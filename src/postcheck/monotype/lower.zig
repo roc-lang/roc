@@ -725,7 +725,7 @@ const ComptimeDemandState = struct {
                 try self.pushExpr(allocator, match.scrutinee);
                 for (view.branches[match.branches.start..][0..match.branches.len]) |branch| {
                     try self.pushStmts(allocator, view, branch.bindings);
-                    if (branch.guard) |guard| try self.pushExpr(allocator, guard);
+                    if (branch.guard.get()) |guard| try self.pushExpr(allocator, guard);
                     try self.pushExpr(allocator, branch.body);
                 }
             },
@@ -17405,18 +17405,26 @@ const DraftRecordDestruct = struct {
 
 const DraftListPattern = struct {
     patterns: DraftSpan(DraftPatId),
-    rest: ?DraftListRestPattern,
+    rest: Ast.OptionalListRest(DraftListRestPattern),
 };
 
 const DraftListRestPattern = struct {
     index: u32,
-    pattern: ?DraftPatId,
+    pattern: collections.OptionalId(DraftPatId),
 };
+
+comptime {
+    std.debug.assert(@sizeOf(DraftListPattern) == 16);
+    std.debug.assert(@sizeOf(DraftPat) == 32);
+    std.debug.assert(@sizeOf(BodyPat) == 32);
+    std.debug.assert(@sizeOf(DraftStmt) == 20);
+    std.debug.assert(@sizeOf(DraftBranch) == 20);
+}
 
 const DraftBranch = struct {
     pat: DraftPatId,
     bindings: DraftSpan(DraftStmtId) = DraftSpan(DraftStmtId).empty(),
-    guard: ?DraftExprId = null,
+    guard: collections.OptionalId(DraftExprId) = .none,
     body: DraftExprId,
 };
 
@@ -17431,7 +17439,7 @@ const DraftStmt = union(enum(u8)) {
         pat: DraftPatId,
         value: DraftExprId,
         recursive: bool = false,
-        comptime_site: ?DraftComptimeSiteId = null,
+        comptime_site: collections.OptionalId(DraftComptimeSiteId) = .none,
     },
     expr: DraftExprId,
     expect: DraftExprId,
@@ -20831,7 +20839,7 @@ const BodyDraftStore = struct {
             program.branches.appendAssumeCapacity(.{
                 .pat = ids.pat(branch.pat),
                 .bindings = ids.stmtSpan(branch.bindings),
-                .guard = if (branch.guard) |guard| ids.expr(guard) else null,
+                .guard = .of(if (branch.guard.get()) |guard| ids.expr(guard) else null),
                 .body = ids.expr(branch.body),
             });
         }
@@ -21127,10 +21135,10 @@ const BodyDraftStore = struct {
             .tuple => |span| .{ .tuple = ids.patSpan(span) },
             .list => |list| .{ .list = .{
                 .patterns = ids.patSpan(list.patterns),
-                .rest = if (list.rest) |rest| .{
+                .rest = .of(if (list.rest.get()) |rest| .{
                     .index = rest.index,
-                    .pattern = if (rest.pattern) |pattern| ids.pat(pattern) else null,
-                } else null,
+                    .pattern = .of(if (rest.pattern.get()) |pattern| ids.pat(pattern) else null),
+                } else null),
             } },
             .tag => |tag| .{ .tag = .{
                 .name = try committed_types.commitTagName(tag.name),
@@ -21551,7 +21559,7 @@ const BodyDraftStore = struct {
                 .pat = ids.pat(let_.pat),
                 .value = ids.expr(let_.value),
                 .recursive = let_.recursive,
-                .comptime_site = if (let_.comptime_site) |site| ids.comptimeSite(site) else null,
+                .comptime_site = .of(if (let_.comptime_site.get()) |site| ids.comptimeSite(site) else null),
             } },
             .expr => |expr| .{ .expr = ids.expr(expr) },
             .expect => |expr| .{ .expect = ids.expr(expr) },
@@ -23747,7 +23755,7 @@ const BodyContext = struct {
             .list => |list| {
                 for (self.patSpan(list.patterns)) |child|
                     try proofs.append(self.allocator, self.patternSuccessImpossibilityProof(child));
-                if (list.rest) |rest| if (rest.pattern) |child|
+                if (list.rest.get()) |rest| if (rest.pattern.get()) |child|
                     try proofs.append(self.allocator, self.patternSuccessImpossibilityProof(child));
             },
             .tag => |tag| for (self.patSpan(tag.payloads)) |child|
@@ -23870,7 +23878,7 @@ const BodyContext = struct {
                     try alternatives.append(self.allocator, try self.anyImpossibilityProof(&.{
                         self.patternSuccessImpossibilityProof(branch.pat),
                         try self.anyStmtSpanImpossibilityProof(self.stmtSpan(branch.bindings)),
-                        if (branch.guard) |guard| self.exprImpossibilityProof(guard) else null,
+                        if (branch.guard.get()) |guard| self.exprImpossibilityProof(guard) else null,
                         self.exprImpossibilityProof(branch.body),
                     }));
                 }
@@ -26604,7 +26612,7 @@ const BodyContext = struct {
                     .tuple => |items| for (ctx.patSpan(items)) |child| try visits.append(ctx.allocator, .{ .pat = child }),
                     .list => |list| {
                         for (ctx.patSpan(list.patterns)) |child| try visits.append(ctx.allocator, .{ .pat = child });
-                        if (list.rest) |rest| if (rest.pattern) |rest_pat| try visits.append(ctx.allocator, .{ .pat = rest_pat });
+                        if (list.rest.get()) |rest| if (rest.pattern.get()) |rest_pat| try visits.append(ctx.allocator, .{ .pat = rest_pat });
                     },
                     .tag => |tag| for (ctx.patSpan(tag.payloads)) |payload| try visits.append(ctx.allocator, .{ .pat = payload }),
                     .nominal => |backing| try visits.append(ctx.allocator, .{ .pat = backing }),
@@ -26718,7 +26726,7 @@ const BodyContext = struct {
                     for (ctx.branchSpan(match.branches)) |branch| {
                         try search.push(.{ .bind_pat = branch.pat });
                         for (ctx.stmtSpan(branch.bindings)) |stmt| try search.push(.{ .stmt = stmt });
-                        if (branch.guard) |guard| try search.push(.{ .expr = guard });
+                        if (branch.guard.get()) |guard| try search.push(.{ .expr = guard });
                         try search.push(.{ .expr = branch.body });
                         try search.push(.{ .unbind = mark });
                     }
@@ -33546,7 +33554,7 @@ const BodyContext = struct {
             task.branches[index] = .{
                 .pat = pat,
                 .bindings = materialized.guard_bindings,
-                .guard = guard,
+                .guard = .of(guard),
                 .body = materialized.body,
             };
             index += 1;
@@ -65529,7 +65537,7 @@ const BodyContext = struct {
                     try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
                         .pat = result_pattern,
                         .value = result,
-                        .comptime_site = comptime_site,
+                        .comptime_site = .of(comptime_site),
                     } }));
                 } else {
                     const unit_ty = try self.unitType();
@@ -65639,7 +65647,7 @@ const BodyContext = struct {
                         try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
                             .pat = try self.lowerPatternAtNode(child, try_node),
                             .value = try_value,
-                            .comptime_site = if (try self.patternCanMiss(child)) comptime_site else null,
+                            .comptime_site = .of(if (try self.patternCanMiss(child)) comptime_site else null),
                         } }));
                         continue;
                     }
@@ -65661,7 +65669,7 @@ const BodyContext = struct {
                     try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
                         .pat = try self.lowerPatternAtNode(child, field_node),
                         .value = field_value,
-                        .comptime_site = if (try self.patternCanMiss(child)) comptime_site else null,
+                        .comptime_site = .of(if (try self.patternCanMiss(child)) comptime_site else null),
                     } }));
                 },
                 .rest => |child| {
@@ -65677,7 +65685,7 @@ const BodyContext = struct {
                     try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
                         .pat = try self.lowerPatternAtNode(child, rest_node),
                         .value = rest_value,
-                        .comptime_site = if (try self.patternCanMiss(child)) comptime_site else null,
+                        .comptime_site = .of(if (try self.patternCanMiss(child)) comptime_site else null),
                     } }));
                 },
             }
@@ -66353,7 +66361,7 @@ const BodyContext = struct {
             return .{ .stmt = .{ .let_ = .{
                 .pat = pat,
                 .value = value,
-                .comptime_site = comptime_site,
+                .comptime_site = .of(comptime_site),
             } }, .termination = .none };
         }
 
@@ -67006,11 +67014,11 @@ const BodyContext = struct {
             .list => |list| {
                 const rest: ?DraftListRestPattern = if (list.rest) |rest| .{
                     .index = rest.index,
-                    .pattern = if (rest.has_pattern) results[list.count] else null,
+                    .pattern = if (rest.has_pattern) .some(results[list.count]) else .none,
                 } else null;
                 return try self.addPatAtTarget(list.target, .{ .list = .{
                     .patterns = try self.addPatSpan(results[0..list.count]),
-                    .rest = rest,
+                    .rest = .of(rest),
                 } });
             },
             .record => |target| {
@@ -67800,11 +67808,11 @@ const BodyContext = struct {
             .list => |list| {
                 const rest: ?DraftListRestPattern = if (list.rest) |rest| .{
                     .index = rest.index,
-                    .pattern = if (rest.has_pattern) results[list.count] else null,
+                    .pattern = if (rest.has_pattern) .some(results[list.count]) else .none,
                 } else null;
                 return try self.addPatWithTypeCell(list.cell, .{ .list = .{
                     .patterns = try self.addPatSpan(results[0..list.count]),
-                    .rest = rest,
+                    .rest = .of(rest),
                 } });
             },
             .record => |record| {
@@ -71893,7 +71901,7 @@ test "body draft store appends draft-local ids spans and type cells" {
     const stmt = try draft.addStmt(.{ .let_ = .{
         .pat = pat,
         .value = expr,
-        .comptime_site = site,
+        .comptime_site = .some(site),
     } });
     const stmt_span = try draft.addStmtSpan(&.{stmt});
 
@@ -72041,7 +72049,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         const let_ = sealed_stmt.let_;
         try std.testing.expectEqual(sealed_pat, let_.pat);
         try std.testing.expectEqual(sealed_expr, let_.value);
-        try std.testing.expectEqual(@as(?Ast.ComptimeSiteId, sealed_site), let_.comptime_site);
+        try std.testing.expectEqual(@as(?Ast.ComptimeSiteId, sealed_site), let_.comptime_site.get());
     }
 }
 

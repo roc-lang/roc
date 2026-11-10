@@ -478,10 +478,10 @@ fn recordStatementDecl(
                 .kind = .value,
                 .value_form = value_form,
                 .value_arity = value_arity,
-                .name_tok = name_tok,
-                .owner_type_path = owner_type_path,
-                .pattern = @backingInt(decl.pattern),
-                .anno = null,
+                .name_tok = .of(name_tok),
+                .owner_type_path = .of(owner_type_path),
+                .pattern = .some(@backingInt(decl.pattern)),
+                .anno = .none,
                 .region = .{ .start = decl.region.start, .end = decl.region.end },
             };
         },
@@ -489,10 +489,10 @@ fn recordStatementDecl(
             .scope = scope_idx,
             .statement = @backingInt(statement_idx),
             .kind = .var_decl,
-            .name_tok = v.name,
-            .owner_type_path = owner_type_path,
-            .pattern = null,
-            .anno = null,
+            .name_tok = .some(v.name),
+            .owner_type_path = .of(owner_type_path),
+            .pattern = .none,
+            .anno = .none,
             .region = .{ .start = v.region.start, .end = v.region.end },
         },
         .import => |i| blk: {
@@ -514,12 +514,12 @@ fn recordStatementDecl(
                 .scope = scope_idx,
                 .statement = @backingInt(statement_idx),
                 .kind = .import,
-                .name_tok = i.alias_tok orelse if (i.target.nested_start_tok) |nested_start|
+                .name_tok = .some(i.alias_tok orelse if (i.target.nested_start_tok) |nested_start|
                     nested_start + i.target.nested_len - 1
                 else
-                    i.target.module_name_tok,
-                .pattern = null,
-                .anno = null,
+                    i.target.module_name_tok),
+                .pattern = .none,
+                .anno = .none,
                 .region = .{ .start = i.region.start, .end = i.region.end },
             };
         },
@@ -527,9 +527,9 @@ fn recordStatementDecl(
             .scope = scope_idx,
             .statement = @backingInt(statement_idx),
             .kind = .file_import,
-            .name_tok = fi.name_tok,
-            .pattern = null,
-            .anno = null,
+            .name_tok = .some(fi.name_tok),
+            .pattern = .none,
+            .anno = .none,
             .region = .{ .start = fi.region.start, .end = fi.region.end },
         },
         .type_decl => |td| blk: {
@@ -544,12 +544,12 @@ fn recordStatementDecl(
                 .scope = scope_idx,
                 .statement = @backingInt(statement_idx),
                 .kind = kind,
-                .name_tok = header.name,
-                .owner_type_path = owner_type_path,
-                .type_path = type_path,
-                .pattern = null,
-                .anno = @backingInt(td.anno),
-                .associated_scope = if (td.associated) |assoc| assoc.scope else null,
+                .name_tok = .some(header.name),
+                .owner_type_path = .of(owner_type_path),
+                .type_path = .of(type_path),
+                .pattern = .none,
+                .anno = .some(@backingInt(td.anno)),
+                .associated_scope = .of(if (td.associated) |assoc| assoc.scope else null),
                 .type_dependencies = type_dependencies,
                 .region = .{ .start = td.region.start, .end = td.region.end },
             };
@@ -558,10 +558,10 @@ fn recordStatementDecl(
             .scope = scope_idx,
             .statement = @backingInt(statement_idx),
             .kind = if (ta.is_var) .var_anno else .value_anno,
-            .name_tok = ta.name,
-            .owner_type_path = owner_type_path,
-            .pattern = null,
-            .anno = @backingInt(ta.anno),
+            .name_tok = .some(ta.name),
+            .owner_type_path = .of(owner_type_path),
+            .pattern = .none,
+            .anno = .some(@backingInt(ta.anno)),
             .region = .{ .start = ta.region.start, .end = ta.region.end },
         },
         .expr,
@@ -579,15 +579,15 @@ fn recordStatementDecl(
         return;
     };
 
-    if (record.name_tok) |name_tok| {
-        record.name_ident = self.tok_buf.resolveIdentifier(name_tok);
+    if (record.name_tok.get()) |name_tok| {
+        record.name_ident = self.tok_buf.resolveIdentifier(name_tok) orelse .NONE;
     }
 
     const decl_idx = try self.decl_index.addDecl(record);
     if (std.meta.activeTag(statement) == .import) {
         const import_stmt = statement.import;
         if (!import_stmt.target.hasNestedTypes()) {
-            if (record.name_ident) |alias_ident| {
+            if (record.nameIdent()) |alias_ident| {
                 try self.decl_index.addImportAliasDecl(scope_idx, alias_ident, decl_idx);
             }
         }
@@ -603,7 +603,7 @@ fn recordStatementDecl(
                 const anno = self.decl_index.decls.items[@backingInt(anno_idx)];
                 const kinds_match = (record.kind == .value and anno.kind == .value_anno) or
                     (record.kind == .var_decl and anno.kind == .var_anno);
-                if (kinds_match and self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
+                if (kinds_match and self.tokenIdentsEqual(anno.name_tok.get(), record.name_tok.get())) {
                     self.decl_index.pairAnnotation(anno_idx, decl_idx);
                 }
             }
@@ -656,15 +656,15 @@ fn recordValueDecl(
         .kind = .value,
         .value_form = value_form,
         .value_arity = value_arity,
-        .name_tok = name_tok,
-        .owner_type_path = owner_type_path,
-        .pattern = @backingInt(pattern_idx),
-        .anno = null,
+        .name_tok = .of(name_tok),
+        .owner_type_path = .of(owner_type_path),
+        .pattern = .some(@backingInt(pattern_idx)),
+        .anno = .none,
         .region = .{ .start = region.start, .end = region.end },
     };
 
-    if (record.name_tok) |tok| {
-        record.name_ident = self.tok_buf.resolveIdentifier(tok);
+    if (record.name_tok.get()) |tok| {
+        record.name_ident = self.tok_buf.resolveIdentifier(tok) orelse .NONE;
     }
 
     const decl_idx = try self.decl_index.addDecl(record);
@@ -677,7 +677,7 @@ fn recordValueDecl(
     if (self.currentPendingAnno()) |pending| {
         if (pending.get()) |anno_idx| {
             const anno = self.decl_index.decls.items[@backingInt(anno_idx)];
-            if (anno.kind == .value_anno and self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
+            if (anno.kind == .value_anno and self.tokenIdentsEqual(anno.name_tok.get(), record.name_tok.get())) {
                 self.decl_index.pairAnnotation(anno_idx, decl_idx);
             }
         }

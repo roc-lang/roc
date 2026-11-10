@@ -12297,12 +12297,11 @@ fn categorizeLocalValueRef(
         return .{ .local_param = .{ .binder = binder } };
     }
 
-    if (local_pattern_roles.statementRole(pattern)) |role| {
-        switch (role) {
-            .mutable_version => return .{ .local_mutable_version = .{ .binder = binder } },
-            .local_proc => |proc| return .{ .local_proc = .{ .binder = binder, .expr = proc.expr, .is_alias = proc.is_alias } },
-            .local_value => return .{ .local_value = .{ .binder = binder } },
-        }
+    switch (local_pattern_roles.statementRole(pattern)) {
+        .none => {},
+        .mutable_version => return .{ .local_mutable_version = .{ .binder = binder } },
+        .local_proc => |proc| return .{ .local_proc = .{ .binder = binder, .expr = proc.expr, .is_alias = proc.is_alias } },
+        .local_value => return .{ .local_value = .{ .binder = binder } },
     }
 
     if (patternIsBinder(module, pattern)) {
@@ -12611,16 +12610,23 @@ fn platformBindingForRequiredIndex(table: *const PlatformRequiredBindingTable, r
     return table.lookupByRequiredIndex(requires_idx);
 }
 
+/// The statement role of a local pattern; `none` for a pattern that no
+/// reached statement binds.
 const LocalPatternStatementRole = union(enum) {
+    none,
     mutable_version,
     local_proc: struct { expr: CIR.Expr.Idx, is_alias: bool },
     local_value,
 };
 
+comptime {
+    std.debug.assert(@sizeOf(LocalPatternStatementRole) == 12);
+}
+
 const LocalPatternRoleIndex = struct {
     module_index: *const ModuleIndex,
     lambda_args: []bool = &.{},
-    statement_roles: []?LocalPatternStatementRole = &.{},
+    statement_roles: []LocalPatternStatementRole = &.{},
 
     fn init(
         allocator: Allocator,
@@ -12630,10 +12636,10 @@ const LocalPatternRoleIndex = struct {
         const node_count = module.nodeCount();
         const lambda_args = try allocator.alloc(bool, node_count);
         errdefer allocator.free(lambda_args);
-        const statement_roles = try allocator.alloc(?LocalPatternStatementRole, node_count);
+        const statement_roles = try allocator.alloc(LocalPatternStatementRole, node_count);
         errdefer allocator.free(statement_roles);
         @memset(lambda_args, false);
-        @memset(statement_roles, null);
+        @memset(statement_roles, .none);
 
         var node_idx: u32 = 0;
         while (node_idx < node_count) : (node_idx += 1) {
@@ -12691,7 +12697,7 @@ const LocalPatternRoleIndex = struct {
     }
 
     fn putStatementRole(
-        statement_roles: []?LocalPatternStatementRole,
+        statement_roles: []LocalPatternStatementRole,
         node_count: usize,
         pattern: CIR.Pattern.Idx,
         role: LocalPatternStatementRole,
@@ -12700,7 +12706,9 @@ const LocalPatternRoleIndex = struct {
         if (raw_pattern >= node_count) {
             checkedArtifactInvariant("checked artifact invariant violated: local statement pattern is out of range", .{});
         }
-        if (statement_roles[raw_pattern]) |existing| {
+        std.debug.assert(role != .none);
+        const existing = statement_roles[raw_pattern];
+        if (existing != .none) {
             if (!localPatternStatementRoleEql(existing, role)) {
                 checkedArtifactInvariant("checked artifact invariant violated: local statement pattern has conflicting roles", .{});
             }
@@ -12712,6 +12720,7 @@ const LocalPatternRoleIndex = struct {
     fn localPatternStatementRoleEql(a: LocalPatternStatementRole, b: LocalPatternStatementRole) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
         return switch (a) {
+            .none,
             .mutable_version,
             .local_value,
             => true,
@@ -12721,12 +12730,12 @@ const LocalPatternRoleIndex = struct {
 
     fn verifyLocalPatternRoles(
         lambda_args: []const bool,
-        statement_roles: []const ?LocalPatternStatementRole,
+        statement_roles: []const LocalPatternStatementRole,
     ) void {
         if (builtin.mode != .debug) return;
 
-        for (lambda_args, statement_roles, 0..) |is_lambda_arg, maybe_statement_role, raw_pattern| {
-            if (is_lambda_arg and maybe_statement_role != null) {
+        for (lambda_args, statement_roles, 0..) |is_lambda_arg, statement_role, raw_pattern| {
+            if (is_lambda_arg and statement_role != .none) {
                 base.invariant(
                     "checked artifact invariant violated: local pattern {d} is both a lambda argument and statement binding",
                     .{raw_pattern},
@@ -12743,7 +12752,7 @@ const LocalPatternRoleIndex = struct {
         return self.lambda_args[raw];
     }
 
-    fn statementRole(self: *const LocalPatternRoleIndex, pattern: CIR.Pattern.Idx) ?LocalPatternStatementRole {
+    fn statementRole(self: *const LocalPatternRoleIndex, pattern: CIR.Pattern.Idx) LocalPatternStatementRole {
         const raw = @backingInt(pattern);
         if (raw >= self.statement_roles.len) {
             checkedArtifactInvariant("checked artifact invariant violated: local statement lookup pattern is out of range", .{});

@@ -1081,7 +1081,7 @@ test "parser records top-level type declaration dependencies" {
     for (decls) |decl_idx| {
         const decl = ast.decl_index.decls.items[@backingInt(decl_idx)];
         if (decl.kind != .type_alias) continue;
-        const name_ident = decl.name_ident orelse continue;
+        const name_ident = decl.nameIdent() orelse continue;
         if (!std.mem.eql(u8, env.getIdent(name_ident), "A")) continue;
 
         const deps = ast.decl_index.typeDependencies(decl.type_dependencies);
@@ -1127,10 +1127,10 @@ test "parser records nested associated owner paths" {
     var found_value = false;
     for (ast.decl_index.decls.items) |decl| {
         if (decl.kind != .value) continue;
-        const name_ident = decl.name_ident orelse continue;
+        const name_ident = decl.nameIdent() orelse continue;
         if (!std.mem.eql(u8, env.getIdent(name_ident), "val")) continue;
 
-        const owner_path = decl.owner_type_path orelse return error.MissingOwnerPath;
+        const owner_path = decl.owner_type_path.get() orelse return error.MissingOwnerPath;
         const owner = ast.decl_index.type_paths.items[@backingInt(owner_path)];
         try std.testing.expectEqualStrings("Nested", env.getIdent(owner.name));
         const parent_path = owner.parent orelse return error.MissingParentPath;
@@ -1178,19 +1178,19 @@ test "parser keeps block-local type paths lexically distinct" {
     var second_inner_path: ?DeclIndex.TypePathIdx = null;
 
     for (ast.decl_index.decls.items) |decl| {
-        const name_ident = decl.name_ident orelse continue;
+        const name_ident = decl.nameIdent() orelse continue;
         const name = env.getIdent(name_ident);
         if (std.mem.eql(u8, name, "T")) {
             if (first_t_path == null) {
-                first_t_path = decl.type_path orelse return error.MissingFirstTPath;
+                first_t_path = decl.type_path.get() orelse return error.MissingFirstTPath;
             } else if (second_t_path == null) {
-                second_t_path = decl.type_path orelse return error.MissingSecondTPath;
+                second_t_path = decl.type_path.get() orelse return error.MissingSecondTPath;
             }
         } else if (std.mem.eql(u8, name, "Inner")) {
             if (first_inner_path == null) {
-                first_inner_path = decl.type_path orelse return error.MissingFirstInnerPath;
+                first_inner_path = decl.type_path.get() orelse return error.MissingFirstInnerPath;
             } else if (second_inner_path == null) {
-                second_inner_path = decl.type_path orelse return error.MissingSecondInnerPath;
+                second_inner_path = decl.type_path.get() orelse return error.MissingSecondInnerPath;
             }
         }
     }
@@ -1227,7 +1227,7 @@ test "parser does not create a type path for malformed associated type headers" 
     try std.testing.expectEqual(null, ast.decl_index.findTypePathBySegments(&.{ outer_ident, broken_ident }));
 
     for (ast.decl_index.decls.items) |decl| {
-        const name_ident = decl.name_ident orelse continue;
+        const name_ident = decl.nameIdent() orelse continue;
         if (!std.mem.eql(u8, env.getIdent(name_ident), "Broken")) continue;
 
         if (decl.kind == .type_alias or decl.kind == .nominal or decl.kind == .@"opaque") {

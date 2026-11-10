@@ -3278,7 +3278,7 @@ const Pass = struct {
         const branches = self.program.branchSpan(match.branches);
         for (0..branches.len) |branch_index| {
             const branch = GuardedList.at(branches, branch_index);
-            if (branch.guard != null or branch.bindings.len != 0) return null;
+            if (branch.guard != .none or branch.bindings.len != 0) return null;
             const pat = self.program.getPat(branch.pat);
             if (pat.data != .tag) return null;
             const tag = pat.data.tag;
@@ -3427,7 +3427,7 @@ const Pass = struct {
             const branches = self.program.branchSpan(match.branches);
             for (0..branches.len) |branch_index| {
                 const br = GuardedList.at(branches, branch_index);
-                if (br.guard != null or br.bindings.len != 0) return null;
+                if (br.guard != .none or br.bindings.len != 0) return null;
                 if (!try self.armBaseMatches(br.body, &base)) return null;
             }
         } else {
@@ -3493,7 +3493,7 @@ const Pass = struct {
                 const branch = GuardedList.at(branches, index);
                 const binding_proof = try self.stmtSpanIsStructurallyWorkFree(branch.bindings, &budget);
                 if (binding_proof != .proven) return binding_proof;
-                if (branch.guard) |guard| {
+                if (branch.guard.get()) |guard| {
                     const guard_proof = try self.exprIsStructurallyWorkFree(guard, &budget);
                     if (guard_proof != .proven) return guard_proof;
                 }
@@ -3741,7 +3741,7 @@ const Pass = struct {
         defer self.allocator.free(branches);
         for (0..source_branches.len) |index| {
             const source_branch = GuardedList.at(source_branches, index);
-            if (source_branch.guard != null or source_branch.bindings.len != 0) return null;
+            if (source_branch.guard != .none or source_branch.bindings.len != 0) return null;
             const source_pat = self.program.getPat(source_branch.pat);
             if (source_pat.data != .tag) return null;
             const source_tag = source_pat.data.tag;
@@ -3763,7 +3763,7 @@ const Pass = struct {
                 (try self.iteratorBaseDoneBody(source_branch.body, loop_parts)) orelse return null
             else
                 (try self.cloneExprFresh(source_branch.body, &renames)) orelse return null;
-            branches[index] = .{ .pat = exact_pat, .guard = null, .body = body };
+            branches[index] = .{ .pat = exact_pat, .guard = .none, .body = body };
         }
 
         const body = try self.program.addExpr(.{ .ty = source_match_expr.ty, .data = .{ .match_ = .{
@@ -4120,7 +4120,7 @@ const Pass = struct {
             const branches = clone.pass.program.branchSpan(branches_span);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
-                if (branch.guard != null or branch.bindings.len != 0) {
+                if (branch.guard != .none or branch.bindings.len != 0) {
                     try clone.op(.abort);
                     return;
                 }
@@ -4631,7 +4631,7 @@ const Pass = struct {
             defer allocator.free(branches);
             for (branches, 0..) |*branch, index| branch.* = .{
                 .pat = @fromBackingInt(@intCast(raws[1 + 2 * index])),
-                .guard = null,
+                .guard = .none,
                 .body = @fromBackingInt(@intCast(raws[2 + 2 * index])),
             };
             return .{
@@ -9695,7 +9695,7 @@ const Cloner = struct {
             .bind = let_.pat,
             .value = let_.value,
             .rest = tail,
-            .comptime_site = let_.comptime_site,
+            .comptime_site = let_.comptime_site.get(),
         };
         frame.cursor = BlockValueCursor.let_continuation;
         if (task.case_value) |cloned| {
@@ -9795,7 +9795,7 @@ const Cloner = struct {
                             .bind = stmt.let_.pat,
                             .value = stmt.let_.value,
                             .rest = tail,
-                            .comptime_site = stmt.let_.comptime_site,
+                            .comptime_site = stmt.let_.comptime_site.get(),
                         } } } };
                     }
                 }
@@ -10483,7 +10483,7 @@ const Cloner = struct {
                         .no_match => continue,
                         .match => {},
                     }
-                    if (branch.guard != null or branch.bindings.len != 0) return .{ .ret = .{ .maybe_value = null } };
+                    if (branch.guard != .none or branch.bindings.len != 0) return .{ .ret = .{ .maybe_value = null } };
 
                     task.change_start = self.subst.watermark();
                     frame.cursor = 1;
@@ -10935,7 +10935,7 @@ const Cloner = struct {
             const outer_branches = self.pass.program.branchSpan(task.outer_branches);
             for (0..outer_branches.len) |branch_index| {
                 const branch = GuardedList.at(outer_branches, branch_index);
-                if (branch.guard != null or branch.bindings.len != 0) return .{ .ret = .{ .maybe_value = null } };
+                if (branch.guard != .none or branch.bindings.len != 0) return .{ .ret = .{ .maybe_value = null } };
             }
 
             const branch_work = switch (scrutinee_data) {
@@ -11934,17 +11934,17 @@ const Cloner = struct {
             1 => {
                 const branch = task.source[frame.index];
                 task.branches[frame.index].bindings = input.?.get(.stmt_span);
-                if (branch.guard) |guard| {
+                if (branch.guard.get()) |guard| {
                     frame.cursor = 2;
                     return .{ .call = .{ .expr = guard } };
                 }
-                task.branches[frame.index].guard = null;
+                task.branches[frame.index].guard = .none;
                 frame.cursor = 3;
                 return .{ .call = .{ .keeping = .{ .expr = branch.body } } };
             },
             // The branch's cloned guard.
             2 => {
-                task.branches[frame.index].guard = input.?.get(.expr);
+                task.branches[frame.index].guard = .some(input.?.get(.expr));
                 frame.cursor = 3;
                 return .{ .call = .{ .keeping = .{ .expr = task.source[frame.index].body } } };
             },
@@ -12670,7 +12670,7 @@ const Cloner = struct {
                     try items.append(allocator, .open_scope);
                     try items.append(allocator, .{ .shadow_pat = branch.pat });
                     try self.collectStmts(task, branch.bindings);
-                    if (branch.guard) |guard| try items.append(allocator, .{ .expr = guard });
+                    if (branch.guard.get()) |guard| try items.append(allocator, .{ .expr = guard });
                     try items.append(allocator, .{ .expr = branch.body });
                     try items.append(allocator, .close_scope);
                 }
@@ -13568,7 +13568,7 @@ const Cloner = struct {
             const joins = try arena.alloc(LetCaseJoin, branches.len);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
-                if (branch.guard != null or branch.bindings.len != 0) break :dispatch_split;
+                if (branch.guard != .none or branch.bindings.len != 0) break :dispatch_split;
                 var binders: std.ArrayList(Ast.LocalId) = .empty;
                 if (!try self.collectPatBinders(branch.pat, arena, &binders)) break :dispatch_split;
                 joins[index] = .{
@@ -13625,7 +13625,7 @@ const Cloner = struct {
             rewritten[index] = .{
                 .pat = branch.pat,
                 .bindings = branch.bindings,
-                .guard = null,
+                .guard = .none,
                 .body = try self.addExpr(.{ .ty = rest_ty, .data = .{ .jump = .{
                     .target = join.id,
                     .args = try self.pass.program.addExprSpan(args),
@@ -13711,8 +13711,8 @@ const Cloner = struct {
                     .list => |list| {
                         const pats = walk.program.patSpan(list.patterns);
                         for (0..pats.len) |index| try walk.stack.append(walk.allocator, .{ .pat = GuardedList.at(pats, index) });
-                        if (list.rest) |rest| {
-                            if (rest.pattern) |rest_pattern| try walk.stack.append(walk.allocator, .{ .pat = rest_pattern });
+                        if (list.rest.get()) |rest| {
+                            if (rest.pattern.get()) |rest_pattern| try walk.stack.append(walk.allocator, .{ .pat = rest_pattern });
                         }
                         std.mem.reverse(PatBinderItem, walk.stack.items[mark..]);
                         return .sequence;
@@ -14596,8 +14596,8 @@ const Cloner = struct {
                     const pats = self.pass.program.patSpan(list.patterns);
                     if (done < pats.len) break :blk GuardedList.at(pats, done);
                     if (frame.span == null) frame.span = try self.pass.program.addPatSpan(frame.children.items);
-                    const rest = list.rest orelse break :blk null;
-                    const rest_pattern = rest.pattern orelse break :blk null;
+                    const rest = list.rest.get() orelse break :blk null;
+                    const rest_pattern = rest.pattern.get() orelse break :blk null;
                     break :blk if (done == pats.len) rest_pattern else null;
                 },
                 .str_pattern => |str| blk: {
@@ -14638,10 +14638,10 @@ const Cloner = struct {
                 .tuple => .{ .tuple = try self.pass.program.addPatSpan(children) },
                 .list => |list| .{ .list = .{
                     .patterns = frame.span.?,
-                    .rest = if (list.rest) |rest| .{
+                    .rest = .of(if (list.rest.get()) |rest| .{
                         .index = rest.index,
-                        .pattern = if (rest.pattern != null) children[children.len - 1] else null,
-                    } else null,
+                        .pattern = if (rest.pattern != .none) .some(children[children.len - 1]) else .none,
+                    } else null),
                 } },
                 .tag => |tag| .{ .tag = .{
                     .name = tag.name,
@@ -15497,7 +15497,7 @@ const BodyLocalScope = struct {
                         try walk.push(.open_scope);
                         try walk.push(.{ .bind_pat = branch.pat });
                         try walk.pushStmtSpan(branch.bindings);
-                        if (branch.guard) |guard| try walk.push(.{ .expr = guard });
+                        if (branch.guard.get()) |guard| try walk.push(.{ .expr = guard });
                         try walk.push(.{ .expr = branch.body });
                         try walk.push(.close_scope);
                     }
@@ -15826,7 +15826,7 @@ fn tailSelfCallSummary(allocator: Allocator, program: *const Ast.Program, root: 
                 for (0..bindings.len) |binding_index| {
                     if (try stmtCallsFn(allocator, program, GuardedList.at(bindings, binding_index), target)) return invalid;
                 }
-                if (branch.guard) |guard| {
+                if (branch.guard.get()) |guard| {
                     if (try exprCallsFn(allocator, program, guard, target)) return invalid;
                 }
                 try tails.append(allocator, branch.body);
@@ -17732,7 +17732,7 @@ test "SpecConstr residual block destructures preserve statement source context" 
     try program.comptime_sites.append(allocator, .{ .kind = .destructure, .owner = .first, .region = stmt_region });
     program.current_loc = stmt_loc;
     program.current_region = stmt_region;
-    const binding = try program.addStmt(.{ .let_ = .{ .pat = pattern, .value = input_expr, .comptime_site = site } });
+    const binding = try program.addStmt(.{ .let_ = .{ .pat = pattern, .value = input_expr, .comptime_site = .some(site) } });
     program.current_loc = .{ .file = 1, .line = 1, .column = 1 };
     program.current_region = Region.from_raw_offsets(0, 80);
     const body = try program.addExpr(.{ .ty = str_ty, .data = .{ .block = .{
@@ -17751,7 +17751,7 @@ test "SpecConstr residual block destructures preserve statement source context" 
     try std.testing.expectEqualDeep(stmt_loc, program.stmtLoc(cloned_stmt));
     try std.testing.expectEqualDeep(stmt_region, program.stmtRegion(cloned_stmt));
     const cloned_bind = program.getStmt(cloned_stmt).let_;
-    try std.testing.expectEqual(site, cloned_bind.comptime_site.?);
+    try std.testing.expectEqual(site, cloned_bind.comptime_site.get().?);
     const cloned_tag = program.getPat(cloned_bind.pat).data.tag;
     const cloned_payload = program.getPat(GuardedList.at(program.patSpan(cloned_tag.payloads), 0)).data.bind;
     try std.testing.expect(cloned_payload != payload);
@@ -19634,7 +19634,7 @@ test "static match verdicts separate definite no-match from statically undecidab
     // representation, so they are undecidable even against known components.
     const list_pat = try program.addPat(.{ .ty = u8_ty, .data = .{ .list = .{
         .patterns = Ast.Span(Ast.PatId).empty(),
-        .rest = null,
+        .rest = .none,
     } } });
     const str_lit = try program.addStringLiteral("known");
     const str_pat = try program.addPat(.{ .ty = u8_ty, .data = .{ .str_lit = str_lit } });
@@ -20010,7 +20010,7 @@ test "known match fold aborts on undecidable branches and keeps the match when e
     const bar_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .tag = .{ .name = bar, .payloads = Ast.Span(Ast.PatId).empty() } } });
     const list_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .list = .{
         .patterns = Ast.Span(Ast.PatId).empty(),
-        .rest = null,
+        .rest = .none,
     } } });
     const body = try program.addExpr(.{ .ty = u8_ty, .data = .unit });
     // This source was built after the clone began, so mark it as source.

@@ -720,6 +720,29 @@ fn dedupeSorted(list: *std.ArrayList(u32)) void {
 /// A range of a unit's binder pool.
 const BinderSpan = struct { start: u32 = 0, len: u32 = 0 };
 
+/// A binder range or its absence in eight bytes. `stored_len` is the range
+/// length plus one, so zero means absent and an empty range stays present.
+const OptionalBinderSpan = struct {
+    start: u32 = 0,
+    stored_len: u32 = 0,
+
+    const none: OptionalBinderSpan = .{};
+
+    fn some(span: BinderSpan) OptionalBinderSpan {
+        std.debug.assert(span.len < std.math.maxInt(u32));
+        return .{ .start = span.start, .stored_len = span.len + 1 };
+    }
+
+    fn get(self: OptionalBinderSpan) ?BinderSpan {
+        if (self.stored_len == 0) return null;
+        return .{ .start = self.start, .len = self.stored_len - 1 };
+    }
+};
+
+comptime {
+    std.debug.assert(@sizeOf(OptionalBinderSpan) == 8);
+}
+
 /// Whether inline expects run when lowering evaluates a body.
 pub const InlineExpectMode = enum { run, omit };
 
@@ -736,10 +759,10 @@ const UnitFacts = struct {
     flags: []u8,
     /// For an `if`, `match`, or `for` expression and for an expression
     /// statement: the binders it reassigns anywhere inside it.
-    state_merges: []?BinderSpan,
+    state_merges: []OptionalBinderSpan,
     /// For a `for` expression or a loop statement: the binders its condition
     /// and body reassign.
-    loop_mutations: []?BinderSpan,
+    loop_mutations: []OptionalBinderSpan,
     binders: []BinderId,
 
     fn destroy(self: *UnitFacts, allocator: Allocator) void {
@@ -950,13 +973,13 @@ pub const BodyAnalyses = struct {
 
     pub fn stateMergeBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
         const facts, const position = try self.unitFacts(bodies, raw_node);
-        const span = facts.state_merges[position] orelse invariant("a state merge was requested for a node that owns none");
+        const span = facts.state_merges[position].get() orelse invariant("a state merge was requested for a node that owns none");
         return facts.binders[span.start..][0..span.len];
     }
 
     pub fn loopMutationBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
         const facts, const position = try self.unitFacts(bodies, raw_node);
-        const span = facts.loop_mutations[position] orelse invariant("loop mutations were requested for a node that is not a loop");
+        const span = facts.loop_mutations[position].get() orelse invariant("loop mutations were requested for a node that is not a loop");
         return facts.binders[span.start..][0..span.len];
     }
 
@@ -1616,8 +1639,8 @@ const ReassignmentPublisher = struct {
     bodies: CheckedBodies,
     unit: UnitId,
     nodes: []const u32,
-    state_merges: []?BinderSpan = &.{},
-    loop_mutations: []?BinderSpan = &.{},
+    state_merges: []OptionalBinderSpan = &.{},
+    loop_mutations: []OptionalBinderSpan = &.{},
     binders: std.ArrayList(BinderId) = .empty,
     scratch: std.ArrayList(BinderId) = .empty,
     work: std.ArrayList(Work) = .empty,
@@ -1683,10 +1706,10 @@ const ReassignmentPublisher = struct {
     }
 
     fn run(self: *ReassignmentPublisher) Allocator.Error!void {
-        self.state_merges = try self.allocator.alloc(?BinderSpan, self.nodes.len);
-        @memset(self.state_merges, null);
-        self.loop_mutations = try self.allocator.alloc(?BinderSpan, self.nodes.len);
-        @memset(self.loop_mutations, null);
+        self.state_merges = try self.allocator.alloc(OptionalBinderSpan, self.nodes.len);
+        @memset(self.state_merges, .none);
+        self.loop_mutations = try self.allocator.alloc(OptionalBinderSpan, self.nodes.len);
+        @memset(self.loop_mutations, .none);
         self.scratch_positions = try self.allocator.alloc(u32, self.nodes.len);
         @memset(self.scratch_positions, no_position);
         const index = self.bodies.index();
@@ -1766,9 +1789,9 @@ const ReassignmentPublisher = struct {
     /// The published range of a plan owner, if it has one yet.
     fn publishedRange(self: *const ReassignmentPublisher, plan: PlanRef) ?BinderSpan {
         return switch (plan) {
-            .loop => |raw| self.loop_mutations[self.position(raw)],
-            .state => |expr| self.state_merges[self.position(@backingInt(expr))],
-            .expr_statement => |statement| self.state_merges[self.position(@backingInt(statement))],
+            .loop => |raw| self.loop_mutations[self.position(raw)].get(),
+            .state => |expr| self.state_merges[self.position(@backingInt(expr))].get(),
+            .expr_statement => |statement| self.state_merges[self.position(@backingInt(statement))].get(),
         };
     }
 
@@ -1800,7 +1823,9 @@ const ReassignmentPublisher = struct {
                 if (item.nested) try self.pushContribution(item.plan, range);
             },
             .share_state => |item| {
-                self.state_merges[self.position(@backingInt(item.statement))] = self.state_merges[self.position(@backingInt(item.expr))].?;
+                const shared = self.state_merges[self.position(@backingInt(item.expr))];
+                std.debug.assert(shared.get() != null);
+                self.state_merges[self.position(@backingInt(item.statement))] = shared;
             },
             .append_binders => |range| {
                 try self.scratch.appendSlice(self.allocator, self.binders.items[range.start..][0..range.len]);
@@ -1866,9 +1891,9 @@ const ReassignmentPublisher = struct {
         try self.binders.appendSlice(self.allocator, self.scratch.items[start..end]);
         const range: BinderSpan = .{ .start = binders_start, .len = @intCast(end - start) };
         switch (plan) {
-            .loop => |raw| self.loop_mutations[self.position(raw)] = range,
-            .state => |expr| self.state_merges[self.position(@backingInt(expr))] = range,
-            .expr_statement => |statement| self.state_merges[self.position(@backingInt(statement))] = range,
+            .loop => |raw| self.loop_mutations[self.position(raw)] = .some(range),
+            .state => |expr| self.state_merges[self.position(@backingInt(expr))] = .some(range),
+            .expr_statement => |statement| self.state_merges[self.position(@backingInt(statement))] = .some(range),
         }
         return range;
     }

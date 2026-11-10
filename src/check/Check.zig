@@ -214,7 +214,7 @@ shared_subtrees_scratch: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .e
 /// share it instead of copying the type again, and later row closing stops
 /// at it. Valid while the type store's ground epoch equals
 /// `snapshot_ground_epoch`. See `recordGeneratedCodecDerivationSnapshot`.
-snapshot_ground_copies: collections.DenseMapUnmanaged(Var, ?Var) = .empty,
+snapshot_ground_copies: collections.DenseMapUnmanaged(Var, collections.OptionalId(Var)) = .empty,
 snapshot_ground_epoch: u64 = 0,
 /// A map from one var to another. Used in instantiation and var copying
 var_set: collections.DenseMap(Var, void),
@@ -809,7 +809,7 @@ erroneous_value_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empt
 /// `var` declarations whose annotation is erroneous. The whole statement must
 /// become an explicit runtime error before checked-body construction, because
 /// its interface is erroneous independently of any value expression.
-erroneous_statements: collections.DenseMapUnmanaged(CIR.Statement.Idx, ?CIR.Expr.Idx) = .empty,
+erroneous_statements: collections.DenseMapUnmanaged(CIR.Statement.Idx, collections.OptionalId(CIR.Expr.Idx)) = .empty,
 /// `for` loops whose iterable was not erroneous when the loop was checked.
 /// The iterable's rejection can be decided later (a literal bound converts
 /// only once the loop body relates the item type), and the erroneous-value
@@ -1385,14 +1385,14 @@ component_derived_relation_set: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// a relation runs under this owner, whichever later work grounds its
 /// receiver or drains its queue entry. `dispatch_relation_owner_log` lists the
 /// keys in insertion order so a solver probe can rewind them.
-dispatch_relation_owners: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+dispatch_relation_owners: std.AutoHashMapUnmanaged(Var, collections.OptionalId(Var)) = .empty,
 dispatch_relation_owner_log: std.ArrayListUnmanaged(Var) = .empty,
 /// The scheme root active where each scheme root became active (null at the
 /// top level and in an independently checked group), and the roots whose
 /// boundary has captured their last requirements. A requirement candidate for
 /// a root whose boundary already ran belongs to the innermost enclosing root
 /// still prospective (`prospectiveSchemeOwner`).
-scheme_owner_parents: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+scheme_owner_parents: std.AutoHashMapUnmanaged(Var, collections.OptionalId(Var)) = .empty,
 captured_scheme_owners: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Whether this module declares a method in a function body. Only such a
 /// method can be a local procedure, so no dispatch selects one otherwise.
@@ -2858,7 +2858,7 @@ fn recordDispatchRelationOwner(self: *Self, fn_var: Var) Allocator.Error!void {
     // A relation reached again through a shared callable (an instantiation
     // shares a leaf rather than copying it) keeps its creator.
     if (entry.found_existing) return;
-    entry.value_ptr.* = self.active_scheme_root;
+    entry.value_ptr.* = .of(self.active_scheme_root);
     self.dispatch_relation_owner_log.appendAssumeCapacity(fn_var);
 }
 
@@ -2876,20 +2876,21 @@ fn recordAnnotationDispatchRelationOwner(self: *Self, fn_var: Var) Allocator.Err
         // A probe rewinds only the keys it inserted.
         std.debug.assert(self.probe_depth == 0);
     }
-    entry.value_ptr.* = self.active_scheme_root;
+    entry.value_ptr.* = .of(self.active_scheme_root);
 }
 
 /// The scheme that created the dispatch relation `fn_var`, or null when it
 /// was created outside every scheme.
 fn dispatchRelationOwner(self: *const Self, fn_var: Var) ?Var {
-    return self.dispatch_relation_owners.get(fn_var) orelse
+    const owner = self.dispatch_relation_owners.get(fn_var) orelse
         base.invariant("a dispatch relation reached resolution without the owner recorded where it was created", .{});
+    return owner.get();
 }
 
 /// Make `owner` the active scheme root, inside the one active here.
 fn activateSchemeOwner(self: *Self, owner: Var) Allocator.Error!void {
     if (self.active_scheme_root != owner) {
-        try self.scheme_owner_parents.put(self.gpa, owner, self.active_scheme_root);
+        try self.scheme_owner_parents.put(self.gpa, owner, .of(self.active_scheme_root));
     }
     _ = self.captured_scheme_owners.remove(owner);
     self.active_scheme_root = owner;
@@ -2901,8 +2902,9 @@ fn prospectiveSchemeOwner(self: *const Self, owner: ?Var) ?Var {
     var current = owner;
     while (current) |root| {
         if (!self.captured_scheme_owners.contains(root)) return root;
-        current = self.scheme_owner_parents.get(root) orelse
+        const parent = self.scheme_owner_parents.get(root) orelse
             base.invariant("a captured scheme root was never activated", .{});
+        current = parent.get();
     }
     return null;
 }
@@ -10213,7 +10215,7 @@ fn checkBindingRootsForInfiniteTypes(
         if (!try self.checkForInfiniteType(CIR.Pattern.Idx, root.pattern, reported)) continue;
         const initialized = root.initialized orelse continue;
         try self.erroneous_value_exprs.put(self.gpa, initialized.expr, {});
-        try self.erroneous_statements.put(self.gpa, initialized.statement, initialized.expr);
+        try self.erroneous_statements.put(self.gpa, initialized.statement, .some(initialized.expr));
         try self.poisonPatternBindings(root.pattern);
     }
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -11741,7 +11743,7 @@ const KnownGroundStop = enum {
 fn computeGroundMarksKnowing(
     self: *Self,
     roots: []const Var,
-    known_ground: ?*const collections.DenseMapUnmanaged(Var, ?Var),
+    known_ground: ?*const collections.DenseMapUnmanaged(Var, collections.OptionalId(Var)),
     stop: KnownGroundStop,
     liftable: LiftableStructure,
 ) Allocator.Error!GroundMarks {
@@ -11756,7 +11758,7 @@ fn computeGroundMarksKnowing(
 fn walkGroundMarks(
     self: *Self,
     marks: *GroundMarks,
-    known_ground: ?*const collections.DenseMapUnmanaged(Var, ?Var),
+    known_ground: ?*const collections.DenseMapUnmanaged(Var, collections.OptionalId(Var)),
     stop: KnownGroundStop,
     liftable: LiftableStructure,
 ) Allocator.Error!void {
@@ -11774,7 +11776,7 @@ fn walkGroundMarks(
         if (entry.found_existing) continue;
         if (known_ground) |known| if (known.get(resolved.var_)) |copy| switch (stop) {
             .any => continue,
-            .copied => if (copy != null) continue,
+            .copied => if (copy != .none) continue,
         };
         if (liftable == .refinable and resolved.desc.liftsIntoNominal()) marks.ground.items[index] = false;
         switch (resolved.desc.content) {
@@ -17234,7 +17236,7 @@ fn rejectPatternFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
     };
     try self.poisonPatternBindings(pattern);
     const recorded = try self.erroneous_statements.getOrPut(self.gpa, stmt_idx);
-    if (!recorded.found_existing) recorded.value_ptr.* = null;
+    if (!recorded.found_existing) recorded.value_ptr.* = .none;
 }
 
 /// Retire a top-level definition whose pattern was rejected. The binders keep
@@ -32214,7 +32216,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                         // binds nothing: its binders are erroneous and the
                         // statement becomes an explicit runtime error.
                         try self.poisonPatternBindings(var_stmt.pattern_idx);
-                        try self.erroneous_statements.put(self.gpa, stmt_idx, null);
+                        try self.erroneous_statements.put(self.gpa, stmt_idx, .none);
                     } else {
                         _ = try self.unifyInContext(annotation_var, var_pattern_var, env, .type_annotation);
                     }
@@ -32372,7 +32374,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
 
             if (decl_pattern_result.isProblem() or self.types.resolveVar(decl_expr_var).desc.content == .err) {
                 try self.markErroneousValueExpr(decl_stmt.expr);
-                try self.erroneous_statements.put(self.gpa, stmt_idx, decl_stmt.expr);
+                try self.erroneous_statements.put(self.gpa, stmt_idx, .some(decl_stmt.expr));
                 try self.poisonPatternBindings(decl_stmt.pattern);
             }
 
@@ -32497,7 +32499,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 self.types.resolveVar(reassign_expr_var).desc.content == .err)
             {
                 try self.markErroneousValueExpr(reassign.expr);
-                try self.erroneous_statements.put(self.gpa, stmt_idx, reassign.expr);
+                try self.erroneous_statements.put(self.gpa, stmt_idx, .some(reassign.expr));
             }
 
             _ = try self.unify(stmt_var, reassign_expr_var, env);
@@ -32551,7 +32553,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             // the expression's erroneous type.
             if (self.call_operand_type_error_exprs.items[nodeSlot(expr.expr)]) {
                 try self.markErroneousValueExpr(expr.expr);
-                try self.erroneous_statements.put(self.gpa, stmt_idx, expr.expr);
+                try self.erroneous_statements.put(self.gpa, stmt_idx, .some(expr.expr));
                 try self.markErroneous(stmt_var);
                 return null;
             }
@@ -39526,7 +39528,7 @@ fn retireForLoopsOverLateRejectedIterables(self: *Self) Allocator.Error!void {
         switch (loop.owner) {
             .statement => |stmt_idx| {
                 const recorded = try self.erroneous_statements.getOrPut(self.gpa, stmt_idx);
-                if (!recorded.found_existing) recorded.value_ptr.* = loop.iterable;
+                if (!recorded.found_existing) recorded.value_ptr.* = .some(loop.iterable);
             },
             .expr => |expr_idx| {
                 if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
@@ -39586,7 +39588,7 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         // A statement already replaced by an earlier sweep has nothing left to poison.
         if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(stmt_idx)).tag == .malformed) continue;
         var evaluated: ?CIR.Expr.Idx = null;
-        const diagnostic = if (entry.value_ptr.*) |value_expr| blk: {
+        const diagnostic = if (entry.value_ptr.get()) |value_expr| blk: {
             const poisoned_expr = self.cir.store.getExpr(value_expr);
             if (poisoned_expr != .e_runtime_error) {
                 base.invariant("check invariant violated: rejected statement value was not poisoned", .{});
@@ -53703,7 +53705,7 @@ fn rememberGroundTypes(self: *Self, roots: []const Var) Allocator.Error!void {
     for (marks.order.items, marks.ground.items) |resolved_var, is_ground| {
         if (!is_ground) continue;
         const slot = try self.snapshot_ground_copies.getOrPut(self.gpa, resolved_var);
-        if (!slot.found_existing) slot.value_ptr.* = null;
+        if (!slot.found_existing) slot.value_ptr.* = .none;
     }
 }
 
@@ -57625,7 +57627,7 @@ fn recordGeneratedCodecDerivationSnapshot(
     var shared_copies = collections.DenseMapUnmanaged(Var, void).empty;
     defer shared_copies.deinit(self.gpa);
     for (ground_marks.order.items) |source| {
-        const copy = (self.snapshot_ground_copies.get(source) orelse continue) orelse continue;
+        const copy = (self.snapshot_ground_copies.get(source) orelse continue).get() orelse continue;
         try self.var_map.put(source, copy);
         try shared_copies.put(self.gpa, copy, {});
     }
@@ -57653,8 +57655,8 @@ fn recordGeneratedCodecDerivationSnapshot(
         for (ground_marks.order.items, ground_marks.ground.items) |source, is_ground| {
             if (!is_ground) continue;
             const slot = try self.snapshot_ground_copies.getOrPut(self.gpa, source);
-            if (slot.found_existing and slot.value_ptr.* != null) continue;
-            slot.value_ptr.* = self.var_map.get(source);
+            if (slot.found_existing and slot.value_ptr.* != .none) continue;
+            slot.value_ptr.* = .of(self.var_map.get(source));
         }
     }
 

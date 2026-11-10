@@ -1973,7 +1973,7 @@ fn layoutResolvedMatchIn(
     const branches = program.branchSpan(branches_span);
     for (0..GuardedList.borrowLen(branches)) |index| {
         const branch = GuardedList.at(branches, index);
-        if (branch.guard != null or branch.bindings.len != 0) return null;
+        if (branch.guard != .none or branch.bindings.len != 0) return null;
         const tag = std.meta.activeTag(program.getPat(branch.pat).data);
         if (tag != .wildcard and tag != .int_lit) return null;
     }
@@ -2063,7 +2063,7 @@ pub fn forEachBoundLocal(allocator: std.mem.Allocator, program: *const Program, 
                 .list => |list| {
                     const children = program.patSpan(list.patterns);
                     for (0..children.len) |index| try work.append(allocator, .{ .pat = GuardedList.at(children, index) });
-                    if (list.rest) |rest| if (rest.pattern) |rest_pattern| {
+                    if (list.rest.get()) |rest| if (rest.pattern.get()) |rest_pattern| {
                         try work.append(allocator, .{ .pat = rest_pattern });
                     };
                 },
@@ -2188,7 +2188,7 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
                 try sink.stmts(branch.bindings);
-                if (branch.guard) |guard| try sink.one(guard);
+                if (branch.guard.get()) |guard| try sink.one(guard);
                 try sink.one(branch.body);
             }
         },

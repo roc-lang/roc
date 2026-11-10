@@ -3134,7 +3134,7 @@ pub fn compute(
     // Proc parameters are defined by the proc entry rather than a statement;
     // remember each parameter's body so its spine has a start. A local that
     // parameterizes more than one proc spec never dismantles.
-    var param_bodies = collections.DenseMap(LIR.LocalId, ?LIR.CFStmtId).init(gpa);
+    var param_bodies = collections.DenseMap(LIR.LocalId, collections.OptionalId(LIR.CFStmtId)).init(gpa);
     defer param_bodies.deinit();
     const is_param = try gpa.alloc(bool, store.localCount());
     defer gpa.free(is_param);
@@ -3157,9 +3157,9 @@ pub fn compute(
             is_param[@backingInt(param)] = true;
             const slot = try param_bodies.getOrPut(param);
             if (slot.found_existing) {
-                slot.value_ptr.* = null;
+                slot.value_ptr.* = .none;
             } else {
-                slot.value_ptr.* = body;
+                slot.value_ptr.* = .some(body);
             }
         }
     }
@@ -3848,7 +3848,7 @@ pub fn compute(
                         => continue :candidates,
                     }
                 else if (candidate.def_count == 0)
-                    ((param_bodies.get(local) orelse continue :candidates) orelse continue :candidates)
+                    ((param_bodies.get(local) orelse continue :candidates).get() orelse continue :candidates)
                 else
                     continue :candidates;
 

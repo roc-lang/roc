@@ -183,7 +183,7 @@ pub const Index = struct {
     enclosing_loop: std.AutoHashMapUnmanaged(LoopKey, u32) = .empty,
     /// Locals bound once by a plain binding, to their value; null for a
     /// local bound more than once or recursively.
-    defs: collections.DenseMapUnmanaged(Ast.LocalId, ?Ast.ExprId) = .empty,
+    defs: collections.DenseMapUnmanaged(Ast.LocalId, collections.OptionalId(Ast.ExprId)) = .empty,
     slots: collections.DenseMapUnmanaged(Ast.LocalId, Slot) = .empty,
     /// The `return` values of each function.
     returns: []std.ArrayList(Ast.ExprId),
@@ -307,7 +307,7 @@ pub const Index = struct {
         switch (program.getPat(pat).data) {
             .bind => |local| {
                 const gop = try self.defs.getOrPut(self.gpa, local);
-                gop.value_ptr.* = if (gop.found_existing) null else value;
+                gop.value_ptr.* = if (gop.found_existing) .none else .of(value);
             },
             .wildcard, .as, .tag, .nominal, .list, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern, .record, .tuple => {},
         }
@@ -429,7 +429,7 @@ pub const Index = struct {
                             const b = GuardedList.at(bs, i);
                             const bind = p.stmtSpan(b.bindings);
                             for (0..bind.len) |j| try tasks.append(gpa, .{ .stmt = GuardedList.at(bind, j) });
-                            if (b.guard) |g| try push(&tasks, gpa, g, .stop);
+                            if (b.guard.get()) |g| try push(&tasks, gpa, g, .stop);
                             try push(&tasks, gpa, b.body, .{ .same = e });
                         }
                     },
@@ -900,7 +900,7 @@ pub const Session = struct {
             },
             .local => |local| {
                 if (self.index.defs.get(local)) |maybe_def| {
-                    const def = maybe_def orelse return .{};
+                    const def = maybe_def.get() orelse return .{};
                     return self.child(exprKey(def, path), missing) orelse .{};
                 }
                 const slot = self.index.slots.get(local) orelse return .{};
