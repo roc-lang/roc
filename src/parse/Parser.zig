@@ -444,7 +444,7 @@ fn currentAssociatedOwnerPath(self: *const Parser) ?DeclIndex.TypePathIdx {
     const scope_idx = self.decl_index.currentScope() orelse return null;
     const scope = self.decl_index.scopes.items[@backingInt(scope_idx)];
     if (scope.kind != .associated) return null;
-    return scope.owner_type_path;
+    return scope.owner_type_path.get();
 }
 
 fn tokenIdentsEqual(self: *Parser, a: ?Token.Idx, b: ?Token.Idx) bool {

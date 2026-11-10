@@ -145,7 +145,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{selector}),
             .frame_locals = try store.addLocalSpan(&.{ selector, result, outer, inner, disc, carried }),
-            .body = root,
+            .body = .some(root),
             .iterator_fusion_scope = true,
             .ret_layout = .u64,
         }, .none);
@@ -161,7 +161,7 @@ fn expectFusionJoins(fixture: *Fixture, phase: passes.Phase) TestError!void {
     defer fresh.deinit();
     for (0..fixture.store.procSpecCount()) |index| {
         const proc = fixture.store.getProcSpec(@fromBackingInt(@intCast(index)));
-        var walk = try body_clone.ReachableStmts.init(&fixture.store, proc.body.?);
+        var walk = try body_clone.ReachableStmts.init(&fixture.store, proc.body.get().?);
         defer walk.deinit();
         var nested: usize = 0;
         var external_jumps: usize = 0;
@@ -224,7 +224,7 @@ const Fixture = struct {
                 .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{ number, text }),
-                .body = body,
+                .body = .some(body),
                 .ret_layout = .i64,
             }, .none);
         }
@@ -307,7 +307,7 @@ const Fixture = struct {
                 .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{input}),
-                .body = body,
+                .body = .some(body),
                 .ret_layout = .i64,
             }, .none);
         }
@@ -492,7 +492,7 @@ fn wrapFusionInForwarder(fixture: *Fixture) std.mem.Allocator.Error!void {
         const body = try store.addCFStmt(.{ .join = .{
             .id = @fromBackingInt(@intCast(4)),
             .params = try store.addLocalSpan(&.{outer}),
-            .body = proc.body.?,
+            .body = proc.body.get().?,
             .remainder = inner_join,
         } }, .test_fixture);
         var frame = std.ArrayList(core.LIR.LocalId).empty;
@@ -501,7 +501,7 @@ fn wrapFusionInForwarder(fixture: *Fixture) std.mem.Allocator.Error!void {
         for (0..old_frame.len) |local| try frame.append(testing.allocator, core.LirStore.GuardedList.at(old_frame, local));
         try frame.appendSlice(testing.allocator, &.{ outer, inner });
         const frame_span = try store.addLocalSpan(frame.items);
-        store.getProcSpecPtr(id).body = body;
+        store.getProcSpecPtr(id).body = .some(body);
         store.getProcSpecPtr(id).frame_locals = frame_span;
     }
 }
@@ -522,7 +522,7 @@ test "LIR proc pass forwarding generated joins become frozen source for tag fusi
         var external_ids: [8]core.LIR.JoinPointId = undefined;
         for (&external_ids, 0..) |*external, index| {
             const proc = fixture.store.getProcSpec(@fromBackingInt(@intCast(index)));
-            const inner = fixture.store.getCFStmtImmediate(proc.body.?).join;
+            const inner = fixture.store.getCFStmtImmediate(proc.body.get().?).join;
             try testing.expectEqual(@as(u32, 3), @backingInt(inner.id));
             external.* = fixture.store.getCFStmtImmediate(inner.body).join.id;
             try testing.expect(@backingInt(external.*) > 4);
@@ -530,9 +530,9 @@ test "LIR proc pass forwarding generated joins become frozen source for tag fusi
         try passes.run(testing.allocator, &fixture.store, &fixture.layouts, .tag_fusion, exec, &metrics);
         for (external_ids, 0..) |external, index| {
             const proc = fixture.store.getProcSpec(@fromBackingInt(@intCast(index)));
-            const inner = fixture.store.getCFStmtImmediate(proc.body.?).join;
+            const inner = fixture.store.getCFStmtImmediate(proc.body.get().?).join;
             try testing.expectEqual(external, fixture.store.getCFStmtImmediate(inner.body).join.id);
-            var walk = try body_clone.ReachableStmts.init(&fixture.store, proc.body.?);
+            var walk = try body_clone.ReachableStmts.init(&fixture.store, proc.body.get().?);
             defer walk.deinit();
             var external_jumps: usize = 0;
             while (try walk.next()) |id| {
@@ -820,14 +820,14 @@ test "LIR proc pass prunes unread join parameters to a fixed point" {
         .identity = LIR.ProcIdentity.forTest(0),
         .args = try store.addLocalSpan(&.{ flag, value }),
         .frame_locals = try store.addLocalSpan(&.{ flag, value, inner_dead, outer_dead, outer_live }),
-        .body = outer,
+        .body = .some(outer),
         .ret_layout = .u64,
     }, .none);
 
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
 
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.get().?);
     defer walk.deinit();
     var joins: usize = 0;
     var live_writes: usize = 0;
@@ -895,14 +895,14 @@ test "LIR proc pass deletes pure definitions that only fed pruned join parameter
         .identity = LIR.ProcIdentity.forTest(0),
         .args = try store.addLocalSpan(&.{value}),
         .frame_locals = try store.addLocalSpan(&.{ value, sum, alias, reread, kept, dead_reread, dead_sum, dead_kept }),
-        .body = join,
+        .body = .some(join),
         .ret_layout = .u64,
     }, .none);
 
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
 
-    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.?);
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.get().?);
     const pruned = store.getCFStmtImmediate(join).join;
     try testing.expectEqual(@as(usize, 0), store.getLocalSpan(pruned.params).len);
     try testing.expectEqual(define_sum, pruned.remainder);
@@ -943,14 +943,14 @@ test "LIR proc pass prunes a join parameter whose only reader is a dead definiti
         .identity = LIR.ProcIdentity.forTest(0),
         .args = try store.addLocalSpan(&.{value}),
         .frame_locals = try store.addLocalSpan(&.{ value, unread, kept, alias }),
-        .body = join,
+        .body = .some(join),
         .ret_layout = .u64,
     }, .none);
 
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
 
-    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.?);
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.get().?);
     const pruned = store.getCFStmtImmediate(join).join;
     const params = store.getLocalSpan(pruned.params);
     try testing.expectEqual(@as(usize, 1), params.len);
@@ -987,14 +987,14 @@ test "LIR proc pass keeps join parameters that are read or are procedure argumen
         .identity = LIR.ProcIdentity.forTest(0),
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(&.{ arg, read }),
-        .body = join,
+        .body = .some(join),
         .ret_layout = .u64,
     }, .none);
 
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
 
-    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.?);
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.get().?);
     try testing.expectEqual(@as(usize, 2), store.getLocalSpan(store.getCFStmtImmediate(join).join.params).len);
     try testing.expectEqual(write_arg, store.getCFStmtImmediate(join).join.remainder);
 }
@@ -1028,7 +1028,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
         .identity = LIR.ProcIdentity.forTest(0),
         .args = .empty(),
         .frame_locals = try store.addLocalSpan(&.{ lhs, rhs, equal }),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .bool,
     }, .none);
 
@@ -1068,7 +1068,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
         .identity = LIR.ProcIdentity.forTest(0),
         .args = try store.addLocalSpan(&.{ lo, hi }),
         .frame_locals = try store.addLocalSpan(&.{ lo, hi, count, shifted }),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u8x16,
     }, .none);
 

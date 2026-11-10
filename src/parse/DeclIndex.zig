@@ -65,11 +65,11 @@ pub const ScopeOwner = union(enum) {
 
 /// Parser declaration scope with direct declaration membership.
 pub const Scope = struct {
-    parent: ?ScopeIdx,
+    parent: collections.OptionalId(ScopeIdx),
     kind: ScopeKind,
     owner: ScopeOwner,
     forward_policy: ForwardPolicy,
-    owner_type_path: ?TypePathIdx,
+    owner_type_path: collections.OptionalId(TypePathIdx),
     decls: Span,
     /// The scope's value, type, and import-alias names: spans into
     /// `scope_names`, each sorted by identifier. Filled when the scope closes.
@@ -78,6 +78,10 @@ pub const Scope = struct {
     import_alias_names: Span,
     region: TokenRegion,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Scope) == 60);
+}
 
 /// The name tables a scope keeps its declarations in.
 pub const Namespace = enum(u8) {
@@ -167,11 +171,15 @@ const OverflowIdx = enum(u32) {
 
 /// Parser-owned type path such as `Parent.Nested`.
 pub const TypePath = struct {
-    parent: ?TypePathIdx,
+    parent: collections.OptionalId(TypePathIdx),
     name: Ident.Idx,
     scope: ScopeIdx,
     depth: u16,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(TypePath) == 16);
+}
 
 const TypePathKey = struct {
     parent: ?TypePathIdx,
@@ -390,11 +398,11 @@ pub fn enterScope(
         .block => .source_order,
     };
     try self.scopes.append(self.gpa, .{
-        .parent = parent,
+        .parent = .of(parent),
         .kind = kind,
         .owner = owner,
         .forward_policy = forward_policy,
-        .owner_type_path = null,
+        .owner_type_path = .none,
         .decls = Span.empty(),
         .value_names = Span.empty(),
         .type_names = Span.empty(),
@@ -528,7 +536,7 @@ pub fn setScopeOwner(self: *DeclIndex, idx: ScopeIdx, owner: ScopeOwner) void {
 
 /// Update a scope's associated owner path once known.
 pub fn setScopeOwnerTypePath(self: *DeclIndex, idx: ScopeIdx, owner_type_path: ?TypePathIdx) void {
-    self.scopes.items[@backingInt(idx)].owner_type_path = owner_type_path;
+    self.scopes.items[@backingInt(idx)].owner_type_path = .of(owner_type_path);
 }
 
 /// Append a declaration to its owning scope.
@@ -679,7 +687,7 @@ pub fn internTypePath(self: *DeclIndex, scope_idx: ScopeIdx, parent: ?TypePathId
         1;
     const idx: TypePathIdx = @fromBackingInt(@intCast(self.type_paths.items.len));
     try self.type_paths.append(self.gpa, .{
-        .parent = parent,
+        .parent = .of(parent),
         .name = name,
         .scope = scope_idx,
         .depth = depth,

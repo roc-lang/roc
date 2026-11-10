@@ -357,7 +357,8 @@ pub const Constants = struct {
     /// 178: checked-module entries combine independently serialized type-store
     ///      columns with body-local type context arguments, per-use anonymous
     ///      structure and generated-codec recurrences.
-    pub const CACHE_VERSION = 178;
+    /// 179: selected hoisted roots store their optional ids in four bytes.
+    pub const CACHE_VERSION = 179;
 };
 
 /// Configuration for the Roc cache system.

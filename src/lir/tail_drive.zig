@@ -80,7 +80,7 @@ pub fn run(
     defer join_bodies.deinit(allocator);
     for (0..proc_count) |proc_index| {
         const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(proc_index))));
-        const body = proc.body orelse continue;
+        const body = proc.body.get() orelse continue;
         join_bodies.clearRetainingCapacity();
         try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
@@ -316,7 +316,7 @@ test "cached pending-call summaries propagate without a locally deferred call" {
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(2),
             .args = .empty(),
-            .body = call,
+            .body = .some(call),
             .ret_layout = .u64,
         }, .none);
         const result = try store.addLocal(.{ .layout_idx = .u64 });
@@ -331,7 +331,7 @@ test "cached pending-call summaries propagate without a locally deferred call" {
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(3),
             .args = .empty(),
-            .body = root_call,
+            .body = .some(root_call),
             .ret_layout = .u64,
         }, .none);
         try run(a, &store, &.{&.{root}});

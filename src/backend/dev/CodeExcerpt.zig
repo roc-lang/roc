@@ -2646,7 +2646,7 @@ test "independent message pools preserve their targets across repeated excerpt a
                 .name = store.freshSyntheticSymbol(),
                 .identity = lir.ProcIdentity.forTest(@intCast(index)),
                 .args = .empty(),
-                .body = body,
+                .body = .some(body),
                 .ret_layout = .zst,
             }, .none);
         }

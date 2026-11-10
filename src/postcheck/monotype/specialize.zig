@@ -152,8 +152,12 @@ pub const ProgramEvidenceSpan = struct {
     nodes_len: u32,
     frames_start: u32,
     frames_len: u32,
-    head: ?u32,
+    head: collections.OptionalU32,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(ProgramEvidenceSpan) == 20);
+}
 
 const OwnedEvidence = struct {
     entries: check.ConstStore.ConstFnEvidenceVector,

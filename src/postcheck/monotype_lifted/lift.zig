@@ -475,7 +475,7 @@ const Lifter = struct {
             const fn_id = try self.output.reserveFnSlot();
             try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = def.body });
             self.def_map[index] = .of(fn_id);
-            if (def.fn_id) |source_fn_id| self.registerFn(source_fn_id, fn_id);
+            if (def.fn_id.get()) |source_fn_id| self.registerFn(source_fn_id, fn_id);
         }
 
         self.nested_def_map = try self.allocator.alloc(MaybeFnId, self.source.nested_defs.len);
@@ -534,7 +534,7 @@ const Lifter = struct {
         }
 
         for (self.source.layout_requests) |request| {
-            const fn_id = if (request.def) |def| blk: {
+            const fn_id = if (request.def.get()) |def| blk: {
                 const raw = @backingInt(def);
                 if (raw >= self.def_map.len) Common.invariant("Monotype static data layout request references a missing definition");
                 break :blk self.def_map[raw].get() orelse
@@ -574,7 +574,7 @@ const Lifter = struct {
             },
             .hosted => .hosted,
         };
-        var source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
+        var source = if (def.fn_id.get()) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
         if (source) |*template| template.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
@@ -582,10 +582,10 @@ const Lifter = struct {
             // A served body already passed this normalization. Its scope is
             // part of source identity even though no body remains to rewrite.
             .root_identity = def.root_identity,
-            .signature = if (def.fn_id) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
+            .signature = .of(if (def.fn_id.get()) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.?.mono_fn_ty,
-            } else null,
+            } else null),
             .args = def.args,
             .captures = .empty(),
             .body = body,
@@ -601,14 +601,14 @@ const Lifter = struct {
         const shapes = self.output.finishFnShapes(outer_shapes);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@backingInt(fn_id)]);
         var source = self.nestedSource(def.fn_id, def.fn_def);
-        source.frozen_fn = def.fn_id;
+        source.frozen_fn = .some(def.fn_id);
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
-            .signature = switch (self.source.fnSignatureRelation(def.fn_id)) {
+            .signature = .of(switch (self.source.fnSignatureRelation(def.fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.mono_fn_ty,
-            },
+            }),
             .args = def.args,
             .captures = capture_span,
             .body = .{ .roc = def.body },
@@ -992,14 +992,14 @@ const Lifter = struct {
         const shapes = self.output.finishFnShapes(finish.outer_shapes);
         const capture_span = try self.output.addTypedLocalSpan(finish.captures);
         var source = self.source.fnSource(lambda.fn_id);
-        source.frozen_fn = lambda.fn_id;
+        source.frozen_fn = .some(lambda.fn_id);
         self.output.setFn(fn_id, .{
             .symbol = self.symbols.fresh(),
             .source = source,
-            .signature = switch (self.source.fnSignatureRelation(lambda.fn_id)) {
+            .signature = .of(switch (self.source.fnSignatureRelation(lambda.fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.mono_fn_ty,
-            },
+            }),
             .args = lambda.args,
             .captures = capture_span,
             .body = .{ .roc = lambda.body },

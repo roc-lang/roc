@@ -89,7 +89,7 @@ pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) Resour
         const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(index)));
         // Only a procedure that calls itself can be rewritten to thread a
         // pointer to its result.
-        if (proc.body != null and proc.hosted == null and proc.abi == .roc and proc.shapes.self_call and
+        if (proc.body != .none and proc.hosted.get() == null and proc.abi == .roc and proc.shapes.self_call and
             layouts.getLayout(proc.ret_layout).tag == .tag_union)
         {
             _ = try layouts.insertPtr(proc.ret_layout);
@@ -139,7 +139,7 @@ fn transformProc(
     scratch: *Scratch,
 ) ResourceError!?Report {
     const proc = store.getProcSpecImmediate(proc_id);
-    if (proc.body == null or proc.hosted != null or proc.abi != .roc) return null;
+    if (proc.body == .none or proc.hosted.get() != null or proc.abi != .roc) return null;
 
     var detection = Detection.init(store, layouts, proc_id, scratch);
     defer detection.deinit();
@@ -226,7 +226,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
             .args = args,
             .next = ret,
         } }, .test_fixture);
-        store.getProcSpecPtr(proc_id).body = call;
+        store.getProcSpecPtr(proc_id).body = .some(call);
         const sites = try builder.finish(&store);
         store.getProcSpecPtr(proc_id).tail_calls = .of(sites);
         store.tail_call_builder = null;
@@ -235,7 +235,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
             .name = store.freshSyntheticSymbol(),
             .args = args,
             .frame_locals = frame,
-            .body = ret,
+            .body = .some(ret),
             .ret_layout = .u64,
         }, .none);
         const untouched_before = store.getProcSpec(untouched);
@@ -256,7 +256,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         const proc = store.getProcSpec(proc_id);
         try std.testing.expectEqual(LIR.TailTransform.tce, proc.tail_transform);
         try std.testing.expect(proc.tail_calls.get() == null);
-        const join = store.getCFStmtImmediate(proc.body.?).join;
+        const join = store.getCFStmtImmediate(proc.body.get().?).join;
         try std.testing.expectEqual(call, join.body);
         try std.testing.expectEqual(join.id, store.getCFStmtImmediate(call).jump.target);
     }
@@ -471,7 +471,7 @@ const Detection = struct {
         const ret_layout_val = self.layouts.getLayout(proc.ret_layout);
         self.eligible_trmc = ret_layout_val.tag == .tag_union;
 
-        try self.walk(proc.body.?);
+        try self.walk(proc.body.get().?);
         if (self.bail) return;
         try self.propagateSharedTails();
         self.invalidateSharedRewriteCandidates();
@@ -1251,7 +1251,7 @@ const Transform = struct {
     /// fresh argument locals; the original args become the join params.
     fn installWrapper(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
         if (self.loopEntry() != null) return self.installWrapperAtEntry(is_trmc, initial);
-        const old_body = self.store.getProcSpecImmediate(self.proc_id).body.?;
+        const old_body = self.store.getProcSpecImmediate(self.proc_id).body.get().?;
         const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
         const fresh = try self.gpa.alloc(LocalId, self.old_args.len);
@@ -1310,7 +1310,7 @@ const Transform = struct {
         const frame_locals = try self.rebuildFrameLocals();
         const proc_ptr = self.store.getProcSpecPtr(self.proc_id);
         proc_ptr.args = fresh_span;
-        proc_ptr.body = join_stmt;
+        proc_ptr.body = .some(join_stmt);
         proc_ptr.frame_locals = frame_locals;
         self.requireStackProbeIfNeeded(proc_ptr);
     }
@@ -1320,7 +1320,7 @@ const Transform = struct {
     /// the join directly and only rewrite recursive sites to rebind params.
     fn installTceLoop(self: *Transform) ResourceError!void {
         const proc = self.store.getProcSpecImmediate(self.proc_id);
-        const loop_start = self.loopEntry() orelse proc.body.?;
+        const loop_start = self.loopEntry() orelse proc.body.get().?;
         const origin = trmcOrigin(self.store.stmtOrigin(loop_start));
         const entry_jump = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } }, origin);
         try self.installJoin(proc.args, entry_jump, origin);
@@ -1344,14 +1344,14 @@ const Transform = struct {
     /// run once.
     fn installJoin(self: *Transform, params: LIR.LocalSpan, remainder: CFStmtId, origin: LIR.StmtOrigin) ResourceError!void {
         const entry = self.loopEntry() orelse {
-            const old_body = self.store.getProcSpecImmediate(self.proc_id).body.?;
+            const old_body = self.store.getProcSpecImmediate(self.proc_id).body.get().?;
             const join_stmt = try self.store.addCFStmt(.{ .join = .{
                 .id = self.join_id,
                 .params = params,
                 .body = old_body,
                 .remainder = remainder,
             } }, origin);
-            self.store.getProcSpecPtr(self.proc_id).body = join_stmt;
+            self.store.getProcSpecPtr(self.proc_id).body = .some(join_stmt);
             return;
         };
         const first = try self.store.addCFStmt(self.store.getCFStmt(entry), self.store.stmtOrigin(entry));
@@ -1453,7 +1453,7 @@ const Transform = struct {
 
     fn unlink(self: *Transform, edge: Edge, replacement: CFStmtId) void {
         switch (edge) {
-            .proc_body => self.store.getProcSpecPtr(self.proc_id).body = replacement,
+            .proc_body => self.store.getProcSpecPtr(self.proc_id).body = .some(replacement),
             .stmt_next => |pred| self.setNext(pred, replacement),
             .join_body => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.body = replacement,
             .join_remainder => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.remainder = replacement,

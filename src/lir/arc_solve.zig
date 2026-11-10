@@ -2945,7 +2945,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             const args = store.getLocalSpan(assign.args);
             const callee = store.getProcSpec(assign.proc);
-            if (callee.body == null) {
+            if (callee.body == .none) {
                 for (0..GuardedList.borrowLen(args)) |arg_index| {
                     try liftVisibilitySeed(solver, GuardedList.at(args, arg_index));
                 }
@@ -3438,7 +3438,7 @@ fn fillPinnedProcContracts(
 }
 
 fn pinnedByAbi(proc: *const LIR.LirProcSpec) bool {
-    return proc.arcBody() == null or proc.hosted != null or switch (proc.abi) {
+    return proc.arcBody() == null or proc.hosted.get() != null or switch (proc.abi) {
         .roc => false,
         // The uniform erased-callable ABI, in either form, fixes an
         // all-owned convention: the argument record and result are owned.
@@ -3480,7 +3480,7 @@ fn computeVisibilityFromFacts(
     // facts, but returns may be encountered after their callers during the
     // structural walk, so connect them after the lift is complete.
     for (solver.unique_calls.items) |call| {
-        if (solver.store.getProcSpecImmediate(call.callee).body == null) continue;
+        if (solver.store.getProcSpecImmediate(call.callee).body == .none) continue;
         const target = domain.indexOf(call.target) orelse continue;
         for (solver.proc_returns.of(@backingInt(call.callee))) |return_local| {
             const returned = domain.indexOfRaw(return_local) orelse continue;
@@ -3727,7 +3727,7 @@ fn computeVisibilityFromLift(
             .assign_call => |assign| {
                 const callee = store.getProcSpecImmediate(assign.proc);
                 const args = store.getLocalSpan(assign.args);
-                if (callee.body == null) {
+                if (callee.body == .none) {
                     // No body to flow through: everything at the boundary is
                     // host-visible.
                     for (0..GuardedList.borrowLen(args)) |arg_index| {
@@ -6759,7 +6759,7 @@ const UniquenessTest = struct {
 
     fn staticData(self: *@This(), initializer: LIR.LirProcSpecId, layout: layout_mod.Idx) SolveError!LIR.StaticDataId {
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(self.static_data_values.items.len));
-        try self.static_data_values.append(std.testing.allocator, .{ .initializer = initializer, .layout_idx = layout });
+        try self.static_data_values.append(std.testing.allocator, .{ .initializer = .some(initializer), .layout_idx = layout });
         return id;
     }
 
@@ -6780,7 +6780,7 @@ const UniquenessTest = struct {
             .identity = LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
             .name = self.store.freshSyntheticSymbol(),
             .args = try self.store.addLocalSpan(args),
-            .body = body,
+            .body = .of(body),
             .ret_layout = layout,
         }, .none);
     }

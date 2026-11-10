@@ -327,7 +327,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = .empty(),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .u64,
         }, .none);
         const arg = try store.addLocal(.{ .layout_idx = .u64 });
@@ -336,7 +336,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{arg}),
-            .body = noop_body,
+            .body = .some(noop_body),
             .ret_layout = .u64,
         }, .none);
         if (procedure_local) {
@@ -349,7 +349,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
             try run(&store, &layouts);
         }
         try testing.expectEqual(.num_int_add_proven_cannot_overflow, store.getCFStmtImmediate(add).assign_low_level.op);
-        try testing.expectEqual(noop_body, store.getProcSpecImmediate(noop).body.?);
+        try testing.expectEqual(noop_body, store.getProcSpecImmediate(noop).body.get().?);
         try testing.expectEqual(arg, store.getCFStmtImmediate(noop_body).ret.value);
     }
 }
@@ -399,7 +399,7 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
         .identity = LIR.ProcIdentity.forTest(0),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{flag}),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u64,
     }, .none);
 
@@ -411,7 +411,7 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
     defer join_ids.deinit();
     var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
     defer jump_targets.deinit(testing.allocator);
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.get().?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
         const cf = store.getCFStmt(stmt);
@@ -477,7 +477,7 @@ test "range prove gives threaded Bool joins identities unused by joins in unreac
         .identity = LIR.ProcIdentity.forTest(0),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{flag}),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u64,
     }, .none);
 
@@ -489,7 +489,7 @@ test "range prove gives threaded Bool joins identities unused by joins in unreac
     // not, has its own identity.
     var join_ids = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(testing.allocator);
     defer join_ids.deinit();
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpec(proc).body.?, testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpec(proc).body.get().?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
         const cf = store.getCFStmt(stmt);
@@ -562,7 +562,7 @@ test "range prove folds a threaded Bool join site that wrote the parameter as a 
         .identity = LIR.ProcIdentity.forTest(0),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{}),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u64,
     }, .none);
 
@@ -577,7 +577,7 @@ test "range prove folds a threaded Bool join site that wrote the parameter as a 
     defer jump_targets.deinit(testing.allocator);
     var join_bodies = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(testing.allocator);
     defer join_bodies.deinit();
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.get().?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
         const cf = store.getCFStmt(stmt);
@@ -670,7 +670,7 @@ test "range prove keeps a join body's arms when another path arrives at it with 
         .identity = LIR.ProcIdentity.forTest(0),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{input}),
-        .body = set_one,
+        .body = .some(set_one),
         .ret_layout = .u64,
     }, .none);
 
@@ -680,7 +680,7 @@ test "range prove keeps a join body's arms when another path arrives at it with 
 
     var returns_one = false;
     var returns_zero = false;
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.get().?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
         const cf = store.getCFStmt(stmt);
@@ -770,7 +770,7 @@ test "range prove keeps a body's arms when two joins share it" {
         .identity = LIR.ProcIdentity.forTest(0),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{ input, unknown }),
-        .body = set_one,
+        .body = .some(set_one),
         .ret_layout = .u64,
     }, .none);
 
@@ -780,7 +780,7 @@ test "range prove keeps a body's arms when two joins share it" {
 
     var returns_one = false;
     var returns_zero = false;
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.get().?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
         const cf = store.getCFStmt(stmt);
@@ -861,7 +861,7 @@ test "range prove reads a static list of copies' stated item count as its length
             .identity = LIR.ProcIdentity.forTest(0),
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{}),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .u64,
         }, .none);
 
@@ -872,7 +872,7 @@ test "range prove reads a static list of copies' stated item count as its length
         var switches: usize = 0;
         var rets = std.ArrayList(LocalId).empty;
         defer rets.deinit(testing.allocator);
-        var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+        var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.get().?, testing.allocator);
         defer walk.deinit();
         while (try walk.next()) |stmt| {
             const cf = store.getCFStmt(stmt);
@@ -968,7 +968,7 @@ test "range prove keeps a loop test whose body allocates many value nodes" {
         .identity = LIR.ProcIdentity.forTest(0),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{}),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u64,
     }, .none);
 
@@ -3049,7 +3049,7 @@ const Pass = struct {
     fn prescanProc(self: *Pass, proc: LIR.LirProcSpec) ResourceError!void {
         if (self.read_counts) |*counts| counts.deinit();
         self.read_counts = null;
-        self.read_counts = if (proc.body) |body| try BodyClone.countReachableReadsWithScratch(self.store, body, self.analysis) else null;
+        self.read_counts = if (proc.body.get()) |body| try BodyClone.countReachableReadsWithScratch(self.store, body, self.analysis) else null;
         const args = self.store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(args)) |i| {
             try self.bumpAssign(GuardedList.at(args, i));
@@ -3059,8 +3059,8 @@ const Pass = struct {
         const seen = &self.prescan_seen;
         seen.clearRetainingCapacity();
 
-        try self.scratch.append(self.allocator, proc.body.?);
-        try self.bumpPred(proc.body.?);
+        try self.scratch.append(self.allocator, proc.body.get().?);
+        try self.bumpPred(proc.body.get().?);
         while (self.scratch.pop()) |current| {
             if (seen.contains(current)) continue;
             try seen.put(current, {});
@@ -3124,8 +3124,8 @@ const Pass = struct {
             try BodyClone.forEachFlowSuccessor(self.store, stmt, self, edgeTo);
         }
         try self.collectSharedJoinBodies();
-        try self.scanJoinNesting(proc.body.?);
-        if (self.body_joins.count() != 0) try self.buildLoopScan(proc.body.?);
+        try self.scanJoinNesting(proc.body.get().?);
+        if (self.body_joins.count() != 0) try self.buildLoopScan(proc.body.get().?);
         var loop_it = self.body_joins.iterator();
         while (loop_it.next()) |kv| try self.scanLoopAssigned(kv.value_ptr.*, kv.key_ptr.*);
     }
@@ -5426,7 +5426,7 @@ const Pass = struct {
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
         const proc = self.store.getProcSpec(proc_id);
-        if (proc.body == null or proc.hosted != null) return;
+        if (proc.body == .none or proc.hosted.get() != null) return;
 
         self.freePersisted();
         self.loop_bounds.clearRetainingCapacity();
@@ -5451,9 +5451,9 @@ const Pass = struct {
             // Threading restructures control flow, so a round that threads
             // stops there and the next round re-derives the graph facts.
             self.seeds_grew = false;
-            if (try self.threadBoolJoins(proc.body.?) == 0) {
-                try self.walkRegions(proc.body.?);
-                try self.certifyRound(proc.body.?);
+            if (try self.threadBoolJoins(proc.body.get().?) == 0) {
+                try self.walkRegions(proc.body.get().?);
+                try self.certifyRound(proc.body.get().?);
                 try self.persistLoopBounds();
                 self.resolvePendingInvariants();
             }

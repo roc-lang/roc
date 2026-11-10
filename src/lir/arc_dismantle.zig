@@ -2136,7 +2136,7 @@ test "component dominance agrees with whole-store dominance across shared proced
             .name = store.freshSyntheticSymbol(),
             .args = .empty(),
             .frame_locals = frame,
-            .body = body,
+            .body = .some(body),
             .ret_layout = .i64,
         }, .none);
     }
@@ -3895,7 +3895,7 @@ pub fn compute(
                 if (!joins_ready[owner]) {
                     joins_ready[owner] = true;
                     try collectProcJoinBodies(store, solution.procStatements(@fromBackingInt(@intCast(owner))), &proc_joins[owner]);
-                    const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.?;
+                    const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.get().?;
                     proc_graphs[owner] = try future_fields.buildProcGraph(gpa, store, &.{proc_body}, &proc_joins[owner]);
                 }
                 const join_bodies = &proc_joins[owner];

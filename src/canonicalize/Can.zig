@@ -1798,7 +1798,7 @@ fn activeDeclEntryIsDefiningItem(self: *Self, binding: ActiveDeclBinding, ident:
     if (self.defining_bound_vars == null) return false;
     const parser_decl_scope = self.parse_ir.decl_index.scopes.items[@backingInt(binding.parser_scope)];
     if (parser_decl_scope.kind != .associated) return false;
-    const owner_path = parser_decl_scope.owner_type_path orelse return false;
+    const owner_path = parser_decl_scope.owner_type_path.get() orelse return false;
     const pattern_idx = self.assoc_value_patterns.get(.{ .owner = owner_path, .item = ident }) orelse return false;
     return self.isDefiningBoundVar(pattern_idx);
 }
@@ -1980,7 +1980,7 @@ fn activeWholeScopeBindingForDeclScope(
             return null;
         }
         if (parser_scope.forward_policy != .whole_scope) return null;
-        maybe_scope = parser_scope.parent;
+        maybe_scope = parser_scope.parent.get();
     }
     return null;
 }
@@ -2167,7 +2167,7 @@ fn parserTypePathForDependencySegments(
                 return self.parserTypePathFromRoot(root_path, segments[1..]);
             }
         }
-        maybe_scope = scope.parent;
+        maybe_scope = scope.parent.get();
     }
 
     return self.moduleParserTypePathForSegments(segments);
@@ -2517,7 +2517,7 @@ const AliasCycleContext = struct {
                     return @fromBackingInt(@intCast(decl.statement));
                 }
             }
-            maybe_scope = scope.parent;
+            maybe_scope = scope.parent.get();
         }
 
         return null;
@@ -3103,7 +3103,7 @@ fn typePathRootName(self: *const Self, path_idx: AST.DeclIndex.TypePathIdx) Iden
     var current = path_idx;
     while (true) {
         const path = decl_index.type_paths.items[@backingInt(current)];
-        if (path.parent) |parent| {
+        if (path.parent.get()) |parent| {
             current = parent;
             continue;
         }
@@ -3116,7 +3116,7 @@ fn typePathRootScope(self: *const Self, path_idx: AST.DeclIndex.TypePathIdx) AST
     var current = path_idx;
     while (true) {
         const path = decl_index.type_paths.items[@backingInt(current)];
-        if (path.parent) |parent| {
+        if (path.parent.get()) |parent| {
             current = parent;
             continue;
         }
@@ -3154,7 +3154,7 @@ fn typePathIdent(
     var maybe_path: ?AST.DeclIndex.TypePathIdx = path_idx;
     while (maybe_path) |idx| {
         try self.scratch_type_paths.append(idx);
-        maybe_path = decl_index.type_paths.items[@backingInt(idx)].parent;
+        maybe_path = decl_index.type_paths.items[@backingInt(idx)].parent.get();
     }
 
     const bytes_top = self.scratchBytesTop();
@@ -3396,8 +3396,8 @@ fn enterAssociatedBlockState(
     state.* = .{
         .associated_value_regions = retained_value_regions,
         .work = work,
-        .owner_type_path = associated_scope.owner_type_path,
-        .owner_is_module_visible = self.associatedOwnerIsModuleVisible(associated_scope.owner_type_path),
+        .owner_type_path = associated_scope.owner_type_path.get(),
+        .owner_is_module_visible = self.associatedOwnerIsModuleVisible(associated_scope.owner_type_path.get()),
     };
 
     try self.scopeEnter(self.env.gpa, false);
@@ -8802,7 +8802,7 @@ fn canonicalizeUnqualifiedIdentExpr(
             const active_decl_scope = active_decl_entry.binding;
             const parser_decl_scope = self.parse_ir.decl_index.scopes.items[@backingInt(active_decl_scope.parser_scope)];
             if (parser_decl_scope.kind == .associated) {
-                if (parser_decl_scope.owner_type_path) |owner_path| {
+                if (parser_decl_scope.owner_type_path.get()) |owner_path| {
                     const key = AST.DeclIndex.AssocValue{
                         .owner = owner_path,
                         .item = ident,

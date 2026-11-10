@@ -571,7 +571,7 @@ const Pass = struct {
             var work = std.ArrayList(Frame).empty;
             defer work.deinit(self.allocator);
             try self.append_kind.put(proc_id, null);
-            try work.append(self.allocator, .{ .proc = proc_id, .current = self.store.getProcSpecImmediate(proc_id).body });
+            try work.append(self.allocator, .{ .proc = proc_id, .current = self.store.getProcSpecImmediate(proc_id).body.get() });
             while (work.items.len != 0) {
                 const frame = &work.items[work.items.len - 1];
                 if (frame.current) |current| {
@@ -581,7 +581,7 @@ const Pass = struct {
                             frame.current = a.next;
                             if (!self.append_kind.contains(a.proc)) {
                                 try self.append_kind.put(a.proc, null);
-                                try work.append(self.allocator, .{ .proc = a.proc, .current = self.store.getProcSpecImmediate(a.proc).body });
+                                try work.append(self.allocator, .{ .proc = a.proc, .current = self.store.getProcSpecImmediate(a.proc).body.get() });
                             }
                         },
                         .ret,
@@ -623,7 +623,7 @@ const Pass = struct {
 
         fn classifyProcUncached(self: *CalleeClassifier, proc_id: LIR.LirProcSpecId) ResourceError!?ProcKind {
             const proc = self.store.getProcSpec(proc_id);
-            if (proc.body == null or proc.hosted != null or proc.abi != .roc) return null;
+            if (proc.body == .none or proc.hosted.get() != null or proc.abi != .roc) return null;
             const params = self.store.getLocalSpan(proc.args);
             if (GuardedList.borrowLen(params) != 2) return null;
 
@@ -637,7 +637,7 @@ const Pass = struct {
             try env.put(GuardedList.at(params, 0), .{ .arg = 0 });
             try env.put(GuardedList.at(params, 1), .{ .arg = 1 });
 
-            var current = proc.body.?;
+            var current = proc.body.get().?;
             while (true) {
                 switch (self.store.getCFStmtImmediate(current).*) {
                     .assign_ref => |assign| {
@@ -1227,7 +1227,7 @@ const Pass = struct {
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
         const proc = self.store.getProcSpecImmediate(proc_id);
-        if (proc.body == null or proc.hosted != null) return;
+        if (proc.body == .none or proc.hosted.get() != null) return;
         const allocator = self.allocator;
         self.resetProcState();
 
@@ -1254,7 +1254,7 @@ const Pass = struct {
         while (promoting) {
             promoting = false;
             scan.clear();
-            try self.scanProc(self.store.getProcSpecImmediate(proc_id).body.?, scan);
+            try self.scanProc(self.store.getProcSpecImmediate(proc_id).body.get().?, scan);
             max_join_id = @max(max_join_id, scan.max_join_id);
             if (scan.edges.items.len == 0) break;
             try edge_index.rebuild(allocator, scan.edges.items);
@@ -1302,8 +1302,8 @@ const Pass = struct {
             }
         }
 
-        try self.versionLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, new_locals);
-        try self.versionSlackLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, new_locals);
+        try self.versionLoops(self.store.getProcSpecImmediate(proc_id).body.get().?, &max_join_id, new_locals);
+        try self.versionSlackLoops(self.store.getProcSpecImmediate(proc_id).body.get().?, &max_join_id, new_locals);
 
         if (new_locals.items.len > 0) {
             const spec = self.store.getProcSpecImmediate(proc_id);
@@ -3754,7 +3754,7 @@ const PromoteTest = struct {
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(99),
             .args = try store.addLocalSpan(&.{ list_arg, elem_arg }),
-            .body = spare_lit,
+            .body = .some(spare_lit),
             .ret_layout = self.list,
         }, .none);
     }
@@ -3770,14 +3770,14 @@ test "promote prepared summaries are frozen across long forward helper chains an
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = LIR.LocalSpan.empty(),
-            .body = null,
+            .body = .none,
             .ret_layout = f.list,
         }, .none);
     }
     const helper = try f.addAppendHelper();
     const args = store.getProcSpecImmediate(helper).args;
     const list_arg = GuardedList.at(store.getLocalSpan(args), 0);
-    var helper_body = store.getProcSpecImmediate(helper).body.?;
+    var helper_body = store.getProcSpecImmediate(helper).body.get().?;
     for (0..96) |_| {
         helper_body = try store.addCFStmt(.{ .assign_ref = .{
             .target = list_arg,
@@ -3785,7 +3785,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
             .next = helper_body,
         } }, .test_fixture);
     }
-    store.getProcSpecPtr(helper).body = helper_body;
+    store.getProcSpecPtr(helper).body = .some(helper_body);
     for (wrappers, 0..) |proc, i| {
         const result = try store.addLocal(.{ .layout_idx = f.list });
         const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
@@ -3796,7 +3796,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
             .next = ret,
         } }, .test_fixture);
         store.getProcSpecPtr(proc).args = args;
-        store.getProcSpecPtr(proc).body = call;
+        store.getProcSpecPtr(proc).body = .some(call);
     }
     var prepared = try prepareCallees(store, testing.allocator);
     defer prepared.deinit();
@@ -3804,7 +3804,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
 
     // Phase input changes cannot change an already-prepared summary. A fresh
     // preparation, however, must reject this recursive cycle exactly.
-    const last_body = store.getProcSpecImmediate(wrappers[wrappers.len - 1]).body.?;
+    const last_body = store.getProcSpecImmediate(wrappers[wrappers.len - 1]).body.get().?;
     store.getCFStmtPtr(last_body).assign_call.proc = wrappers[0];
     var recursive = try prepareCallees(store, testing.allocator);
     defer recursive.deinit();
@@ -3828,9 +3828,9 @@ test "promote summaries reject ignored recursive calls in either procedure order
             .target = ignored,
             .proc = b,
             .args = args,
-            .next = f.store.getProcSpecImmediate(a).body.?,
+            .next = f.store.getProcSpecImmediate(a).body.get().?,
         } }, .test_fixture);
-        f.store.getProcSpecPtr(a).body = body;
+        f.store.getProcSpecPtr(a).body = .some(body);
         const ret = try f.store.addCFStmt(.{ .ret = .{ .value = ignored } }, .test_fixture);
         const recursive = try f.store.addCFStmt(.{ .assign_call = .{
             .target = ignored,
@@ -3839,7 +3839,7 @@ test "promote summaries reject ignored recursive calls in either procedure order
             .next = ret,
         } }, .test_fixture);
         f.store.getProcSpecPtr(b).args = args;
-        f.store.getProcSpecPtr(b).body = recursive;
+        f.store.getProcSpecPtr(b).body = .some(recursive);
         var prepared = try prepareCallees(&f.store, testing.allocator);
         defer prepared.deinit();
         try testing.expectEqual(@as(?ProcKind, null), prepared.kinds.get(a).?);
@@ -3854,7 +3854,7 @@ test "promote summaries reject discarded operations before checked append" {
         const helper = try f.addAppendHelper();
         const args = f.store.getProcSpecImmediate(helper).args;
         const ignored = try f.store.addLocal(.{ .layout_idx = f.list });
-        const next = f.store.getProcSpecImmediate(helper).body.?;
+        const next = f.store.getProcSpecImmediate(helper).body.get().?;
         const prefix = if (op) |low_level|
             try f.store.addCFStmt(.{ .assign_low_level = .{
                 .target = ignored,
@@ -3868,12 +3868,12 @@ test "promote summaries reject discarded operations before checked append" {
                 .identity = LIR.ProcIdentity.forTest(@intCast(f.store.procSpecCount())),
                 .name = f.store.freshSyntheticSymbol(),
                 .args = args,
-                .body = null,
+                .body = .none,
                 .ret_layout = f.list,
-                .hosted = .{
+                .hosted = .some(.{
                     .symbol = try f.store.insertString("roc_test_ignored"),
                     .dispatch_index = 0,
-                },
+                }),
             }, .none);
             break :blk try f.store.addCFStmt(.{ .assign_call = .{
                 .target = ignored,
@@ -3882,7 +3882,7 @@ test "promote summaries reject discarded operations before checked append" {
                 .next = next,
             } }, .test_fixture);
         };
-        f.store.getProcSpecPtr(helper).body = prefix;
+        f.store.getProcSpecPtr(helper).body = .some(prefix);
         var prepared = try prepareCallees(&f.store, testing.allocator);
         defer prepared.deinit();
         try testing.expectEqual(@as(?ProcKind, null), prepared.kinds.get(helper).?);
@@ -3893,7 +3893,7 @@ test "promote summaries do not treat an exact reserve as an append's growth step
     var f = try PromoteTest.init(testing.allocator);
     defer f.deinit();
     const helper = try f.addAppendHelper();
-    const literal = f.store.getCFStmtImmediate(f.store.getProcSpecImmediate(helper).body.?).assign_literal;
+    const literal = f.store.getCFStmtImmediate(f.store.getProcSpecImmediate(helper).body.get().?).assign_literal;
     const reserve = f.store.getCFStmtPtr(literal.next);
     try testing.expectEqual(LowLevelOp.list_reserve_for_append, reserve.assign_low_level.op);
     reserve.assign_low_level.op = .list_reserve;
@@ -3918,7 +3918,7 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
             .args = args,
             .next = ret,
         } }, .test_fixture);
-        f.store.getProcSpecPtr(helper).body = body;
+        f.store.getProcSpecPtr(helper).body = .some(body);
         const wrapper_body = try f.store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = helper,
@@ -3929,7 +3929,7 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
             .identity = LIR.ProcIdentity.forTest(@intCast(f.store.procSpecCount())),
             .name = f.store.freshSyntheticSymbol(),
             .args = args,
-            .body = wrapper_body,
+            .body = .some(wrapper_body),
             .ret_layout = f.list,
         }, .none);
         var prepared = try prepareCallees(&f.store, testing.allocator);
@@ -3945,7 +3945,7 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
         var f = try PromoteTest.init(testing.allocator);
         defer f.deinit();
         const helper = try f.addAppendHelper();
-        const literal = f.store.getCFStmtImmediate(f.store.getProcSpecImmediate(helper).body.?).assign_literal;
+        const literal = f.store.getCFStmtImmediate(f.store.getProcSpecImmediate(helper).body.get().?).assign_literal;
         const reserve = f.store.getCFStmtImmediate(literal.next).assign_low_level;
         const append = f.store.getCFStmtImmediate(reserve.next).assign_low_level;
         const reserved_alias = try f.store.addLocal(.{ .layout_idx = f.list });
@@ -4007,7 +4007,7 @@ fn testMetadataTransfer(f: *PromoteTest, proc: LIR.LirProcSpecId, site_entry: CF
         .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
     };
     defer scan.deinit(allocator);
-    try pass.scanProc(f.store.getProcSpecImmediate(proc).body.?, &scan);
+    try pass.scanProc(f.store.getProcSpecImmediate(proc).body.get().?, &scan);
     try pass.classifyMetadataTransfers(&scan, proc);
     for (scan.edges.items) |edge| if (edge.stmt == site) {
         try testing.expectEqual(expected, edge.preserves_metadata);
@@ -4053,7 +4053,7 @@ test "promote metadata follows alias observations across source redefinitions" {
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(11661),
             .args = try store.addLocalSpan(&.{ input, index }),
-            .body = alias,
+            .body = .some(alias),
             .ret_layout = f.list,
         }, .none);
         try testMetadataTransfer(&f, proc, site, !observe_after);
@@ -4079,7 +4079,7 @@ test "promote metadata preserves exclusive consuming branches" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(11662),
         .args = try store.addLocalSpan(&.{ input, cond }),
-        .body = branch,
+        .body = .some(branch),
         .ret_layout = f.list,
     }, .none);
     try testMetadataTransfer(&f, proc, left, true);
@@ -4145,7 +4145,7 @@ test "promote threads slack through an append-only loop" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
-        .body = loop,
+        .body = .some(loop),
         .ret_layout = f.list,
     }, .none);
 
@@ -4371,7 +4371,7 @@ test "promote guards a byte append with a word of slack and runs it unchecked" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
-        .body = loop,
+        .body = .some(loop),
         .ret_layout = f.list,
     }, .none);
 
@@ -4540,7 +4540,7 @@ test "promote threads slack through an inline reserve and unchecked append pair"
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
-        .body = loop,
+        .body = .some(loop),
         .ret_layout = f.list,
     }, .none);
 
@@ -4727,7 +4727,7 @@ const CountedLoop = struct {
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .args = try store.addLocalSpan(&.{ init_list, n }),
-            .body = loop,
+            .body = .some(loop),
             .ret_layout = f.list,
         }, .none);
         return .{ .loop = loop, .join_id = join_id, .append_call = append_call, .out = out, .cur = cur };
@@ -4929,7 +4929,7 @@ test "promote leaves a tainted chain alone" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
-        .body = loop,
+        .body = .some(loop),
         .ret_layout = f.list,
     }, .none);
 
@@ -4988,7 +4988,7 @@ test "promote ignores a join without a back edge" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
-        .body = loop,
+        .body = .some(loop),
         .ret_layout = f.list,
     }, .none);
 
@@ -5136,7 +5136,7 @@ test "promote versions a set loop into a dispatching head and a unique-only copy
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = LIR.LocalSpan.empty(),
-        .body = loop,
+        .body = .some(loop),
         .ret_layout = f.list,
     }, .none);
 
@@ -5254,7 +5254,7 @@ test "promote keeps a foreign back edge on the head inside the copy" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{other}),
-        .body = loop,
+        .body = .some(loop),
         .ret_layout = f.list,
     }, .none);
 
@@ -5338,7 +5338,7 @@ test "promote initializes merged metadata on every incoming definition" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ initial, other, condition }),
-        .body = loop,
+        .body = .some(loop),
         .ret_layout = f.list,
     }, .none);
 
@@ -5399,7 +5399,7 @@ test "promote skips metadata topology for a read-only loop beside an unrelated a
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(171),
         .args = try store.addLocalSpan(&.{ initial, other, item }),
-        .body = loop,
+        .body = .some(loop),
         .ret_layout = f.list,
     }, .none);
     const before = @import("use_order.zig").topology_builds;

@@ -85,7 +85,7 @@ const Inventory = struct {
         var queue_index: usize = 0;
         while (queue_index < self.proc_queue.items.len) : (queue_index += 1) {
             const caller = self.proc_queue.items[queue_index];
-            const body = self.store.getProcSpecImmediate(caller).body orelse continue;
+            const body = self.store.getProcSpecImmediate(caller).body.get() orelse continue;
             var walk = try body_clone.ReachableStmts.init(self.store, body);
             defer walk.deinit();
             while (try walk.next()) |stmt_id| {
@@ -160,8 +160,8 @@ fn eligibleCall(
     const extra = store.stmtRowOrDefault(call.extra);
     if (extra.is_cold) return false;
     const callee = store.getProcSpecImmediate(call.proc);
-    return callee.body != null and
-        callee.hosted == null and
+    return callee.body != .none and
+        callee.hosted.get() == null and
         callee.abi == .roc and
         callee.erased_reuse_arg == .none and
         callee.erased_call_args == .none and
@@ -265,7 +265,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite, scratc
     std.debug.assert(call_node.* == .assign_call);
     const call = call_node.assign_call;
     const callee = store.getProcSpecImmediate(call.proc).*;
-    const source_body = callee.body.?;
+    const source_body = callee.body.get().?;
     // The clone appends locals, so the spans are copied out first.
     scratch.locals.clearRetainingCapacity();
     try scratch.appendSpan(store, callee.args);
@@ -280,7 +280,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite, scratc
     if (!next_join.found_existing) {
         var index = body_clone.JoinParamIndex.init(scratch.allocator);
         defer index.deinit();
-        try index.indexReachable(store, store.getProcSpecImmediate(site.caller).body.?);
+        try index.indexReachable(store, store.getProcSpecImmediate(site.caller).body.get().?);
         next_join.value_ptr.* = index.next_join_point;
     }
 
@@ -378,7 +378,7 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{callee_arg}),
-        .body = callee_body,
+        .body = .some(callee_body),
         .frame_locals = try store.addLocalSpan(&.{ callee_arg, two }),
         .ret_layout = .u64,
     }, .none);
@@ -397,7 +397,7 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{caller_arg}),
         .iterator_fusion_scope = true,
-        .body = caller_body,
+        .body = .some(caller_body),
         .frame_locals = try store.addLocalSpan(&.{ caller_arg, result_local }),
         .ret_layout = .u64,
     }, .none);
@@ -407,7 +407,7 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
 
     var saw_argument_copy = false;
     var saw_distinct_write = false;
-    var walk = try body_clone.ReachableStmts.init(store, store.getProcSpecImmediate(caller).body.?);
+    var walk = try body_clone.ReachableStmts.init(store, store.getProcSpecImmediate(caller).body.get().?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -435,7 +435,7 @@ test "single-use inline preserves calls with refcounted callee frames" {
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{callee_arg}),
-        .body = callee_body,
+        .body = .some(callee_body),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .str,
     }, .none);
@@ -454,7 +454,7 @@ test "single-use inline preserves calls with refcounted callee frames" {
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{caller_arg}),
         .iterator_fusion_scope = true,
-        .body = caller_body,
+        .body = .some(caller_body),
         .frame_locals = try store.addLocalSpan(&.{ caller_arg, result_local }),
         .ret_layout = .str,
     }, .none);
@@ -462,7 +462,7 @@ test "single-use inline preserves calls with refcounted callee frames" {
 
     try run(&result);
 
-    const preserved = store.getCFStmt(store.getProcSpecImmediate(caller).body.?);
+    const preserved = store.getCFStmt(store.getProcSpecImmediate(caller).body.get().?);
     try testing.expect(preserved == .assign_call);
     try testing.expectEqual(callee, preserved.assign_call.proc);
 }
@@ -494,7 +494,7 @@ test "single-use inline gives the caller the shapes of the body it receives" {
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = .empty(),
-        .body = callee_body,
+        .body = .some(callee_body),
         .frame_locals = try store.addLocalSpan(&.{ lhs, rhs, equal }),
         .ret_layout = .bool,
         .shapes = .{ .loop = true },
@@ -516,7 +516,7 @@ test "single-use inline gives the caller the shapes of the body it receives" {
         .identity = LIR.ProcIdentity.forTest(2),
         .args = .empty(),
         .iterator_fusion_scope = true,
-        .body = caller_body,
+        .body = .some(caller_body),
         .frame_locals = try store.addLocalSpan(&.{result_local}),
         .ret_layout = .bool,
     }, .none);
@@ -534,7 +534,7 @@ test "single-use inline gives the caller the shapes of the body it receives" {
     // caller now holds.
     try @import("proc_passes.zig").run(testing.allocator, store, &result.layouts, .range, null, null);
     var folded: usize = 0;
-    var walk = try body_clone.ReachableStmts.init(store, store.getProcSpecImmediate(caller).body.?);
+    var walk = try body_clone.ReachableStmts.init(store, store.getProcSpecImmediate(caller).body.get().?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);

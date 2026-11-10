@@ -2105,7 +2105,7 @@ const ConstantGraph = struct {
         var by_pattern = collections.DenseMap(u32, ExprId).init(allocator);
         defer by_pattern.deinit();
         for (roots.roots) |root| {
-            if (root.pattern) |pattern| try by_pattern.put(@backingInt(pattern), root.rootExpr());
+            if (root.pattern.get()) |pattern| try by_pattern.put(@backingInt(pattern), root.rootExpr());
         }
         for (refs.records) |record| {
             const ref = switch (record.ref) {

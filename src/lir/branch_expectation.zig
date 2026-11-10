@@ -167,7 +167,7 @@ const Fixture = struct {
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{ a, b }),
-            .body = current,
+            .body = .some(current),
             .ret_layout = .u64,
         }, .none);
     }

@@ -963,7 +963,7 @@ test "a cyclic group has the same words whichever member its evaluation enters b
     const store = &program.result.store;
     const target = try store.addLocal(.{ .layout_idx = .u8 });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
-    const proc = try store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try store.addLocalSpan(&.{target}), .body = ret, .ret_layout = .u8 }, .none);
+    const proc = try store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try store.addLocalSpan(&.{target}), .body = .some(ret), .ret_layout = .u8 }, .none);
     // The evaluation reads a callable's worker for its procedure alone.
     var entry: lower.Worker = undefined;
     entry.proc = proc;

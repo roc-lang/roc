@@ -43,7 +43,7 @@ pub fn writeProc(
     if (proc.tail_group.get()) |group| try writer.print(" tail_group={d}", .{@backingInt(group)});
     try writer.writeAll("\n");
 
-    if (proc.body) |body| {
+    if (proc.body.get()) |body| {
         var printer = Printer{ .store = store, .layouts = layouts };
         defer printer.visited.deinit(gpa);
         try printer.writeChainInner(gpa, body, 1, writer);
@@ -675,7 +675,7 @@ test "proc fingerprint ignores program numbering but not content" {
                     .name = .none,
                     .identity = LIR.ProcIdentity.forTest(@intCast(100 + index)),
                     .args = .empty(),
-                    .body = null,
+                    .body = .none,
                     .ret_layout = .u64,
                 }, .none);
             }
@@ -683,7 +683,7 @@ test "proc fingerprint ignores program numbering but not content" {
                 .name = .none,
                 .identity = LIR.ProcIdentity.forTest(callee_identity),
                 .args = .empty(),
-                .body = null,
+                .body = .none,
                 .ret_layout = .str,
             }, .none);
             const value = try store.addLocal(.{ .layout_idx = .str });
@@ -698,7 +698,7 @@ test "proc fingerprint ignores program numbering but not content" {
                 .name = .none,
                 .identity = LIR.ProcIdentity.forTest(1),
                 .args = .empty(),
-                .body = call,
+                .body = .some(call),
                 .ret_layout = .str,
             }, .none);
         }

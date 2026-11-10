@@ -155,7 +155,7 @@ fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
 }
 
 fn rootIdentity(request: CheckedArtifact.RootRequest) error{TestUnexpectedResult}!CheckedArtifact.ComptimeRootId {
-    return request.compile_time_root orelse error.TestUnexpectedResult;
+    return request.compile_time_root.get() orelse error.TestUnexpectedResult;
 }
 
 /// The request for the root declared at `order` in its module.
@@ -264,7 +264,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
     const tables = [_]CheckedArtifact.RootRequest{ try rootWithOrder(helper_roots, 1), try rootWithOrder(helper_roots, 2) };
     try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key.digest(), &tables));
     for (helper_roots) |request| {
-        try std.testing.expect(helper.compile_time_roots.root(request.compile_time_root.?).payload != .unevaluated);
+        try std.testing.expect(helper.compile_time_roots.root(request.compile_time_root.get().?).payload != .unevaluated);
     }
 
     // The runtime program restores the completed table from Helper's store

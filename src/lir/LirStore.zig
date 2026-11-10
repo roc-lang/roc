@@ -1111,7 +1111,7 @@ pub fn releaseCode(self: *Self) void {
     if (self.body_coordinator != null) base.invariant("{s}", .{"LIR store invariant violated: a body shard cannot release program code"});
     for (0..self.proc_specs.len()) |index| {
         const spec = self.proc_specs.getPtrImmediate(@intCast(index));
-        spec.body = null;
+        spec.body = .none;
         spec.args = LocalSpan.empty();
         spec.frame_locals = LocalSpan.empty();
         spec.join_points = JoinPointSpan.empty();
@@ -2139,7 +2139,7 @@ pub fn addProcSpec(self: *Self, proc: LirProcSpec, loc: base.SourceLoc) Allocato
     // has accumulated shapes for; a placeholder is overwritten exactly when
     // its body is lowered.
     var spec = proc;
-    if (spec.body != null) spec.shapes = spec.shapes.merged(self.shapes);
+    if (spec.body != .none) spec.shapes = spec.shapes.merged(self.shapes);
     try self.proc_specs.append(self.allocator, spec);
     try self.proc_locs.append(self.allocator, loc);
     return @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
@@ -2239,14 +2239,14 @@ pub fn getProcSpec(self: *const Self, idx: LirProcSpecId) LirProcSpec {
 /// Updates the body for a stored proc specification.
 pub fn setProcSpecBody(self: *Self, idx: LirProcSpecId, body: ?CFStmtId) void {
     const proc = self.getProcSpecPtr(idx);
-    proc.body = body;
+    proc.body = .of(body);
     proc.shapes = proc.shapes.merged(self.shapes);
 }
 
 /// Updates body and final join points after all fallible/appending work has completed.
 pub fn setProcSpecBodyAndJoinPoints(self: *Self, idx: LirProcSpecId, body: ?CFStmtId, join_points: JoinPointSpan) void {
     const proc = self.getProcSpecPtr(idx);
-    proc.body = body;
+    proc.body = .of(body);
     proc.join_points = join_points;
     proc.shapes = proc.shapes.merged(self.shapes);
 }
@@ -2299,7 +2299,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
         .name = coordinator.freshSyntheticSymbol(),
         .args = .empty(),
         .ret_layout = .u64,
-        .body = root,
+        .body = .some(root),
         .join_points = joins,
     }, .none);
     const other_ret = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } }, .test_fixture);
@@ -2308,7 +2308,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
         .name = coordinator.freshSyntheticSymbol(),
         .args = .empty(),
         .ret_layout = .u64,
-        .body = other_ret,
+        .body = .some(other_ret),
     }, .none);
     // Unrelated prefix size must not determine per-worker owned storage.
     for (0..10000) |_| _ = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } }, .test_fixture);
@@ -2335,7 +2335,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     } };
     GuardedList.atPtr(a.getCFSwitchBranchesMut(branches), 0).body = appended_a;
     GuardedList.atPtr(a.getJoinPointSpanMut(joins), 0).params = span_a;
-    a.getProcSpecPtr(first).body = appended_a;
+    a.getProcSpecPtr(first).body = .some(appended_a);
     a.getProcSpecPtr(first).frame_locals = span_a;
     a.getProcSpecPtr(first).tail_calls = .some(.{ .head = appended_a, .loop = @fromBackingInt(@intCast(77)) });
     a.getProcSpecPtr(first).tail_transform = .tce;
@@ -2348,24 +2348,24 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
         .args = span_b,
         .next = appended_b,
     } };
-    b.getProcSpecPtr(second).body = appended_b;
+    b.getProcSpecPtr(second).body = .some(appended_b);
     b.getProcSpecPtr(second).frame_locals = span_b;
-    try std.testing.expectEqual(root, coordinator.getProcSpec(first).body.?);
+    try std.testing.expectEqual(root, coordinator.getProcSpec(first).body.get().?);
     try std.testing.expectEqual(old_local, coordinator.getCFStmt(ret).ret.value);
     try std.testing.expectEqual(ret, GuardedList.at(coordinator.getCFSwitchBranches(branches), 0).body);
     try std.testing.expectEqual(appended_a, GuardedList.at(a.getCFSwitchBranches(branches), 0).body);
-    try std.testing.expectEqual(other_ret, a.getProcSpec(second).body.?);
+    try std.testing.expectEqual(other_ret, a.getProcSpec(second).body.get().?);
     try std.testing.expect(a.procRewriteChanged());
     try std.testing.expect(b.procRewriteChanged());
     try coordinator.commitProcRewriteWithJoinRelocation(&a, null);
     try coordinator.commitProcRewriteWithJoinRelocation(&b, null);
     const committed_a = coordinator.getProcSpec(first);
     const committed_b = coordinator.getProcSpec(second);
-    try std.testing.expectEqual(appended_a, committed_a.body.?);
-    try std.testing.expectEqual(@backingInt(appended_b) + 1, @backingInt(committed_b.body.?));
-    try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.next);
-    try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.tail_call.next().?);
-    try std.testing.expectEqual(committed_a.body.?, committed_a.tail_calls.get().?.head);
+    try std.testing.expectEqual(appended_a, committed_a.body.get().?);
+    try std.testing.expectEqual(@backingInt(appended_b) + 1, @backingInt(committed_b.body.get().?));
+    try std.testing.expectEqual(committed_a.body.get().?, coordinator.getCFStmt(ret).assign_call.next);
+    try std.testing.expectEqual(committed_a.body.get().?, coordinator.getCFStmt(ret).assign_call.tail_call.next().?);
+    try std.testing.expectEqual(committed_a.body.get().?, committed_a.tail_calls.get().?.head);
     try std.testing.expectEqual(@as(u32, 77), @backingInt(committed_a.tail_calls.get().?.loop));
     try std.testing.expectEqual(lir_defs.TailTransform.tce, committed_a.tail_transform);
     try std.testing.expectEqual(committed_a.frame_locals, coordinator.getCFStmt(ret).assign_call.args);
@@ -2373,7 +2373,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     try std.testing.expectEqual(@backingInt(local_b) + 1, @backingInt(coordinator.getCFStmt(other_ret).assign_call.target));
     try std.testing.expectEqual(coordinator.getCFStmt(other_ret).assign_call.target, GuardedList.at(coordinator.getLocalSpan(committed_b.frame_locals), 0));
     try std.testing.expectEqual(committed_b.frame_locals, coordinator.getCFStmt(other_ret).assign_call.args);
-    try std.testing.expectEqual(committed_b.body.?, coordinator.getCFStmt(other_ret).assign_call.next);
+    try std.testing.expectEqual(committed_b.body.get().?, coordinator.getCFStmt(other_ret).assign_call.next);
 }
 
 test "procedure rewrite relocates only generated joins across simultaneous shards" {
@@ -2393,7 +2393,7 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
             .name = coordinator.freshSyntheticSymbol(),
             .args = .empty(),
             .ret_layout = .zst,
-            .body = roots[i],
+            .body = .some(roots[i]),
             .join_points = old_spans[i],
         }, .none);
     }
@@ -2419,7 +2419,7 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
         worker.getCFStmtPtr(roots[i]).jump.target = fresh;
         // An old join row can point to generated statements without changing identity.
         GuardedList.atPtr(worker.getJoinPointSpanMut(old_spans[i]), 0).body = destination;
-        worker.getProcSpecPtr(procs[i]).body = destination;
+        worker.getProcSpecPtr(procs[i]).body = .some(destination);
         worker.getProcSpecPtr(procs[i]).join_points = try worker.addJoinPointSpan(&.{
             .{ .id = source, .params = .empty(), .body = external },
             .{ .id = fresh, .params = .empty(), .body = clone },
@@ -2433,7 +2433,7 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
         const offset: u32 = @intCast(i * 2);
         try coordinator.commitProcRewriteWithJoinRelocation(worker, .{ .first_fresh = 100, .offset = offset });
         const proc = coordinator.getProcSpec(procs[i]);
-        const destination = coordinator.getCFStmt(proc.body.?).join;
+        const destination = coordinator.getCFStmt(proc.body.get().?).join;
         const clone = coordinator.getCFStmt(destination.body).join;
         try std.testing.expectEqual(100 + offset, @backingInt(destination.id));
         try std.testing.expectEqual(101 + offset, @backingInt(clone.id));
@@ -2443,7 +2443,7 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
         try std.testing.expectEqual(destination.id, coordinator.getCFStmt(roots[i]).jump.target);
         const old = GuardedList.at(coordinator.getJoinPointSpan(old_spans[i]), 0);
         try std.testing.expectEqual(source, old.id);
-        try std.testing.expectEqual(proc.body.?, old.body);
+        try std.testing.expectEqual(proc.body.get().?, old.body);
         const joins = coordinator.getJoinPointSpan(proc.join_points);
         try std.testing.expectEqual(source, GuardedList.at(joins, 0).id);
         try std.testing.expectEqual(destination.id, GuardedList.at(joins, 1).id);
@@ -2497,7 +2497,7 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
         .arms = arms,
         .on_miss = nested,
     } }, .test_fixture);
-    coordinator.getProcSpecPtr(proc).body = root;
+    coordinator.getProcSpecPtr(proc).body = .some(root);
     coordinator.getProcSpecPtr(proc).tail_calls = .some(.{ .head = head, .loop = @fromBackingInt(@intCast(42)) });
     var worker = try coordinator.cloneForProcRewrite(allocator, proc);
     defer worker.deinit();
@@ -2528,7 +2528,7 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
                 .name = coordinator.freshSyntheticSymbol(),
                 .args = .empty(),
                 .ret_layout = .u64,
-                .body = ret,
+                .body = .some(ret),
             }, .none);
             const prefix = coordinator.captureBodyPrefix();
             const metadata = coordinator.getProcSpec(proc);
@@ -2540,7 +2540,7 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
                 appended = try worker.addCFStmt(.{ .ret = .{ .value = new_local } }, .test_fixture);
             }
             worker.getCFStmtPtr(ret).* = .{ .init_uninitialized = .{ .target = local, .next = appended } };
-            worker.getProcSpecPtr(proc).body = appended;
+            worker.getProcSpecPtr(proc).body = .some(appended);
             worker.getProcSpecPtr(proc).tail_calls = .some(.{ .head = appended, .loop = @fromBackingInt(@intCast(100)) });
             worker.getProcSpecPtr(proc).join_points = try worker.addJoinPointSpan(&.{.{
                 .id = @fromBackingInt(@intCast(100)),
@@ -2553,7 +2553,7 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
                 try std.testing.expectEqual(local, coordinator.getCFStmt(ret).ret.value);
                 return err;
             };
-            try std.testing.expectEqual(appended, coordinator.getProcSpec(proc).body.?);
+            try std.testing.expectEqual(appended, coordinator.getProcSpec(proc).body.get().?);
             try std.testing.expectEqual(@as(u32, 102), @backingInt(coordinator.getProcSpec(proc).tail_calls.get().?.loop));
         }
     };

@@ -3157,7 +3157,7 @@ pub const Program = struct {
         const struct_idx = self.result.layouts.getLayout(failure_layout).getStruct().idx;
         const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = failure_layout,
             .compile_time_root = .{
                 .module = module_key,
@@ -3173,7 +3173,7 @@ pub const Program = struct {
         });
         const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = try self.layouts.layoutOf(ty),
             .compile_time_root = .{
                 .module = module_key,
@@ -3594,7 +3594,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     defer schema_roots.deinit(allocator);
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
-        const root_id = request.compile_time_root orelse continue;
+        const root_id = request.compile_time_root.get() orelse continue;
         const source_module = if (input.roots.source_modules.len == 0)
             program.modules.views.items[0].index
         else
@@ -3622,7 +3622,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             // A literal argument root whose value holds a function is
             // validated and discarded: nothing stores its value (design.md
             // "Literal Arguments").
-            const validate_only = if (request.compile_time_root) |root_id| blk: {
+            const validate_only = if (request.compile_time_root.get()) |root_id| blk: {
                 const root = program.module(source_module).view.compile_time_roots.root(root_id);
                 break :blk if (root.literal_argument) |argument| argument.validate_only else false;
             } else false;
@@ -3670,7 +3670,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 .const_locator = request.const_locator,
                 .layout_idx = try program.layouts.layoutOf(worker.ret),
                 .plan = plan,
-                .initializer = worker.proc,
+                .initializer = .some(worker.proc),
             });
         }
     }

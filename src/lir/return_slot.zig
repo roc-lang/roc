@@ -210,7 +210,7 @@ fn testAggregateCallee(store: *LirStore, result_layout: layout_mod.Idx) Resource
         .identity = LIR.ProcIdentity.forTest(6),
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(&.{ arg, result }),
-        .body = assign,
+        .body = .some(assign),
         .ret_layout = result_layout,
     }, .none);
 }
@@ -235,7 +235,7 @@ fn testTagCallee(store: *LirStore, result_layout: layout_mod.Idx) ResourceError!
         .identity = LIR.ProcIdentity.forTest(5),
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(&.{ arg, result }),
-        .body = assign,
+        .body = .some(assign),
         .ret_layout = result_layout,
     }, .none);
 }
@@ -275,7 +275,7 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
         .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{ destination, arg }),
         .frame_locals = try store.addLocalSpan(&.{ destination, arg, temporary, temporary_alias, store_unit }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .zst,
     }, .none);
 
@@ -299,7 +299,7 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
     try std.testing.expectEqual(aggregate_ptr, store.getLocal(variant_dest).layout_idx);
     try std.testing.expectEqual(layout_mod.Idx.u64, store.getLocal(variant_value).layout_idx);
 
-    const variant_store = store.getCFStmtImmediate(variant.body.?).store_struct;
+    const variant_store = store.getCFStmtImmediate(variant.body.get().?).store_struct;
     try std.testing.expectEqual(variant_dest, variant_store.dest);
     try std.testing.expectEqual(aggregate, variant_store.struct_layout);
     const variant_store_fields = store.getLocalSpan(variant_store.fields);
@@ -309,7 +309,7 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
     try std.testing.expectEqual(layout_mod.Idx.zst, store.getLocal(store.getCFStmtImmediate(variant_store.next).ret.value).layout_idx);
 
     const caller_proc = store.getProcSpec(caller);
-    try std.testing.expectEqual(call, caller_proc.body.?);
+    try std.testing.expectEqual(call, caller_proc.body.get().?);
 }
 
 test "return slot lowers direct tag return into destination store" {
@@ -341,7 +341,7 @@ test "return slot lowers direct tag return into destination store" {
         .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&.{ destination, arg }),
         .frame_locals = try store.addLocalSpan(&.{ destination, arg, temporary, store_unit }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .zst,
     }, .none);
 
@@ -352,7 +352,7 @@ test "return slot lowers direct tag return into destination store" {
     const variant = store.getProcSpec(rewritten.proc);
     const variant_args = store.getLocalSpan(variant.args);
 
-    const variant_store = store.getCFStmtImmediate(variant.body.?).store_tag;
+    const variant_store = store.getCFStmtImmediate(variant.body.get().?).store_tag;
     try std.testing.expectEqual(GuardedList.at(variant_args, 0), variant_store.dest);
     try std.testing.expectEqual(aggregate, variant_store.tag_layout);
     try std.testing.expectEqual(@as(u32, 0), variant_store.variant_index);
@@ -400,7 +400,7 @@ test "return slot shares one variant for identical proc and layout demands" {
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ destination_a, destination_b, arg }),
         .frame_locals = try store.addLocalSpan(&.{ destination_a, destination_b, arg, temporary_a, temporary_b, store_unit_a, store_unit_b }),
-        .body = call_a,
+        .body = .some(call_a),
         .ret_layout = .zst,
     }, .none);
 
@@ -445,7 +445,7 @@ test "return slot does not fuse a multi-use stored call result" {
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ destination_a, destination_b, arg }),
         .frame_locals = try store.addLocalSpan(&.{ destination_a, destination_b, arg, temporary, store_unit_a, store_unit_b }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .zst,
     }, .none);
 

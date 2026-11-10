@@ -407,7 +407,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
                 const self: *@This() = @ptrCast(@alignCast(raw.?));
                 const address = @intFromPtr(self.executable.codePtr());
                 if (relocation.rc_helper) |helper| return address + (self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null);
-                const proc_id = relocation.procedure orelse return null;
+                const proc_id = relocation.procedure.get() orelse return null;
                 return address + (self.codegen.compiledProcSymbol(proc_id) orelse return null).code_start;
             }
         };

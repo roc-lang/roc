@@ -1917,7 +1917,7 @@ fn entrypointAbiDigestFromLirData(
     }
 
     for (store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         updateHashU32(&hasher, hosted.dispatch_index);
         updateHashBytes(&hasher, store.getString(hosted.symbol));
     }
@@ -8596,7 +8596,7 @@ fn hostedSymbolsFromLir(arena: std.mem.Allocator, store: *const lir.LirStore) st
     var seen = std.StringHashMap(void).init(arena);
     var symbols = std.ArrayList([]const u8).empty;
     for (store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         const text = store.getString(hosted.symbol);
         const gop = try seen.getOrPut(text);
         // Dupe into the arena: a diagnostic naming these symbols renders
@@ -8622,14 +8622,14 @@ fn wasmRocHostRequirements(
 fn hostedSymbolsFromLirDispatch(arena: std.mem.Allocator, store: *const lir.LirStore) std.mem.Allocator.Error![]const []const u8 {
     var hosted_count: usize = 0;
     for (store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         hosted_count = @max(hosted_count, @as(usize, hosted.dispatch_index) + 1);
     }
 
     const hosted_symbols = try arena.alloc([]const u8, hosted_count);
     for (hosted_symbols) |*symbol| symbol.* = "";
     for (store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         hosted_symbols[hosted.dispatch_index] = store.getString(hosted.symbol);
     }
     return hosted_symbols;
@@ -9278,7 +9278,7 @@ fn rejectWasmHostParameterOverflow(
     var seen = std.AutoHashMap(u32, void).init(ctx.gpa);
     defer seen.deinit();
     for (store.getProcSpecs()) |proc| {
-        const hosted = proc.hosted orelse continue;
+        const hosted = proc.hosted.get() orelse continue;
         if (seen.contains(hosted.dispatch_index)) continue;
         try seen.put(hosted.dispatch_index, {});
         const params = store.getLocalSpan(proc.args);
@@ -9464,7 +9464,7 @@ test "a dev object defines every static datum its link keeps" {
             .name = store.freshSyntheticSymbol(),
             .identity = lir.ProcIdentity.forTest(719),
             .args = .empty(),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .str,
         }, .none);
         const descriptor = try a.alloc(u8, 24);
@@ -9526,7 +9526,7 @@ test "a composed program object holds only the pieces its roots reach" {
             const local = try library_store.addLocal(.{ .layout_idx = .u64 });
             const ret = try library_store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const body = try library_store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } }, .next = ret } }, .test_fixture);
-            _ = try library_store.addProcSpec(.{ .name = library_store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = body, .ret_layout = .u64, .exported = true }, .none);
+            _ = try library_store.addProcSpec(.{ .name = library_store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = .some(body), .ret_layout = .u64, .exported = true }, .none);
         }
         var library_compiler = backend.ObjectFileCompiler.init(allocator);
         library_compiler.link_unit = true;
@@ -9542,7 +9542,7 @@ test "a composed program object holds only the pieces its roots reach" {
         const result = try app_store.addLocal(.{ .layout_idx = .u64 });
         const ret = try app_store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const body = try app_store.addCFStmt(.{ .assign_call = .{ .target = result, .proc = linked, .args = .empty(), .next = ret } }, .test_fixture);
-        const entry_proc = try app_store.addProcSpec(.{ .name = app_store.freshSyntheticSymbol(), .identity = entry_identity, .args = .empty(), .body = body, .ret_layout = .u64 }, .none);
+        const entry_proc = try app_store.addProcSpec(.{ .name = app_store.freshSyntheticSymbol(), .identity = entry_identity, .args = .empty(), .body = .some(body), .ret_layout = .u64 }, .none);
         const entrypoints = [_]backend.Entrypoint{.{ .symbol_name = "roc__main", .proc = entry_proc, .arg_layouts = &.{}, .ret_layout = .u64 }};
         var app_compiler = backend.ObjectFileCompiler.init(allocator);
         var app_pieces = try app_compiler.compileToPieces(&app_store, &app_layouts, &entrypoints, &.{}, app_store.getProcSpecs(), target);
