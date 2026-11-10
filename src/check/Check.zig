@@ -642,6 +642,17 @@ synthetic_binding_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// scheme-use evidence, codec requirements, or dispatch scope of its own
 /// (design.md "Anonymous Structure Is Copied Per Use").
 per_use_copy_bindings: collections.DenseMapUnmanaged(Var, void) = .empty,
+/// The nominal type declarations this module's checking can lift an
+/// anonymous tag union into, collected before any binding generalizes: an
+/// anonymous tag union none of them can take in is shared by every use
+/// rather than copied (design.md "Anonymous Structure Is Copied Per Use").
+tag_absorbers: types_mod.tag_absorbers.TagUnionAbsorbers = .{},
+/// Whether `tag_absorbers` is collected. Until it is, every liftable class
+/// is copied per use.
+tag_absorbers_collected: bool = false,
+/// The module envs whose declarations `tag_absorbers` holds: every env this
+/// check copies types from.
+tag_absorber_sources: std.ArrayListUnmanaged(*const ModuleEnv) = .empty,
 /// Reused exact graph walk for classifying a freshly generalized binding.
 /// Classification happens once at the producer boundary, never on lookup.
 binding_scheme_classification_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
@@ -1818,6 +1829,9 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .binding_scheme_nodes = .keyed,
     .synthetic_binding_schemes = .keyed,
     .per_use_copy_bindings = .keyed,
+    .tag_absorbers = .keyed,
+    .tag_absorbers_collected = .input,
+    .tag_absorber_sources = .input,
     .binding_scheme_classification_seen = .scratch,
     .binding_scheme_classification_stack = .scratch,
     .settled_static_dispatch_constraint_fns = .keyed,
@@ -11768,7 +11782,7 @@ fn walkGroundMarks(
             .any => continue,
             .copied => if (copy != null) continue,
         };
-        if (liftable == .refinable and resolved.desc.liftsIntoNominal()) marks.ground.items[index] = false;
+        if (liftable == .refinable and try self.copiedPerUse(resolved.desc)) marks.ground.items[index] = false;
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => marks.ground.items[index] = false,
             .alias => |alias| {
@@ -14348,6 +14362,7 @@ const PendingRecordDestruct = struct {
 /// and seal the solved type store: every later stage only reads it.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try self.checkFileInternal(false);
+    try self.debugAssertLocalTagAbsorbersCovered();
     try self.types.canonicalizeAndSeal(self.cir.getIdentStoreConst());
 }
 
@@ -14357,6 +14372,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 pub fn checkFileLeavingStoreOpen(self: *Self) std.mem.Allocator.Error!void {
     if (comptime !builtin.is_test) @compileError("checkFileLeavingStoreOpen is test scaffolding");
     try self.checkFileInternal(false);
+    try self.debugAssertLocalTagAbsorbersCovered();
 }
 
 fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
@@ -14365,6 +14381,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // Fill in types store up to the size of CIR nodes
     try ensureTypeStoreIsFilled(self);
+
+    try self.collectTagAbsorbers();
 
     // Record which annotations type host-boundary values before any
     // annotation is generated (their rows are kept as written rather than
@@ -37237,6 +37255,100 @@ fn methodCallArgContext(
     } };
 }
 
+/// Collect `tag_absorbers`: every nominal declaration in the store of each
+/// module this check copies types from, and every nominal declaration this
+/// module writes, read from its syntax because a declaration in a function
+/// body registers only when checking reaches it.
+fn collectTagAbsorbers(self: *Self) Allocator.Error!void {
+    std.debug.assert(!self.tag_absorbers_collected);
+    if (self.builtin_ctx.builtin_module) |builtin_env| try self.addTagAbsorberSource(builtin_env);
+    for (self.imported_modules) |env| try self.addTagAbsorberSource(env);
+    for (self.owner_modules) |env| try self.addTagAbsorberSource(env);
+    if (self.platform_requirements) |input| {
+        try self.addTagAbsorberSource(input.env);
+        for (input.owner_modules) |env| try self.addTagAbsorberSource(env);
+    }
+
+    const node_count: usize = @intCast(self.cir.store.nodes.len());
+    for (0..node_count) |index| {
+        const node = self.cir.store.nodes.get(@fromBackingInt(@intCast(index)));
+        if (node.tag != .statement_nominal_decl) continue;
+        const nominal = self.cir.store.getStatement(@fromBackingInt(@intCast(index))).s_nominal_decl;
+        try self.addLocalTagAbsorber(nominal.anno);
+    }
+
+    self.tag_absorbers_collected = true;
+    self.generalizer.tag_absorbers = .{
+        .absorbers = &self.tag_absorbers,
+        .idents = self.cir.getIdentStoreConst(),
+    };
+}
+
+/// Assert that `tag_absorbers` allows every lift into a declaration this
+/// module registered, now that checking has generated every backing.
+fn debugAssertLocalTagAbsorbersCovered(self: *Self) Allocator.Error!void {
+    if (!std.debug.runtime_safety or !self.tag_absorbers_collected) return;
+    const self_module = self.cir.selfModuleIdentity();
+    for (self.types.nominal_decls.items.items) |decl| {
+        if (decl.origin_module != self_module or !decl.isValid()) continue;
+        if (!try self.tag_absorbers.coversBacking(self.gpa, self.types, self.cir.getIdentStoreConst(), decl.backing)) {
+            base.invariant("a nominal declaration's backing admits a lift its syntax did not record", .{});
+        }
+    }
+}
+
+fn addTagAbsorberSource(self: *Self, env: *const ModuleEnv) Allocator.Error!void {
+    if (env == self.cir) return;
+    for (self.tag_absorber_sources.items) |known| if (known == env) return;
+    try self.tag_absorber_sources.append(self.gpa, env);
+    // Another module cannot lift into an opaque declaration.
+    try self.tag_absorbers.addStoreDecls(self.gpa, &env.types, env.getIdentStoreConst(), false);
+}
+
+/// Record the backing annotation of a nominal declaration this module
+/// writes. Only a tag union written directly as the backing is checked as a
+/// tag-union backing; an application or a lookup is checked as the alias or
+/// nominal type it names, into which no anonymous union lifts.
+fn addLocalTagAbsorber(self: *Self, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!void {
+    const absorbers = &self.tag_absorbers;
+    switch (self.cir.store.getTypeAnno(anno_idx)) {
+        .parens => |parens| try self.addLocalTagAbsorber(parens.anno),
+        .tag_union => |tag_union| {
+            if (tag_union.ext != null) {
+                absorbers.every = true;
+                return;
+            }
+            absorbers.scratch.clearRetainingCapacity();
+            for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_anno| switch (self.cir.store.getTypeAnno(tag_anno)) {
+                .tag => |tag| try absorbers.scratch.append(self.gpa, types_mod.tag_absorbers.TagUnionAbsorbers.nameHash(self.cir.getIdentText(tag.name))),
+                else => {
+                    absorbers.every = true;
+                    return;
+                },
+            };
+            try absorbers.addClosedFromScratch(self.gpa);
+        },
+        .rigid_var, .rigid_var_lookup, .underscore, .malformed => absorbers.every = true,
+        .apply, .lookup, .tag, .tuple, .record, .@"fn" => {},
+    }
+}
+
+/// Whether the class `desc` is per-use structure: anonymous structure a use
+/// of a binding holding it can change (`TagUnionAbsorbers.copiedPerUse`).
+fn copiedPerUse(self: *Self, desc: types_mod.Descriptor) Allocator.Error!bool {
+    if (!self.tag_absorbers_collected) return desc.liftsIntoNominal();
+    return self.tag_absorbers.copiedPerUse(self.gpa, self.types, self.cir.getIdentStoreConst(), desc);
+}
+
+/// Assert that `env` is a module whose declarations `tag_absorbers` holds,
+/// since this check is about to copy types from it.
+fn debugAssertTagAbsorberSource(self: *const Self, env: *const ModuleEnv) void {
+    if (!std.debug.runtime_safety or !self.tag_absorbers_collected) return;
+    if (env == self.cir) return;
+    for (self.tag_absorber_sources.items) |known| if (known == env) return;
+    base.invariant("a check copied types from a module whose declarations it did not collect", .{});
+}
+
 /// Whether a type contains no type variables at all: no flex, rigid, or
 /// presence vars, and no error content.
 fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
@@ -37268,7 +37380,7 @@ fn varIsGroundAs(self: *Self, root_var: Var, liftable: LiftableStructure) std.me
         const resolved = self.types.resolveVar(var_);
         if (visited.contains(resolved.var_)) continue;
         try visited.put(resolved.var_, {});
-        if (liftable == .refinable and resolved.desc.liftsIntoNominal()) return false;
+        if (liftable == .refinable and try self.copiedPerUse(resolved.desc)) return false;
 
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
@@ -37741,6 +37853,7 @@ fn copyImportedBindingSchemeCodecRequirements(
     source_node: CIR.Node.Idx,
     copied_scheme_root: Var,
 ) Allocator.Error!void {
+    self.debugAssertTagAbsorberSource(source_env);
     const source_requirements = source_env.bindingSchemeCodecRequirementsForNode(source_node);
     if (source_requirements.len == 0) return;
 
@@ -38182,6 +38295,8 @@ fn copyVarWithSourceSubstitutions(
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    self.debugAssertTagAbsorberSource(other_module_env);
 
     // First, reset state
     self.var_map.clearRetainingCapacity();
@@ -47193,6 +47308,7 @@ fn importedOwnerContextSubstitutions(
     const source_decl_idx = source_env.types.lookupNominalDeclByKey(source_origin, owner_statement) orelse return;
     const source_decl = source_env.types.getNominalDecl(source_decl_idx);
     if (source_decl.flags.context_len == 0) return;
+    self.debugAssertTagAbsorberSource(source_env);
 
     self.var_map.clearRetainingCapacity();
     const first_new_var: usize = @intCast(self.types.len());

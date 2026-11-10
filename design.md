@@ -5068,11 +5068,37 @@ quantified, exactly as it owns copies of the quantified variables.
 The rule is carried as explicit descriptor data, not by rank: such a class is
 monomorphic, so marking it generalized would make every body-local record of
 the scope look polymorphic to post-check stages. Instead, when a
-generalization boundary leaves a class it made ungeneralized and the class can
-lift (`Descriptor.liftsIntoNominal`: a record, tag union, empty record, or empty
-tag union not written in an opened nominal backing, which never lifts), it
-marks the class `DescriptorFlags.per_use_structure`, and the rank stays what
-rank adjustment computed. A class an enclosing scope made keeps its sharing:
+generalization boundary leaves a class it made ungeneralized and some use can
+change the class (`TagUnionAbsorbers.copiedPerUse`), it marks the class
+`DescriptorFlags.per_use_structure`, and the rank stays what rank adjustment
+computed. A use can change a record or empty record not written in an opened
+nominal backing (`Descriptor.liftsIntoNominal`), which a use can lift or
+widen. A use can change an anonymous tag union only by lifting it, and only
+into a nominal type whose backing is a tag union that is open or lists every
+tag the anonymous union itself lists, which is exactly what relating the two
+checks before it lifts. So a tag union is marked only when one of the
+declarations the module's checking can see could take it in: a backing row
+that is open, a backing that is one of the declaration's own type variables,
+an invalid declaration (relating to which poisons the union), a closed
+backing listing all of the union's own tags, or, for an empty union, any
+tag-union backing. A union no such declaration could take in keeps the same
+type under every relation, so every use shares it.
+
+The declarations a module's checking can see are collected before any binding
+generalizes (`Check.tag_absorbers`). They are every declaration in the type
+store of each module the check copies types from (Builtin, its imports, the
+owners of what it imports, and a platform's requirement surface), less the
+opaque ones, into which another module cannot lift, and every nominal
+declaration the module writes, read from its syntax, since a declaration in a
+function body registers only when checking reaches it. A backing written as
+a tag union is the only one of the module's own that can take in a union:
+an application or a lookup is checked as the alias or nominal type it names,
+and relating a union to a nominal type whose backing is not itself a tag
+union never lifts. Tag names are compared by a hash of their text, as the
+declarations come from several modules; a collision can only mark a union
+that did not need it. Debug builds assert that every module a check copies
+types from was collected, and that every declaration the module registered
+admits no lift its syntax did not record. A class an enclosing scope made keeps its sharing:
 a weak binding's one type is still shared by every use, and a function
 returning it returns that same class. A merge keeps the mark only when both
 sides had it, so a class that joins an enclosing scope's class is shared like
@@ -5108,19 +5134,23 @@ type by descriptors.
 
 Annotation instances follow the same rule. An annotation's instance of a
 type declaration is shared by later references at the same position only
-when it is ground and free of liftable structure; only such subtrees of a
-non-ground instance are shared with the next instance. Otherwise one
+when it is ground and free of structure a use can change, by the same test;
+only such subtrees of a non-ground instance are shared with the next
+instance. Otherwise one
 definition's body, lifting its annotated result into a nominal type, would
 change every other annotation naming the same alias.
 
-The cost is one copy per use of a binding's anonymous records and tag
-unions, with their field and tag runs, and of the nodes above them.
+The cost is one copy per use of a binding's anonymous records and of the tag
+unions a visible declaration could take in, with their field and tag runs,
+and of the nodes above them.
 The accepted and rejected sides are pinned by
 `test/cli/LiftedUseLeavesOtherUses.roc`,
 `test/cli/LiftedUseLeavesOtherUsesRejected.roc`,
 `test/cli/OptionalFieldsPerUse.roc`,
-`test/cli/issue_12482_encoder_for_in_nested_function.roc`, and
-`test/cli/lifted_use_leaves_other_uses/`.
+`test/cli/issue_12482_encoder_for_in_nested_function.roc`,
+`test/cli/lifted_use_leaves_other_uses/`, and
+`src/check/test/per_use_tag_union_test.zig`, which pins which tag unions are
+copied and which are shared.
 
 ### Scheme Relations Through Unrooted Variables
 
@@ -13882,9 +13912,10 @@ Other solved-graph mutations:
   rule in Declared Backing Structure (above); the write itself never changes
   content or links classes.
 - `markPerUseStructure`—policy: Anonymous Structure Is Copied Per Use
-  (above). A generalization boundary marks each liftable class it made and
-  left ungeneralized, after rank adjustment and before anything instantiates
-  the binding. The write never changes content, rank, or links classes; scheme
+  (above). A generalization boundary marks each class it made and left
+  ungeneralized that a use can change (a record, or a tag union a visible
+  declaration could take in), after rank adjustment and before anything
+  instantiates the binding. The write never changes content, rank, or links classes; scheme
   classification and scheme instantiation consult it, so each use copies the
   class instead of sharing it. The accepted side (every use keeps its own
   type, and a lifting use still lifts) and the rejected side (a method of the
