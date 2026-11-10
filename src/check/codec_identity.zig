@@ -231,7 +231,7 @@ const ContentDigester = struct {
             .evidence => |id| {
                 if ((try self.evidence_ordinals.getOrPut(self.allocator, id)).found_existing) continue;
                 const node = self.table.evidence_nodes[id];
-                if (node.generated_codec_derivation) |nested| try self.appendNestedCodec(@backingInt(nested));
+                if (node.generated_codec_derivation.get()) |nested| try self.appendNestedCodec(@backingInt(nested));
                 switch (node.nested) {
                     .from_callable => {},
                     .resolved, .through_alias => |span| try self.tasks.append(self.allocator, .{ .refs = span }),
@@ -324,7 +324,7 @@ const ContentDigester = struct {
         if (!try self.firstVisit(&self.evidence_ordinals, id)) return;
         const node = self.table.evidence_nodes[id];
         self.writeTarget(node.target);
-        try self.writeOptionalType(node.dispatcher_ty);
+        try self.writeOptionalType(node.dispatcher_ty.get());
         self.writeU8(@backingInt(std.meta.activeTag(node.instantiation)));
         switch (node.instantiation) {
             .monomorphic => {},
@@ -333,8 +333,8 @@ const ContentDigester = struct {
         const subst = self.table.site_substitutions[node.subst.start..][0..node.subst.len];
         self.writeU32(@intCast(subst.len));
         for (subst) |ty| try self.writeType(ty);
-        self.writeU8(@intFromBool(node.generated_codec_derivation != null));
-        if (node.generated_codec_derivation) |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) });
+        self.writeU8(@intFromBool(node.generated_codec_derivation != .none));
+        if (node.generated_codec_derivation.get()) |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) });
         self.writeU8(@backingInt(std.meta.activeTag(node.nested)));
         switch (node.nested) {
             .from_callable => {},
@@ -632,8 +632,8 @@ const Comparer = struct {
                     const a = self.table.evidence_nodes[pair.left];
                     const b = self.table.evidence_nodes[pair.right];
                     if (!std.meta.eql(a.target, b.target) or std.meta.activeTag(a.instantiation) != std.meta.activeTag(b.instantiation) or std.meta.activeTag(a.nested) != std.meta.activeTag(b.nested) or a.subst.len != b.subst.len) return false;
-                    if (!try self.optionalTypes(a.dispatcher_ty, b.dispatcher_ty)) return false;
-                    if (!try self.codecs(a.generated_codec_derivation, b.generated_codec_derivation)) return false;
+                    if (!try self.optionalTypes(a.dispatcher_ty.get(), b.dispatcher_ty.get())) return false;
+                    if (!try self.codecs(a.generated_codec_derivation.get(), b.generated_codec_derivation.get())) return false;
                     switch (a.instantiation) {
                         .monomorphic => {},
                         .callable => |ty| try self.typesPair(ty, b.instantiation.callable),

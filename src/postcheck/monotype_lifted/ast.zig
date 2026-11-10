@@ -2376,7 +2376,7 @@ fn testSourceDigestTemplate(name_store: *names.NameStore, template_id: u32) std.
         .artifact = .{},
         .proc_base = try name_store.internProcBase(.{
             .module_name = try name_store.internModuleName("SourceDigest"),
-            .export_name = null,
+            .export_name = .none,
             .kind = .checked_source,
             .ordinal = 0,
         }),

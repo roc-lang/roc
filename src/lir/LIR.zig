@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const check = @import("check");
 const layout = @import("layout");
 const hosted = @import("hosted.zig");
@@ -1040,8 +1041,11 @@ pub const TailCalls = struct {
     loop: JoinPointId,
     /// The statement the loop begins at, when it is not the body's first:
     /// the statements before it run once per call.
-    entry: ?CFStmtId = null,
+    entry: collections.OptionalId(CFStmtId) = .none,
 };
+
+/// An optional `TailCalls` at its own size.
+pub const OptionalTailCalls = collections.OptionalStruct(TailCalls, "head");
 
 /// Which tail-recursion rewrite the TRMC pass (src/lir/trmc.zig) applied to a
 /// proc. Consumed by TRMC debug output, test assertions, and the interpreter's
@@ -1845,9 +1849,9 @@ pub const LirProcSpec = struct {
     /// consumes a non-null transfer; its runtime pointer may be null when the
     /// caller declines reuse. Internal Roc-ABI destination variants preserve
     /// this marker when they forward the same input.
-    erased_reuse_arg: ?LocalId = null,
+    erased_reuse_arg: collections.OptionalId(LocalId) = .none,
     /// Packed explicit-argument layout required by the erased-callable ABI.
-    erased_call_args: ?ErasedCallArgsPlanId = null,
+    erased_call_args: collections.OptionalId(ErasedCallArgsPlanId) = .none,
     /// Complete producer-authored inventory, unique and sorted by LocalId.
     /// Passes adding fresh locals must preserve this ordering.
     frame_locals: LocalSpan = LocalSpan.empty(),
@@ -1855,11 +1859,11 @@ pub const LirProcSpec = struct {
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
     /// Hidden capture-pointer parameter for an erased callable procedure.
-    erased_capture_arg: ?LocalId = null,
+    erased_capture_arg: collections.OptionalId(LocalId) = .none,
     /// For a procedure whose result is dynamic (`ret_layout` is the dynamic
     /// layout): the `result` dynamic local addressing the storage the caller
     /// passes after the explicit arguments.
-    dyn_result: ?LocalId = null,
+    dyn_result: collections.OptionalId(LocalId) = .none,
     abi: ProcAbi = .roc,
     /// The emission unit a direct call must share with this procedure to
     /// demand an ownership variant of it.
@@ -1899,7 +1903,7 @@ pub const LirProcSpec = struct {
     /// symbol has global binding and it is a root of reachability and ARC.
     exported: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
-    tail_calls: ?TailCalls = null,
+    tail_calls: OptionalTailCalls = .none,
     /// Set by the tail-drive pass on an erased-callable procedure with an
     /// `unless_caller_drives` statement: its entry records whether the
     /// erased-call runtime made the call.
@@ -1920,7 +1924,7 @@ pub const LirProcSpec = struct {
     /// passed in memory to a frame-replacing call cannot live in the frame
     /// being replaced, so a backend that passes arguments that way gives
     /// every member of a group one storage contract for them.
-    tail_group: ?TailGroupId = null,
+    tail_group: collections.OptionalId(TailGroupId) = .none,
     /// What the body contains, for pass admission.
     shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.
@@ -1943,6 +1947,10 @@ pub const LirProcSpec = struct {
     rc_ret_unique: bool = false,
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: U32Span = U32Span.empty(),
+
+    comptime {
+        std.debug.assert(@sizeOf(LirProcSpec) == 224);
+    }
 
     /// The body ARC analyzes and places reference counts in. A static
     /// initializer is construction-only LIR that the static data

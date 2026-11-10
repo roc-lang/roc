@@ -304,7 +304,7 @@ fn certifyProcAbiMetadata(
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
 
-        if (proc.erased_reuse_arg) |marker| {
+        if (proc.erased_reuse_arg.get()) |marker| {
             if (GuardedList.borrowLen(args) == 0 or
                 GuardedList.at(args, GuardedList.borrowLen(args) - 1) != marker)
             {
@@ -327,7 +327,7 @@ fn certifyProcAbiMetadata(
             var explicit_args: usize = 0;
             for (0..GuardedList.borrowLen(args)) |index| {
                 const arg = GuardedList.at(args, index);
-                if (proc.erased_capture_arg != null and arg == proc.erased_capture_arg.?) {
+                if (proc.erased_capture_arg != .none and arg == proc.erased_capture_arg.get().?) {
                     if (store.getLocal(arg).layout_idx != .opaque_ptr) {
                         diag.context_proc = proc_id;
                         diag.set("proc={d}: erased-record capture argument must have opaque-pointer layout", .{proc_index});
@@ -335,10 +335,10 @@ fn certifyProcAbiMetadata(
                     }
                     continue;
                 }
-                if (proc.erased_reuse_arg != null and arg == proc.erased_reuse_arg.?) continue;
+                if (proc.erased_reuse_arg != .none and arg == proc.erased_reuse_arg.get().?) continue;
                 explicit_args += 1;
             }
-            if (explicit_args > 1 or proc.erased_call_args != null) {
+            if (explicit_args > 1 or proc.erased_call_args != .none) {
                 diag.context_proc = proc_id;
                 diag.set("proc={d}: erased-record ABI proc must take only its argument record", .{proc_index});
                 return error.Certification;
@@ -346,7 +346,7 @@ fn certifyProcAbiMetadata(
             continue;
         }
         if (proc.abi != .erased_callable) {
-            if (proc.erased_call_args != null) {
+            if (proc.erased_call_args != .none) {
                 diag.context_proc = proc_id;
                 diag.set("proc={d}: ordinary Roc ABI proc carried an erased-call argument plan", .{proc_index});
                 return error.Certification;
@@ -366,13 +366,13 @@ fn certifyProcAbiMetadata(
             return error.Certification;
         }
 
-        if (proc.erased_reuse_arg == null) {
+        if (proc.erased_reuse_arg == .none) {
             diag.context_proc = proc_id;
             diag.set("proc={d}: erased-callable reuse argument must carry its ownership marker", .{proc_index});
             return error.Certification;
         }
 
-        const arg_plan = proc.erased_call_args orelse {
+        const arg_plan = proc.erased_call_args.get() orelse {
             diag.context_proc = proc_id;
             diag.set("proc={d}: erased-callable ABI proc lacks an argument plan", .{proc_index});
             return error.Certification;
@@ -6902,8 +6902,8 @@ test "certify accepts consistent erased-callable proc ABI metadata" {
             .name = f.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(5),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
-            .erased_reuse_arg = reuse,
-            .erased_call_args = arg_plan,
+            .erased_reuse_arg = .of(reuse),
+            .erased_call_args = .of(arg_plan),
             .body = body,
             .ret_layout = .i64,
             .abi = .erased_callable,
@@ -6925,8 +6925,8 @@ test "certify accepts consistent erased-callable proc ABI metadata" {
             .name = f.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(2),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
-            .erased_reuse_arg = reuse,
-            .erased_call_args = arg_plan,
+            .erased_reuse_arg = .of(reuse),
+            .erased_call_args = .of(arg_plan),
             .body = body,
             .ret_layout = erased_callable,
             .abi = .erased_callable,
@@ -6969,7 +6969,7 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
             .name = f.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(1),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
-            .erased_reuse_arg = reuse,
+            .erased_reuse_arg = .of(reuse),
             .body = body,
             .ret_layout = .i64,
             .abi = .erased_callable,
@@ -6992,7 +6992,7 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
             .name = f.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(1),
             .args = try f.store.addLocalSpan(&.{ capture, marked_reuse, final_reuse }),
-            .erased_reuse_arg = marked_reuse,
+            .erased_reuse_arg = .of(marked_reuse),
             .body = body,
             .ret_layout = erased_callable,
             .abi = .erased_callable,
@@ -7014,7 +7014,7 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
             .name = f.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(1),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
-            .erased_reuse_arg = reuse,
+            .erased_reuse_arg = .of(reuse),
             .body = body,
             .ret_layout = .i64,
             .abi = .erased_callable,
@@ -7062,8 +7062,8 @@ test "certify rejects an erased-call argument plan that differs from the signatu
         .name = f.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = try f.store.addLocalSpan(&.{ first, second, capture, reuse }),
-        .erased_reuse_arg = reuse,
-        .erased_call_args = wrong_plan,
+        .erased_reuse_arg = .of(reuse),
+        .erased_call_args = .of(wrong_plan),
         .body = body,
         .ret_layout = .i64,
         .abi = .erased_callable,

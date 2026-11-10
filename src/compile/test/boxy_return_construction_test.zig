@@ -36,7 +36,7 @@ fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLi
                 (std.mem.endsWith(u8, name, expected) and name[name.len - expected.len - 1] == '.')) break i;
         } else continue;
         found[matched] = true;
-        const result = proc.dyn_result orelse return error.TestUnexpectedResult;
+        const result = proc.dyn_result.get() orelse return error.TestUnexpectedResult;
         var work: std.ArrayList(lir.LIR.CFStmtId) = .empty;
         defer work.deinit(std.testing.allocator);
         var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);

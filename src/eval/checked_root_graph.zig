@@ -334,7 +334,7 @@ const Walker = struct {
             const plan = plans.plans[@backingInt(plan_id)];
             switch (plan.resolution) {
                 .direct_closed, .direct_parametric => |direct| try self.nodes.append(self.allocator, direct.evidence),
-                .structural => if (plan.generated_codec_derivation) |id| try self.derivations.append(self.allocator, id),
+                .structural => if (plan.generated_codec_derivation.get()) |id| try self.derivations.append(self.allocator, id),
                 .evidence_dependent, .checked_error, .@"unreachable", .direct_pending => {},
             }
             try self.drainNodes(key.module);

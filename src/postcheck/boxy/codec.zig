@@ -813,7 +813,7 @@ pub fn localValues(b: *Builder, family: u32, bound: []const TypeId, out: []Local
 /// A structural `parser_for`/`encoder_for` dispatch: the derivation's
 /// constructor applied to the encoding operand.
 pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, operands: []const static_dispatch.StaticDispatchOperand, operand_types: []const TypeId, result_ty: TypeId) Allocator.Error!void {
-    const id = call_plan.generated_codec_derivation orelse invariant("a structural codec dispatch names no generated derivation");
+    const id = call_plan.generated_codec_derivation.get() orelse invariant("a structural codec dispatch names no generated derivation");
     if (operands.len != 1) invariant("a structural codec dispatch does not take one encoding");
     const family = try familyFor(b.program, b.module, id);
     const fn_ty = try b.convert(call_plan.callable_ty);
@@ -884,7 +884,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     const plan = owner_view.view.static_dispatch_plans.plans[@backingInt(plan_id)];
     // A dispatch on a constrained variable reaches its derivation through
     // the evidence the stored value's procedure was instantiated with.
-    const derivation_module, const derivation = if (plan.generated_codec_derivation) |id| .{ owner_view.index, id } else switch (plan.resolution) {
+    const derivation_module, const derivation = if (plan.generated_codec_derivation.get()) |id| .{ owner_view.index, id } else switch (plan.resolution) {
         .evidence_dependent => |dependent| blk: {
             var frame_index = stored.evidence_frame_head orelse invariant("a stored generated codec runtime has no evidence");
             for (0..dependent.index.depth) |_| frame_index = stored.evidence_frames[frame_index].parent orelse
@@ -1518,7 +1518,7 @@ const Gen = struct {
         try proc_args.append(b.allocator, frame.start.capture_ptr);
         try b.finishProc(frame.start.entry, frame.body_start, proc_args.items, frame.ret_layout);
         const proc = b.store.getProcSpecPtr(b.currentWorker().proc);
-        proc.erased_capture_arg = frame.start.capture_ptr;
+        proc.erased_capture_arg = .of(frame.start.capture_ptr);
         proc.abi = .erased_record;
     }
 

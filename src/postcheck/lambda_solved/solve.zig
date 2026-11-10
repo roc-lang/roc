@@ -908,9 +908,9 @@ const Solver = struct {
             slot.* = .{
                 .local = capture.local,
                 .symbol = local.symbol,
-                .binder = local.identity.binder(),
-                .capture_id = local.identity.captureId(),
-                .checked_capture_id = local.identity.checkedCaptureId(),
+                .binder = .of(local.identity.binder()),
+                .capture_id = .of(local.identity.captureId()),
+                .checked_capture_id = .of(local.identity.checkedCaptureId()),
                 .capture_kind = local.capture_kind,
                 .ty = self.localTy(capture.local),
             };
@@ -6357,7 +6357,7 @@ test "lambda sets merged in opposite encounter orders publish one member order" 
     const captured_ty = try program.types.add(.zst);
     // `functionType` gives each lambda one capture span, which every member
     // naming that lambda carries.
-    const first_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
+    const first_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = .none, .ty = captured_ty }});
 
     const forward_first = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = first_lambda, .captures = first_captures }}) });
     const forward_rest = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
@@ -6394,7 +6394,7 @@ test "a merge of sets sharing a lambda keeps that lambda's one capture span" {
     const shared_lambda: Common.Symbol = @fromBackingInt(4);
     const other_lambda: Common.Symbol = @fromBackingInt(2);
     const captured_ty = try program.types.add(.zst);
-    const shared_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
+    const shared_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = .none, .ty = captured_ty }});
 
     const left = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = shared_lambda, .captures = shared_captures }}) });
     const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
@@ -6422,8 +6422,8 @@ fn unifyOneLambdaWithTwoCaptureSpans() Allocator.Error!void {
 
     const lambda: Common.Symbol = @fromBackingInt(4);
     const captured_ty = try program.types.add(.zst);
-    const left_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
-    const right_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
+    const left_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = .none, .ty = captured_ty }});
+    const right_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = .none, .ty = captured_ty }});
     const left = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = left_captures }}) });
     const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = right_captures }}) });
 
@@ -6764,7 +6764,7 @@ test "issue 12595 shared recursive row payload compatibility work" {
             // The captured symbol is distinct from every lambda symbol here.
             const captured_local: Lifted.LocalId = @fromBackingInt(1);
             const captured_symbol: Common.Symbol = @fromBackingInt(4);
-            const captures = try types.addCaptures(&.{.{ .local = captured_local, .symbol = captured_symbol, .binder = null, .ty = value }});
+            const captures = try types.addCaptures(&.{.{ .local = captured_local, .symbol = captured_symbol, .binder = .none, .ty = value }});
             const common: Type.FnMember = .{ .lambda = @fromBackingInt(3), .captures = captures };
             const left_callable = try types.add(.{ .lambda_set = try types.addMembers(&.{ common, .{ .lambda = @fromBackingInt(2), .captures = .empty() } }) });
             const right_callable = try types.add(.{ .lambda_set = try types.addMembers(&.{ .{ .lambda = @fromBackingInt(1), .captures = .empty() }, common }) });
@@ -6918,7 +6918,7 @@ test "issue 12616 completed compatibility retains disjoint proofs and still prop
     // Erasure digests the capture symbol, so it is distinct from the lambda symbol.
     const captured_local: Lifted.LocalId = @fromBackingInt(1);
     const captured_symbol: Common.Symbol = @fromBackingInt(2);
-    const captures = try types.addCaptures(&.{.{ .local = captured_local, .symbol = captured_symbol, .binder = null, .ty = number }});
+    const captures = try types.addCaptures(&.{.{ .local = captured_local, .symbol = captured_symbol, .binder = .none, .ty = number }});
     const callable = try types.add(.{ .lambda_set = try types.addMembers(&.{.{ .lambda = @fromBackingInt(1), .captures = captures }}) });
     const empty = try types.add(.{ .lambda_set = .empty() });
     const a = try types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = number } });

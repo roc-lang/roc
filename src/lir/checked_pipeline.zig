@@ -2467,8 +2467,8 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
 
     fn defName(info: *const ModuleInfo, proc_base: u32) []const u8 {
         const key = info.names.procBase(@fromBackingInt(@intCast(proc_base)));
-        if (key.export_name) |export_name| return info.names.exportNameText(export_name);
-        const def_idx = key.source_def_idx orelse return "?";
+        if (key.export_name.get()) |export_name| return info.names.exportNameText(export_name);
+        const def_idx = key.source_def_idx.get() orelse return "?";
         const def = info.env.store.getDef(@fromBackingInt(@intCast(def_idx)));
         return switch (info.env.store.getPattern(def.pattern)) {
             inline .assign, .var_assign => |assign| info.env.getIdent(assign.ident),

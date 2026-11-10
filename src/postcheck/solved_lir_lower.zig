@@ -414,17 +414,21 @@ const FnEntry = struct {
     source: ?Mono.FnTemplate,
     args: Type.Span,
     ret: Type.TypeId,
-    capture_arg_ty: ?Type.TypeId,
-    proc: ?LIR.LirProcSpecId,
+    capture_arg_ty: collections.OptionalId(Type.TypeId),
+    proc: collections.OptionalId(LIR.LirProcSpecId),
     /// The specialization whose reach-queue entry lowers `proc`'s body.
     /// Specializations that render to one procedure identity share one proc,
     /// and exactly one of them owns its lowering.
-    proc_owner: ?Type.FnId = null,
+    proc_owner: collections.OptionalId(Type.FnId) = .none,
     /// The shared procedure body is queued independently of which exact
     /// specializations are referenced by emitted calls or constant metadata.
     body_queued: bool = false,
     worker_admissible: ?bool = null,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(FnEntry) == 556);
+}
 
 const LoweredFnBody = struct {
     body: LIR.CFStmtId,
@@ -1435,7 +1439,7 @@ const Lowerer = struct {
     fn markStableSignatures(self: *Lowerer) Common.LowerError!void {
         if (self.owned_proc_signatures) {
             for (self.fn_entries.items) |entry| {
-                const proc = entry.proc orelse continue;
+                const proc = entry.proc.get() orelse continue;
                 self.result.store.getProcSpecPtr(proc).stable_signature = true;
             }
             return;
@@ -1451,7 +1455,7 @@ const Lowerer = struct {
         defer members.deinit(self.allocator);
         for (self.fn_entries.items, self.fn_reachable.items, 0..) |entry, is_reached, index| {
             if (!is_reached) continue;
-            const proc = entry.proc orelse Common.invariant("reachable function had no procedure");
+            const proc = entry.proc.get() orelse Common.invariant("reachable function had no procedure");
             if (self.result.store.getProcSpec(proc).code_key != null) continue;
             app_callees.clearRetainingCapacity();
             try self.solved.lifted.appCalleesReachedBy(self.fn_specs.items[index].source, &app_callees, self.allocator);
@@ -1459,12 +1463,12 @@ const Lowerer = struct {
             members.clearRetainingCapacity();
             const arg_tys = self.types.span(entry.args);
             for (0..arg_tys.len) |arg_index| try self.collectCallableMembers(GuardedList.at(arg_tys, arg_index), &members);
-            if (entry.capture_arg_ty) |capture_arg_ty| try self.collectCallableMembers(capture_arg_ty, &members);
+            if (entry.capture_arg_ty.get()) |capture_arg_ty| try self.collectCallableMembers(capture_arg_ty, &members);
             try self.collectCallableMembers(entry.ret, &members);
             for (members.items) |member| stable_sources[@backingInt(self.fn_specs.items[@backingInt(member)].source)] = true;
         }
         for (self.fn_entries.items, 0..) |entry, index| {
-            const proc = entry.proc orelse continue;
+            const proc = entry.proc.get() orelse continue;
             if (!stable_sources[@backingInt(self.fn_specs.items[index].source)]) continue;
             const spec = self.result.store.getProcSpecPtr(proc);
             if (spec.code_key != null) spec.stable_signature = true;
@@ -1480,7 +1484,7 @@ const Lowerer = struct {
         @memset(reached, false);
         for (self.fn_entries.items, self.fn_reachable.items) |entry, is_reached| {
             if (!is_reached) continue;
-            const proc = entry.proc orelse Common.invariant("reachable function had no procedure");
+            const proc = entry.proc.get() orelse Common.invariant("reachable function had no procedure");
             reached[@backingInt(proc)] = true;
         }
         for (self.result.erased_fns.items) |*set| {
@@ -1967,7 +1971,7 @@ const Lowerer = struct {
 
         const prefix = worker.result.store.captureBodyPrefix();
         const fn_index = @backingInt(context.fn_id);
-        const proc = worker.fn_entries.items[fn_index].proc orelse
+        const proc = worker.fn_entries.items[fn_index].proc.get() orelse
             Common.invariant("prepared Solved-LIR worker function had no procedure identity");
         const lowered = worker.lowerFnSpec(context.fn_id, worker.fn_specs.items[fn_index]) catch {
             context.failed = true;
@@ -2339,7 +2343,7 @@ const Lowerer = struct {
                             try self.add(.{ .ty = ty });
                             if (entry.spec.abi == .erased) _ = try l.frozenCaptureLayout(try l.layoutOfType(ty));
                         }
-                        if (entry.capture_arg_ty) |ty| try self.add(.{ .ty = ty });
+                        if (entry.capture_arg_ty.get()) |ty| try self.add(.{ .ty = ty });
                         switch (entry.spec.return_reuse) {
                             .none => {},
                             .erased_callable => |capture_ty| if (capture_ty) |ty| {
@@ -2566,7 +2570,7 @@ const Lowerer = struct {
                     for (0..variants.len) |index| {
                         const variant = GuardedList.at(variants, index);
                         try self.add(.{ .proc = variant.target });
-                        if (variant.capture_ty) |capture_ty| {
+                        if (variant.capture_ty.get()) |capture_ty| {
                             try self.add(.{ .ty = capture_ty });
                         } else if (content == .erased_fn) {
                             // A worker reads a capture-free member's static
@@ -2675,10 +2679,10 @@ const Lowerer = struct {
         proc.frame_locals = appended.frame_locals;
         proc.stack_probe = shard.stack_probe;
         proc.shapes = shard.shapes;
-        proc.tail_calls = if (shard.tail_calls) |sites|
+        proc.tail_calls = .of(if (shard.tail_calls) |sites|
             appended.relocation.tailCalls(shard.prefix, sites)
         else
-            null;
+            null);
         self.next_join_point = next_join_point;
         try self.folded_map_matches.appendSlice(self.allocator, shard.folded_map_matches);
         self.fn_written.items[@backingInt(shard.fn_id)] = true;
@@ -2895,7 +2899,7 @@ const Lowerer = struct {
                     proc_ptr.body = body;
                     proc_ptr.frame_locals = frame_locals;
                     proc_ptr.stack_probe = lowered_body.?.stack_probe;
-                    proc_ptr.tail_calls = lowered_body.?.tail_calls;
+                    proc_ptr.tail_calls = .of(lowered_body.?.tail_calls);
                     proc_ptr.shapes = lowered_body.?.shapes;
                 }
             },
@@ -2959,7 +2963,7 @@ const Lowerer = struct {
         const index = @backingInt(fn_id);
         if (index >= self.fn_entries.items.len) Common.invariant("direct LIR reachability referenced a missing function spec");
         if (self.worker_callback) {
-            const proc = self.fn_entries.items[index].proc orelse
+            const proc = self.fn_entries.items[index].proc.get() orelse
                 self.missingWorkerPreparation("Solved-LIR worker reached a function without a prepared procedure");
             try self.noteWorkerDiscoveredFn(fn_id);
             return proc;
@@ -2969,7 +2973,7 @@ const Lowerer = struct {
         self.fn_reachable.items[index] = true;
         // Specializations sharing this proc queue its body under the owner,
         // whichever of them an emitted reference reaches first.
-        const owner = self.fn_entries.items[index].proc_owner orelse
+        const owner = self.fn_entries.items[index].proc_owner.get() orelse
             Common.invariant("direct LIR proc placeholder had no lowering owner");
         const owner_index = @backingInt(owner);
         if (self.fn_entries.items[owner_index].body_queued) return proc;
@@ -2980,7 +2984,7 @@ const Lowerer = struct {
 
     fn procPlaceholder(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!LIR.LirProcSpecId {
         const index = @backingInt(fn_id);
-        if (self.fn_entries.items[index].proc) |existing| return existing;
+        if (self.fn_entries.items[index].proc.get()) |existing| return existing;
         if (self.worker_callback) {
             try self.noteWorkerDiscoveredFn(fn_id);
             self.missingWorkerPreparation("Solved-LIR worker requested an unprepared procedure placeholder");
@@ -3020,16 +3024,16 @@ const Lowerer = struct {
             // Another specialization interned this procedure. Share its proc;
             // the owner's reach-queue entry lowers the body once, whether the
             // owner or this spec is the first one an emitted reference reaches.
-            const existing = self.fn_entries.items[@backingInt(owner)].proc orelse
+            const existing = self.fn_entries.items[@backingInt(owner)].proc.get() orelse
                 Common.invariant("direct LIR proc identity owner had no proc");
-            entry.proc = existing;
-            entry.proc_owner = owner;
+            entry.proc = .some(existing);
+            entry.proc_owner = .some(owner);
             self.fn_entries.items[index] = entry;
             return existing;
         }
 
         const arg_count = lifted_args.len + switch (spec.abi) {
-            .finite => (if (entry.capture_arg_ty == null) @as(usize, 0) else 1) +
+            .finite => (if (entry.capture_arg_ty == .none) @as(usize, 0) else 1) +
                 @as(usize, @intFromBool(spec.return_reuse.enabled())),
             .erased => 2,
         };
@@ -3040,11 +3044,11 @@ const Lowerer = struct {
             const arg_ty = GuardedList.at(arg_tys, i);
             arg_locals[i] = try self.addLocalForLayout(try self.layoutOfType(arg_ty));
         }
-        if (entry.capture_arg_ty) |capture_arg_ty| {
+        if (entry.capture_arg_ty.get()) |capture_arg_ty| {
             arg_locals[lifted_args.len] = try self.addLocalForLayout(try self.layoutOfType(capture_arg_ty));
         }
         if (spec.abi == .finite and spec.return_reuse.enabled()) {
-            const reuse_index = lifted_args.len + @as(usize, @intFromBool(entry.capture_arg_ty != null));
+            const reuse_index = lifted_args.len + @as(usize, @intFromBool(entry.capture_arg_ty != .none));
             arg_locals[reuse_index] = try self.addLocalForLayout(try self.result.layouts.insertErasedCallable());
         }
         if (spec.abi == .erased) {
@@ -3061,7 +3065,7 @@ const Lowerer = struct {
         const erased_reuse_arg = switch (spec.abi) {
             .erased => arg_locals[lifted_args.len + 1],
             .finite => if (spec.return_reuse.enabled())
-                arg_locals[lifted_args.len + @as(usize, @intFromBool(entry.capture_arg_ty != null))]
+                arg_locals[lifted_args.len + @as(usize, @intFromBool(entry.capture_arg_ty != .none))]
             else
                 null,
         };
@@ -3070,14 +3074,14 @@ const Lowerer = struct {
             .identity = identity,
             .args = args_span,
             .iterator_fusion_scope = source_fn.iterator_fusion_scope,
-            .erased_reuse_arg = erased_reuse_arg,
+            .erased_reuse_arg = .of(erased_reuse_arg),
             .erased_call_args = if (spec.abi == .erased)
-                try self.erasedCallArgsPlan(arg_locals[0..lifted_args.len])
+                .some(try self.erasedCallArgsPlan(arg_locals[0..lifted_args.len]))
             else
-                null,
+                .none,
             .body = null,
             .ret_layout = ret_layout,
-            .erased_capture_arg = if (spec.abi == .erased) arg_locals[lifted_args.len] else null,
+            .erased_capture_arg = if (spec.abi == .erased) .some(arg_locals[lifted_args.len]) else .none,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
             .code_key = code_key,
@@ -3089,8 +3093,8 @@ const Lowerer = struct {
             }
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
-        entry.proc = proc;
-        entry.proc_owner = fn_id;
+        entry.proc = .some(proc);
+        entry.proc_owner = .some(fn_id);
         self.fn_entries.items[index] = entry;
         return proc;
     }
@@ -3131,9 +3135,9 @@ const Lowerer = struct {
             self.own_captures.appendAssumeCapacity(.{
                 .local = capture.local,
                 .symbol = local.symbol,
-                .binder = local.identity.binder(),
-                .capture_id = local.identity.captureId(),
-                .checked_capture_id = local.identity.checkedCaptureId(),
+                .binder = .of(local.identity.binder()),
+                .capture_id = .of(local.identity.captureId()),
+                .checked_capture_id = .of(local.identity.checkedCaptureId()),
                 .capture_kind = local.capture_kind,
                 .ty = self.solved.local_tys.items[@backingInt(capture.local)],
             });
@@ -3358,10 +3362,10 @@ const Lowerer = struct {
 
     fn captureUsesRecursiveSlotStorage(self: *Lowerer, capture: SolvedType.Capture) bool {
         if (self.recursive_value_locals.contains(capture.local)) return true;
-        if (capture.capture_id) |capture_id| {
+        if (capture.capture_id.get()) |capture_id| {
             if (self.recursive_value_capture_ids.contains(capture_id)) return true;
         }
-        if (capture.checked_capture_id) |capture_id| {
+        if (capture.checked_capture_id.get()) |capture_id| {
             if (self.recursive_value_capture_ids.contains(capture_id)) return true;
         }
         return false;
@@ -3859,8 +3863,8 @@ const Lowerer = struct {
                     .source = source_fn.source,
                     .args = try self.types.addSpan(task.arg_tys.items),
                     .ret = ret_ty,
-                    .capture_arg_ty = capture_arg_ty,
-                    .proc = null,
+                    .capture_arg_ty = .of(capture_arg_ty),
+                    .proc = .none,
                 };
                 return .{ .ret = .{ .fn_id = task.fn_id } };
             },
@@ -3947,7 +3951,7 @@ const Lowerer = struct {
                 .id = undefined,
                 .source = member.lambda,
                 .target = target,
-                .capture_ty = self.fn_entries.items[@backingInt(target)].spec.capture_ty,
+                .capture_ty = .of(self.fn_entries.items[@backingInt(target)].spec.capture_ty),
             });
         }
         if (task.variants.items.len < solved_members.len) {
@@ -4242,7 +4246,7 @@ const Lowerer = struct {
                 .callable => |variants| {
                     const variant_span = types.fnVariantSpan(variants);
                     for (0..variant_span.len) |index| {
-                        if (GuardedList.at(variant_span, index).capture_ty) |capture_ty| {
+                        if (GuardedList.at(variant_span, index).capture_ty.get()) |capture_ty| {
                             try edges.append(allocator, .{ .node = capture_ty, .position = @intCast(index) });
                         }
                     }
@@ -5368,14 +5372,14 @@ const Lowerer = struct {
         while (task.index < type_variants.len) {
             const index = task.index;
             const variant = GuardedList.at(type_variants, index);
-            if (variant.capture_ty) |capture_ty| {
+            if (variant.capture_ty.get()) |capture_ty| {
                 if (waiting) return .{ .call = .{ .capture_slots = .{ .ty = capture_ty } } };
             }
             task.variants[index] = .{
                 .id = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
                 .discriminant = @intCast(index),
                 .variant_index = @intCast(index),
-                .payload_layout = if (variant.capture_ty) |capture_ty|
+                .payload_layout = if (variant.capture_ty.get()) |capture_ty|
                     try self.callablePayloadLayout(task.value_layout, type_variants.len, @intCast(index), capture_ty)
                 else
                     .zst,
@@ -5421,7 +5425,7 @@ const Lowerer = struct {
         if (input) |captures| task.captures = captures.get(.capture_slots);
         while (task.index < members.len) {
             const member = GuardedList.at(members, task.index);
-            if (member.capture_ty) |capture_ty| {
+            if (member.capture_ty.get()) |capture_ty| {
                 if (waiting) return .{ .call = .{ .capture_slots = .{ .ty = capture_ty } } };
             }
             const template = try constFnTemplateForFn(self, member.target);
@@ -5430,7 +5434,7 @@ const Lowerer = struct {
             // may read compile-time values this program does not have.
             const held = if (self.completed_erased_members) |completed| completed.contains(template) else false;
             const entry_proc = if (held) try self.markReachableFn(member.target) else try self.procPlaceholder(member.target);
-            const capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst;
+            const capture_layout = if (member.capture_ty.get()) |capture_ty| try self.layoutOfType(capture_ty) else .zst;
             task.entries[task.index] = .{
                 .on_drop = self.erasedCallableOnDrop(try self.frozenCaptureLayout(capture_layout)),
                 .entry = entry_proc,
@@ -5481,7 +5485,7 @@ const Lowerer = struct {
         }
         if (task.index < fields.len) {
             const field = GuardedList.at(fields, task.index);
-            const checked_capture_id = field.checked_capture_id orelse
+            const checked_capture_id = field.checked_capture_id.get() orelse
                 Common.invariant("ConstStore capture field had no checked capture identity");
             task.slots[task.index] = .{
                 .id = checked_capture_id,
@@ -5608,7 +5612,7 @@ const Lowerer = struct {
                     for (0..variants.len) |index| {
                         const variant = GuardedList.at(variants, index);
                         try out.append(self.allocator, variant.target);
-                        if (variant.capture_ty) |capture_ty| try stack.append(self.allocator, capture_ty);
+                        if (variant.capture_ty.get()) |capture_ty| try stack.append(self.allocator, capture_ty);
                     }
                 },
                 .named => |named| {
@@ -7933,7 +7937,7 @@ const Lowerer = struct {
             for (0..variants.len) |variant_index| {
                 const variant = GuardedList.at(variants, variant_index);
                 if (variant.source != fn_symbol) continue;
-                return try self.finiteCallableValueStep(where, target, @intCast(variant_index), captures, capture_operands, variant.capture_ty, next);
+                return try self.finiteCallableValueStep(where, target, @intCast(variant_index), captures, capture_operands, variant.capture_ty.get(), next);
             }
             return Common.invariant("finite callable type did not contain referenced function");
         } else if (content == .erased_fn) {
@@ -7941,7 +7945,7 @@ const Lowerer = struct {
             for (0..variants.len) |variant_index| {
                 const variant = GuardedList.at(variants, variant_index);
                 if (variant.source != fn_symbol) continue;
-                return try self.packedErasedFnStep(where, target, variant.target, captures, capture_operands, variant.capture_ty, next);
+                return try self.packedErasedFnStep(where, target, variant.target, captures, capture_operands, variant.capture_ty.get(), next);
             }
             return Common.invariant("erased callable type did not contain referenced function");
         } else {
@@ -8118,7 +8122,7 @@ const Lowerer = struct {
             if (capture.capture_id != field.capture_id) {
                 Common.invariant("callable capture payload fields differed from captured locals");
             }
-            const capture_id = capture.capture_id orelse Common.invariant("member capture had no CaptureId");
+            const capture_id = capture.capture_id.get() orelse Common.invariant("member capture had no CaptureId");
             if (operand.id != capture_id) Common.invariant("capture operand CaptureId did not match its member capture slot");
             field_storage_tys[i] = field.storage_ty;
             if (target_is_zst) {
@@ -8215,7 +8219,7 @@ const Lowerer = struct {
                 const capture_values = try self.allocator.alloc(Lifted.ExprId, capture_items.len);
                 errdefer self.allocator.free(capture_values);
                 for (capture_items, task.capture_operands, capture_values) |capture, operand, *value| {
-                    const capture_id = capture.capture_id orelse Common.invariant("member capture had no CaptureId");
+                    const capture_id = capture.capture_id.get() orelse Common.invariant("member capture had no CaptureId");
                     if (operand.id != capture_id) Common.invariant("capture operand CaptureId did not match its member capture slot");
                     value.* = operand.value;
                 }
@@ -8643,7 +8647,7 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerTask {
         const args = arg_exprs;
-        if (variant.capture_ty) |_| {
+        if (variant.capture_ty != .none) {
             const payload = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(callee).layout_idx, variant_index));
             return .{ .callable_variant = .{
                 .where = where,
@@ -13558,7 +13562,7 @@ const Lowerer = struct {
                 } } };
             },
             .callable => {
-                if (task.target_variant.capture_ty == null and task.source_variant.capture_ty == null) {
+                if (task.target_variant.capture_ty == .none and task.source_variant.capture_ty == .none) {
                     return .{ .ret = try self.result.store.addCFStmt(.{ .assign_tag = .{
                         .target = target,
                         .variant_index = task.target_index,
@@ -13567,9 +13571,9 @@ const Lowerer = struct {
                         .next = next,
                     } }, where.glue()) };
                 }
-                const target_capture_ty = task.target_variant.capture_ty orelse
+                const target_capture_ty = task.target_variant.capture_ty.get() orelse
                     Common.invariant("callable boundary target variant dropped a capture payload");
-                const source_capture_ty = task.source_variant.capture_ty orelse
+                const source_capture_ty = task.source_variant.capture_ty.get() orelse
                     Common.invariant("callable boundary source variant lacked a capture payload");
 
                 const target_payload_layout = self.localTagPayloadLayout(target, task.target_index, null);
@@ -13587,12 +13591,12 @@ const Lowerer = struct {
                 return .{ .call = .{ .into_storage = .{ .target = target_payload, .target_ty = target_capture_ty, .source = frame.second, .source_ty = source_capture_ty, .next = assign_tag } } };
             },
             .callable_to_erased => {
-                if (task.target_variant.capture_ty == null and task.source_variant.capture_ty == null) {
+                if (task.target_variant.capture_ty == .none and task.source_variant.capture_ty == .none) {
                     return .{ .ret = try self.staticCallableRead(where.glue(), target, task.target_variant.target, next) };
                 }
-                const target_capture_ty = task.target_variant.capture_ty orelse
+                const target_capture_ty = task.target_variant.capture_ty.get() orelse
                     Common.invariant("callable-to-erased boundary target variant dropped a capture payload");
-                const source_capture_ty = task.source_variant.capture_ty orelse
+                const source_capture_ty = task.source_variant.capture_ty.get() orelse
                     Common.invariant("callable-to-erased boundary source variant lacked a capture payload");
 
                 const capture = try self.addTemp(target_capture_ty);
@@ -14290,7 +14294,7 @@ const Lowerer = struct {
     fn appendVariantCaptureTypes(self: *Lowerer, children: *std.ArrayList(Type.TypeId), variants: Type.Span) Common.LowerError!void {
         const variant_span = self.types.fnVariantSpan(variants);
         for (0..variant_span.len) |index| {
-            if (GuardedList.at(variant_span, index).capture_ty) |capture_ty| try children.append(self.allocator, capture_ty);
+            if (GuardedList.at(variant_span, index).capture_ty.get()) |capture_ty| try children.append(self.allocator, capture_ty);
         }
     }
 
@@ -14347,7 +14351,7 @@ const Lowerer = struct {
         for (0..variant_span.len) |index| {
             const variant = GuardedList.at(variant_span, index);
             std.hash.autoHash(hasher, variant.source);
-            std.hash.autoHash(hasher, variant.capture_ty != null);
+            std.hash.autoHash(hasher, variant.capture_ty != .none);
         }
     }
 
@@ -14518,11 +14522,11 @@ const Lowerer = struct {
                         return true;
                     }
                     if (std.meta.eql(lhs_variant.capture_ty, rhs_variant.capture_ty)) continue;
-                    if (lhs_variant.capture_ty == null or rhs_variant.capture_ty == null) {
+                    if (lhs_variant.capture_ty == .none or rhs_variant.capture_ty == .none) {
                         try items.add(.{ .decided = false });
                         return true;
                     }
-                    try addPair(items, lhs_variant.capture_ty.?, rhs_variant.capture_ty.?);
+                    try addPair(items, lhs_variant.capture_ty.get().?, rhs_variant.capture_ty.get().?);
                 }
                 return true;
             }
@@ -15004,7 +15008,7 @@ const Lowerer = struct {
                     const variant_span = types.fnVariantSpan(variants);
                     const frame = try self.refsFrame(variant_span.len);
                     for (frame.kind.refs.payloads, 0..) |*payload, index| {
-                        payload.* = if (GuardedList.at(variant_span, index).capture_ty) |capture_ty| .{ .single = capture_ty } else .zst;
+                        payload.* = if (GuardedList.at(variant_span, index).capture_ty.get()) |capture_ty| .{ .single = capture_ty } else .zst;
                     }
                     return .{ .push = frame };
                 },
@@ -15584,9 +15588,9 @@ test "shared procedure scheduling preserves exact specialization demand" {
                 .source = null,
                 .args = .empty(),
                 .ret = direct_ty,
-                .capture_arg_ty = null,
-                .proc = proc,
-                .proc_owner = owner,
+                .capture_arg_ty = .none,
+                .proc = .some(proc),
+                .proc_owner = .some(owner),
             });
             try lowerer.fn_reachable.append(allocator, false);
         }
@@ -16210,13 +16214,13 @@ test "value encoding preserves tag identities but excludes finite call targets" 
         .id = undefined,
         .source = @fromBackingInt(@intCast(1)),
         .target = @fromBackingInt(@intCast(2)),
-        .capture_ty = null,
+        .capture_ty = .none,
     }});
     const rhs_members = try lowerer.types.addFnVariants(&.{.{
         .id = undefined,
         .source = @fromBackingInt(@intCast(1)),
         .target = @fromBackingInt(@intCast(3)),
-        .capture_ty = null,
+        .capture_ty = .none,
     }});
     const lhs = try lowerer.types.add(.{ .callable = lhs_members });
     const rhs = try lowerer.types.add(.{ .callable = rhs_members });

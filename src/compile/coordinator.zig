@@ -10063,8 +10063,8 @@ fn hashExhaustivenessSitesForView(
             .destructure => 1,
         });
         hashRegionIntoSha256(hasher, site.region);
-        hashOptionalU32IntoSha256(hasher, if (site.checked_expr) |expr| @backingInt(expr) else null);
-        hashOptionalU32IntoSha256(hasher, if (site.checked_pattern) |pattern| @backingInt(pattern) else null);
+        hashOptionalU32IntoSha256(hasher, if (site.checked_expr.get()) |expr| @backingInt(expr) else null);
+        hashOptionalU32IntoSha256(hasher, if (site.checked_pattern.get()) |pattern| @backingInt(pattern) else null);
         hashExhaustivenessOwnerIntoSha256(hasher, site.owner);
         hashExhaustivenessPolicyIntoSha256(hasher, site.policy);
     }

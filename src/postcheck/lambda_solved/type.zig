@@ -71,12 +71,16 @@ pub const Tag = struct {
 pub const Capture = struct {
     local: @import("../monotype_lifted/ast.zig").LocalId,
     symbol: Common.Symbol,
-    binder: ?check.CheckedBodies.BinderId,
-    capture_id: ?check.CheckedModule.CaptureId = null,
-    checked_capture_id: ?check.CheckedModule.CaptureId = null,
+    binder: collections.OptionalId(check.CheckedBodies.BinderId),
+    capture_id: collections.OptionalId(check.CheckedModule.CaptureId) = .none,
+    checked_capture_id: collections.OptionalId(check.CheckedModule.CaptureId) = .none,
     capture_kind: check.CheckedModule.ConstCaptureKind = .lexical,
     ty: TypeVarId,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(Capture) == 64);
+}
 
 /// Function member of a lambda set.
 pub const FnMember = struct {
@@ -627,7 +631,7 @@ test "lambda solved empty spans use shared empty descriptor" {
     const nonempty_span = try store.addSpan(&.{unit});
     const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = .none }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @fromBackingInt(@intCast(2)), .checked_name = @fromBackingInt(@intCast(2)), .payloads = nonempty_span }});
-    const nonempty_captures = try store.addCaptures(&.{.{ .local = @fromBackingInt(@intCast(3)), .symbol = @fromBackingInt(@intCast(4)), .binder = null, .ty = unit }});
+    const nonempty_captures = try store.addCaptures(&.{.{ .local = @fromBackingInt(@intCast(3)), .symbol = @fromBackingInt(@intCast(4)), .binder = .none, .ty = unit }});
     const nonempty_members = try store.addMembers(&.{.{ .lambda = @fromBackingInt(@intCast(5)), .captures = nonempty_captures }});
     try std.testing.expect(nonempty_span.len == 1);
     try std.testing.expect(nonempty_fields.len == 1);

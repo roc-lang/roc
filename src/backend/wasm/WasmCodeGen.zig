@@ -6498,7 +6498,7 @@ const TailDriver = struct {
 const tail_area_args_offset: u32 = 16;
 
 fn isTailGroupMember(proc: LirProcSpec) bool {
-    return proc.tail_group != null and proc.abi == .roc and proc.hosted == null and
+    return proc.tail_group != .none and proc.abi == .roc and proc.hosted == null and
         proc.body != null and !proc.is_static_initializer;
 }
 
@@ -6511,7 +6511,7 @@ fn tailDriverIndex(self: *const Self, proc: LirProcSpec) Allocator.Error!?usize 
     if (!isTailGroupMember(proc)) return null;
     const result = try self.resolveValType(proc.ret_layout);
     for (self.tables().tail_drivers.items, 0..) |driver, index| {
-        if (driver.group == proc.tail_group.? and driver.result == result) return index;
+        if (driver.group == proc.tail_group.get().? and driver.result == result) return index;
     }
     return null;
 }
@@ -6551,7 +6551,7 @@ fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.E
             const type_idx = try self.internFuncType(&.{result}, &.{result});
             const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
             _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_tail_driver", self.tail_drivers.items.len);
-            try self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.?, .result = result, .defined = defined });
+            try self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.get().?, .result = result, .defined = defined });
             break :blk &self.tail_drivers.items[self.tail_drivers.items.len - 1];
         };
         try driver.members.append(self.allocator, @fromBackingInt(@as(u32, @intCast(i))));
@@ -6987,7 +6987,7 @@ fn emitProcSpecBody(
         try self.bindErasedCallableAdapterParams(
             proc,
             args,
-            proc.erased_call_args orelse unreachable, // ARC certification requires an argument plan on every erased-callable ABI proc
+            proc.erased_call_args.get() orelse unreachable, // ARC certification requires an argument plan on every erased-callable ABI proc
             args_ptr,
             capture_ptr,
             reuse_ptr,
@@ -7007,7 +7007,7 @@ fn emitProcSpecBody(
         }
         const stored_args: ?u32 = if (direct_count < args.len) self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory else null;
         const hidden = self.hiddenParams(proc);
-        if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.?);
+        if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.get().?);
         if (hidden.carry) self.carry = .{ .idx = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
         if (hidden.pending) self.pending_cell = .{ .idx = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
         if (stored_args) |base_local| {
@@ -7099,7 +7099,7 @@ fn emitProcSpecBody(
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
         // A dynamic result was written to the caller's storage by `ret`.
-        if (erased_abi and proc.dyn_result == null) {
+        if (erased_abi and proc.dyn_result == .none) {
             try self.emitErasedCallableAdapterReturnStore(erased_ret_ptr.?, proc.ret_layout);
         }
         // This procedure owns its tail carry, which its dynamic parameters
@@ -7578,7 +7578,7 @@ fn bindErasedCallableAdapterParams(
     }
 
     const explicit_count = args.len - 2;
-    const hidden_capture_arg = proc.erased_capture_arg orelse wasmInvariantFmt(
+    const hidden_capture_arg = proc.erased_capture_arg.get() orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: erased callable adapter has no hidden capture arg",
         .{},
     );
@@ -8934,7 +8934,7 @@ const HiddenParams = struct {
 
 fn hiddenParams(self: *const Self, proc: LirProcSpec) HiddenParams {
     return .{
-        .result = proc.abi == .roc and proc.dyn_result != null,
+        .result = proc.abi == .roc and proc.dyn_result != .none,
         .carry = procCarriesTailArgs(self.store, proc),
         .pending = proc.takesPendingCell(),
     };
@@ -8962,7 +8962,7 @@ fn localDyn(self: *const Self, local: ProcLocalId) ?LIR.DynLocal {
 /// result is dynamic.
 fn currentDynResult(self: *const Self) ?ProcLocalId {
     const proc_id = self.current_proc_id orelse return null;
-    return self.store.getProcSpec(proc_id).dyn_result;
+    return self.store.getProcSpec(proc_id).dyn_result.get();
 }
 
 fn emitBoxyRuntimeCall(self: *Self, entry: BoxyRuntimeSignatures.Entry) Allocator.Error!void {
@@ -9176,11 +9176,11 @@ fn generateDynResultReturn(self: *Self, result: ProcLocalId, value: ProcLocalId)
 /// (`ProcAbi.erased_record`): the result pointer, the argument record
 /// pointer, the capture pointer, and the reuse pointer.
 fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr: u32, capture_ptr: u32, reuse_ptr: u32) Allocator.Error!void {
-    if (proc.dyn_result) |result| {
+    if (proc.dyn_result.get()) |result| {
         try self.emitLocalGet(ret_ptr);
         try self.emitBindingSet(try self.procLocalBinding(result));
     }
-    const capture_param = proc.erased_capture_arg orelse wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has no capture parameter", .{});
+    const capture_param = proc.erased_capture_arg.get() orelse wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has no capture parameter", .{});
     const params = self.store.getLocalSpan(proc.args);
     var explicit_count: usize = 0;
     for (0..params.len) |i| {
@@ -9191,7 +9191,7 @@ fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr
             try self.emitBindingSet(binding);
             continue;
         }
-        if (proc.erased_reuse_arg != null and param == proc.erased_reuse_arg.?) {
+        if (proc.erased_reuse_arg != .none and param == proc.erased_reuse_arg.get().?) {
             try self.emitLocalGet(reuse_ptr);
             try self.emitBindingSet(binding);
             continue;
@@ -9224,7 +9224,7 @@ fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr
 /// dynamic parameter or result, or the target is dynamic.
 fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLocalId) bool {
     const callee = self.store.getProcSpec(proc_id);
-    if (callee.dyn_result != null or callee.takesPendingCell() or self.localDyn(target) != null) return true;
+    if (callee.dyn_result != .none or callee.takesPendingCell() or self.localDyn(target) != null) return true;
     const params = self.store.getLocalSpan(callee.args);
     for (0..params.len) |i| {
         if (self.localDyn(GuardedList.at(params, i)) != null) return true;
@@ -9267,7 +9267,7 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
     }
     if (stored) |s| try self.emitLocalGet(s.base_local);
     var result_target: ?DynTarget = null;
-    if (callee.dyn_result != null) {
+    if (callee.dyn_result != .none) {
         const t = try self.dynTarget(target);
         result_target = t;
         try self.emitTargetAddress(t);

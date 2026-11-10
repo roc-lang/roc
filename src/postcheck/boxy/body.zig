@@ -645,8 +645,8 @@ pub const Builder = struct {
         defer self.allocator.free(all);
         try self.finishProc(entry, body_start, all, ret_layout);
         const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = capture_ptr;
-        proc.erased_reuse_arg = reuse;
+        proc.erased_capture_arg = .of(capture_ptr);
+        proc.erased_reuse_arg = .of(reuse);
         proc.abi = .erased_record;
     }
 
@@ -1964,14 +1964,14 @@ pub const Builder = struct {
         const proc = self.store.getProcSpecPtr(worker.proc);
         proc.args = try self.store.addLocalSpan(args);
         proc.ret_layout = ret_layout;
-        proc.dyn_result = self.result_local;
+        proc.dyn_result = .of(self.result_local);
         proc.frame_locals = try self.store.addLocalSpan(self.frame_locals.items);
         proc.join_points = try self.store.addJoinPointSpan(self.join_points.items);
         proc.body = proc_body;
         proc.shapes = self.store.shapes;
         self.store.shapes = .{};
         if (has_dynamic_frame) self.tail_calls.self_calls = .replace_frame;
-        proc.tail_calls = try self.tail_calls.finish(self.store);
+        proc.tail_calls = .of(try self.tail_calls.finish(self.store));
     }
 
     /// Crash with a checked runtime error; the value of type `ty` it stands
@@ -4119,7 +4119,7 @@ pub const Builder = struct {
             .template => |key| blk: {
                 const view = self.program.module(key.module);
                 const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
-                const export_name = view.nameStore().procBase(template.proc_base).export_name orelse break :blk "a template";
+                const export_name = view.nameStore().procBase(template.proc_base).export_name.get() orelse break :blk "a template";
                 break :blk view.nameStore().exportNameText(export_name);
             },
             inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| @tagName(kind),
@@ -5857,7 +5857,7 @@ pub const Builder = struct {
                 const owner = self.program.worker(owner_worker).*;
                 const owner_view = self.program.module(owner.module);
                 const site = owner_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
-                const site_expr = site.checked_expr orelse invariant("a stored closure's site has no checked expression");
+                const site_expr = site.checked_expr.get() orelse invariant("a stored closure's site has no checked expression");
                 const expr = owner_view.bodies().expr(site_expr);
                 const lambda_expr = switch (expr.data) {
                     .lambda => site_expr,
@@ -7031,7 +7031,7 @@ pub const Builder = struct {
         return try self.dictionaryFromType(.{
             .module = context.module,
             .method = param.method,
-            .structural = param.structural,
+            .structural = param.structural.get(),
             .dispatcher = try converter.convert(context.module, param.dispatcher_ty, context.env),
             .callable = try converter.convert(context.module, param.callable_ty, context.env),
         });
@@ -7808,7 +7808,7 @@ pub const Builder = struct {
         return try self.dictionaryFromType(.{
             .module = self.module,
             .method = param.method,
-            .structural = param.structural,
+            .structural = param.structural.get(),
             .dispatcher = try converter.convert(self.module, param.dispatcher_ty, self.env),
             .callable = try converter.convert(self.module, param.callable_ty, self.env),
         });

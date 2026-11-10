@@ -103,6 +103,7 @@ fn holdsRewriteIdentity(comptime T: type) bool {
 /// Whether some optional payload, struct field, or union field type of `T`
 /// satisfies `holds`.
 fn anyFieldType(comptime T: type, comptime holds: fn (comptime type) bool) bool {
+    if (collections.CompactOptionalPayload(T)) |Payload| return holds(Payload);
     const info = @typeInfo(T);
     if (info == .optional) return holds(info.optional.child);
     const field_types: []const type = if (info == .@"struct")
@@ -371,7 +372,9 @@ const ProcRewrite = struct {
             }
         }
         const info = @typeInfo(T);
-        if (comptime std.meta.activeTag(info) == .optional) {
+        if (comptime collections.CompactOptionalPayload(T)) |Payload| {
+            if (value.get()) |payload| try self.prepareValue(source, allocator, marks, Payload, payload);
+        } else if (comptime std.meta.activeTag(info) == .optional) {
             if (value) |payload| try self.prepareValue(source, allocator, marks, info.optional.child, payload);
         } else if (comptime std.meta.activeTag(info) == .@"struct") {
             inline for (info.@"struct".field_names, info.@"struct".field_types) |field_name, field_type| {
@@ -753,6 +756,10 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
     if (T == U64Span) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.u64s, bases.u64s), .len = value.len };
     if (T == U32Span) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.u32s, bases.u32s), .len = value.len };
 
+    // A compact optional relocates exactly like the `?Payload` it stores.
+    if (comptime collections.CompactOptionalPayload(T)) |Payload| {
+        return T.of(if (value.get()) |payload| relocateBodyValue(Payload, payload, prefix, bases) else null);
+    }
     const type_info = @typeInfo(T);
     if (comptime std.meta.activeTag(type_info) == .optional) {
         if (value) |payload| {
@@ -1108,10 +1115,10 @@ pub fn releaseCode(self: *Self) void {
         spec.args = LocalSpan.empty();
         spec.frame_locals = LocalSpan.empty();
         spec.join_points = JoinPointSpan.empty();
-        spec.erased_reuse_arg = null;
-        spec.erased_capture_arg = null;
-        spec.erased_call_args = null;
-        spec.tail_calls = null;
+        spec.erased_reuse_arg = .none;
+        spec.erased_capture_arg = .none;
+        spec.erased_call_args = .none;
+        spec.tail_calls = .none;
         spec.tail_transform = .none;
     }
     inline for (.{
@@ -2330,7 +2337,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     GuardedList.atPtr(a.getJoinPointSpanMut(joins), 0).params = span_a;
     a.getProcSpecPtr(first).body = appended_a;
     a.getProcSpecPtr(first).frame_locals = span_a;
-    a.getProcSpecPtr(first).tail_calls = .{ .head = appended_a, .loop = @fromBackingInt(@intCast(77)) };
+    a.getProcSpecPtr(first).tail_calls = .some(.{ .head = appended_a, .loop = @fromBackingInt(@intCast(77)) });
     a.getProcSpecPtr(first).tail_transform = .tce;
     const local_b = try b.addLocal(.{ .layout_idx = .u64 });
     const appended_b = try b.addCFStmt(.{ .ret = .{ .value = local_b } }, .test_fixture);
@@ -2358,8 +2365,8 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     try std.testing.expectEqual(@backingInt(appended_b) + 1, @backingInt(committed_b.body.?));
     try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.next);
     try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.tail_call.next().?);
-    try std.testing.expectEqual(committed_a.body.?, committed_a.tail_calls.?.head);
-    try std.testing.expectEqual(@as(u32, 77), @backingInt(committed_a.tail_calls.?.loop));
+    try std.testing.expectEqual(committed_a.body.?, committed_a.tail_calls.get().?.head);
+    try std.testing.expectEqual(@as(u32, 77), @backingInt(committed_a.tail_calls.get().?.loop));
     try std.testing.expectEqual(lir_defs.TailTransform.tce, committed_a.tail_transform);
     try std.testing.expectEqual(committed_a.frame_locals, coordinator.getCFStmt(ret).assign_call.args);
     try std.testing.expectEqual(committed_a.frame_locals, GuardedList.at(coordinator.getJoinPointSpan(joins), 0).params);
@@ -2418,7 +2425,7 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
             .{ .id = fresh, .params = .empty(), .body = clone },
             .{ .id = @fromBackingInt(@intCast(101)), .params = .empty(), .body = external },
         });
-        worker.getProcSpecPtr(procs[i]).tail_calls = .{ .head = roots[i], .loop = if (i == 0) source else fresh };
+        worker.getProcSpecPtr(procs[i]).tail_calls = .some(.{ .head = roots[i], .loop = if (i == 0) source else fresh });
     }
     try std.testing.expectEqualDeep(a.body_prefix, b.body_prefix);
     for ([_]*Self{ &a, &b }, 0..) |worker, i| {
@@ -2441,7 +2448,7 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
         try std.testing.expectEqual(source, GuardedList.at(joins, 0).id);
         try std.testing.expectEqual(destination.id, GuardedList.at(joins, 1).id);
         try std.testing.expectEqual(clone.id, GuardedList.at(joins, 2).id);
-        try std.testing.expectEqual(if (i == 0) source else destination.id, proc.tail_calls.?.loop);
+        try std.testing.expectEqual(if (i == 0) source else destination.id, proc.tail_calls.get().?.loop);
     }
 }
 
@@ -2491,7 +2498,7 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
         .on_miss = nested,
     } }, .test_fixture);
     coordinator.getProcSpecPtr(proc).body = root;
-    coordinator.getProcSpecPtr(proc).tail_calls = .{ .head = head, .loop = @fromBackingInt(@intCast(42)) };
+    coordinator.getProcSpecPtr(proc).tail_calls = .some(.{ .head = head, .loop = @fromBackingInt(@intCast(42)) });
     var worker = try coordinator.cloneForProcRewrite(allocator, proc);
     defer worker.deinit();
     try std.testing.expectEqualSlices(u32, &.{
@@ -2534,7 +2541,7 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
             }
             worker.getCFStmtPtr(ret).* = .{ .init_uninitialized = .{ .target = local, .next = appended } };
             worker.getProcSpecPtr(proc).body = appended;
-            worker.getProcSpecPtr(proc).tail_calls = .{ .head = appended, .loop = @fromBackingInt(@intCast(100)) };
+            worker.getProcSpecPtr(proc).tail_calls = .some(.{ .head = appended, .loop = @fromBackingInt(@intCast(100)) });
             worker.getProcSpecPtr(proc).join_points = try worker.addJoinPointSpan(&.{.{
                 .id = @fromBackingInt(@intCast(100)),
                 .params = .empty(),
@@ -2547,7 +2554,7 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
                 return err;
             };
             try std.testing.expectEqual(appended, coordinator.getProcSpec(proc).body.?);
-            try std.testing.expectEqual(@as(u32, 102), @backingInt(coordinator.getProcSpec(proc).tail_calls.?.loop));
+            try std.testing.expectEqual(@as(u32, 102), @backingInt(coordinator.getProcSpec(proc).tail_calls.get().?.loop));
         }
     };
     // Heap-layout dependent remaps would vary the allocation count between runs.

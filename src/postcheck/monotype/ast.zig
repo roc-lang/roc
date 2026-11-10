@@ -1680,34 +1680,10 @@ pub const ListRestPattern = struct {
     pattern: collections.OptionalId(PatId),
 };
 
-/// A list pattern's rest, or its absence, in eight bytes. `stored_index` is
-/// the rest's index plus one, so zero means the list pattern has no rest.
+/// A list pattern's rest, or its absence, in eight bytes: the rest's index
+/// is stored plus one, so all zeros means the list pattern has no rest.
 pub fn OptionalListRest(comptime Rest: type) type {
-    return struct {
-        stored_index: u32 = 0,
-        pattern: @FieldType(Rest, "pattern") = .none,
-
-        const Self = @This();
-
-        pub const none: Self = .{};
-
-        pub fn some(rest: Rest) Self {
-            std.debug.assert(rest.index < std.math.maxInt(u32));
-            return .{ .stored_index = rest.index + 1, .pattern = rest.pattern };
-        }
-
-        pub fn of(rest: ?Rest) Self {
-            return if (rest) |present| some(present) else .none;
-        }
-
-        pub fn get(self: Self) ?Rest {
-            if (self.stored_index == 0) {
-                std.debug.assert(self.pattern == .none);
-                return null;
-            }
-            return .{ .index = self.stored_index - 1, .pattern = self.pattern };
-        }
-    };
+    return collections.OptionalStruct(Rest, "index");
 }
 
 comptime {
@@ -3222,7 +3198,7 @@ fn testProcTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allo
         .artifact = .{},
         .proc_base = try name_store.internProcBase(.{
             .module_name = try name_store.internModuleName("SourceDigest"),
-            .export_name = null,
+            .export_name = .none,
             .kind = .checked_source,
             .ordinal = 0,
         }),
