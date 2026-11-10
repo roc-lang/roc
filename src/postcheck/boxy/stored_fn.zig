@@ -675,12 +675,18 @@ const MetadataReader = struct {
             .empty_record => {},
             .record => {
                 const fields = try self.word();
-                if (fields > self.remaining() / 13) return error.InvalidMetadata;
+                if (fields > self.remaining() / 14) return error.InvalidMetadata;
                 for (0..fields) |_| {
                     try self.name();
                     try self.typeRef();
                     _ = try self.tag(types.FieldKind);
                     _ = try self.word();
+                    const has_default = try self.byte();
+                    if (has_default > 1) return error.InvalidMetadata;
+                    if (has_default == 1) {
+                        try self.module();
+                        _ = try self.word();
+                    }
                 }
                 try self.ext();
                 const declared = try self.byte();
@@ -734,9 +740,15 @@ const MetadataReader = struct {
     }
     fn worker(self: *MetadataReader) error{InvalidMetadata}!void {
         while (true) switch (try self.tag(Tag)) {
-            .template, .template_list_u8, .default => {
+            .template, .default => {
                 try self.module();
                 _ = try self.word();
+                return;
+            },
+            .template_list_int => {
+                try self.module();
+                _ = try self.word();
+                _ = try self.tag(lower.ListIntItem);
                 return;
             },
             .lambda => {
@@ -986,8 +998,10 @@ const Tag = enum(u8) {
     crash_dictionary,
     codec,
     callable_eval_entry,
-    /// A template's `List(U8)` worker (`lower.TemplateBinding.list_u8`).
-    template_list_u8,
+    /// A template's integer list worker (`lower.TemplateBinding.list_int`):
+    /// the module and template, then one byte naming the item type
+    /// (`lower.ListIntItem`).
+    template_list_int,
 };
 
 fn appendWord(allocator: Allocator, list: *std.ArrayList(u8), value: u32) Allocator.Error!void {
@@ -1125,6 +1139,11 @@ const Encoder = struct {
                     try self.tableType(field.ty);
                     try self.table.append(self.allocator, @backingInt(field.kind));
                     try self.tableWord(field.slot_variable);
+                    try self.table.append(self.allocator, @intFromBool(field.default != null));
+                    if (field.default) |default| {
+                        try self.tableWord(try self.moduleEntry(default.module));
+                        try self.tableWord(default.expr_node);
+                    }
                 }
                 try self.tableExt(record.ext);
                 try self.table.append(self.allocator, @intFromBool(record.declared != null));
@@ -1199,9 +1218,14 @@ const Encoder = struct {
         const kind: Tag = @fromBackingInt(@intCast(input.byte()));
         try self.tag(kind);
         switch (kind) {
-            .template, .template_list_u8, .default => {
+            .template, .default => {
                 try self.module(input.module());
                 try self.word(input.word());
+            },
+            .template_list_int => {
+                try self.module(input.module());
+                try self.word(input.word());
+                try self.bytes.append(self.allocator, input.byte());
             },
             .lambda => {
                 try self.word(input.word());
@@ -1274,10 +1298,14 @@ const Encoder = struct {
             .template => |key| {
                 try self.tag(switch (key.binding) {
                     .generic => .template,
-                    .list_u8 => .template_list_u8,
+                    .list_int => .template_list_int,
                 });
                 try self.module(key.module);
                 try self.word(@backingInt(key.template));
+                switch (key.binding) {
+                    .generic => {},
+                    .list_int => |item| try self.bytes.append(self.allocator, @backingInt(item)),
+                }
             },
             .lambda => |key| {
                 try self.tag(.lambda);
@@ -1439,6 +1467,10 @@ const Decoder = struct {
                     const ty = self.typeOf();
                     const kind: types.FieldKind = @fromBackingInt(@intCast(self.byte()));
                     field.* = .{ .name = field_name, .ty = ty, .kind = kind, .slot_variable = self.word() };
+                    if (self.byte() != 0) {
+                        const module_index = self.module();
+                        field.default = .{ .module = module_index, .expr_node = self.word() };
+                    }
                 }
                 const remainder = self.ext();
                 var declared: ?types.DeclaredOrderInput = null;
@@ -1509,9 +1541,11 @@ const Decoder = struct {
                 const module_index = self.module();
                 return try program.templateWorker(module_index, @fromBackingInt(self.word()));
             },
-            .template_list_u8 => {
+            .template_list_int => {
                 const module_index = self.module();
-                return try program.listU8TemplateWorker(module_index, @fromBackingInt(self.word()));
+                const template = self.word();
+                const item: lower.ListIntItem = @fromBackingInt(self.byte());
+                return try program.listIntTemplateWorker(module_index, @fromBackingInt(template), item);
             },
             .lambda => {
                 const expr: ExprId = @fromBackingInt(self.word());
@@ -1653,19 +1687,97 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
     return .{ .worker = worker, .bound = bound, .inputs = try captureOperands(arena, words, inputs), .capture_descs = try captureOperands(arena, words, capture_descs) };
 }
 
-test "function unit metadata validates List U8 template tag and its single module reference" {
-    try std.testing.expectEqual(@as(u8, 11), @backingInt(Tag.callable_eval_entry));
-    try std.testing.expectEqual(@as(u8, 12), @backingInt(Tag.template_list_u8));
-    // A List(U8) template recipe has one module and a template ordinal.
-    // Unlike the callable-entry recipe, it has no second module reference.
-    var bytes = [_]u8{ 12, 0, 0, 0, 0, 23, 0, 0, 0 };
-    var reader = MetadataReader{ .bytes = &bytes, .modules = 1 };
-    try reader.worker();
+test "stored type metadata preserves field defaults across module reindexing" {
+    const allocator = std.testing.allocator;
+    var source: Program = undefined;
+    source.allocator = allocator;
+    source.modules = .{ .allocator = allocator };
+    defer source.modules.deinit();
+    source.store = types.Store.init(allocator);
+    defer source.store.deinit();
+    var destination: Program = undefined;
+    destination.allocator = allocator;
+    destination.modules = .{ .allocator = allocator };
+    defer destination.modules.deinit();
+    destination.store = types.Store.init(allocator);
+    defer destination.store.deinit();
+    destination.arena = std.heap.ArenaAllocator.init(allocator);
+    defer destination.arena.deinit();
+    var source_modules: [2]types.ModuleIndex = undefined;
+    var destination_modules: [2]types.ModuleIndex = undefined;
+    for (0..2) |index| {
+        var view: checked.ImportedModuleView = undefined;
+        view.key = .{ .bytes = @splat(@intCast(index + 1)) };
+        view.module_identity.stable_hash = view.key.bytes;
+        source_modules[index] = try source.modules.add(view);
+        view.key.bytes = @splat(@intCast(2 - index));
+        view.module_identity.stable_hash = view.key.bytes;
+        destination_modules[index] = try destination.modules.add(view);
+    }
+    const name = try source.store.internName("count");
+    const number = try source.store.primitive(.u8);
+    var fields = [_]types.Field{.{ .name = name, .ty = number, .kind = .inline_slot }};
+    const required = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+    fields[0].default = .{ .module = source_modules[0], .expr_node = 10 };
+    const defaulted = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+    const root = try source.store.intern(.{ .tuple = &.{ required, defaulted } });
+    var encoder: Encoder = .{ .allocator = allocator, .program = &source };
+    defer encoder.deinit();
+    const root_index = try encoder.tableIndex(root);
+    const bytes = try encoder.finish();
+    defer allocator.free(bytes);
+
+    // Validate exactly the entries the encoder produced, including truncation.
+    var reader: MetadataReader = .{ .bytes = encoder.table.items, .modules = @intCast(encoder.modules.items.len) };
+    for (0..encoder.table_len) |_| {
+        try reader.typeEntry();
+        reader.types += 1;
+    }
     try std.testing.expectEqual(@as(usize, 0), reader.remaining());
+    for (0..encoder.table.items.len) |len| {
+        var truncated: MetadataReader = .{ .bytes = encoder.table.items[0..len], .modules = 1 };
+        const result: error{InvalidMetadata}!void = blk: {
+            for (0..encoder.table_len) |_| {
+                truncated.typeEntry() catch |err| break :blk err;
+                truncated.types += 1;
+            }
+        };
+        try std.testing.expectError(error.InvalidMetadata, result);
+    }
+
+    var decoder: Decoder = .{ .program = &destination, .bytes = bytes };
+    decoder.readModules();
+    try decoder.readTable();
+    defer allocator.free(decoder.table);
+    const restored = destination.store.span(destination.store.get(decoder.table[root_index]).tuple);
+    try std.testing.expect(restored[0] != restored[1]);
+    try std.testing.expectEqual(@as(?types.FieldDefault, null), destination.store.fieldSpan(destination.store.get(restored[0]).record.fields)[0].default);
+    const restored_default = destination.store.fieldSpan(destination.store.get(restored[1]).record.fields)[0].default.?;
+    try std.testing.expectEqual(destination_modules[1], restored_default.module);
+    try std.testing.expectEqual(@as(u32, 10), restored_default.expr_node);
+}
+
+test "function unit metadata validates the integer list template tag, its single module reference, and its item type" {
+    try std.testing.expectEqual(@as(u8, 11), @backingInt(Tag.callable_eval_entry));
+    try std.testing.expectEqual(@as(u8, 12), @backingInt(Tag.template_list_int));
+    // An integer list template recipe has one module, a template ordinal,
+    // and an item type byte. Unlike the callable-entry recipe, it has no
+    // second module reference.
+    var bytes = [_]u8{ 12, 0, 0, 0, 0, 23, 0, 0, 0, @backingInt(lower.ListIntItem.u32) };
+    for (std.enums.values(lower.ListIntItem)) |item| {
+        bytes[9] = @backingInt(item);
+        var reader = MetadataReader{ .bytes = &bytes, .modules = 1 };
+        try reader.worker();
+        try std.testing.expectEqual(@as(usize, 0), reader.remaining());
+    }
     for (0..bytes.len) |len| {
         var truncated = MetadataReader{ .bytes = bytes[0..len], .modules = 1 };
         try std.testing.expectError(error.InvalidMetadata, truncated.worker());
     }
+    bytes[9] = @intCast(@typeInfo(lower.ListIntItem).@"enum".field_values.len);
+    var invalid_item = MetadataReader{ .bytes = &bytes, .modules = 1 };
+    try std.testing.expectError(error.InvalidMetadata, invalid_item.worker());
+    bytes[9] = @backingInt(lower.ListIntItem.u32);
     bytes[1] = 1;
     var invalid = MetadataReader{ .bytes = &bytes, .modules = 1 };
     try std.testing.expectError(error.InvalidMetadata, invalid.worker());

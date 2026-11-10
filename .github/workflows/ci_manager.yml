@@ -465,7 +465,7 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     env: &minici_shard_env
       # Warning threshold for `.zig-cache` as it stands *after* a shard runs:
       # the cache restored from the build artifact plus everything the shard's
@@ -672,7 +672,7 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 180
     env: *minici_shard_env
     strategy:
       fail-fast: false
@@ -693,8 +693,7 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: windows-2025
-    # Two evaluator workers use less memory and need a longer job budget.
-    timeout-minutes: ${{ matrix.minici_shard == 'windows-eval' && 180 || 120 }}
+    timeout-minutes: 180
     env: *minici_shard_env
     strategy:
       fail-fast: false

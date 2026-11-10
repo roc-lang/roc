@@ -10,11 +10,19 @@ Email := [Email(Str)].{
         parse_str = Str.parser_for(encoding)
         |state| {
             parsed = parse_str(state)?
-            if Str.contains(parsed.value, "@") {
-                Ok({ value: Email.Email(parsed.value), rest: parsed.rest })
-            } else {
-                Err(InvalidEmail(parsed.value))
+            match Email.from_str(parsed.value) {
+                Ok(email) => Ok({ value: email, rest: parsed.rest })
+                Err(InvalidEmail(raw)) => Err(InvalidJson("Invalid email: ${raw}"))
             }
+        }
+    }
+
+    from_str : Str -> Try(Email, [InvalidEmail(Str)])
+    from_str = |raw| {
+        if Str.contains(raw, "@") {
+            Ok(Email(raw))
+        } else {
+            Err(InvalidEmail(raw))
         }
     }
 
@@ -26,7 +34,7 @@ summarize = |json| {
     Ok(Str.concat(name, " <${Email.to_str(email)}> ${Str.repeat("*", num_stars)}"))
 }
 
-Row : [Aardvark(Str, Str, U64), InvalidEmail(Str), InvalidJson(Str), MissingRequiredField(Str), Zebra]
+Row : [Aardvark(Str, Str, U64), InvalidJson(Str), Zebra]
 
 wide : Str -> Try(Str, Row)
 wide = |json| {
@@ -44,9 +52,7 @@ show = |result| {
     match result {
         Ok(text) => text
         Err(Aardvark(a, b, c)) => "aardvark ${a} ${b} ${c.to_str()}"
-        Err(InvalidEmail(raw)) => "invalid email ${raw}"
-        Err(InvalidJson(_)) => "invalid json"
-        Err(MissingRequiredField(field)) => "missing ${field}"
+        Err(InvalidJson(message)) => message
         Err(Zebra) => "zebra"
     }
 }

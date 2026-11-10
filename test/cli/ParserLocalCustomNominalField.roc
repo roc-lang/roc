@@ -11,7 +11,7 @@ Format := [Default].{
 			Done => Err(MissingRequired)
 		}
 
-	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [MissingRequired, MissingRequiredField(Str)])
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [MissingRequired])
 	parse_record_start = |_, state| Ok(Uncounted(state))
 
 	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
@@ -22,7 +22,7 @@ Format := [Default].{
 			Continue(State),
 			Done(State),
 		],
-		[MissingRequired, MissingRequiredField(Str)],
+		[MissingRequired],
 	)
 	parse_record_field = |_, _, state|
 		match state {
@@ -30,21 +30,21 @@ Format := [Default].{
 			Done => Ok(Done(state))
 		}
 
-	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [MissingRequired, MissingRequiredField(Str)])
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [MissingRequired])
 	parse_record_after_field = |_, state| Ok(Continue(state))
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired, MissingRequiredField(Str)])
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
 	skip_record_field = |_, _| Ok(Done)
 
-	missing_record_field : Format, Str, State -> [MissingRequired]
-	missing_record_field = |_, _, _| MissingRequired
+	missing_field : Format, Str -> [MissingRequired]
+	missing_field = |_, _| MissingRequired
 }
 
 State := [Present(Str), Done]
 
-parse : State -> Try(a, [MissingRequired, MissingRequiredField(Str)])
+parse : State -> Try(a, [MissingRequired])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired, MissingRequiredField(Str)])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
 	]
 parse = |input| {
 	Shape : a
@@ -65,7 +65,7 @@ expect {
 		count_utf8_bytes = |token| Str.count_utf8_bytes(token.raw)
 	}
 
-	result : Try({ token : Token }, [MissingRequired, MissingRequiredField(Str)])
+	result : Try({ token : Token }, [MissingRequired])
 	result = parse(State.Present("value"))
 
 	match result {
