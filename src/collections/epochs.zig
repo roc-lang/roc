@@ -179,6 +179,46 @@ pub fn EpochSet(comptime Key: type, comptime representation: SetRepresentation, 
             }
         }
 
+        /// Reserve room for `capacity` keys without changing the domain.
+        pub fn ensureTotalCapacityPrecise(self: *Self, gpa: Allocator, capacity: usize) Allocator.Error!void {
+            if (representation != .stamps) @compileError("only stamped sets reserve key capacity");
+            if (capacity <= self.storage.len) return;
+            self.storage = try gpa.realloc(self.storage, capacity);
+        }
+
+        /// Add one absent key; room for it must already be reserved.
+        pub fn appendAbsentAssumeCapacity(self: *Self) void {
+            if (representation != .stamps) @compileError("only stamped sets append keys");
+            std.debug.assert(self.logical_len < self.storage.len);
+            self.storage[self.logical_len] = 0;
+            storage_work.add(.bytes_filled, @sizeOf(u32));
+            self.logical_len += 1;
+        }
+
+        /// Forget every key, retaining capacity. Keys added afterwards are
+        /// cleared as they are added, so this touches no stamps.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            if (representation != .stamps) @compileError("only stamped sets truncate their domain");
+            self.logical_len = 0;
+        }
+
+        /// `ensureLen` by moving to a new block, so the number of allocations
+        /// a caller makes does not depend on whether the heap could extend
+        /// the old block in place.
+        pub fn ensureLenRelocating(self: *Self, gpa: Allocator, new_len: usize) Allocator.Error!void {
+            if (representation != .stamps) @compileError("only stamped sets relocate their stamps");
+            if (new_len <= self.logical_len) return;
+            std.debug.assert(self.pages.bytes.len == 0 and !self.borrowed);
+            if (new_len > self.storage.len) {
+                const grown = try gpa.alloc(u32, new_len);
+                @memcpy(grown[0..self.logical_len], self.storage[0..self.logical_len]);
+                gpa.free(self.storage);
+                self.storage = grown;
+            }
+            clearStamps(self.storage[self.logical_len..new_len]);
+            self.logical_len = new_len;
+        }
+
         /// Discard a mutable graph suffix while retaining its stamp capacity.
         pub fn shrinkRetainingCapacity(self: *Self, new_len: usize) void {
             std.debug.assert(new_len <= self.len());
@@ -315,9 +355,10 @@ pub fn EpochColumn(comptime Key: type, comptime T: type, comptime source: EpochS
             if (interleaved) {
                 const old_len = self.entries.len;
                 if (new_len <= old_len) return;
-                self.entries = try gpa.realloc(self.entries, new_len);
+                const capacity = @max(new_len, old_len +| old_len / 2 +| 8);
+                self.entries = try gpa.realloc(self.entries, capacity);
                 for (self.entries[old_len..]) |*entry| entry.* = .{ .stamp = 0, .datum = undefined };
-                storage_work.add(.bytes_filled, (new_len - old_len) * @sizeOf(u32));
+                storage_work.add(.bytes_filled, (capacity - old_len) * @sizeOf(u32));
             } else {
                 if (new_len <= self.stamps.len) return;
                 const old_len = self.data.len;
@@ -328,6 +369,21 @@ pub fn EpochColumn(comptime Key: type, comptime T: type, comptime source: EpochS
                 }
                 try growStamps(gpa, &self.stamps, new_len);
             }
+        }
+
+        /// `ensureLen` by moving to a new block, so the number of allocations
+        /// a caller makes does not depend on whether the heap could extend
+        /// the old block in place.
+        pub fn ensureLenRelocating(self: *Self, gpa: Allocator, new_len: usize) Allocator.Error!void {
+            if (!interleaved) @compileError("only interleaved columns relocate as one block");
+            const old_len = self.entries.len;
+            if (new_len <= old_len) return;
+            const grown = try gpa.alloc(Entry, new_len);
+            @memcpy(grown[0..old_len], self.entries);
+            gpa.free(self.entries);
+            self.entries = grown;
+            for (self.entries[old_len..]) |*entry| entry.* = .{ .stamp = 0, .datum = undefined };
+            storage_work.add(.bytes_filled, (new_len - old_len) * @sizeOf(u32));
         }
 
         /// The datum at `k` in the current epoch, or null.
@@ -580,6 +636,39 @@ test "epoch suffix rollback clears reused indices without reallocating" {
     try set.ensureLen(testing.allocator, 3);
     try testing.expect(!set.contains(2));
     try testing.expectEqual(capacity, set.storage.len);
+}
+
+test "a reserved stamped set appends absent keys and truncates without touching stamps" {
+    var set: EpochSet(u32, .stamps, .internal) = .{};
+    defer set.deinit(testing.allocator);
+    try set.ensureTotalCapacityPrecise(testing.allocator, 4);
+    set.appendAbsentAssumeCapacity();
+    set.appendAbsentAssumeCapacity();
+    try testing.expectEqual(@as(usize, 2), set.len());
+    set.insert(1);
+    set.clearRetainingCapacity();
+    try testing.expectEqual(@as(usize, 0), set.len());
+    set.appendAbsentAssumeCapacity();
+    set.appendAbsentAssumeCapacity();
+    try testing.expect(!set.contains(1));
+}
+
+test "relocating growth keeps stamps and leaves new keys absent" {
+    var set: EpochSet(u32, .stamps, .internal) = .{};
+    defer set.deinit(testing.allocator);
+    try set.ensureLenRelocating(testing.allocator, 2);
+    set.insert(1);
+    try set.ensureLenRelocating(testing.allocator, 8);
+    try testing.expect(set.contains(1));
+    try testing.expect(!set.contains(7));
+
+    var column: EpochColumn(u32, u32, .internal) = .{};
+    defer column.deinit(testing.allocator);
+    try column.ensureLenRelocating(testing.allocator, 2);
+    column.set(1, 9);
+    try column.ensureLenRelocating(testing.allocator, 8);
+    try testing.expectEqual(@as(?u32, 9), column.get(1));
+    try testing.expectEqual(@as(?u32, null), column.get(7));
 }
 
 test "sparse epoch domains begin absent and reset without filling" {

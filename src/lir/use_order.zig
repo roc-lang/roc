@@ -13,6 +13,7 @@ const LIR = core.LIR;
 const LirStore = core.LirStore;
 const GuardedList = LirStore.GuardedList;
 const no_local = std.math.maxInt(u32);
+const StmtColumn = collections.OptionalIndexColumn(LIR.CFStmtId);
 
 /// Exact topology construction count for reuse tests.
 pub threadlocal var topology_builds: usize = 0;
@@ -156,8 +157,8 @@ pub const UseOrder = struct {
         /// Statements reading and defining each local.
         reads_of: Rows,
         defs_of: Rows,
-        /// The join statement each jump targets, or `no_local`.
-        jump_join: []u32,
+        /// The join statement each jump targets, when it targets one.
+        jump_join: StmtColumn.View,
         /// Reverse edges of `forEachSuccessor`.
         preds: Rows,
         /// Straight-line blocks: the first statement of each statement's
@@ -165,9 +166,9 @@ pub const UseOrder = struct {
         /// block's last statement. Inside a block every statement's only
         /// successor is the next one, reached by no other edge, so marking
         /// and queries move between blocks and resolve positions inside one.
-        block_first: []u32,
+        block_first: StmtColumn.View,
         block_pos: []u32,
-        block_last: []u32,
+        block_last: StmtColumn.View,
         /// Unknown successors conservatively count as used.
         unresolved: std.bit_set.DynamicBitSetUnmanaged,
         unresolved_list: []u32,
@@ -179,12 +180,12 @@ pub const UseOrder = struct {
                 allocator.destroy(self.tables);
             } else {
                 for (self.members) |stmt| {
-                    self.tables.jump_join[self.tables.stmtIndex(stmt)] = no_local;
+                    self.tables.jump_join.clear(self.tables.stmtIndex(stmt));
                     self.tables.mark_gen[self.tables.stmtIndex(stmt)] = 0;
                     self.tables.unresolved.unset(self.tables.stmtIndex(stmt));
-                    self.tables.block_first[self.tables.stmtIndex(stmt)] = no_local;
+                    self.tables.block_first.clear(self.tables.stmtIndex(stmt));
                     self.tables.block_pos[self.tables.stmtIndex(stmt)] = 0;
-                    self.tables.block_last[self.tables.stmtIndex(stmt)] = no_local;
+                    self.tables.block_last.clear(self.tables.stmtIndex(stmt));
                 }
                 self.reads_of.clearIndex();
                 self.defs_of.clearIndex();
@@ -206,16 +207,16 @@ pub const UseOrder = struct {
     /// every mark is zero.
     pub const Scratch = struct {
         domain: ?*Domain = null,
-        jump_join: []u32,
+        jump_join: StmtColumn,
         reads_index: RowIndex,
         defs_index: RowIndex,
         preds_index: RowIndex,
         seen: std.bit_set.DynamicBitSetUnmanaged,
         unresolved: std.bit_set.DynamicBitSetUnmanaged,
         mark_gen: []u32,
-        block_first: []u32,
+        block_first: StmtColumn,
         block_pos: []u32,
-        block_last: []u32,
+        block_last: StmtColumn,
 
         pub fn init(allocator: Allocator, store: *const LirStore) Allocator.Error!Scratch {
             return initTables(allocator, store, .with_marks);
@@ -234,9 +235,8 @@ pub const UseOrder = struct {
         fn initTablesInDomain(allocator: Allocator, store: *const LirStore, marks: Marks, domain: ?*Domain) Allocator.Error!Scratch {
             const stmt_count = if (domain) |d| d.stmts.count() else store.cfStmtCount();
             const local_count = if (domain) |d| d.locals.count() else store.localCount();
-            const jump_join = try allocator.alloc(u32, stmt_count);
-            errdefer allocator.free(jump_join);
-            @memset(jump_join, no_local);
+            var jump_join = try StmtColumn.initFilled(allocator, stmt_count);
+            errdefer jump_join.deinit(allocator);
             var reads_index = try RowIndex.init(allocator, local_count, domain, false);
             errdefer reads_index.deinit(allocator);
             var defs_index = try RowIndex.init(allocator, local_count, domain, false);
@@ -250,14 +250,12 @@ pub const UseOrder = struct {
             const mark_gen = try allocator.alloc(u32, if (marks == .with_marks) stmt_count else 0);
             errdefer allocator.free(mark_gen);
             @memset(mark_gen, 0);
-            const block_first = try allocator.alloc(u32, stmt_count);
-            errdefer allocator.free(block_first);
-            @memset(block_first, no_local);
+            var block_first = try StmtColumn.initFilled(allocator, stmt_count);
+            errdefer block_first.deinit(allocator);
             const block_pos = try allocator.alloc(u32, stmt_count);
             errdefer allocator.free(block_pos);
             @memset(block_pos, 0);
-            const block_last = try allocator.alloc(u32, stmt_count);
-            @memset(block_last, no_local);
+            const block_last = try StmtColumn.initFilled(allocator, stmt_count);
             return .{
                 .domain = domain,
                 .jump_join = jump_join,
@@ -274,16 +272,16 @@ pub const UseOrder = struct {
         }
 
         pub fn deinit(self: *Scratch, allocator: Allocator) void {
-            allocator.free(self.jump_join);
+            self.jump_join.deinit(allocator);
             self.reads_index.deinit(allocator);
             self.defs_index.deinit(allocator);
             self.preds_index.deinit(allocator);
             self.seen.deinit(allocator);
             self.unresolved.deinit(allocator);
             allocator.free(self.mark_gen);
-            allocator.free(self.block_first);
+            self.block_first.deinit(allocator);
             allocator.free(self.block_pos);
-            allocator.free(self.block_last);
+            self.block_last.deinit(allocator);
         }
     };
 
@@ -438,7 +436,7 @@ pub const UseOrder = struct {
         const members = try member_list.toOwnedSlice(allocator);
         errdefer allocator.free(members);
         errdefer if (scratch != null) for (members) |stmt| {
-            tables.jump_join[tables.stmtIndex(stmt)] = no_local;
+            tables.jump_join.clear(tables.stmtIndex(stmt));
         };
 
         var joins = collections.DenseMap(LIR.JoinPointId, u32).init(allocator);
@@ -453,7 +451,7 @@ pub const UseOrder = struct {
                 const stmt = store.getCFStmtImmediate(stmt_id);
                 if (stmt.* != .jump) continue;
                 if (joins.get(stmt.jump.target)) |join_stmt| {
-                    tables.jump_join[tables.stmtIndex(@backingInt(stmt_id))] = join_stmt;
+                    tables.jump_join.set(tables.stmtIndex(@backingInt(stmt_id)), @fromBackingInt(join_stmt));
                 }
             }
         }
@@ -486,11 +484,11 @@ pub const UseOrder = struct {
             .members = if (scratch == null) &.{} else members,
             .reads_of = reads_of,
             .defs_of = defs_of,
-            .jump_join = tables.jump_join,
+            .jump_join = tables.jump_join.view(),
             .preds = preds,
-            .block_first = tables.block_first,
+            .block_first = tables.block_first.view(),
             .block_pos = tables.block_pos,
-            .block_last = tables.block_last,
+            .block_last = tables.block_last.view(),
             .unresolved = tables.unresolved,
             .unresolved_list = owned_unresolved,
         };
@@ -531,7 +529,7 @@ pub const UseOrder = struct {
             if (isBlockStart(store, tables, preds, stmt)) fillBlock(store, tables, preds, stmt);
         }
         for (members) |stmt| {
-            if (tables.block_first[tables.stmtIndex(stmt)] == no_local) fillBlock(store, tables, preds, stmt);
+            if (!tables.block_first.isPresent(tables.stmtIndex(stmt))) fillBlock(store, tables, preds, stmt);
         }
     }
 
@@ -539,15 +537,15 @@ pub const UseOrder = struct {
         var current = first;
         var position: u32 = 0;
         while (true) {
-            tables.block_first[tables.stmtIndex(current)] = first;
+            tables.block_first.set(tables.stmtIndex(current), @fromBackingInt(first));
             tables.block_pos[tables.stmtIndex(current)] = position;
             const next = blockContinuation(store, tables, preds, current) orelse break;
-            if (tables.block_first[tables.stmtIndex(next)] != no_local) break;
+            if (tables.block_first.isPresent(tables.stmtIndex(next))) break;
             if (isBlockStart(store, tables, preds, next)) break;
             current = next;
             position += 1;
         }
-        tables.block_last[tables.stmtIndex(first)] = current;
+        tables.block_last.set(tables.stmtIndex(first), @fromBackingInt(current));
     }
 
     /// Whether a statement contributes to the rows of `kind`.
@@ -900,8 +898,8 @@ pub const UseOrder = struct {
     pub fn after(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
         if (self.topology.unresolved.isSet(self.topology.tables.stmtIndex(stmt))) return true;
         const index = self.topology.tables.stmtIndex(stmt);
-        const first = self.topology.block_first[index];
-        if (self.topology.block_last[self.topology.tables.stmtIndex(first)] != stmt) {
+        const first: u32 = @backingInt(self.topology.block_first.get(index).?);
+        if (@backingInt(self.topology.block_last.get(self.topology.tables.stmtIndex(first)).?) != stmt) {
             return self.markedWithin(first, self.topology.block_pos[index] + 1, local);
         }
         return self.exitMarked(stmt, local);
@@ -919,7 +917,7 @@ pub const UseOrder = struct {
             if (def == null or initial_key <= def.?) return true;
         }
         if (def != null) return false;
-        return self.exitMarked(self.topology.block_last[self.topology.tables.stmtIndex(first)], local);
+        return self.exitMarked(@backingInt(self.topology.block_last.get(self.topology.tables.stmtIndex(first)).?), local);
     }
 
     /// Whether an edge out of a block's last statement reaches a marked block.
@@ -957,11 +955,11 @@ pub const UseOrder = struct {
 
     fn stmtBlockKey(self: *const UseOrder, stmt: u32) u64 {
         const index = self.topology.tables.stmtIndex(stmt);
-        return self.blockKey(self.topology.block_first[index], self.topology.block_pos[index]);
+        return self.blockKey(@backingInt(self.topology.block_first.get(index).?), self.topology.block_pos[index]);
     }
 
     fn blockMarked(self: *const UseOrder, first: u32) bool {
-        std.debug.assert(self.topology.block_first[self.topology.tables.stmtIndex(first)] == first);
+        std.debug.assert(@backingInt(self.topology.block_first.get(self.topology.tables.stmtIndex(first)).?) == first);
         return self.marks.contains(self.markIndex(first));
     }
 
@@ -992,7 +990,7 @@ pub const UseOrder = struct {
             if (builtin.is_test) self.backward_visits += 1;
             for (self.topology.preds.rowAt(first)) |pred| {
                 if (self.cutEdge(pred, first, local)) continue;
-                const pred_first = self.topology.block_first[self.topology.tables.stmtIndex(pred)];
+                const pred_first: u32 = @backingInt(self.topology.block_first.get(self.topology.tables.stmtIndex(pred)).?);
                 if (self.blockMarked(pred_first)) continue;
                 // A redefinition anywhere in the predecessor block stops the
                 // value from reaching its first statement through its exit.
@@ -1003,7 +1001,7 @@ pub const UseOrder = struct {
     }
 
     fn seedBlock(self: *UseOrder, stmt: u32) Allocator.Error!void {
-        const first = self.topology.block_first[self.topology.tables.stmtIndex(stmt)];
+        const first: u32 = @backingInt(self.topology.block_first.get(self.topology.tables.stmtIndex(stmt)).?);
         if (self.blockMarked(first)) return;
         const key = self.blockKey(first, 0);
         const initial_key = nextInBlock(self.mark_initial.items, key).?;
@@ -1023,9 +1021,8 @@ pub const UseOrder = struct {
     fn cutEdge(self: *const UseOrder, from: u32, to: u32, local: LIR.LocalId) bool {
         const node = self.topology.store.getCFStmtImmediate(@fromBackingInt(@intCast(from)));
         if (node.* != .jump) return false;
-        const join_stmt = self.topology.jump_join[self.topology.tables.stmtIndex(from)];
-        if (join_stmt == no_local) return false;
-        const join = self.topology.store.getCFStmtImmediate(@fromBackingInt(@intCast(join_stmt))).join;
+        const join_stmt = self.topology.jump_join.get(self.topology.tables.stmtIndex(from)) orelse return false;
+        const join = self.topology.store.getCFStmtImmediate(join_stmt).join;
         if (@backingInt(join.body) != to) return false;
         const params = self.topology.store.getLocalSpan(join.params);
         for (0..GuardedList.borrowLen(params)) |index| {
@@ -1047,9 +1044,8 @@ pub const UseOrder = struct {
         const node = store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt)));
         switch (node.*) {
             .jump => {
-                const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
-                if (join_stmt == no_local) return true;
-                note(ctx, @backingInt(store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join.body));
+                const join_stmt = tables.jump_join.get(tables.stmtIndex(stmt)) orelse return true;
+                note(ctx, @backingInt(store.getCFStmt(join_stmt).join.body));
             },
             // A join's body runs only when jumped to; declaring the join
             // continues with its remainder.

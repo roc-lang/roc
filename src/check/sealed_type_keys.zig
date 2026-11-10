@@ -182,25 +182,24 @@ const HeapKeyPages = struct {
 };
 const KeyIndex = std.AutoHashMapUnmanaged([32]u8, Var);
 
-/// A canonical id memo using atomics supported by every compiler host.
-/// The extra bit distinguishes an empty slot from the largest valid id;
-/// all other ids need only the word load.
+/// A canonical id memo in one atomic word. Zero is the empty slot, so the
+/// column can start on fresh zero pages, and an id `n` is stored as `n + 1`.
+/// `maxInt(u32)` has no stored form: it is left unmemoized, so its readers
+/// compute the same immutable answer each time.
 pub const CanonicalIdSlot = struct {
-    value: std.atomic.Value(u32) = .init(std.math.maxInt(u32)),
-    largest_ready: std.atomic.Value(bool) = .init(false),
+    word: std.atomic.Value(u32) = .init(0),
 
     pub fn get(self: *const CanonicalIdSlot) ?CheckedTypeId {
-        const raw = self.value.load(.acquire);
-        if (raw == std.math.maxInt(u32) and !self.largest_ready.load(.acquire)) return null;
-        return @fromBackingInt(raw);
+        const word = self.word.load(.acquire);
+        if (word == 0) return null;
+        return @fromBackingInt(word - 1);
     }
 
     /// Concurrent publishers must publish the same immutable answer.
     pub fn put(self: *CanonicalIdSlot, id: CheckedTypeId) void {
         const raw = @backingInt(id);
-        if (raw == std.math.maxInt(u32)) {
-            self.largest_ready.store(true, .release);
-        } else self.value.store(raw, .release);
+        if (raw == std.math.maxInt(u32)) return;
+        self.word.store(raw + 1, .release);
     }
 };
 
@@ -222,7 +221,7 @@ pub const SealedTypeKeys = struct {
     /// variable reaches an identity variable.
     identity: collections.zeroed_pages.SparseSlice(std.atomic.Value(u8)),
     /// Canonical ids of settled source types, recorded on first request.
-    canonical: []CanonicalIdSlot,
+    canonical: collections.zeroed_pages.SparseSlice(CanonicalIdSlot),
 
     /// Key slots for `env`'s sealed store. `allocator` must be safe to use
     /// from every thread that reads the module's types.
@@ -231,8 +230,8 @@ pub const SealedTypeKeys = struct {
         errdefer allocator.destroy(keys);
         var identity = try collections.zeroed_pages.SparseSlice(std.atomic.Value(u8)).init(allocator, @intCast(env.types.len()));
         errdefer identity.deinit(allocator);
-        const canonical_ids = try allocator.alloc(CanonicalIdSlot, identity.items.len);
-        @memset(canonical_ids, .{});
+        var canonical_ids = try collections.zeroed_pages.SparseSlice(CanonicalIdSlot).init(allocator, identity.items.len);
+        errdefer canonical_ids.deinit(allocator);
         keys.* = .{ .allocator = allocator, .io = io, .env = env, .identity = identity, .canonical = canonical_ids };
         return keys;
     }
@@ -246,7 +245,7 @@ pub const SealedTypeKeys = struct {
         }
         if (self.writer) |*writer| writer.deinit();
         self.identity.deinit(allocator);
-        allocator.free(self.canonical);
+        self.canonical.deinit(allocator);
         allocator.destroy(self);
     }
 
@@ -341,12 +340,12 @@ pub const SealedTypeKeys = struct {
 
     /// The previously recorded canonical id of a settled source type.
     pub fn knownCanonical(self: *const SealedTypeKeys, var_: Var) ?CheckedTypeId {
-        return self.canonical[@backingInt(var_)].get();
+        return self.canonical.items[@backingInt(var_)].get();
     }
 
     /// Record the canonical id selected from the immutable source key index.
     pub fn recordCanonical(self: *SealedTypeKeys, var_: Var, id: CheckedTypeId) void {
-        self.canonical[@backingInt(var_)].put(id);
+        self.canonical.items[@backingInt(var_)].put(id);
     }
 
     /// The lowest reached checked representative of `view`'s store whose key
@@ -381,14 +380,30 @@ pub const SealedTypeKeys = struct {
     };
 };
 
-test "canonical id slots distinguish unknown from every boundary id" {
-    for ([_]u32{ 0, 1 << 31, std.math.maxInt(u32) }) |raw| {
+test "canonical id slots distinguish unknown from every encodable id" {
+    for ([_]u32{ 0, 1 << 31, std.math.maxInt(u32) - 1 }) |raw| {
         var slot: CanonicalIdSlot = .{};
         try std.testing.expect(slot.get() == null);
         const id: CheckedTypeId = @fromBackingInt(raw);
         slot.put(id);
         try std.testing.expectEqual(id, slot.get().?);
     }
+}
+
+test "a canonical id slot leaves the unencodable largest id unmemoized" {
+    var slot: CanonicalIdSlot = .{};
+    slot.put(@fromBackingInt(std.math.maxInt(u32)));
+    try std.testing.expect(slot.get() == null);
+    slot.put(@fromBackingInt(7));
+    slot.put(@fromBackingInt(std.math.maxInt(u32)));
+    try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(7)), slot.get().?);
+}
+
+test "the zero word is an empty canonical id slot of four bytes" {
+    try std.testing.expectEqual(@as(usize, 4), @sizeOf(CanonicalIdSlot));
+    var zeroed: [8]CanonicalIdSlot = undefined;
+    @memset(std.mem.sliceAsBytes(&zeroed), 0);
+    for (&zeroed) |*slot| try std.testing.expect(slot.get() == null);
 }
 
 /// Real solver-assigned representatives spanning full pages and a partial

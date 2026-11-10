@@ -302,37 +302,30 @@ fn typePairKey(root: Type.TypeId, target: Type.TypeId) u64 {
 /// increment, so a pass costs only the types it touches, however many an
 /// earlier pass touched.
 const TypeMarks = struct {
-    stamps: std.ArrayList(u32) = .empty,
-    epoch: u32 = 0,
+    stamps: collections.EpochSet(Type.TypeId, .stamps, .internal) = .{},
 
     fn deinit(self: *TypeMarks, allocator: Allocator) void {
         self.stamps.deinit(allocator);
     }
 
     fn startPass(self: *TypeMarks) void {
-        self.epoch +%= 1;
-        if (self.epoch == 0) {
-            @memset(self.stamps.items, 0);
-            self.epoch = 1;
-        }
+        self.stamps.reset();
     }
 
     /// Mark `ty`, returning whether it was unmarked in this pass.
     fn mark(self: *TypeMarks, allocator: Allocator, ty: Type.TypeId) Allocator.Error!bool {
         const slot: usize = @backingInt(ty);
-        if (slot >= self.stamps.items.len) try self.stamps.appendNTimes(allocator, 0, slot + 1 - self.stamps.items.len);
-        if (self.stamps.items[slot] == self.epoch) return false;
-        self.stamps.items[slot] = self.epoch;
-        return true;
+        try self.stamps.ensureLen(allocator, slot + 1);
+        return !self.stamps.testAndInsert(ty);
     }
 
     fn isMarked(self: *const TypeMarks, ty: Type.TypeId) bool {
         const slot: usize = @backingInt(ty);
-        return slot < self.stamps.items.len and self.stamps.items[slot] == self.epoch;
+        return slot < self.stamps.len() and self.stamps.contains(ty);
     }
 
     fn unmark(self: *TypeMarks, ty: Type.TypeId) void {
-        self.stamps.items[@backingInt(ty)] = 0;
+        self.stamps.remove(ty);
     }
 };
 
@@ -381,14 +374,6 @@ const ScannedJoinedClass = struct {
 pub const ClosedTypeBuild = struct {
     checked_ty: checked.CheckedTypeId,
     node: NodeId,
-};
-
-/// One label's pairing state for the row relation in flight; see
-/// `InstGraph.row_label_slots`.
-const RowLabelSlot = struct {
-    right_generation: u32,
-    right_index: u32,
-    left_generation: u32,
 };
 
 /// Content of an instantiation-graph node. Rows carry explicit extension
@@ -2552,8 +2537,7 @@ pub const InstGraph = struct {
     /// Reused scratch for de-duplicating instances that mention a losing root
     /// in more than one argument position.
     nominal_backing_affected: std.ArrayList(NominalBackingInstanceId),
-    nominal_backing_migration_epochs: std.ArrayList(u64),
-    nominal_backing_migration_epoch: u64,
+    nominal_backing_migration_epochs: collections.EpochSet(u32, .stamps, .internal),
     /// Backing pairs whose keys became equal during root migration. Migration
     /// restores every index invariant before these pairs are unified.
     nominal_backing_collisions: std.ArrayList(NodePair),
@@ -2574,8 +2558,7 @@ pub const InstGraph = struct {
     /// containment. The two queries share one conservative dependency list,
     /// while each walk can stop as soon as its requested property is found.
     containment_pending: std.ArrayList(NodeId),
-    containment_visit_epochs: std.ArrayList(u32),
-    containment_visit_epoch: u32,
+    containment_visit_epochs: collections.EpochSet(u32, .stamps, .internal),
     containment_cache: collections.DenseMap(NodeId, ContainmentCacheEntry),
     /// Pools for the visited sets the graph's walks create per query. Fresh
     /// maps re-allocate and re-zero sparse chunks across the node/type ID
@@ -2588,14 +2571,15 @@ pub const InstGraph = struct {
     /// Transitive unification scratch, one entry per call in flight; a union
     /// can unify again while an outer call is still draining.
     unify_scratch_pool: std.ArrayList(UnifyScratch) = .empty,
-    /// Row pairing by label id. A slot is current only when its generation
-    /// equals `row_label_generation`, so a row relation claims fresh slots
-    /// without clearing them. Row pairing completes before any queued
-    /// relation runs, so one column serves every relation. The column grows
-    /// by explicit reallocation, never by resizing in place, so the number of
-    /// allocations a relation makes does not depend on the heap's layout.
-    row_label_slots: []RowLabelSlot = &.{},
-    row_label_generation: u32 = 0,
+    /// Row pairing by label id: the right-row position of each label in the
+    /// relation in flight. A row relation claims fresh entries by advancing
+    /// the epoch. Row pairing completes before any queued relation runs, so
+    /// one column serves every relation. The columns grow by moving to a new
+    /// block, never by resizing in place, so the number of allocations a
+    /// relation makes does not depend on the heap's layout.
+    row_label_right: collections.EpochColumn(u32, u32, .internal) = .{},
+    /// The labels of the left row of the relation in flight.
+    row_label_left: collections.EpochSet(u32, .stamps, .internal) = .{},
     /// Buffers borrowed by every `InterfaceConstraints.identityInto`.
     identity_bytes_scratch: std.ArrayList(u8) = .empty,
     identity_leaves_scratch: std.ArrayList(Type.TypeId) = .empty,
@@ -2684,8 +2668,7 @@ pub const InstGraph = struct {
             .nominal_backing_instances = .empty,
             .nominal_backings_by_root = collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)).init(allocator),
             .nominal_backing_affected = .empty,
-            .nominal_backing_migration_epochs = .empty,
-            .nominal_backing_migration_epoch = 0,
+            .nominal_backing_migration_epochs = .{},
             .nominal_backing_collisions = .empty,
             .processing_nominal_backing_collisions = false,
             .request_source_interfaces = .empty,
@@ -2693,8 +2676,7 @@ pub const InstGraph = struct {
             .private_backing_roots = .empty,
             .representation_membership = .empty,
             .containment_pending = .empty,
-            .containment_visit_epochs = .empty,
-            .containment_visit_epoch = 0,
+            .containment_visit_epochs = .{},
             .containment_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
             .node_set_pool = collections.DenseMapPool(NodeId, void).init(allocator),
             .capture_scratch = InterfaceConstraints.CaptureScratch.init(allocator),
@@ -2758,7 +2740,6 @@ pub const InstGraph = struct {
         self.nominal_backings_by_root.clearRetainingCapacity();
         self.nominal_backing_affected.clearRetainingCapacity();
         self.nominal_backing_migration_epochs.clearRetainingCapacity();
-        self.nominal_backing_migration_epoch = 0;
         self.nominal_backing_collisions.clearRetainingCapacity();
         self.processing_nominal_backing_collisions = false;
         self.request_source_interfaces.clearRetainingCapacity();
@@ -2767,7 +2748,6 @@ pub const InstGraph = struct {
         self.representation_membership.clearRetainingCapacity();
         self.containment_pending.clearRetainingCapacity();
         self.containment_visit_epochs.clearRetainingCapacity();
-        self.containment_visit_epoch = 0;
         var containment_entries = self.containment_cache.valueIterator();
         while (containment_entries.next()) |entry| entry.release(self.allocator, &self.list_pools.dependencies);
         self.containment_cache.clearRetainingCapacity();
@@ -2853,7 +2833,8 @@ pub const InstGraph = struct {
         self.never_uninhabited.deinit();
         for (self.unify_scratch_pool.items) |*scratch| scratch.deinit(self.allocator);
         self.unify_scratch_pool.deinit(self.allocator);
-        self.allocator.free(self.row_label_slots);
+        self.row_label_right.deinit(self.allocator);
+        self.row_label_left.deinit(self.allocator);
         self.capture_scratch.deinit(allocator);
         self.identity_bytes_scratch.deinit(allocator);
         self.identity_leaves_scratch.deinit(allocator);
@@ -4072,7 +4053,7 @@ pub const InstGraph = struct {
         self.class_member_next.appendAssumeCapacity(.none);
         self.class_member_head.appendAssumeCapacity(id);
         self.class_member_tail.appendAssumeCapacity(id);
-        self.containment_visit_epochs.appendAssumeCapacity(0);
+        self.containment_visit_epochs.appendAbsentAssumeCapacity();
         self.request_source_interfaces.appendAssumeCapacity(.none);
         self.constructor_evidence_requests.appendAssumeCapacity(false);
         self.private_backing_roots.appendAssumeCapacity(false);
@@ -4172,7 +4153,7 @@ pub const InstGraph = struct {
             .node = node,
             .active = true,
         });
-        try self.nominal_backing_migration_epochs.append(self.allocator, 0);
+        try self.nominal_backing_migration_epochs.ensureLen(self.allocator, self.nominal_backing_instances.items.len);
         try self.nominal_backing_index.putNoClobber(.{ .instance = instance_id }, instance_id);
         for (stored_args, 0..) |root, arg_index| {
             const occurrences = try self.nominal_backings_by_root.getOrPut(root);
@@ -4208,12 +4189,7 @@ pub const InstGraph = struct {
         const moved = removed_occurrences.value.items;
 
         self.nominal_backing_affected.clearRetainingCapacity();
-        self.nominal_backing_migration_epoch +%= 1;
-        if (self.nominal_backing_migration_epoch == 0) {
-            @memset(self.nominal_backing_migration_epochs.items, 0);
-            self.nominal_backing_migration_epoch = 1;
-        }
-        const epoch = self.nominal_backing_migration_epoch;
+        self.nominal_backing_migration_epochs.reset();
         for (moved) |occurrence| {
             const instance_index = @backingInt(occurrence.instance);
             const instance = &self.nominal_backing_instances.items[instance_index];
@@ -4227,8 +4203,7 @@ pub const InstGraph = struct {
             // winner; every stale occurrence is discarded the first time its
             // recorded root loses, keeping cleanup amortized linear.
             if (instance.args[arg_index] != loser) continue;
-            if (self.nominal_backing_migration_epochs.items[instance_index] != epoch) {
-                self.nominal_backing_migration_epochs.items[instance_index] = epoch;
+            if (!self.nominal_backing_migration_epochs.testAndInsert(instance_index)) {
                 self.nominal_backing_affected.appendAssumeCapacity(occurrence.instance);
             }
         }
@@ -5554,20 +5529,13 @@ pub const InstGraph = struct {
         }
         self.containment_pending.clearRetainingCapacity();
         defer self.containment_pending.clearRetainingCapacity();
-        if (self.containment_visit_epoch == std.math.maxInt(u32)) {
-            @memset(self.containment_visit_epochs.items, 0);
-            self.containment_visit_epoch = 1;
-        } else {
-            self.containment_visit_epoch += 1;
-        }
-        const visit_epoch = self.containment_visit_epoch;
+        self.containment_visit_epochs.reset();
 
         try self.containment_pending.append(self.allocator, query_root);
         while (self.containment_pending.pop()) |raw_node| {
             const node = self.find(raw_node);
             const node_index = @backingInt(node);
-            if (self.containment_visit_epochs.items[node_index] == visit_epoch) continue;
-            self.containment_visit_epochs.items[node_index] = visit_epoch;
+            if (self.containment_visit_epochs.testAndInsert(node_index)) continue;
             try entry.dependencies.append(self.allocator, .{
                 .node = raw_node,
                 .root = node,
@@ -7155,12 +7123,12 @@ pub const InstGraph = struct {
                 if (public_row.fields.len != request_row.fields.len) {
                     Common.invariant("request container join received records with different field counts");
                 }
-                const generation = try self.claimRowLabelGeneration(public_row.fields, request_row.fields);
+                try self.claimRowLabels(public_row.fields, request_row.fields);
                 for (request_row.fields) |request_field| {
-                    self.row_label_slots[@backingInt(request_field.name)].right_generation = generation;
+                    self.row_label_right.set(@backingInt(request_field.name), 0);
                 }
                 for (public_row.fields) |public_field| {
-                    if (self.row_label_slots[@backingInt(public_field.name)].right_generation != generation) {
+                    if (!self.row_label_right.contains(@backingInt(public_field.name))) {
                         Common.invariant("request container join received records with different fields");
                     }
                 }
@@ -8168,31 +8136,25 @@ pub const InstGraph = struct {
     }
 
     /// Start a record-row pairing whose label slots cover both rows.
-    fn claimRowLabelGeneration(self: *InstGraph, left: []const InstField, right: []const InstField) Allocator.Error!u32 {
-        var needed: usize = self.row_label_slots.len;
+    fn claimRowLabels(self: *InstGraph, left: []const InstField, right: []const InstField) Allocator.Error!void {
+        var needed: usize = self.row_label_right.len();
         for (left) |field| needed = @max(needed, @as(usize, @backingInt(field.name)) + 1);
         for (right) |field| needed = @max(needed, @as(usize, @backingInt(field.name)) + 1);
-        return self.claimLabelGeneration(needed);
+        try self.claimLabels(needed);
     }
 
-    /// Claim a fresh label generation over `needed` label slots. Reading the
-    /// slots of a generation must finish before any relation that can pair
-    /// rows runs, since that relation claims the next generation.
-    fn claimLabelGeneration(self: *InstGraph, needed: usize) Allocator.Error!u32 {
-        if (needed > self.row_label_slots.len) {
-            const old = self.row_label_slots;
-            const grown = try self.allocator.alloc(RowLabelSlot, @max(needed, old.len * 2));
-            @memcpy(grown[0..old.len], old);
-            @memset(grown[old.len..], .{ .right_generation = 0, .right_index = 0, .left_generation = 0 });
-            self.allocator.free(old);
-            self.row_label_slots = grown;
+    /// Empty the label columns over `needed` labels. Reading them must finish
+    /// before any relation that can pair rows runs, since that relation
+    /// claims them again.
+    fn claimLabels(self: *InstGraph, needed: usize) Allocator.Error!void {
+        const current = self.row_label_right.len();
+        if (needed > current) {
+            const grown = @max(needed, current * 2);
+            try self.row_label_right.ensureLenRelocating(self.allocator, grown);
+            try self.row_label_left.ensureLenRelocating(self.allocator, grown);
         }
-        if (self.row_label_generation == std.math.maxInt(u32)) {
-            @memset(self.row_label_slots, .{ .right_generation = 0, .right_index = 0, .left_generation = 0 });
-            self.row_label_generation = 0;
-        }
-        self.row_label_generation += 1;
-        return self.row_label_generation;
+        self.row_label_right.reset();
+        self.row_label_left.reset();
     }
 
     fn unifyTagRows(
@@ -8427,22 +8389,21 @@ pub const InstGraph = struct {
 
         // Both rows indexed by label id so each side pairs with the other in
         // one pass; the first row position wins for a repeated label.
-        const generation = try self.claimRowLabelGeneration(flat_left.fields, flat_right.fields);
+        try self.claimRowLabels(flat_left.fields, flat_right.fields);
         for (flat_right.fields, 0..) |right_field, index| {
             const slot = @backingInt(right_field.name);
-            if (self.row_label_slots[slot].right_generation == generation) continue;
-            self.row_label_slots[slot].right_generation = generation;
-            self.row_label_slots[slot].right_index = @intCast(index);
+            if (self.row_label_right.contains(slot)) continue;
+            self.row_label_right.set(slot, @intCast(index));
         }
         for (flat_left.fields) |left_field| {
-            self.row_label_slots[@backingInt(left_field.name)].left_generation = generation;
+            self.row_label_left.insert(@backingInt(left_field.name));
         }
 
         for (flat_left.fields) |left_field| {
             var shared = false;
             const left_slot = @backingInt(left_field.name);
-            if (self.row_label_slots[left_slot].right_generation == generation) {
-                const right_field = flat_right.fields[self.row_label_slots[left_slot].right_index];
+            if (self.row_label_right.get(left_slot)) |right_index| {
+                const right_field = flat_right.fields[right_index];
                 const merged_kind = self.unifyFieldKinds(
                     left_field.kind,
                     left_field.default,
@@ -8474,7 +8435,7 @@ pub const InstGraph = struct {
             }
         }
         for (flat_right.fields) |right_field| {
-            if (self.row_label_slots[@backingInt(right_field.name)].left_generation == generation) continue;
+            if (self.row_label_left.contains(@backingInt(right_field.name))) continue;
             try merged.append(row_allocator, right_field);
             try only_right.append(row_allocator, right_field);
         }

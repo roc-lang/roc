@@ -948,7 +948,7 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(lower_source, "const proof_reservation = try self.addImpossibilityProof(.pending)");
     try expectContains(lower_source, ".{ .forward = proof }");
     try expectContains(lower_source, "try self.resolveDraftConstUseReservations(body_draft)");
-    try expectContains(lower_source, "sources[reservation_index] = restored");
+    try expectContains(lower_source, "sources.set(reservation_index, restored)");
     try expectContains(lower_source, "deferred const reservation dependencies formed a cycle");
     try expectContains(lower_source, "body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[restored_index]");
     try expectContains(lower_source, "body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[restored_index]");

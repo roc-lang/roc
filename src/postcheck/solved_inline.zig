@@ -285,16 +285,19 @@ const InlineAnalyzer = struct {
         callees_end: u32,
     };
 
+    /// A position in `CandidateGraph.nodes`.
+    const CandidateNodeIndex = enum(u32) { _ };
+
     const CandidateGraph = struct {
         nodes: std.ArrayList(CandidateNode) = .empty,
         callees: std.ArrayList(Lifted.FnId) = .empty,
         /// Per lifted function, its index in `nodes`.
-        node_of: []?u32,
+        node_of: collections.OptionalIndexColumn(CandidateNodeIndex),
 
         fn deinit(self: *CandidateGraph, allocator: std.mem.Allocator) void {
             self.nodes.deinit(allocator);
             self.callees.deinit(allocator);
-            allocator.free(self.node_of);
+            self.node_of.deinit(allocator);
         }
 
         fn calleeNodes(self: *const CandidateGraph, node: u32) []const Lifted.FnId {
@@ -313,9 +316,8 @@ const InlineAnalyzer = struct {
     /// are numbered in.
     fn decideCandidates(self: *InlineAnalyzer) std.mem.Allocator.Error!void {
         const fn_count = self.solved.lifted.fnCount();
-        var graph = CandidateGraph{ .node_of = try self.allocator.alloc(?u32, fn_count) };
+        var graph = CandidateGraph{ .node_of = try collections.OptionalIndexColumn(CandidateNodeIndex).initFilled(self.allocator, fn_count) };
         defer graph.deinit(self.allocator);
-        @memset(graph.node_of, null);
 
         for (0..fn_count) |index| {
             const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
@@ -332,7 +334,7 @@ const InlineAnalyzer = struct {
                     continue;
                 },
             }
-            graph.node_of[index] = @intCast(graph.nodes.items.len);
+            graph.node_of.set(index, @fromBackingInt(@as(u32, @intCast(graph.nodes.items.len))));
             try graph.nodes.append(self.allocator, .{
                 .fn_id = fn_id,
                 .candidate = candidate,
@@ -495,7 +497,7 @@ const InlineAnalyzer = struct {
                 if (frame.next_callee < callees.len) {
                     const callee_fn = callees[frame.next_callee];
                     frame.next_callee += 1;
-                    const callee = graph.node_of[@backingInt(callee_fn)] orelse continue;
+                    const callee: u32 = @backingInt(graph.node_of.get(@backingInt(callee_fn)) orelse continue);
                     if (pass == .accepted and !self.acceptedNode(graph, callee)) continue;
                     if (order[callee] == unvisited) {
                         order[callee] = next_order;

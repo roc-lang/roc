@@ -20877,6 +20877,7 @@ fn publishLiteralArgumentRoots(
     // generalized local scope's. A scope inside a defaulted field
     // expression has no template.
     const ScopeKey = struct { template: ?u32, scope: ?u32 };
+    const ScopeOwnerColumn = collections.OptionalIndexColumn(canonical.CheckedProcedureTemplateId);
     const ObligationKey = struct { site: LiteralSite, ty: [32]u8 };
     const ScopeState = struct {
         list: std.ArrayListUnmanaged(LiteralRequirement) = .empty,
@@ -20895,18 +20896,22 @@ fn publishLiteralArgumentRoots(
     }
 
     // The template whose body owns each generalized local scope.
-    const scope_owners = try allocator.alloc(?u32, scopes.len);
-    defer allocator.free(scope_owners);
-    @memset(scope_owners, null);
+    var scope_owners = try ScopeOwnerColumn.initFilled(allocator, scopes.len);
+    defer scope_owners.deinit(allocator);
     for (template_iterator_refs.scope_site_spans, 0..) |span, template_index| {
         for (template_iterator_refs.scope_sites[span.start..][0..span.len]) |site| {
             var current: ?DispatchScopeId = site.scope;
             while (current) |id| {
-                scope_owners[@backingInt(id)] = @intCast(template_index);
+                scope_owners.set(@backingInt(id), @fromBackingInt(@as(u32, @intCast(template_index))));
                 current = scopes[@backingInt(id)].parent;
             }
         }
     }
+    const rawScopeOwner = struct {
+        fn get(owners: *const ScopeOwnerColumn, scope: usize) ?u32 {
+            return if (owners.get(scope)) |template| @backingInt(template) else null;
+        }
+    }.get;
     const scopeKeyOf = struct {
         fn get(template: ?u32, scope: DispatchScope) ScopeKey {
             return switch (scope) {
@@ -21444,7 +21449,7 @@ fn publishLiteralArgumentRoots(
         artifact: ?CheckedModuleDigest,
     };
     const resolveCallee = struct {
-        fn get(ref: CalleeRef, owner: canonical.ArtifactRef, templates_: *const CheckedProcedureTemplateTable, owners: []const ?u32, states: *std.AutoHashMapUnmanaged(ScopeKey, ScopeState), views: CheckedImportViews) ?Callee {
+        fn get(ref: CalleeRef, owner: canonical.ArtifactRef, templates_: *const CheckedProcedureTemplateTable, owners: *const ScopeOwnerColumn, states: *std.AutoHashMapUnmanaged(ScopeKey, ScopeState), views: CheckedImportViews) ?Callee {
             switch (ref) {
                 .template => |tref| {
                     if (tref.artifact.eql(owner)) {
@@ -21469,7 +21474,7 @@ fn publishLiteralArgumentRoots(
                 },
                 .scope => |id| {
                     const scope = templates_.dispatch_scopes[@backingInt(id)];
-                    const key: ScopeKey = .{ .template = owners[@backingInt(id)], .scope = @backingInt(id) };
+                    const key: ScopeKey = .{ .template = rawScopeOwner(owners, @backingInt(id)), .scope = @backingInt(id) };
                     return .{
                         .key = key,
                         .obligations = if (states.getPtr(key)) |state| state.list.items else &.{},
@@ -21491,7 +21496,7 @@ fn publishLiteralArgumentRoots(
     while (true) {
         var changed = false;
         for (edges.items, edge_args.items) |edge, *args| {
-            const callee = resolveCallee(edge.callee, owner_artifact, templates, scope_owners, &scope_states, import_views) orelse continue;
+            const callee = resolveCallee(edge.callee, owner_artifact, templates, &scope_owners, &scope_states, import_views) orelse continue;
             if (args.items.len >= callee.obligations.len) continue;
             if (edge.subst.len != 0 and edge.subst.len != callee.vars.len) checkedArtifactInvariant("an edge's substitution differs from its callee's scheme", .{});
             // A use with no recorded instantiation of a scheme with
@@ -21573,7 +21578,7 @@ fn publishLiteralArgumentRoots(
         }
         for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
             const start: u32 = @intCast(pool.items.len);
-            if (scope_states.getPtr(.{ .template = scope_owners[scope_index], .scope = @intCast(scope_index) })) |state| try pool.appendSlice(allocator, state.list.items);
+            if (scope_states.getPtr(.{ .template = rawScopeOwner(&scope_owners, scope_index), .scope = @intCast(scope_index) })) |state| try pool.appendSlice(allocator, state.list.items);
             scope.literal_requirements = .{ .start = start, .len = @intCast(pool.items.len - start) };
         }
         allocator.free(templates.literal_requirements_pool);
@@ -21591,7 +21596,7 @@ fn publishLiteralArgumentRoots(
             }
             for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
                 for (templates.scopeLiteralRequirements(scope), 0..) |obligation, index| {
-                    std.debug.print("literal-args: scope {d} (template {?d}) obligation {d}: literal expr {d} ({s}) edge {s}, callee obligation {d}\n", .{ scope_index, scope_owners[scope_index], index, obligation.site.node, @tagName(obligation.site.kind), @tagName(obligation.edge), obligation.callee_requirement });
+                    std.debug.print("literal-args: scope {d} (template {?d}) obligation {d}: literal expr {d} ({s}) edge {s}, callee obligation {d}\n", .{ scope_index, rawScopeOwner(&scope_owners, scope_index), index, obligation.site.node, @tagName(obligation.site.kind), @tagName(obligation.edge), obligation.callee_requirement });
                 }
             }
         }
