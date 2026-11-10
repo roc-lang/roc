@@ -1930,7 +1930,7 @@ test "record interning preserves immutable field default identities" {
     const padded = try store.intern(.{ .record = .{
         .fields = &fields,
         .ext = null,
-        .declared = .{ .padding = &.{u8_ty}, .slots = &.{ 0, 1 } },
+        .declared = .{ .padding = &.{u8_ty}, .entries = &.{ .{ .named = count }, .{ .padding = 0 } } },
     } });
     try std.testing.expectEqual(first, try store.recordRow(padded));
 }
