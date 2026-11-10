@@ -12023,8 +12023,8 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
         }
     };
     const recursive = try graph.addRecursiveNode(Context{}, Context.fill);
-    graph.containment_visit_epoch = std.math.maxInt(u32);
-    @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
+    graph.containment_visit_epochs.epoch.current = std.math.maxInt(u32) - 1;
+    @memset(graph.containment_visit_epochs.storage, std.math.maxInt(u32) - 1);
 
     // An unrelated generated-private node makes the traversal necessary;
     // without one the query answers without visiting anything.
@@ -12042,10 +12042,10 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
             .authority = .generated_private,
         },
     }));
-    @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
+    @memset(graph.containment_visit_epochs.storage, std.math.maxInt(u32) - 1);
 
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
-    try std.testing.expectEqual(@as(u32, 1), graph.containment_visit_epoch);
+    try std.testing.expectEqual(@as(u32, 1), graph.containment_visit_epochs.epoch.current);
 
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
     try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_cache_hits);
@@ -12120,11 +12120,11 @@ test "iterator-interface containment caches exact graph dependencies" {
 
     const child = try graph.newNode(.{ .primitive = .u64 });
     const root = try graph.newNode(.{ .box = child });
-    graph.containment_visit_epoch = std.math.maxInt(u32);
-    @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
+    graph.containment_visit_epochs.epoch.current = std.math.maxInt(u32) - 1;
+    @memset(graph.containment_visit_epochs.storage, std.math.maxInt(u32) - 1);
 
     try std.testing.expect(!try graph.containsIteratorInterface(root));
-    try std.testing.expectEqual(@as(u32, 1), graph.containment_visit_epoch);
+    try std.testing.expectEqual(@as(u32, 1), graph.containment_visit_epochs.epoch.current);
     try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_nodes_visited);
 
     try std.testing.expect(!try graph.containsIteratorInterface(root));
