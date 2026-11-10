@@ -567,12 +567,14 @@ pub const Builder = struct {
 
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
+        try program.module(worker.module).bodies().demandIndex();
         const bound = try program.arena.allocator().alloc(TypeId, worker.scheme_vars.len);
         for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
-        // A `List(U8)` worker's body, and its lambdas', is lowered with the
-        // list item variable bound to `U8` (design.md "Pre-Specialized
-        // List(U8) Workers"): every value of the item type is static.
-        if (worker.list_u8_slot) |slot| bound[slot] = try program.store.primitive(.u8);
+        // An integer list worker's body, and its lambdas', is lowered with
+        // the list item variable bound to its integer type (design.md
+        // "Pre-Specialized Integer List Workers"): every value of the item
+        // type is static.
+        if (worker.list_int) |list_int| bound[list_int.slot] = try program.store.primitive(list_int.item.primitive());
         return .{
             .program = program,
             .allocator = program.allocator,
@@ -2496,7 +2498,9 @@ pub const Builder = struct {
 
     /// Materialize a default whose declaring module is already program-owned.
     pub fn fieldDefaultValue(self: *Builder, default: types.FieldDefault) Allocator.Error!LocalId {
-        const expr = self.program.module(default.module).bodies().defaultExpr(default.expr_node) orelse
+        const default_bodies = self.program.module(default.module).bodies();
+        try default_bodies.demandIndex();
+        const expr = default_bodies.defaultExpr(default.expr_node) orelse
             invariant("a field default's expression was not archived");
         const worker = try self.program.defaultWorker(default.module, expr);
         const target = try self.localOf(self.program.worker(worker).ret, .frame);
@@ -4170,6 +4174,9 @@ pub const Builder = struct {
                 .literal => {
                     if (!literal_requirement.site.module.eql(self.view.key)) invariant("a literal literal_requirement's literal is in another module than its scheme");
                     const node = literal_requirement.site.node;
+                    // Forwarding can enter an imported scheme whose linked
+                    // worker needed no body index. Reading its literal does.
+                    try self.bodies().demandIndex();
                     // A custom literal pattern's literal converts at the
                     // pattern's type.
                     if (self.bodies().index().nodeKind(node) == .pattern) {
@@ -7370,8 +7377,9 @@ pub const Builder = struct {
                 return try self.pushValue(try self.adaptValue(value, ret, result_ty));
             }
         }
-        // A `List` template called at `U8` calls its `List(U8)` worker, whose
-        // inputs are the generic worker's.
+        // A `List` template called at a fixed-size integer item type calls
+        // its integer list worker for that type, whose inputs are the
+        // generic worker's.
         const direct = try self.program.directCallTarget(callee, bound);
         try self.argsAtParams(explicit, arg_types, direct, bound, null);
         // The callee's one hidden argument: its type table at the hidden
