@@ -105,31 +105,28 @@ const StorageMemory = struct {
     directory_bytes: usize = 0,
 };
 
-/// A fresh anonymous/private mapping (Windows: reserve and commit). Only
-/// PageAllocator.map promises the zero bytes required here; Allocator.alloc
-/// may recycle bytes and poison them even when its underlying allocator maps.
+/// Fresh zero pages from the compiler's page primitive. Slots are claimed on
+/// demand by the variables consumers ask about, so the mapping is sparse: a
+/// claimed slot makes one small page resident, never a huge page, and
+/// untouched pages are never resident. An allocator's block may be recycled
+/// and dirty, so only a fresh mapping supplies the zero bytes required here.
 const ZeroedKeyMapping = struct {
     slots: []KeySlot,
-    reserved_bytes: usize,
+    pages: collections.zeroed_pages.Pages,
 
     fn init(_: Allocator, count: usize) Allocator.Error!ZeroedKeyMapping {
         const bytes = std.math.mul(usize, count, @sizeOf(KeySlot)) catch return error.OutOfMemory;
-        if (bytes == 0) return .{ .slots = &.{}, .reserved_bytes = 0 };
-        const page_size = std.heap.pageSize();
         comptime std.debug.assert(@alignOf(KeySlot) <= std.heap.page_size_min);
-        const padded = std.math.add(usize, bytes, page_size - 1) catch return error.OutOfMemory;
-        const reserved_bytes = padded & ~(page_size - 1);
-        const raw = std.heap.PageAllocator.map(reserved_bytes, .fromByteUnits(page_size)) orelse return error.OutOfMemory;
-        const slots: [*]KeySlot = @ptrCast(@alignCast(raw));
-        // No memset, Allocator wrapper, huge-page advice, or result read.
-        return .{ .slots = slots[0..count], .reserved_bytes = reserved_bytes };
+        const pages = try collections.zeroed_pages.map(bytes, .sparse);
+        if (bytes == 0) return .{ .slots = &.{}, .pages = pages };
+        const slots: [*]KeySlot = @ptrCast(@alignCast(pages.bytes.ptr));
+        // No memset, Allocator wrapper, or result read.
+        return .{ .slots = slots[0..count], .pages = pages };
     }
 
     fn deinit(self: ZeroedKeyMapping, _: Allocator) void {
-        if (self.reserved_bytes == 0) return;
-        const raw: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(self.slots.ptr));
-        // Direct unmap neither poisons memory nor scans slot states.
-        std.heap.PageAllocator.unmap(raw[0..self.reserved_bytes]);
+        // Unmapping neither poisons memory nor scans slot states.
+        self.pages.unmap();
     }
 
     fn slot(self: ZeroedKeyMapping, _: Allocator, _: std.Io, raw: usize) Allocator.Error!*KeySlot {
@@ -137,7 +134,7 @@ const ZeroedKeyMapping = struct {
     }
 
     fn memory(self: ZeroedKeyMapping) StorageMemory {
-        return .{ .logical_bytes = self.slots.len * @sizeOf(KeySlot), .reserved_bytes = self.reserved_bytes };
+        return .{ .logical_bytes = self.slots.len * @sizeOf(KeySlot), .reserved_bytes = self.pages.bytes.len };
     }
 };
 
@@ -679,7 +676,7 @@ test "source key storage fresh native mappings bypass dirty and failing heap all
     try std.testing.expect(mapping.slots[0].peek() == null);
     const empty = try ZeroedKeyMapping.init(failing.allocator(), 0);
     defer empty.deinit(failing.allocator());
-    try std.testing.expectEqual(@as(usize, 0), empty.reserved_bytes);
+    try std.testing.expectEqual(@as(usize, 0), empty.pages.bytes.len);
     const too_many = std.math.maxInt(usize) / @sizeOf(KeySlot);
     try std.testing.expectError(error.OutOfMemory, ZeroedKeyMapping.init(failing.allocator(), too_many + 1));
     // Multiplication fits, but page rounding does not; no syscall is needed.

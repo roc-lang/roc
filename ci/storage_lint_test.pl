@@ -9,6 +9,8 @@ my @cases = (
     ['alias backing', 'const Col = collections.OptionalIndexColumn(Id); var map = try Col.initFilled(gpa, n); @memset(map.words[1..], 0);', 1],
     ['alias chain', 'const First = collections.EpochSet(Id, .bitset, .internal); const Second = First; var seen: Second = undefined; @memset(seen.storage, 0);', 1],
     ['alias cycle terminates', 'const A = B; const B = A; var seen: A = undefined; @memset(seen, 0);', 0],
+    ['sparse zero-page alias', 'const SparseIndexColumn = collections.zeroed_pages.SparseSlice(OptionalU32); const Analysis = struct { view_root: SparseIndexColumn }; fn f(self: *Analysis) void { @memset(self.view_root.items, .none); }', 1],
+    ['write-first field', 'const Domain = struct { param_position: collections.WriteFirstSlice(u32) }; fn f(self: *Domain) void { @memset(self.param_position.entries, 0); }', 1],
     ['struct containing a column is not a column', 'const Analysis = struct { marks: collections.EpochSet(Id, .stamps, .internal), state: []u8 }; fn f(analysis: *Analysis) void { @memset(analysis.state, 0); }', 0],
     ['multiline', "const Col = collections.OptionalIndexColumn(\n LIR.LocalId\n); var x = try Col.initFilled(gpa, n); \@memset(\n x.words,\n 0);", 1],
     ['optional duplicate', 'const Col = collections.OptionalIndexColumn(LIR.LocalId); const x = try gpa.alloc(?LIR.LocalId, n);', 1],
