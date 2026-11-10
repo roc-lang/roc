@@ -781,6 +781,13 @@ pub const Store = struct {
             .primitive => |prim| try self.scratch_key.append(self.allocator, @backingInt(prim)),
             .empty_record => {},
             .record => |record| {
+                // Reading a field by name, merging a substituted remainder,
+                // and deriving declared slots all rely on this order.
+                if (std.debug.runtime_safety) {
+                    for (record.fields[0..record.fields.len -| 1], record.fields[@min(1, record.fields.len)..]) |prev, next| {
+                        std.debug.assert(self.nameLessThan(prev.name, next.name));
+                    }
+                }
                 try self.keyU32(@intCast(record.fields.len));
                 for (record.fields) |field| {
                     try self.keyU32(@backingInt(field.name));
@@ -944,11 +951,6 @@ pub const Store = struct {
     /// Stores `declared`'s entries and the slots derived from them over
     /// `fields`, which are sorted by label (see `DeclaredOrder.slots`).
     fn addDeclaredOrder(self: *Store, fields: []const Field, declared: DeclaredOrderInput) Allocator.Error!SlotSpan {
-        if (std.debug.runtime_safety) {
-            for (fields[0..fields.len -| 1], fields[@min(1, fields.len)..]) |prev, next| {
-                std.debug.assert(self.nameLessThan(prev.name, next.name));
-            }
-        }
         const arena = self.span_arena.allocator();
         const slots = try arena.alloc(u32, fields.len + declared.padding.len);
         const named = try self.allocator.alloc(bool, fields.len);
