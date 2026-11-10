@@ -778,7 +778,7 @@ fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) Resou
     var members = grouped.iterator(.{});
     while (members.next()) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
-        store.getProcSpecPtr(proc).tail_group = @fromBackingInt(groups.find(@intCast(proc_index)));
+        store.getProcSpecPtr(proc).tail_group = .some(@fromBackingInt(groups.find(@intCast(proc_index))));
     }
 }
 
@@ -1627,7 +1627,7 @@ const ArcPlanStep = struct {
     pre_release_extra: PlanSpan = .{},
     /// Why `pre_release_extra` was filled: the tail-call frame release of an
     /// `assign_call`. Set by the planner that fills the list.
-    pre_release_extra_reason: ?LIR.RcReason = null,
+    pre_release_extra_reason: collections.OptionalEnum(LIR.RcReason) = .none,
     pre_retain: PlanSpan = .{},
     retain_assign_ref_target: bool = true,
     take_assign_ref_target: bool = false,
@@ -1638,7 +1638,7 @@ const ArcPlanStep = struct {
     residual_shell_all_rc_fields_absent: bool = false,
     /// The view whose container and first slot number the absent pieces,
     /// when the shell is a view's.
-    residual_shell_view: ?LIR.LocalId = null,
+    residual_shell_view: collections.OptionalId(LIR.LocalId) = .none,
     retain_set_target: bool = true,
     preserve_consumed_args: u64 = 0,
     transfer_mask: u64 = 0,
@@ -1654,23 +1654,27 @@ const ArcPlanStep = struct {
     /// The call is a same-SCC tail call whose caller frame owns nothing once
     /// the call starts.
     replaces_frame: bool = false,
-    call_callee: ?LIR.LirProcSpecId = null,
+    call_callee: collections.OptionalId(LIR.LirProcSpecId) = .none,
     call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
-    variant_request: ?VariantRequestId = null,
+    variant_request: collections.OptionalId(VariantRequestId) = .none,
     post_release: PlanSpan = .{},
+
+    comptime {
+        std.debug.assert(@sizeOf(ArcPlanStep) == 184);
+    }
 
     fn reset(self: *ArcPlanStep, stmt: LIR.CFStmtId) void {
         self.initialized = true;
         self.stmt = stmt;
         self.pre_release = null;
         self.pre_release_extra.len = 0;
-        self.pre_release_extra_reason = null;
+        self.pre_release_extra_reason = .none;
         self.pre_retain.len = 0;
         self.retain_assign_ref_target = true;
         self.take_assign_ref_target = false;
         self.residual_shell_absent_mask = 0;
         self.residual_shell_all_rc_fields_absent = false;
-        self.residual_shell_view = null;
+        self.residual_shell_view = .none;
         self.retain_set_target = true;
         self.preserve_consumed_args = 0;
         self.transfer_mask = 0;
@@ -1682,9 +1686,9 @@ const ArcPlanStep = struct {
         self.low_level_selection = null;
         self.retain_call_result = false;
         self.replaces_frame = false;
-        self.call_callee = null;
+        self.call_callee = .none;
         self.call_demanded = arc_sig.RcSig.all_owned;
-        self.variant_request = null;
+        self.variant_request = .none;
         self.post_release.len = 0;
     }
 };
@@ -2327,7 +2331,7 @@ const Inserter = struct {
                             assign,
                             step.residual_shell_absent_mask,
                             step.residual_shell_all_rc_fields_absent,
-                            step.residual_shell_view,
+                            step.residual_shell_view.get(),
                         ),
                     }),
                     .next = next,
@@ -2353,7 +2357,7 @@ const Inserter = struct {
                 };
                 break :blk try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
-                    .proc = if (step.variant_request) |request|
+                    .proc = if (step.variant_request.get()) |request|
                         self.resolved_variants[@backingInt(request)]
                     else
                         assign.proc,
@@ -2545,7 +2549,7 @@ const Inserter = struct {
         var pre_release_index = pre_release_extra.len;
         while (pre_release_index > 0) {
             pre_release_index -= 1;
-            const reason = step.pre_release_extra_reason orelse arcInvariant("ARC plan step filled pre_release_extra without its reason");
+            const reason = step.pre_release_extra_reason.get() orelse arcInvariant("ARC plan step filled pre_release_extra without its reason");
             cloned = try self.materializeReleaseDecision(pre_release_extra[pre_release_index], .{ .stmt = at, .reason = reason }, cloned);
         }
         if (step.preserve_consumed_args != 0) {
@@ -2644,8 +2648,8 @@ const Inserter = struct {
                 .switch_stmt, .initialized_payload_switch, .str_match, .str_match_set => {},
             }
             for (plan.steps.items[0..plan.step_count]) |*step| {
-                if (step.call_callee) |callee| {
-                    step.variant_request = try self.requestVariantForCall(callee, step.call_demanded);
+                if (step.call_callee.get()) |callee| {
+                    step.variant_request = .of(try self.requestVariantForCall(callee, step.call_demanded));
                 }
             }
         }
@@ -2676,12 +2680,12 @@ const Inserter = struct {
                         // A view copies its container's representation,
                         // including slots already given away on this path.
                         step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.target);
-                        step.residual_shell_view = assign.target;
+                        step.residual_shell_view = .some(assign.target);
                     } else if (any_views and assign.op.kind == .local and self.viewForEmission(assign.op.source) != null and self.isBindingBorrowed(assign.op.source) and
                         self.store.getLocal(assign.op.source).layout_idx == self.store.getLocal(assign.target).layout_idx)
                     {
                         step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.op.source);
-                        step.residual_shell_view = assign.op.source;
+                        step.residual_shell_view = .some(assign.op.source);
                     } else if (assign.op.kind == .local and
                         self.store.getLocal(assign.op.source).layout_idx == self.store.getLocal(assign.target).layout_idx and
                         self.layouts.getLayout(self.store.getLocal(assign.op.source).layout_idx).tag == .struct_ and
@@ -2794,7 +2798,7 @@ const Inserter = struct {
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     for (transfer.args.retain_args) |arg| try self.appendStepRetain(step, .{ .local = arg, .reason = .owned_param_demand });
                     step.retain_call_result = transfer.retain_call_result;
-                    step.call_callee = assign.proc;
+                    step.call_callee = .some(assign.proc);
                     step.call_demanded = transfer.args.demanded;
                     self.death_scratch.clearRetainingCapacity();
                     if (tail_call != null) {
@@ -2804,7 +2808,7 @@ const Inserter = struct {
                         // disappearing caller frame and must end first.
                         try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
-                        step.pre_release_extra_reason = .tail_call_frame;
+                        step.pre_release_extra_reason = .some(.tail_call_frame);
                         step.replaces_frame = self.sharesReturnContract(assign);
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, self.death_scratch);
@@ -2834,7 +2838,7 @@ const Inserter = struct {
                         // above; everything else the frame owns ends first.
                         try self.releaseTailCallerFrame(&segment.owned, assign_stmt.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
-                        step.pre_release_extra_reason = .tail_call_frame;
+                        step.pre_release_extra_reason = .some(.tail_call_frame);
                         step.replaces_frame = true;
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign_stmt.target, .owned, assign_stmt.next, self.death_scratch);
@@ -5023,7 +5027,7 @@ const Inserter = struct {
                     if (!call.reuse_closure or preserve_reuse_source) try self.appendStepRetain(step, .{ .local = call.closure, .reason = .closure_call_capture });
                     try self.releaseTailCallerFrame(owned, target, self.death_scratch);
                     try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
-                    step.pre_release_extra_reason = .tail_call_frame;
+                    step.pre_release_extra_reason = .some(.tail_call_frame);
                     step.replaces_frame = true;
                     return;
                 }
@@ -18393,7 +18397,7 @@ const DynFixture = struct {
     /// A procedure whose frame is every local allocated so far.
     fn proc(self: *DynFixture, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx, dyn_result: ?LIR.LocalId) Allocator.Error!LIR.LirProcSpecId {
         const id = try self.f.addProc(args, body, ret_layout);
-        self.f.store.getProcSpecPtr(id).dyn_result = dyn_result;
+        self.f.store.getProcSpecPtr(id).dyn_result = .of(dyn_result);
         return id;
     }
 
@@ -18488,7 +18492,7 @@ test "ARC erased argument products take fields and preserve prefix and scalar re
         }
         const proc = try d.proc(&.{ table, param }, body, d.dynamic, if (keep_record) param else result);
         d.f.store.getProcSpecPtr(proc).abi = .erased_record;
-        d.f.store.getProcSpecPtr(proc).erased_capture_arg = table;
+        d.f.store.getProcSpecPtr(proc).erased_capture_arg = .of(table);
         try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
         try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
         try d.f.expectRc(param, 0, 0, 0);

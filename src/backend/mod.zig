@@ -109,9 +109,9 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
                 .body = body,
                 .ret_layout = ret_layout,
                 .abi = .erased_callable,
-                .erased_capture_arg = capture_arg,
-                .erased_reuse_arg = reuse_arg,
-                .erased_call_args = arg_plan,
+                .erased_capture_arg = .of(capture_arg),
+                .erased_reuse_arg = .of(reuse_arg),
+                .erased_call_args = .of(arg_plan),
             }, .none);
         }
 

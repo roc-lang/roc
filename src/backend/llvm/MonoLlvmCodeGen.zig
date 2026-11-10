@@ -1931,7 +1931,7 @@ pub const MonoLlvmCodeGen = struct {
     /// procedure whose result is dynamic, which writes it to the storage
     /// whose address its caller passes after the arguments.
     fn fastRetLayout(proc: LirProcSpec) layout.Idx {
-        return if (proc.dyn_result != null) .zst else proc.ret_layout;
+        return if (proc.dyn_result != .none) .zst else proc.ret_layout;
     }
 
     /// Whether `proc` takes a tail carry: a hidden parameter after its
@@ -1941,7 +1941,7 @@ pub const MonoLlvmCodeGen = struct {
     /// frame-replacing calls; it releases its carry when it returns or
     /// replaces its own frame. Every other caller passes none.
     fn procCarriesTailArgs(store: *const lir.LirStore, proc: LirProcSpec) bool {
-        if (proc.abi != .roc or proc.tail_group == null) return false;
+        if (proc.abi != .roc or proc.tail_group == .none) return false;
         const params = store.getLocalSpan(proc.args);
         for (0..params.len) |i| {
             if (store.getLocal(GuardedList.at(params, i)).dyn != null) return true;
@@ -2006,7 +2006,7 @@ pub const MonoLlvmCodeGen = struct {
     fn computeFastSignature(self: *MonoLlvmCodeGen, arena: std.mem.Allocator, proc: LirProcSpec) Error!FastSignature {
         const owned = try self.procArgLayoutsIn(arena, proc, .explicit);
         const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), owned, fastRetLayout(proc), false) catch return error.OutOfMemory;
-        const group_scratch: TailScratch = if (proc.tail_group) |group| blk: {
+        const group_scratch: TailScratch = if (proc.tail_group.get()) |group| blk: {
             if (@backingInt(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@backingInt(group)});
             break :blk self.tail_scratch.items[@backingInt(group)];
         } else .{};
@@ -2014,13 +2014,13 @@ pub const MonoLlvmCodeGen = struct {
         // Under tail drivers, and for a procedure outside every tail group,
         // each call's stored arguments live in storage its caller owns, sized
         // for this procedure alone.
-        const scratch: TailScratch = if (self.usesTailDrivers() or proc.tail_group == null) tail_args.scratch else group_scratch;
+        const scratch: TailScratch = if (self.usesTailDrivers() or proc.tail_group == .none) tail_args.scratch else group_scratch;
         var cursor: u32 = if (lowered.ret == .indirect) 1 else 0;
         const args_start = cursor;
         for (lowered.args, tail_args.stored) |placement, stored| {
             if (!stored) cursor += fastPlacementParamCount(placement);
         }
-        const dyn_result_index: ?u32 = if (proc.dyn_result != null) blk: {
+        const dyn_result_index: ?u32 = if (proc.dyn_result != .none) blk: {
             cursor += 1;
             break :blk cursor - 1;
         } else null;
@@ -2068,7 +2068,7 @@ pub const MonoLlvmCodeGen = struct {
         // The dynamic result address, the tail carry, the pending cell, and
         // the storage pointer follow the arguments, so their registers are
         // reserved up front.
-        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != null)) + @intFromBool(procCarriesTailArgs(self.store, proc)) + @intFromBool(proc.takesPendingCell());
+        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != .none)) + @intFromBool(procCarriesTailArgs(self.store, proc)) + @intFromBool(proc.takesPendingCell());
         if (self.usesTailDrivers()) {
             // Only a signature past the wasm parameter limit takes a storage
             // pointer, which then counts against the limit too.
@@ -2076,7 +2076,7 @@ pub const MonoLlvmCodeGen = struct {
             if (std.mem.findScalar(bool, stored, true) != null) {
                 layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + 1, stored);
             }
-        } else if (proc.tail_group != null) {
+        } else if (proc.tail_group != .none) {
             layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + @intFromBool(group_storage), stored);
         } else {
             // Arguments past the registers travel in storage the caller owns,
@@ -2089,7 +2089,7 @@ pub const MonoLlvmCodeGen = struct {
                 layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + 1, stored);
             }
         }
-        const own_storage = self.usesTailDrivers() or proc.tail_group == null;
+        const own_storage = self.usesTailDrivers() or proc.tail_group == .none;
         var cursor: TailScratchCursor = .{};
         for (lowered.args, arg_layouts, offsets, stored) |placement, arg_layout, *offset, is_stored| {
             if (!is_stored and (placement != .indirect or own_storage)) continue;
@@ -2124,7 +2124,7 @@ pub const MonoLlvmCodeGen = struct {
         self.clearFastSignatures();
         var group_count: usize = 0;
         for (procs) |proc| {
-            if (proc.tail_group) |group| group_count = @max(group_count, @as(usize, @backingInt(group)) + 1);
+            if (proc.tail_group.get()) |group| group_count = @max(group_count, @as(usize, @backingInt(group)) + 1);
         }
         self.tail_scratch.appendNTimes(self.allocator, .{}, group_count) catch return error.OutOfMemory;
         // Under tail drivers the arguments travel through static storage.
@@ -2136,7 +2136,7 @@ pub const MonoLlvmCodeGen = struct {
         defer arena_state.deinit();
         for ([_]bool{ false, true }) |group_storage| {
             for (procs) |proc| {
-                const group = proc.tail_group orelse continue;
+                const group = proc.tail_group.get() orelse continue;
                 if (proc.is_static_initializer or !fastAbiEligible(proc)) continue;
                 if (group_storage and !needs_storage[@backingInt(group)]) continue;
                 _ = arena_state.reset(.retain_capacity);
@@ -2175,13 +2175,13 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn isTailDriverMember(proc: LirProcSpec) bool {
-        return proc.tail_group != null and !proc.is_static_initializer and fastAbiEligible(proc);
+        return proc.tail_group != .none and !proc.is_static_initializer and fastAbiEligible(proc);
     }
 
     fn tailDriverFor(self: *MonoLlvmCodeGen, proc: LirProcSpec) ?*TailDriver {
         if (!self.usesTailDrivers() or !isTailDriverMember(proc)) return null;
         for (self.tail_drivers.items) |*driver| {
-            if (driver.group == proc.tail_group.? and driver.ret_layout == proc.ret_layout) return driver;
+            if (driver.group == proc.tail_group.get().? and driver.ret_layout == proc.ret_layout) return driver;
         }
         return null;
     }
@@ -2228,7 +2228,7 @@ pub const MonoLlvmCodeGen = struct {
                 const function = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
                 function.setLinkage(.internal, builder);
                 function.setCallConv(self.fastCallConv(proc), builder);
-                self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.?, .ret_layout = proc.ret_layout, .function = function }) catch return error.OutOfMemory;
+                self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.get().?, .ret_layout = proc.ret_layout, .function = function }) catch return error.OutOfMemory;
                 break :blk &self.tail_drivers.items[self.tail_drivers.items.len - 1];
             };
             driver.members.append(self.allocator, @fromBackingInt(@as(u32, @intCast(i)))) catch return error.OutOfMemory;
@@ -2433,7 +2433,7 @@ pub const MonoLlvmCodeGen = struct {
     /// spill reload placed between that call and the caller's stack
     /// readjustment from the stack pointer before the pop (#12191).
     fn fastCallConv(self: *const MonoLlvmCodeGen, proc: LirProcSpec) LlvmBuilder.CallConv {
-        if (self.target.cpu.arch.isWasm() or proc.tail_group == null) return .fastcc;
+        if (self.target.cpu.arch.isWasm() or proc.tail_group == .none) return .fastcc;
         return .tailcc;
     }
 
@@ -2441,7 +2441,7 @@ pub const MonoLlvmCodeGen = struct {
     /// in the same group passes its own along; any other caller owns a slot
     /// for that group in its frame.
     fn tailScratchArg(self: *MonoLlvmCodeGen, callee: LirProcSpec, sig: *const FastSignature) Error!LlvmBuilder.Value {
-        const group = callee.tail_group orelse return self.wasmStoredArgs(sig);
+        const group = callee.tail_group.get() orelse return self.wasmStoredArgs(sig);
         if (self.usesTailDrivers()) return self.wasmStoredArgs(sig);
         if (self.current_tail_scratch) |own| {
             if (self.current_tail_group == group) return own;
@@ -2870,7 +2870,7 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = entry };
         if (self.stack_checks and self.stack_check_procs.items[@backingInt(proc_id)]) try self.emitStackCheck(func);
 
-        self.current_tail_group = proc.tail_group;
+        self.current_tail_group = proc.tail_group.get();
         self.current_tail_scratch = if (fast_sig) |sig|
             if (sig.scratch_index) |index| wip.arg(index) else null
         else
@@ -2896,7 +2896,7 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        self.current_dyn_result = proc.dyn_result;
+        self.current_dyn_result = proc.dyn_result.get();
         self.current_carry = null;
         self.current_frame_locals = proc.frame_locals;
         if (proc.abi == .erased_callable) {
@@ -2951,12 +2951,12 @@ pub const MonoLlvmCodeGen = struct {
         try self.allocProcLocalSlots(proc);
         if (fast_sig) |sig| {
             try self.unpackFastProcArgs(proc, sig);
-            if (sig.dyn_result_index) |index| try self.storePointer(self.slot(proc.dyn_result.?).ptr, wip.arg(index));
+            if (sig.dyn_result_index) |index| try self.storePointer(self.slot(proc.dyn_result.get().?).ptr, wip.arg(index));
             if (sig.carry_index) |index| self.current_carry = wip.arg(index);
         } else if (proc.abi == .erased_record) {
             try self.bindErasedRecordParams(proc);
         } else {
-            if (proc.dyn_result != null) llvmInvariantFmt("procedure {d} with a dynamic result has no register-passing function", .{@backingInt(proc_id)});
+            if (proc.dyn_result != .none) llvmInvariantFmt("procedure {d} with a dynamic result has no register-passing function", .{@backingInt(proc_id)});
             try self.unpackProcArgs(proc);
         }
         for (self.value_plan.inventory.items) |local| {
@@ -3050,7 +3050,7 @@ pub const MonoLlvmCodeGen = struct {
             // Tail-group argument storage is overwritten before the next
             // member enters; those parameters must keep their snapshots.
             // Storage a caller owns for one call lives until the call returns.
-            return self.proc.tail_group == null and (sig.tail_args.stored[index] or sig.lowered.args[index] == .indirect);
+            return self.proc.tail_group == .none and (sig.tail_args.stored[index] or sig.lowered.args[index] == .indirect);
         }
 
         pub fn memoryView(self: PlanOps, assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?ValuePlan.View {
@@ -3117,7 +3117,7 @@ pub const MonoLlvmCodeGen = struct {
             // A dynamic parameter receives the address of its argument's
             // bytes, and a dynamic result is written to the target's.
             switch (operand) {
-                .result => if (callee.dyn_result != null) return .address,
+                .result => if (callee.dyn_result != .none) return .address,
                 .arg => |index| if (codegen.localDyn(GuardedList.at(codegen.store.getLocalSpan(callee.args), index)) != null) return .address,
             }
             if (!fastAbiEligible(callee)) return switch (operand) {
@@ -3150,7 +3150,7 @@ pub const MonoLlvmCodeGen = struct {
 
         /// A dynamic result is copied from the returned value's bytes.
         pub fn returnAccess(self: PlanOps) ValuePlan.Access {
-            return if (self.proc.dyn_result != null) .address else .value;
+            return if (self.proc.dyn_result != .none) .address else .value;
         }
     };
 
@@ -3664,7 +3664,7 @@ pub const MonoLlvmCodeGen = struct {
         const explicit_count = try explicitProcParamCount(proc.abi, params.len);
         const args_ptr = self.args_ptr_arg orelse return error.CompilationFailed;
         if (proc.abi == .erased_callable) {
-            const plan = self.store.getErasedCallArgsPlan(proc.erased_call_args orelse return error.CompilationFailed);
+            const plan = self.store.getErasedCallArgsPlan(proc.erased_call_args.get() orelse return error.CompilationFailed);
             const offsets = self.store.getErasedCallArgOffsets(plan);
             if (offsets.len != explicit_count) return error.CompilationFailed;
             try self.unpackProcArgsAtOffsets(params, explicit_count, args_ptr, offsets);
@@ -3678,7 +3678,7 @@ pub const MonoLlvmCodeGen = struct {
 
         if (proc.abi != .erased_callable) return;
 
-        const capture_param = proc.erased_capture_arg orelse
+        const capture_param = proc.erased_capture_arg.get() orelse
             llvmInvariantFmt("erased callable adapter has no hidden capture arg", .{});
         if (GuardedList.at(params, explicit_count) != capture_param) {
             llvmInvariantFmt("erased callable capture arg was not the first hidden parameter", .{});
@@ -4884,7 +4884,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
 
-        if (builtin.mode == .debug and (proc.dyn_result != null or self.localDyn(target) != null or self.anyDynamic(param_locals))) {
+        if (builtin.mode == .debug and (proc.dyn_result != .none or self.localDyn(target) != null or self.anyDynamic(param_locals))) {
             invariant("LLVM codegen invariant violated: a packed call to proc {d} passes dynamic values", .{@backingInt(proc_id)});
         }
         const arg_layouts = try self.allocator.alloc(layout.Idx, arg_locals.len);
@@ -4940,7 +4940,7 @@ pub const MonoLlvmCodeGen = struct {
         const scratch: ?LlvmBuilder.Value = if (sig.scratch_index != null) try self.tailScratchArg(proc, sig) else null;
         // Storage for one call to a procedure outside every tail group lives
         // only for that call, so exclusive call sites can share stack space.
-        const call_storage: ?LlvmBuilder.Value = if (proc.tail_group == null) scratch else null;
+        const call_storage: ?LlvmBuilder.Value = if (proc.tail_group == .none) scratch else null;
         if (call_storage) |storage| try self.emitLifetimeMarker(.@"lifetime.start", storage);
         for (sig.lowered.args, sig.arg_layouts, 0..) |placement, arg_layout, i| {
             const arg_local = GuardedList.at(arg_locals, i);
@@ -12621,8 +12621,8 @@ pub const MonoLlvmCodeGen = struct {
         const ret_ptr = self.ret_ptr_arg orelse return error.CompilationFailed;
         const args_ptr = self.args_ptr_arg orelse return error.CompilationFailed;
         const capture_ptr = self.capture_ptr_arg orelse return error.CompilationFailed;
-        if (proc.dyn_result) |result| try self.storePointer(self.slot(result).ptr, ret_ptr);
-        const capture_param = proc.erased_capture_arg orelse llvmInvariantFmt("erased_record proc has no capture parameter", .{});
+        if (proc.dyn_result.get()) |result| try self.storePointer(self.slot(result).ptr, ret_ptr);
+        const capture_param = proc.erased_capture_arg.get() orelse llvmInvariantFmt("erased_record proc has no capture parameter", .{});
         const params = self.store.getLocalSpan(proc.args);
         var explicit_count: usize = 0;
         for (0..params.len) |i| {
@@ -12631,7 +12631,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storePointer(self.slot(param).ptr, capture_ptr);
                 continue;
             }
-            if (proc.erased_reuse_arg != null and param == proc.erased_reuse_arg.?) {
+            if (proc.erased_reuse_arg != .none and param == proc.erased_reuse_arg.get().?) {
                 try self.storePointer(self.slot(param).ptr, self.reuse_ptr_arg orelse return error.CompilationFailed);
                 continue;
             }

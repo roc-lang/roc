@@ -163,8 +163,8 @@ fn eligibleCall(
     return callee.body != null and
         callee.hosted == null and
         callee.abi == .roc and
-        callee.erased_reuse_arg == null and
-        callee.erased_call_args == null and
+        callee.erased_reuse_arg == .none and
+        callee.erased_call_args == .none and
         !callee.is_static_initializer and
         ownershipNeutralFrame(store, layouts, callee.frame_locals);
 }

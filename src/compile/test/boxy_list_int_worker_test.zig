@@ -99,7 +99,7 @@ fn expectStaticWorker(store: *const lir.LirStore, proc: lir.LIR.LirProcSpec) (st
     for (0..collections.GuardedList.borrowLen(args)) |arg_index| {
         try std.testing.expect(store.localDyn(collections.GuardedList.at(args, arg_index)) == null);
     }
-    try std.testing.expect(proc.dyn_result == null);
+    try std.testing.expect(proc.dyn_result == .none);
     var pending: std.ArrayList(lir.LIR.CFStmtId) = .empty;
     defer pending.deinit(std.testing.allocator);
     var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);

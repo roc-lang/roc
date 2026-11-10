@@ -10637,8 +10637,8 @@ pub const CheckedExhaustivenessSite = struct {
     kind: CheckedComptimeSiteKind,
     region: base.Region,
     owner: ?CheckedExhaustivenessSiteOwner = null,
-    checked_expr: ?CIR.Expr.Idx = null,
-    checked_pattern: ?CIR.Pattern.Idx = null,
+    checked_expr: collections.OptionalId(CIR.Expr.Idx) = .none,
+    checked_pattern: collections.OptionalId(CIR.Pattern.Idx) = .none,
     policy: ExhaustivenessResolutionPolicy,
     requires_pairing: bool = false,
 };
@@ -10649,14 +10649,14 @@ pub const CheckedExhaustivenessSiteTable = struct {
 
     pub fn lookupByMatchExpr(self: *const CheckedExhaustivenessSiteTable, expr: CIR.Expr.Idx) ?CheckedExhaustivenessSiteId {
         for (self.sites) |site| {
-            if (site.checked_expr != null and site.checked_expr.? == expr) return site.id;
+            if (site.checked_expr.get() == expr) return site.id;
         }
         return null;
     }
 
     pub fn lookupByDestructurePattern(self: *const CheckedExhaustivenessSiteTable, pattern: CIR.Pattern.Idx) ?CheckedExhaustivenessSiteId {
         for (self.sites) |site| {
-            if (site.checked_pattern != null and site.checked_pattern.? == pattern) return site.id;
+            if (site.checked_pattern.get() == pattern) return site.id;
         }
         return null;
     }
@@ -14469,8 +14469,8 @@ const EvidencePass = struct {
                                 .{},
                             ),
                         }
-                        if (node.dispatcher_ty == null or
-                            !try type_view.rootExactEql(&scratch, node.dispatcher_ty.?, call.dispatcher_ty))
+                        if (node.dispatcher_ty == .none or
+                            !try type_view.rootExactEql(&scratch, node.dispatcher_ty.get().?, call.dispatcher_ty))
                         {
                             checkedArtifactInvariant(
                                 "checked generated codec callable evidence had a different dispatcher type",
@@ -14706,8 +14706,8 @@ const EvidencePass = struct {
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
-                .slot = if (source == .scheme_requirement) null else self.schemeVarSlot(param.dispatcher_var),
-                .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
+                .slot = .of(if (source == .scheme_requirement) null else self.schemeVarSlot(param.dispatcher_var)),
+                .structural = .of(self.structuralKindForMethodIdent(param.constraint.fn_name)),
                 .source = source,
                 .path = published_path,
             });
@@ -14989,7 +14989,7 @@ const EvidencePass = struct {
                 policy,
             ) },
         };
-        plan.generated_codec_derivation = switch (plan.resolution) {
+        plan.generated_codec_derivation = .of(switch (plan.resolution) {
             .structural => |derivation| switch (derivation.kind()) {
                 .parser => self.generatedCodecDerivationForSourceConstraint(
                     src.constraint_fn_var orelse
@@ -15006,7 +15006,7 @@ const EvidencePass = struct {
                 .equality, .hash, .map, .map_effectful => null,
             },
             .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => null,
-        };
+        });
         if (builtin.mode == .debug) switch (plan.resolution) {
             .direct_pending => |node_id| self.verifyDirectPlanSubstitution(node_id),
             .structural, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => {},
@@ -15443,7 +15443,7 @@ const EvidencePass = struct {
         const module_env = self.module.moduleEnvConst();
         self.current_chain = &.{};
         for (self.local_method_registry.entries) |*entry| {
-            const callable_ty = entry.inspect_override orelse continue;
+            const callable_ty = entry.inspect_override.get() orelse continue;
             const target = entry.target orelse
                 checkedArtifactInvariant("inspect override entry had no method target", .{});
             const use_var = module_env.inspectOverrideInstance(target.def_idx) orelse
@@ -15453,7 +15453,7 @@ const EvidencePass = struct {
                 .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("inspect override instance was not a function", .{}),
             };
             if (function.args.len != 1) checkedArtifactInvariant("inspect override instance did not take one argument", .{});
-            entry.inspect_evidence = try self.evidenceNodeForTarget(target, function.args[0], use_var, null, .dispatch_edge, .commit);
+            entry.inspect_evidence = .some(try self.evidenceNodeForTarget(target, function.args[0], use_var, null, .dispatch_edge, .commit));
         }
     }
 
@@ -15713,8 +15713,8 @@ const EvidencePass = struct {
         }
         const node_id = try self.internEvidenceNode(.{
             .target = frame.target,
-            .dispatcher_ty = frame.dispatcher_ty,
-            .generated_codec_derivation = null,
+            .dispatcher_ty = .of(frame.dispatcher_ty),
+            .generated_codec_derivation = .none,
             .instantiation = if (through_alias) .{ .alias = frame.callable_ty } else .{ .callable = frame.callable_ty },
             .nested = if (through_alias) .{ .through_alias = nested.refs } else .{ .resolved = nested.refs },
             .subst = nested.subst,
@@ -15763,8 +15763,8 @@ const EvidencePass = struct {
             if (record_idx == null) {
                 return .{ .done = try self.internEvidenceNode(.{
                     .target = target,
-                    .dispatcher_ty = dispatcher_ty,
-                    .generated_codec_derivation = generated_codec_derivation,
+                    .dispatcher_ty = .of(dispatcher_ty),
+                    .generated_codec_derivation = .of(generated_codec_derivation),
                     .instantiation = .{ .alias = callable },
                     .nested = .{ .through_alias = .{} },
                 }) };
@@ -15783,8 +15783,8 @@ const EvidencePass = struct {
                 }
                 return .{ .done = try self.internEvidenceNode(.{
                     .target = target,
-                    .dispatcher_ty = dispatcher_ty,
-                    .generated_codec_derivation = generated_codec_derivation,
+                    .dispatcher_ty = .of(dispatcher_ty),
+                    .generated_codec_derivation = .of(generated_codec_derivation),
                     .instantiation = .{ .callable = callable_ty.? },
                     .nested = if (procedure_schema == .none) .{ .resolved = .{} } else .from_callable,
                 }) };
@@ -15797,12 +15797,12 @@ const EvidencePass = struct {
                     .callable => |existing_callable| target.alias == null and try checked_view.sameType(existing_callable, callable_ty.?),
                     .alias => |existing_callable| target.alias != null and try checked_view.sameType(existing_callable, callable_ty.?),
                 };
-                const dispatcher_matches = if (existing.dispatcher_ty) |existing_dispatcher|
+                const dispatcher_matches = if (existing.dispatcher_ty.get()) |existing_dispatcher|
                     if (dispatcher_ty) |requested| try checked_view.sameType(existing_dispatcher, requested) else false
                 else
                     dispatcher_ty == null;
                 if (!dispatcher_matches or
-                    existing.generated_codec_derivation != generated_codec_derivation or
+                    existing.generated_codec_derivation.get() != generated_codec_derivation or
                     !callable_matches)
                 {
                     checkedArtifactInvariant("one checked dispatch evidence record resolved at two checked call identities", .{});
@@ -15856,8 +15856,8 @@ const EvidencePass = struct {
             }
             return .{ .done = try self.internEvidenceNode(.{
                 .target = target,
-                .dispatcher_ty = dispatcher_ty,
-                .generated_codec_derivation = generated_codec_derivation,
+                .dispatcher_ty = .of(dispatcher_ty),
+                .generated_codec_derivation = .of(generated_codec_derivation),
                 .instantiation = instantiation,
                 .nested = .from_callable,
             }) };
@@ -15872,8 +15872,8 @@ const EvidencePass = struct {
 
         return .{ .done = try self.internEvidenceNode(.{
             .target = target,
-            .dispatcher_ty = dispatcher_ty,
-            .generated_codec_derivation = generated_codec_derivation,
+            .dispatcher_ty = .of(dispatcher_ty),
+            .generated_codec_derivation = .of(generated_codec_derivation),
             .instantiation = instantiation,
             .nested = .{ .resolved = .{} },
         }) };
@@ -15889,8 +15889,8 @@ const EvidencePass = struct {
         // types share whichever ids name them.
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, candidate.target);
-        std.hash.autoHash(&hasher, candidate.dispatcher_ty != null);
-        if (candidate.dispatcher_ty) |ty| try self.hashCheckedTypeIdentity(&hasher, ty);
+        std.hash.autoHash(&hasher, candidate.dispatcher_ty != .none);
+        if (candidate.dispatcher_ty.get()) |ty| try self.hashCheckedTypeIdentity(&hasher, ty);
         std.hash.autoHash(&hasher, candidate.generated_codec_derivation);
         std.hash.autoHash(&hasher, std.meta.activeTag(candidate.instantiation));
         switch (candidate.instantiation) {
@@ -15953,9 +15953,9 @@ const EvidencePass = struct {
         if (!std.meta.eql(left.target, right.target) or
             left.generated_codec_derivation != right.generated_codec_derivation or
             std.meta.activeTag(left.instantiation) != std.meta.activeTag(right.instantiation)) return false;
-        if ((left.dispatcher_ty == null) != (right.dispatcher_ty == null)) return false;
-        if (left.dispatcher_ty) |left_ty| {
-            if (!try type_view.sameType(left_ty, right.dispatcher_ty.?)) return false;
+        if ((left.dispatcher_ty == .none) != (right.dispatcher_ty == .none)) return false;
+        if (left.dispatcher_ty.get()) |left_ty| {
+            if (!try type_view.sameType(left_ty, right.dispatcher_ty.get().?)) return false;
         }
         switch (left.instantiation) {
             .monomorphic => {},
@@ -16188,7 +16188,7 @@ const EvidencePass = struct {
     fn procedureHasCodecEvidenceParam(self: *EvidencePass, target: static_dispatch.MethodTarget) bool {
         const target_view = self.procedureEvidenceView(target);
         for (target_view.table.evidenceParams(&target_view.template)) |param| {
-            const structural = param.structural orelse continue;
+            const structural = param.structural.get() orelse continue;
             switch (structural) {
                 .parser, .encoder => return true,
                 .equality, .hash, .map, .map_effectful => {},
@@ -16637,8 +16637,8 @@ const EvidencePass = struct {
 
 test "procedure evidence schema positively classifies callable paths and pathless requirements" {
     var params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = @fromBackingInt(@intCast(1)), .dispatcher_ty = @fromBackingInt(@intCast(1)), .callable_ty = @fromBackingInt(@intCast(3)), .slot = 0, .structural = .encoder, .path = .{ .last = 0, .len = 1 } },
-        .{ .method = @fromBackingInt(@intCast(2)), .dispatcher_ty = @fromBackingInt(@intCast(2)), .callable_ty = @fromBackingInt(@intCast(4)), .slot = 1, .path = .{ .last = 1, .len = 1 } },
+        .{ .method = @fromBackingInt(@intCast(1)), .dispatcher_ty = @fromBackingInt(@intCast(1)), .callable_ty = @fromBackingInt(@intCast(3)), .slot = .some(0), .structural = .some(.encoder), .path = .{ .last = 0, .len = 1 } },
+        .{ .method = @fromBackingInt(@intCast(2)), .dispatcher_ty = @fromBackingInt(@intCast(2)), .callable_ty = @fromBackingInt(@intCast(4)), .slot = .some(1), .path = .{ .last = 1, .len = 1 } },
     };
     const table = CheckedProcedureTemplateTable{
         .evidence_params_pool = params[0..],
@@ -17528,9 +17528,14 @@ pub const NestedProcSite = struct {
     /// (or a procedure nested in it) selects requires, ordered by binder id.
     runtime_captures: artifact_serialize.Span = .{},
     kind: NestedProcKind,
-    checked_expr: ?CIR.Expr.Idx,
-    checked_pattern: ?CIR.Pattern.Idx,
+    checked_expr: collections.OptionalId(CIR.Expr.Idx),
+    checked_pattern: collections.OptionalId(CIR.Pattern.Idx),
 };
+
+comptime {
+    std.debug.assert(@sizeOf(CheckedExhaustivenessSite) == 80);
+    std.debug.assert(@sizeOf(NestedProcSite) == 84);
+}
 
 /// Public `NestedProcSiteTable` declaration.
 pub const NestedProcSiteTable = struct {
@@ -17632,7 +17637,7 @@ pub const NestedProcSiteTable = struct {
         var seen = std.AutoHashMap(Key, void).init(allocator);
         defer seen.deinit();
         for (sites) |site| {
-            const expr = site.checked_expr orelse continue;
+            const expr = site.checked_expr.get() orelse continue;
             const entry = try seen.getOrPut(.{ .owner = site.owner, .expr = expr });
             if (entry.found_existing) {
                 checkedArtifactInvariant("a nested procedure expression was recorded at two sites of one owner", .{});
@@ -17909,10 +17914,10 @@ pub const CheckedProcedureTemplateTable = struct {
             const intrinsic = intrinsicForProcedureDef(module, def_idx);
             const proc_base = try names.internProcBase(.{
                 .module_name = module_name,
-                .export_name = export_name,
+                .export_name = .of(export_name),
                 .kind = if (intrinsic != null) .intrinsic_wrapper else if (isHostedProcedureExpr(def.expr.data)) .hosted_wrapper else .checked_source,
                 .ordinal = @backingInt(def_idx),
-                .source_def_idx = @backingInt(def_idx),
+                .source_def_idx = .some(@backingInt(def_idx)),
             });
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(templates.items.len))));
             const template_ref = canonical.ProcedureTemplateRef{
@@ -18013,10 +18018,10 @@ pub const CheckedProcedureTemplateTable = struct {
             const root_expr = lambda_source;
             const proc_base = try names.internProcBase(.{
                 .module_name = module_name,
-                .export_name = null,
+                .export_name = .none,
                 .kind = .promoted_local,
                 .ordinal = @backingInt(lambda_source),
-                .source_def_idx = null,
+                .source_def_idx = .none,
             });
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
             const template_ref = canonical.ProcedureTemplateRef{
@@ -18094,10 +18099,10 @@ pub const CheckedProcedureTemplateTable = struct {
             const checked_fn_scheme = try checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
             const proc_base = try names.internProcBase(.{
                 .module_name = module_name,
-                .export_name = null,
+                .export_name = .none,
                 .kind = .entry_wrapper,
                 .ordinal = @backingInt(root.id),
-                .source_def_idx = null,
+                .source_def_idx = .none,
             });
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
             const template_ref = canonical.ProcedureTemplateRef{
@@ -18451,8 +18456,8 @@ const NestedProcSiteBuilder = struct {
             .evidence_source = evidence_source,
             .evidence = evidence,
             .kind = kind,
-            .checked_expr = checked_expr,
-            .checked_pattern = checked_pattern,
+            .checked_expr = .of(checked_expr),
+            .checked_pattern = .of(checked_pattern),
         });
         // `template_refs` is the per-template site pool (each template holds a
         // span into it); default-root sites belong to no template and are
@@ -18884,7 +18889,7 @@ const NestedProcSiteBuilder = struct {
     }
 
     fn ownSiteCaptures(self: *const NestedProcSiteBuilder, site: NestedProcSite) []const CIR.Expr.Capture.Idx {
-        const expr_id = site.checked_expr orelse return &.{};
+        const expr_id = site.checked_expr.get() orelse return &.{};
         const data = self.bodies.exprData(expr_id);
         return if (data == .closure) data.closure.captures else &.{};
     }
@@ -18922,7 +18927,7 @@ const NestedProcSiteBuilder = struct {
         var site_by_expr = std.AutoHashMapUnmanaged(ScanExpr, u32){};
         defer site_by_expr.deinit(allocator);
         for (sites, self.site_scans.items, 0..) |site, scan, index| {
-            const expr_id = site.checked_expr orelse continue;
+            const expr_id = site.checked_expr.get() orelse continue;
             try site_by_expr.put(allocator, .{ .scan = scan, .expr = expr_id }, @intCast(index));
             const data = self.bodies.exprData(expr_id);
             if (data == .closure) try site_by_expr.put(allocator, .{ .scan = scan, .expr = data.closure.lambda }, @intCast(index));
@@ -21466,7 +21471,7 @@ fn publishLiteralArgumentRoots(
                 .direct_closed, .direct_parametric => |direct| try collector.nodes(direct.evidence, scope, @fromBackingInt(@intCast(plan.node))),
                 // A generated codec's calls are edges of the scope that
                 // reaches the codec.
-                .structural => if (plan.generated_codec_derivation) |id| {
+                .structural => if (plan.generated_codec_derivation.get()) |id| {
                     try collector.derivationNodes(id);
                     while (collector.stack.pop()) |node_id| try collector.nodes(node_id, scope, @fromBackingInt(@intCast(plan.node)));
                 },
@@ -26550,8 +26555,8 @@ fn publishCheckedExhaustivenessSites(
                 .id = id,
                 .kind = kind,
                 .region = obligation.region,
-                .checked_expr = checked_expr,
-                .checked_pattern = checked_pattern,
+                .checked_expr = .of(checked_expr),
+                .checked_pattern = .of(checked_pattern),
                 .policy = .not_pending,
             };
             continue;
@@ -26598,8 +26603,8 @@ fn publishCheckedExhaustivenessSites(
             .kind = kind,
             .region = obligation.region,
             .owner = owner,
-            .checked_expr = checked_expr,
-            .checked_pattern = checked_pattern,
+            .checked_expr = .of(checked_expr),
+            .checked_pattern = .of(checked_pattern),
             .policy = policy,
             .requires_pairing = requires_pairing,
         };
@@ -31392,7 +31397,7 @@ pub const CheckedModuleArtifact = struct {
                 .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => null,
             };
             if (expected_codec_kind) |kind| {
-                const derivation_id = plan.generated_codec_derivation orelse return .{
+                const derivation_id = plan.generated_codec_derivation.get() orelse return .{
                     .kind = .plan_generated_codec_derivation_invalid,
                     .node = plan.node,
                     .index = @intCast(i),
@@ -31420,7 +31425,7 @@ pub const CheckedModuleArtifact = struct {
                         .method = plan.method,
                     };
                 }
-            } else if (plan.generated_codec_derivation != null) {
+            } else if (plan.generated_codec_derivation != .none) {
                 return .{
                     .kind = .plan_generated_codec_derivation_invalid,
                     .node = plan.node,
@@ -31480,7 +31485,7 @@ pub const CheckedModuleArtifact = struct {
                         if (node.target.kind == .structural or node.nested == .from_callable) {
                             return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method };
                         }
-                        const node_dispatcher = node.dispatcher_ty orelse
+                        const node_dispatcher = node.dispatcher_ty.get() orelse
                             return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method };
                         if (!self.typesView().containsId(node_dispatcher)) {
                             return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method };
@@ -31675,7 +31680,7 @@ pub const CheckedModuleArtifact = struct {
                 return .{ .kind = .scheme_vars_out_of_bounds, .index = @intCast(i) };
             }
             for (templates.evidenceParams(&template)) |param| {
-                const slot = param.slot orelse {
+                const slot = param.slot.get() orelse {
                     if (param.source == .scheme_requirement) continue;
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
                 };
@@ -31919,7 +31924,7 @@ pub const CheckedModuleArtifact = struct {
                 }
             }
             for (params) |param| {
-                const slot = param.slot orelse {
+                const slot = param.slot.get() orelse {
                     if (param.source == .scheme_requirement) continue;
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 };
@@ -32214,7 +32219,7 @@ pub const CheckedModuleArtifact = struct {
                 .template => |owner_template| std.debug.assert(@backingInt(owner_template.template) < self.checked_procedure_templates.templates.items.len),
                 // A default-root site always names its checked lambda/closure
                 // expression (defaults are archived checked expressions).
-                .default_root => std.debug.assert(site.checked_expr != null),
+                .default_root => std.debug.assert(site.checked_expr != .none),
             }
             switch (site.lexical_scope) {
                 .root => {},
@@ -32235,8 +32240,8 @@ pub const CheckedModuleArtifact = struct {
                     }
                 },
             }
-            if (site.checked_expr) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
-            if (site.checked_pattern) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
+            if (site.checked_expr.get()) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
+            if (site.checked_pattern.get()) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
         }
 
         for (self.exported_procedure_templates.templates) |exported| {
@@ -34141,7 +34146,7 @@ const MethodBindingTargets = struct {
         const template = table.get(template_ref.template);
         // A promoted local procedure has no source definition and is always
         // callable.
-        if (names.procBase(template_ref.proc_base).source_def_idx) |raw_def| {
+        if (names.procBase(template_ref.proc_base).source_def_idx.get()) |raw_def| {
             const def: CIR.Def.Idx = @fromBackingInt(@intCast(raw_def));
             const entry = table.lookupEntryByDef(def) orelse
                 checkedArtifactInvariant("a method's procedure alias reached a source definition with no template", .{});
@@ -36438,7 +36443,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .kind = .match,
         .region = base.Region.from_raw_offsets(11, 22),
         .owner = .{ .root = @fromBackingInt(@intCast(4)) },
-        .checked_expr = @fromBackingInt(@intCast(3)),
+        .checked_expr = .some(@fromBackingInt(@intCast(3))),
         .policy = .{ .compile_time_replaced_by_root = @fromBackingInt(@intCast(4)) },
     });
     const destructure_site_id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(exhaustiveness_site_entries.items.len))));
@@ -36446,7 +36451,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .id = destructure_site_id,
         .kind = .destructure,
         .region = base.Region.from_raw_offsets(33, 44),
-        .checked_pattern = @fromBackingInt(@intCast(7)),
+        .checked_pattern = .some(@fromBackingInt(@intCast(7))),
         .policy = .compile_time_only,
     });
     const exhaustiveness_sites_src = CheckedExhaustivenessSiteTable{
@@ -36538,8 +36543,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqual(match_site_id, match_site.id);
     try std.testing.expectEqual(CheckedComptimeSiteKind.match, match_site.kind);
     try std.testing.expect(match_site.region.eq(base.Region.from_raw_offsets(11, 22)));
-    try std.testing.expectEqual(@as(?CIR.Expr.Idx, @fromBackingInt(@intCast(3))), match_site.checked_expr);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), match_site.checked_pattern);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, @fromBackingInt(@intCast(3))), match_site.checked_expr.get());
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), match_site.checked_pattern.get());
     try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, match_site_id), loaded.exhaustiveness_sites.lookupByMatchExpr(@fromBackingInt(@intCast(3))));
     switch (match_site.owner.?) {
         .root => |root| try std.testing.expectEqual(@as(ComptimeRootId, @fromBackingInt(@intCast(4))), root),
@@ -36554,8 +36559,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqual(destructure_site_id, destructure_site.id);
     try std.testing.expectEqual(CheckedComptimeSiteKind.destructure, destructure_site.kind);
     try std.testing.expect(destructure_site.region.eq(base.Region.from_raw_offsets(33, 44)));
-    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), destructure_site.checked_expr);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, @fromBackingInt(@intCast(7))), destructure_site.checked_pattern);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), destructure_site.checked_expr.get());
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, @fromBackingInt(@intCast(7))), destructure_site.checked_pattern.get());
     try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, destructure_site_id), loaded.exhaustiveness_sites.lookupByDestructurePattern(@fromBackingInt(@intCast(7))));
     try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteOwner, null), destructure_site.owner);
     if (destructure_site.policy != .compile_time_only) return error.TestExpectedEqual;
@@ -36632,8 +36637,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xAF, 0xEE, 0xF5, 0x8F, 0x46, 0xB5, 0x3B, 0x22, 0x37, 0x16, 0xEB, 0x13, 0xA1, 0x2D, 0x3F, 0xF5,
-        0xD0, 0xE7, 0x6C, 0xC5, 0x72, 0xFE, 0x41, 0x91, 0x7B, 0x8E, 0x32, 0x73, 0xE4, 0x56, 0x7E, 0xE1,
+        0x7A, 0xF9, 0x1C, 0x61, 0x4D, 0x59, 0x6D, 0x74, 0x01, 0x8D, 0x07, 0xE9, 0x05, 0x17, 0x7E, 0xEC,
+        0x04, 0xDC, 0xEE, 0xCE, 0x65, 0xB1, 0xAA, 0xF2, 0x7C, 0xFF, 0x30, 0xE5, 0xC3, 0x4B, 0x4F, 0x1E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -37607,7 +37612,7 @@ const SealedSlotsFixture = struct {
     }
 
     fn evidence(self: *SealedSlotsFixture, callable: CheckedTypeId, dispatcher: CheckedTypeId) Allocator.Error!static_dispatch.EvidenceParamRecord {
-        return .{ .method = try self.names.internMethodName("apply"), .dispatcher_ty = dispatcher, .callable_ty = callable, .slot = null };
+        return .{ .method = try self.names.internMethodName("apply"), .dispatcher_ty = dispatcher, .callable_ty = callable, .slot = .none };
     }
 
     fn expectSlots(self: *SealedSlotsFixture, variables: []const CheckedTypeId, root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord, expected: []const u32) (Allocator.Error || error{TestExpectedEqual})!void {

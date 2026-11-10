@@ -720,24 +720,9 @@ fn dedupeSorted(list: *std.ArrayList(u32)) void {
 /// A range of a unit's binder pool.
 const BinderSpan = struct { start: u32 = 0, len: u32 = 0 };
 
-/// A binder range or its absence in eight bytes. `stored_len` is the range
-/// length plus one, so zero means absent and an empty range stays present.
-const OptionalBinderSpan = struct {
-    start: u32 = 0,
-    stored_len: u32 = 0,
-
-    const none: OptionalBinderSpan = .{};
-
-    fn some(span: BinderSpan) OptionalBinderSpan {
-        std.debug.assert(span.len < std.math.maxInt(u32));
-        return .{ .start = span.start, .stored_len = span.len + 1 };
-    }
-
-    fn get(self: OptionalBinderSpan) ?BinderSpan {
-        if (self.stored_len == 0) return null;
-        return .{ .start = self.start, .len = self.stored_len - 1 };
-    }
-};
+/// A binder range or its absence in eight bytes: the length is stored plus
+/// one, so all zeros means absent and an empty range stays present.
+const OptionalBinderSpan = collections.OptionalStruct(BinderSpan, "len");
 
 comptime {
     std.debug.assert(@sizeOf(OptionalBinderSpan) == 8);
@@ -2698,13 +2683,13 @@ fn singleSourceSites(
     var site_counts = collections.DenseMap(u32, u32).init(allocator);
     defer site_counts.deinit();
     for (sites) |site| {
-        const expr = site.checked_expr orelse continue;
+        const expr = site.checked_expr.get() orelse continue;
         (try site_counts.getOrPutValue(@backingInt(expr), 0)).value_ptr.* += 1;
     }
 
     for (sites, flags) |site, *flag| {
         if (site.owner != .template) continue;
-        const expr = site.checked_expr orelse continue;
+        const expr = site.checked_expr.get() orelse continue;
         const raw = @backingInt(expr);
         if (site_counts.get(raw).? != 1) continue;
         flag.* = shapes.callees.isSet(raw) or if (shapes.bound_by.get(raw)) |pattern|

@@ -158,7 +158,7 @@ fn transformProc(
         }
     }
 
-    var tail_site: ?CFStmtId = if (proc.tail_calls) |sites| sites.head else null;
+    var tail_site: ?CFStmtId = if (proc.tail_calls.get()) |sites| sites.head else null;
     while (tail_site) |id| {
         tail_count += 1;
         tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.next();
@@ -178,7 +178,7 @@ fn transformProc(
         store.getProcSpecPtr(proc_id).tail_transform = .tce;
     }
 
-    store.getProcSpecPtr(proc_id).tail_calls = null;
+    store.getProcSpecPtr(proc_id).tail_calls = .none;
     return .{ .construct_count = construct_count, .tail_count = tail_count };
 }
 
@@ -228,7 +228,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         } }, .test_fixture);
         store.getProcSpecPtr(proc_id).body = call;
         const sites = try builder.finish(&store);
-        store.getProcSpecPtr(proc_id).tail_calls = sites;
+        store.getProcSpecPtr(proc_id).tail_calls = .of(sites);
         store.tail_call_builder = null;
         const untouched = try store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
@@ -255,7 +255,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         try std.testing.expectEqualDeep(untouched_before, store.getProcSpec(untouched));
         const proc = store.getProcSpec(proc_id);
         try std.testing.expectEqual(LIR.TailTransform.tce, proc.tail_transform);
-        try std.testing.expect(proc.tail_calls == null);
+        try std.testing.expect(proc.tail_calls.get() == null);
         const join = store.getCFStmtImmediate(proc.body.?).join;
         try std.testing.expectEqual(call, join.body);
         try std.testing.expectEqual(join.id, store.getCFStmtImmediate(call).jump.target);
@@ -973,7 +973,7 @@ const Transform = struct {
             .ready_moves = &detection.scratch.ready_moves,
             .old_args = &.{},
             .move_targets = &detection.scratch.move_targets,
-            .join_id = if (store.getProcSpecImmediate(proc_id).tail_calls) |sites|
+            .join_id = if (store.getProcSpecImmediate(proc_id).tail_calls.get()) |sites|
                 sites.loop
             else
                 @fromBackingInt(@intCast(detection.max_join_id + 1)),
@@ -1126,7 +1126,7 @@ const Transform = struct {
     }
 
     fn rewriteTailSites(self: *Transform) ResourceError!void {
-        var site: ?CFStmtId = if (self.store.getProcSpecImmediate(self.proc_id).tail_calls) |sites| sites.head else null;
+        var site: ?CFStmtId = if (self.store.getProcSpecImmediate(self.proc_id).tail_calls.get()) |sites| sites.head else null;
         while (site) |id| {
             const call = self.store.getCFStmtImmediate(id).assign_call;
             site = call.tail_call.next();
@@ -1333,8 +1333,8 @@ const Transform = struct {
     /// The statement the producer begins the loop at when the statements
     /// before it run once per call (`LIR.TailCalls.entry`).
     fn loopEntry(self: *const Transform) ?CFStmtId {
-        const sites = self.store.getProcSpecImmediate(self.proc_id).tail_calls orelse return null;
-        return sites.entry;
+        const sites = self.store.getProcSpecImmediate(self.proc_id).tail_calls.get() orelse return null;
+        return sites.entry.get();
     }
 
     /// Install the loop's join where the loop begins, entered by `remainder`.

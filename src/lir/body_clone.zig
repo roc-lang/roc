@@ -1246,7 +1246,7 @@ pub fn cloneCallVariant(
     }
 
     const body = try cloner.cloneStmt(source_body);
-    const erased_reuse_arg = if (source_spec.erased_reuse_arg) |source_arg|
+    const erased_reuse_arg = if (source_spec.erased_reuse_arg.get()) |source_arg|
         try cloner.mapLocal(source_arg)
     else
         null;
@@ -1261,7 +1261,7 @@ pub fn cloneCallVariant(
         .name = store.freshSyntheticSymbol(),
         .identity = try callVariantIdentity(store, layouts, source_spec.identity, spec),
         .args = try store.addLocalSpan(variant_args.items),
-        .erased_reuse_arg = erased_reuse_arg,
+        .erased_reuse_arg = .of(erased_reuse_arg),
         .frame_locals = try store.addLocalSpan(frame_locals.items[0..unique_len]),
         .body = body,
         .ret_layout = spec.ret_layout,

@@ -256,8 +256,8 @@ const Fixture = struct {
             const proc = self.store.getProcSpecPtr(id);
             proc.abi = .erased_callable;
             proc.args = args;
-            proc.erased_capture_arg = capture;
-            proc.erased_reuse_arg = reuse;
+            proc.erased_capture_arg = .of(capture);
+            proc.erased_reuse_arg = .of(reuse);
         }
     }
 

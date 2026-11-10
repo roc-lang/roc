@@ -126,7 +126,7 @@ test "boxy worker reads the composite parameter and result descriptor once from 
                     const args = store.getLocalSpan(proc.args);
                     try std.testing.expectEqual(@as(usize, 2), args.len);
                     const param = store.localDyn(collections.GuardedList.at(args, 0)) orelse return error.TestUnexpectedResult;
-                    const result = store.localDyn(proc.dyn_result orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult;
+                    const result = store.localDyn(proc.dyn_result.get() orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult;
                     try std.testing.expectEqual(param.desc, result.desc);
                 }
                 try std.testing.expect(found);
@@ -233,7 +233,7 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
         defer call_args.deinit(std.testing.allocator);
         const params = store.getLocalSpan(proc.args);
         // An erased worker's last parameter is the erased ABI's reuse input.
-        const reuse_params: usize = @intFromBool(proc.erased_reuse_arg != null);
+        const reuse_params: usize = @intFromBool(proc.erased_reuse_arg != .none);
         const param: ?lir.LIR.LocalId = if (params.len == 2 + reuse_params) collections.GuardedList.at(params, 0) else null;
         var forwards_param = false;
         var extracts_param = false;

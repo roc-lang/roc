@@ -58,9 +58,9 @@ pub const Field = struct {
 /// Capture record field entry.
 pub const CaptureField = struct {
     symbol: Common.Symbol,
-    binder: ?check.CheckedBodies.BinderId,
-    capture_id: ?check.CheckedModule.CaptureId = null,
-    checked_capture_id: ?check.CheckedModule.CaptureId = null,
+    binder: collections.OptionalId(check.CheckedBodies.BinderId),
+    capture_id: collections.OptionalId(check.CheckedModule.CaptureId) = .none,
+    checked_capture_id: collections.OptionalId(check.CheckedModule.CaptureId) = .none,
     capture_kind: check.CheckedModule.ConstCaptureKind = .lexical,
     /// Type the function body observes when it reads this capture.
     ty: TypeId,
@@ -80,8 +80,13 @@ pub const FnVariant = struct {
     id: FnVariantId,
     source: Common.Symbol,
     target: FnId,
-    capture_ty: ?TypeId,
+    capture_ty: collections.OptionalId(TypeId),
 };
+
+comptime {
+    std.debug.assert(@sizeOf(CaptureField) == 64);
+    std.debug.assert(@sizeOf(FnVariant) == 16);
+}
 
 /// One entry of a nominal record's declared fields. Mirrors
 /// `MonoType.DeclaredField`; consumed by layout and descriptor planning.
@@ -512,7 +517,7 @@ pub const Store = struct {
                 for (0..variant_slice.len) |index| {
                     const variant = GuardedList.at(variant_slice, index);
                     try writeVariantDigest(hasher, targets, variant);
-                    if (variant.capture_ty) |capture_ty| {
+                    if (variant.capture_ty.get()) |capture_ty| {
                         writeBytes(hasher, "capture");
                         try scratch.child(hasher, capture_ty);
                     } else {
@@ -536,7 +541,7 @@ pub const Store = struct {
                 for (0..variant_slice.len) |index| {
                     const variant = GuardedList.at(variant_slice, index);
                     try writeVariantDigest(hasher, targets, variant);
-                    if (variant.capture_ty) |capture_ty| {
+                    if (variant.capture_ty.get()) |capture_ty| {
                         writeBytes(hasher, "capture");
                         try scratch.child(hasher, capture_ty);
                     } else {
@@ -655,7 +660,7 @@ test "Lambda Mono content digest names callables by target identity, not program
         for (shape, &variants, 0..) |variant, *out, position| {
             const capture = try store.add(.{ .capture_record = try store.addCaptureFields(&.{.{
                 .symbol = @fromBackingInt(@intCast(variant.capture_symbol)),
-                .binder = null,
+                .binder = .none,
                 .ty = captured,
                 .storage_ty = captured,
             }}) });
@@ -663,7 +668,7 @@ test "Lambda Mono content digest names callables by target identity, not program
                 .id = @fromBackingInt(@intCast(position)),
                 .source = @fromBackingInt(@intCast(variant.source)),
                 .target = @fromBackingInt(@intCast(variant.target)),
-                .capture_ty = capture,
+                .capture_ty = .some(capture),
             };
         }
         const callable = try store.add(.{ .callable = try store.addFnVariants(&variants) });
@@ -691,7 +696,7 @@ test "Lambda Mono digest terminates recursive erased captures independent of all
         const callable = if (i == 0) third else first;
         try store.set(capture, .{ .capture_record = try store.addCaptureFields(&.{.{
             .symbol = @fromBackingInt(@intCast(7)),
-            .binder = null,
+            .binder = .none,
             .ty = record,
             .storage_ty = record,
         }}) });
@@ -707,7 +712,7 @@ test "Lambda Mono digest terminates recursive erased captures independent of all
                     .id = undefined, // Assigned by addFnVariants.
                     .source = @fromBackingInt(@intCast(8)),
                     .target = @fromBackingInt(@intCast(9)),
-                    .capture_ty = capture,
+                    .capture_ty = .some(capture),
                 }}),
             },
         });
@@ -739,7 +744,7 @@ test "Lambda Mono digest distinguishes recursive edges and callable targets" {
                 .id = undefined, // Assigned by addFnVariants.
                 .source = @fromBackingInt(@intCast(1)),
                 .target = @fromBackingInt(@intCast(i)),
-                .capture_ty = root,
+                .capture_ty = .some(root),
             }}),
         });
         digest.* = try store.typeDigest(&name_store, root);
@@ -918,15 +923,15 @@ test "lambda mono callable variants receive store-local ids" {
 
     const capture_ty = try store.add(.zst);
     const variants = try store.addFnVariants(&.{
-        .{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(7)), .target = @fromBackingInt(@intCast(70)), .capture_ty = capture_ty },
-        .{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(8)), .target = @fromBackingInt(@intCast(80)), .capture_ty = null },
+        .{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(7)), .target = @fromBackingInt(@intCast(70)), .capture_ty = .some(capture_ty) },
+        .{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(8)), .target = @fromBackingInt(@intCast(80)), .capture_ty = .none },
     });
     const callable = try store.add(.{ .callable = variants });
 
     const stored_variants = store.fnVariantSpan(store.get(callable).callable);
     try std.testing.expectEqual(@as(FnVariantId, @fromBackingInt(@intCast(variants.start))), GuardedList.at(stored_variants, 0).id);
     try std.testing.expectEqual(@as(FnVariantId, @fromBackingInt(@intCast(1))), GuardedList.at(stored_variants, 1).id);
-    try std.testing.expectEqual(capture_ty, GuardedList.at(stored_variants, 0).capture_ty.?);
+    try std.testing.expectEqual(capture_ty, GuardedList.at(stored_variants, 0).capture_ty.get().?);
 }
 
 test "lambda mono empty spans use shared empty descriptor" {
@@ -936,9 +941,9 @@ test "lambda mono empty spans use shared empty descriptor" {
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
     const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = .none }});
-    const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @fromBackingInt(@intCast(2)), .binder = null, .ty = unit, .storage_ty = unit }});
+    const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @fromBackingInt(@intCast(2)), .binder = .none, .ty = unit, .storage_ty = unit }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @fromBackingInt(@intCast(3)), .checked_name = @fromBackingInt(@intCast(3)), .payloads = nonempty_span }});
-    const nonempty_variants = try store.addFnVariants(&.{.{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(4)), .target = @fromBackingInt(@intCast(40)), .capture_ty = unit }});
+    const nonempty_variants = try store.addFnVariants(&.{.{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(4)), .target = @fromBackingInt(@intCast(40)), .capture_ty = .some(unit) }});
     try std.testing.expect(nonempty_span.len == 1);
     try std.testing.expect(nonempty_fields.len == 1);
     try std.testing.expect(nonempty_capture_fields.len == 1);

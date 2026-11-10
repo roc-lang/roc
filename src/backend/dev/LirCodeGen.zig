@@ -14032,7 +14032,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// has a dynamic parameter or result, or the target is dynamic.
         fn callIsDynamic(self: *Self, proc_id: lir.LIR.LirProcSpecId, target_local: LocalId) bool {
             const callee = self.store.getProcSpec(proc_id);
-            if (callee.dyn_result != null or callee.takesPendingCell() or self.localDyn(target_local) != null) return true;
+            if (callee.dyn_result != .none or callee.takesPendingCell() or self.localDyn(target_local) != null) return true;
             const params = self.store.getLocalSpan(callee.args);
             for (0..params.len) |i| {
                 if (self.localDyn(GuardedList.at(params, i)) != null) return true;
@@ -14057,7 +14057,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             );
             const carries = procCarriesTailArgs(self.store, callee);
             const takes_pending = callee.takesPendingCell();
-            const count = arg_refs.len + @intFromBool(callee.dyn_result != null) + @intFromBool(carries) + @intFromBool(takes_pending);
+            const count = arg_refs.len + @intFromBool(callee.dyn_result != .none) + @intFromBool(carries) + @intFromBool(takes_pending);
             const arg_locs = try self.allocator.alloc(ValueLocation, count);
             defer self.allocator.free(arg_locs);
             const arg_layouts = try self.allocator.alloc(layout.Idx, count);
@@ -14090,7 +14090,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             var result_target: ?DynTarget = null;
-            if (callee.dyn_result) |callee_result| {
+            if (callee.dyn_result.get()) |callee_result| {
                 const dst = try self.dynTarget(target_local);
                 result_target = dst;
                 const slot = self.codegen.allocStackSlot(8);
@@ -14191,7 +14191,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .num_regs = self.calcArgRegCount(arg_loc, expected_layout),
                 });
             }
-            if (proc_spec.dyn_result) |callee_result| {
+            if (proc_spec.dyn_result.get()) |callee_result| {
                 // The callee writes its result where this procedure's caller
                 // asked for this procedure's.
                 const own_result = self.current_dyn_result orelse base.invariant("LIR/codegen invariant violated: frame-replacing call with a dynamic result from a procedure without one", .{});
@@ -18508,14 +18508,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.saveIncomingPointerArg(capture_slot, 3);
             try self.saveIncomingPointerArg(reuse_slot, 4);
 
-            if (proc.dyn_result) |result| {
+            if (proc.dyn_result.get()) |result| {
                 try self.setLocalLocation(localKey(result), self.stackLocationForLayout(self.localLayout(result), ret_slot));
                 self.ret_ptr_slot = null;
             } else {
                 self.ret_ptr_slot = ret_slot;
             }
 
-            const capture_param = proc.erased_capture_arg orelse base.invariant("LIR/codegen invariant violated: erased_record proc has no capture parameter", .{});
+            const capture_param = proc.erased_capture_arg.get() orelse base.invariant("LIR/codegen invariant violated: erased_record proc has no capture parameter", .{});
             const params = self.store.getLocalSpan(proc.args);
             var explicit_count: usize = 0;
             for (0..params.len) |i| {
@@ -18531,7 +18531,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.setLocalLocation(localKey(param), self.stackLocationForLayout(.opaque_ptr, capture_slot));
                     continue;
                 }
-                if (proc.erased_reuse_arg != null and param == proc.erased_reuse_arg.?) {
+                if (proc.erased_reuse_arg != .none and param == proc.erased_reuse_arg.get().?) {
                     try self.setLocalLocation(localKey(param), self.stackLocationForLayout(self.localLayout(param), reuse_slot));
                     continue;
                 }
@@ -18940,7 +18940,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.uses_caller_stack_arg_base = false;
             self.current_proc_arg_pop = 0;
             self.caller_drives_slot = null;
-            self.current_dyn_result = proc.dyn_result;
+            self.current_dyn_result = proc.dyn_result.get();
             self.proc_has_dyn_region = false;
             self.carry_slot = null;
             self.pending_cell_slot = null;
@@ -19053,7 +19053,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const ret_ptr_reg = self.getArgumentRegister(1);
                 try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
-                try self.bindErasedCallableAdapterParams(proc, proc.erased_call_args orelse base.invariant("LIR/codegen invariant violated: erased-callable proc has no erased call args", .{}));
+                try self.bindErasedCallableAdapterParams(proc, proc.erased_call_args.get() orelse base.invariant("LIR/codegen invariant violated: erased-callable proc has no erased call args", .{}));
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
             } else if (proc.abi == .erased_record) {
                 try self.bindErasedRecordParams(proc);
@@ -19070,7 +19070,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Bind parameters to argument registers. Large returns use a hidden
                 // first argument register for the return buffer.
                 const initial_param_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
-                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result, procCarriesTailArgs(self.store, proc), proc.takesPendingCell());
+                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result.get(), procCarriesTailArgs(self.store, proc), proc.takesPendingCell());
             }
             if (proc.uses_pending_cell and !proc.takesPendingCell()) try self.emitOwnPendingCell(invocation_slot);
 
@@ -19270,7 +19270,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// calls; it releases its carry when it returns or replaces its own
         /// frame. Every other caller passes none.
         fn procCarriesTailArgs(store: *const LirStore, proc: LirProcSpec) bool {
-            if (proc.abi != .roc or proc.tail_group == null) return false;
+            if (proc.abi != .roc or proc.tail_group == .none) return false;
             const params = store.getLocalSpan(proc.args);
             for (0..params.len) |i| {
                 if (store.getLocal(GuardedList.at(params, i)).dyn != null) return true;
@@ -20048,7 +20048,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.saveIncomingPointerArg(capture_ptr_slot, 3);
             try self.saveIncomingPointerArg(reuse_ptr_slot, 4);
 
-            const capture_arg = proc.erased_capture_arg orelse base.invariant("Dev/codegen invariant violated: erased callable proc had no capture argument", .{});
+            const capture_arg = proc.erased_capture_arg.get() orelse base.invariant("Dev/codegen invariant violated: erased callable proc had no capture argument", .{});
             const explicit_count = locals.len - 2;
             if (builtin.mode == .debug and GuardedList.at(locals, explicit_count) != capture_arg) {
                 base.invariant("Dev/codegen invariant violated: erased callable capture argument was not the first hidden parameter", .{});
@@ -24965,9 +24965,9 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(3),
         .args = args,
-        .erased_reuse_arg = reuse_arg,
-        .erased_call_args = arg_plan,
-        .erased_capture_arg = capture_arg,
+        .erased_reuse_arg = .of(reuse_arg),
+        .erased_call_args = .of(arg_plan),
+        .erased_capture_arg = .of(capture_arg),
         .ret_layout = .u64,
     };
     try codegen.bindErasedCallableAdapterParams(proc, arg_plan);

@@ -20,30 +20,6 @@ pub const DeclIdx = enum(u32) { _ };
 /// Stable index of one parser-owned type path.
 pub const TypePathIdx = enum(u32) { _ };
 
-/// A raw `u32` index or its absence in four bytes: zero means absent and a
-/// present index is stored plus one.
-pub const OptionalRawIdx = enum(u32) {
-    none = 0,
-    _,
-
-    /// Wrap an index within the owning table's bounded domain.
-    pub inline fn some(raw: u32) OptionalRawIdx {
-        std.debug.assert(raw < std.math.maxInt(u32));
-        return @fromBackingInt(raw + 1);
-    }
-
-    /// Wrap an optional index: null is absence.
-    pub inline fn of(raw: ?u32) OptionalRawIdx {
-        return if (raw) |present| some(present) else .none;
-    }
-
-    /// Read the original index, or null for absence.
-    pub inline fn get(self: OptionalRawIdx) ?u32 {
-        if (self == .none) return null;
-        return @backingInt(self) - 1;
-    }
-};
-
 /// Contiguous range into a side table.
 pub const Span = struct {
     start: u32,
@@ -277,11 +253,11 @@ pub const Decl = struct {
     kind: DeclKind,
     value_form: ValueDeclForm = .none,
     value_arity: u32 = 0,
-    name_tok: OptionalRawIdx,
+    name_tok: collections.OptionalU32,
     /// `Ident.Idx.NONE` when the declaration has no single name.
     name_ident: Ident.Idx = .NONE,
-    pattern: OptionalRawIdx,
-    anno: OptionalRawIdx,
+    pattern: collections.OptionalU32,
+    anno: collections.OptionalU32,
     paired_decl: collections.OptionalId(DeclIdx) = .none,
     paired_anno: collections.OptionalId(DeclIdx) = .none,
     associated_scope: collections.OptionalId(ScopeIdx) = .none,

@@ -1286,6 +1286,9 @@ reach_free_schemes: collections.DenseMap(Var, void),
 /// copied when it deferred them (`UseInstance.saved_start`).
 use_deferred_callables: std.ArrayListUnmanaged(types_mod.instantiate.DeferredCallable) = .empty,
 use_saved_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
+/// The instantiation state of each use whose instantiation deferred
+/// requirement callables (`UseInstance.link`).
+use_link_contexts: std.ArrayListUnmanaged(DeferredLinkContext) = .empty,
 /// Uses whose deferred callables are not linked yet.
 uses_with_deferred_callables: std.ArrayListUnmanaged(u32) = .empty,
 scratch_deferred_callables: std.ArrayListUnmanaged(types_mod.instantiate.DeferredCallable) = .empty,
@@ -1975,6 +1978,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .reach_free_schemes = .keyed,
     .use_deferred_callables = .keyed,
     .use_saved_copies = .keyed,
+    .use_link_contexts = .keyed,
     .uses_with_deferred_callables = .boundary,
     .scratch_deferred_callables = .scratch,
     .scratch_deferred_placeholders = .scratch,
@@ -2285,7 +2289,7 @@ const InstantiationDispatcher = struct {
     /// The expression whose checking instantiated this dispatcher (the lookup of
     /// the constrained scheme). Null only if the dispatcher was created outside
     /// `checkExpr`.
-    instantiation_expr: ?CIR.Expr.Idx,
+    instantiation_expr: collections.OptionalId(CIR.Expr.Idx),
     source: Source = .attached_constraint,
     /// Whether this exact copied range is already present in the ordinary
     /// deferred-dispatch queue. Explicit requirements whose receiver remains
@@ -2301,13 +2305,13 @@ const InstantiationDispatcher = struct {
     /// materialization fact before validating any sibling edge. A successful
     /// sibling can ground the shared receiver, so re-deriving this afterward
     /// would lose this edge's already-selected owner.
-    default_target: ?literal_defaulting.DefaultTarget = null,
+    default_target: collections.OptionalEnum(literal_defaulting.DefaultTarget) = .none,
     /// The binding group whose checking instantiated this dispatcher (null
     /// outside any group frame). A dispatcher can wait registry-only while its
     /// receiver is flex and enqueue from whichever frame grounds it, so the
     /// deferred-queue entry carries this instantiation-time group as its
     /// `owner_group_index`, not the enqueuing frame's group.
-    owner_group_index: ?u32 = null,
+    owner_group_index: collections.OptionalU32 = .none,
 
     const Source = enum {
         /// A constraint copied structurally with a generalized flex var. It is
@@ -2453,12 +2457,12 @@ const AmbiguityCandidate = struct {
     /// The exact event expression: the expression whose checking instantiated
     /// a constrained scheme, or the direct dispatch expression that created a
     /// `.creation` candidate.
-    instantiation_expr: ?CIR.Expr.Idx,
+    instantiation_expr: collections.OptionalId(CIR.Expr.Idx),
     source: Source,
     /// Prospective definition that owned this record. The same shared receiver
     /// may gain a different relation in a later definition and must then be
     /// judged again at that later boundary.
-    dedup_owner: ?Var,
+    dedup_owner: collections.OptionalId(Var),
     /// The receiver was created in direct code of an explicitly requested
     /// executable root. A future caller cannot supply type evidence there;
     /// nested closure bodies remain false because their invocation is still
@@ -2500,7 +2504,7 @@ const AmbiguityCandidateFlip = struct {
 const AmbiguityCandidateKey = struct {
     var_: Var,
     source: AmbiguityCandidate.Source,
-    owner: ?Var,
+    owner: collections.OptionalId(Var),
 };
 
 /// A candidate the local judgment found unpinnable at its judgment event. The
@@ -2511,7 +2515,7 @@ const AmbiguityVerdict = struct {
     /// The receiver var as recorded at its creation/instantiation site.
     var_: Var,
     /// Copied from the candidate (see `AmbiguityCandidate`).
-    instantiation_expr: ?CIR.Expr.Idx,
+    instantiation_expr: collections.OptionalId(CIR.Expr.Idx),
     source: AmbiguityCandidate.Source,
 };
 
@@ -2576,7 +2580,7 @@ const DispatchTargetInstantiation = struct {
     /// finalizer consumes only those selected targets.
     is_literal_conversion: bool,
     receiver_var: Var,
-    parent_constraint_fn_var: ?Var,
+    parent_constraint_fn_var: collections.OptionalId(Var),
     /// Canonical receiver+callable digest for this edge, computed at record
     /// time exactly when something can read it: when the edge has a
     /// same-target ancestor to compare against, or when its method name is
@@ -2603,7 +2607,7 @@ const DispatchTargetInstantiation = struct {
     /// The expression that introduced this edge's constraint. A component
     /// obligation derived for a structural comparison or hash names the
     /// comparison or hash it serves.
-    intro_expr: ?CIR.Expr.Idx,
+    intro_expr: collections.OptionalId(CIR.Expr.Idx),
 };
 
 const CandidateFrames = struct {
@@ -2633,8 +2637,8 @@ const DispatchReplaySource = struct {
     edge: u32,
     shape_start: u32,
     shape_len: u32,
-    scheme_use: ?u32,
-    next_same_hash: ?u32,
+    scheme_use: collections.OptionalU32,
+    next_same_hash: collections.OptionalU32,
     freeze: enum { pending, frozen, unusable } = .pending,
     frozen_root: Var = undefined,
     pairs_start: u32 = 0,
@@ -2677,7 +2681,9 @@ const UseInstance = struct {
     saved_start: u32 = 0,
     saved_len: u32 = 0,
     deferred_linked: bool = true,
-    link: ?DeferredLinkContext = null,
+    /// Index of its instantiation's state in `use_link_contexts`, present
+    /// once the instantiation deferred requirement callables.
+    link: collections.OptionalU32 = .none,
 
     const State = enum {
         /// None of its relations has been processed.
@@ -2724,11 +2730,11 @@ const DeferredLinkContext = struct {
     rank: Rank,
     region_behavior: InstantiateRegionBehavior,
     root_region: Region,
-    instantiation_expr: ?CIR.Expr.Idx,
-    group_index: ?u32,
-    active_scheme_root: ?Var,
-    instantiation_source_expr: ?CIR.Expr.Idx,
-    discarded_binding_rhs_expr: ?CIR.Expr.Idx,
+    instantiation_expr: collections.OptionalId(CIR.Expr.Idx),
+    group_index: collections.OptionalU32,
+    active_scheme_root: collections.OptionalId(Var),
+    instantiation_source_expr: collections.OptionalId(CIR.Expr.Idx),
+    discarded_binding_rhs_expr: collections.OptionalId(CIR.Expr.Idx),
     checking_executable_root: bool,
     delayed_dependency_depth: u32,
     instantiation_is_immediate_callee: bool,
@@ -2741,7 +2747,7 @@ const UseReplaySource = struct {
     use: u32,
     shape_start: u32,
     shape_len: u32,
-    next_same_hash: ?u32,
+    next_same_hash: collections.OptionalU32,
     freeze: enum { pending, frozen, unusable } = .pending,
     frozen_root: Var = undefined,
     pairs_start: u32 = 0,
@@ -2749,6 +2755,18 @@ const UseReplaySource = struct {
     tree_start: u32 = 0,
     tree_len: u32 = 0,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(InstantiationDispatcher) == 24);
+    std.debug.assert(@sizeOf(AmbiguityCandidate) == 16);
+    std.debug.assert(@sizeOf(AmbiguityCandidateKey) == 12);
+    std.debug.assert(@sizeOf(AmbiguityVerdict) == 12);
+    std.debug.assert(@sizeOf(DispatchTargetInstantiation) == 88);
+    std.debug.assert(@sizeOf(DispatchReplaySource) == 44);
+    std.debug.assert(@sizeOf(UseInstance) == 72);
+    std.debug.assert(@sizeOf(DeferredLinkContext) == 64);
+    std.debug.assert(@sizeOf(UseReplaySource) == 40);
+}
 
 /// A replay source's instance node and the callable node at its position.
 const DispatchReplayPair = struct {
@@ -3140,10 +3158,10 @@ fn registerInstantiatedSchemeRequirement(
     try self.instantiation_dispatchers.append(self.gpa, .{
         .dispatcher_var = requirement.receiver_var,
         .constraints = constraint_range,
-        .instantiation_expr = instantiation_expr,
+        .instantiation_expr = .of(instantiation_expr),
         .source = .scheme_requirement,
         .deferred_enqueued = !receiver_is_flex,
-        .owner_group_index = self.currentGroupIndex(),
+        .owner_group_index = .of(self.currentGroupIndex()),
     });
     if (receiver_is_flex) {
         try self.pending_scheme_requirement_dispatchers.append(self.gpa, dispatcher_idx);
@@ -3184,8 +3202,8 @@ fn registerInstantiatedAttachedDispatch(
     try self.instantiation_dispatchers.append(self.gpa, .{
         .dispatcher_var = receiver_var,
         .constraints = constraints,
-        .instantiation_expr = instantiation_expr,
-        .owner_group_index = owner_group_index,
+        .instantiation_expr = .of(instantiation_expr),
+        .owner_group_index = .of(owner_group_index),
     });
     try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr, receiver_position);
     // An attached constraint copied by instantiation lives on the fresh
@@ -5895,7 +5913,7 @@ fn finalizeContextualLocalDispatches(self: *Self) Allocator.Error!void {
             const entry = try self.contextual_local_dispatch_fn_vars.getOrPut(self.gpa, fn_var);
             if (entry.found_existing) break;
             if (self.dispatch_target_instantiation_by_fn_var.get(fn_var)) |raw_index| {
-                if (self.dispatch_target_instantiations.items[raw_index].intro_expr) |expr| {
+                if (self.dispatch_target_instantiations.items[raw_index].intro_expr.get()) |expr| {
                     try self.contextual_local_dispatch_exprs.put(self.gpa, expr, {});
                 }
             }
@@ -5905,7 +5923,7 @@ fn finalizeContextualLocalDispatches(self: *Self) Allocator.Error!void {
     // A lookup that instantiated a scheme requirement supplies its evidence,
     // so evaluating the lookup evaluates the dispatch.
     for (self.instantiation_dispatchers.items) |dispatcher| {
-        const expr = dispatcher.instantiation_expr orelse continue;
+        const expr = dispatcher.instantiation_expr.get() orelse continue;
         for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| {
             if (!self.contextual_local_dispatch_fn_vars.contains(constraint.fn_var)) continue;
             try self.contextual_local_dispatch_exprs.put(self.gpa, expr, {});
@@ -5924,7 +5942,7 @@ fn finalizeContextualLocalDispatches(self: *Self) Allocator.Error!void {
 /// edge, or the structural comparison or hash it is a component of.
 fn dispatchDerivationParent(self: *const Self, fn_var: Var) ?Var {
     if (self.dispatch_target_instantiation_by_fn_var.get(fn_var)) |raw_index| {
-        if (self.dispatch_target_instantiations.items[raw_index].parent_constraint_fn_var) |parent| return parent;
+        if (self.dispatch_target_instantiations.items[raw_index].parent_constraint_fn_var.get()) |parent| return parent;
     }
     if (self.dispatch_derivation_by_child_fn_var.get(fn_var)) |parent| return parent;
     return self.component_derivation_by_child_fn_var.get(fn_var);
@@ -12567,11 +12585,11 @@ fn instantiateVarHelpFromScheme(
                         .rank = instantiator.current_rank,
                         .region_behavior = region_behavior,
                         .root_region = root_instantiated_region,
-                        .instantiation_expr = var_context.instantiation_expr,
-                        .group_index = var_context.group_index,
-                        .active_scheme_root = self.active_scheme_root,
-                        .instantiation_source_expr = self.instantiation_source_expr,
-                        .discarded_binding_rhs_expr = self.discarded_binding_rhs_expr,
+                        .instantiation_expr = .of(var_context.instantiation_expr),
+                        .group_index = .of(var_context.group_index),
+                        .active_scheme_root = .of(self.active_scheme_root),
+                        .instantiation_source_expr = .of(self.instantiation_source_expr),
+                        .discarded_binding_rhs_expr = .of(self.discarded_binding_rhs_expr),
                         .checking_executable_root = self.checking_executable_root,
                         .delayed_dependency_depth = self.delayed_dependency_depth,
                         .instantiation_is_immediate_callee = self.instantiation_is_immediate_callee,
@@ -16984,7 +17002,7 @@ fn instantiatedConstraintUseExpr(self: *const Self, constraint: StaticDispatchCo
     }
     for (self.instantiation_dispatchers.items) |dispatcher| {
         for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |copied| {
-            if (copied.fn_var == constraint.fn_var) return dispatcher.instantiation_expr;
+            if (copied.fn_var == constraint.fn_var) return dispatcher.instantiation_expr.get();
         }
     }
     return null;
@@ -17750,7 +17768,7 @@ fn recordRejectedInstantiations(self: *Self, constraint: StaticDispatchConstrain
     }
     const relation_root = self.types.resolveVar(relation_fn).var_;
     for (self.instantiation_dispatchers.items) |dispatcher| {
-        const instantiation_expr = dispatcher.instantiation_expr orelse continue;
+        const instantiation_expr = dispatcher.instantiation_expr.get() orelse continue;
         const carries_relation = for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |candidate| {
             if (self.types.resolveVar(candidate.fn_var).var_ == relation_root) break true;
         } else false;
@@ -17788,7 +17806,7 @@ fn rejectedRequirementInstantiatedElsewhere(
     const relation_root = self.types.resolveVar(relation_fn).var_;
     var instantiated_elsewhere = false;
     for (self.instantiation_dispatchers.items) |dispatcher| {
-        const instantiation_expr = dispatcher.instantiation_expr orelse continue;
+        const instantiation_expr = dispatcher.instantiation_expr.get() orelse continue;
         const carries_relation = for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |candidate| {
             if (self.types.resolveVar(candidate.fn_var).var_ == relation_root) break true;
         } else false;
@@ -17968,7 +17986,7 @@ fn recordAmbiguityCandidate(
     const key = AmbiguityCandidateKey{
         .var_ = receiver_var,
         .source = source,
-        .owner = dedup_owner,
+        .owner = .of(dedup_owner),
     };
     const requires_current_resolution = self.checking_executable_root and
         self.delayed_dependency_depth == 0 and
@@ -18008,9 +18026,9 @@ fn recordAmbiguityCandidate(
     entry.value_ptr.* = @intCast(self.ambiguity_candidates.items.len);
     try self.ambiguity_candidates.append(self.gpa, .{
         .var_ = receiver_var,
-        .instantiation_expr = instantiation_expr,
+        .instantiation_expr = .of(instantiation_expr),
         .source = source,
-        .dedup_owner = dedup_owner,
+        .dedup_owner = .of(dedup_owner),
         .requires_current_resolution = requires_current_resolution,
         .position = position,
     });
@@ -18220,7 +18238,7 @@ fn judgeAmbiguityCandidate(
         only_where_clause_contracts and
         resolved_rank == .generalized and
         candidate.source == .instantiation and
-        try self.instantiationArgumentsCanPin(candidate.instantiation_expr, resolved_var))
+        try self.instantiationArgumentsCanPin(candidate.instantiation_expr.get(), resolved_var))
     {
         return;
     }
@@ -18502,7 +18520,7 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
         // candidate recorded the exact expression whose instantiation created
         // the obligation, so report there and mark it a runtime error—codegen
         // then emits a crash instead of reaching the ownerless dispatch.
-        if (verdict.instantiation_expr) |inst_expr| {
+        if (verdict.instantiation_expr.get()) |inst_expr| {
             primary = self.cir.store.getExprRegion(inst_expr);
             runtime_error_inserted = true;
             if (self.cir.store.getExpr(inst_expr) != .e_runtime_error) {
@@ -18683,7 +18701,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                 const resolved = self.types.resolveVar(dispatcher.dispatcher_var);
                 if (resolved.desc.content != .flex) continue;
                 self.instantiation_dispatchers.items[latch_idx].default_target =
-                    default_materialization_roots.get(resolved.var_);
+                    .of(default_materialization_roots.get(resolved.var_));
             }
 
             while (compatibility_dispatchers_checked < compatibility_end) : (compatibility_dispatchers_checked += 1) {
@@ -18691,7 +18709,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                 if (dispatcher.constraints.len() == 0 or dispatcher.compatibility_checked) continue;
                 self.instantiation_dispatchers.items[compatibility_dispatchers_checked].compatibility_checked = true;
 
-                if (dispatcher.default_target) |target| {
+                if (dispatcher.default_target.get()) |target| {
                     ran_default_compatibility = true;
                     _ = try self.checkFlexVarConstraintCompatibility(
                         dispatcher.dispatcher_var,
@@ -18701,7 +18719,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                             .default_target = target,
                             .allow_generalized = true,
                             .allow_arithmetic_default = true,
-                            .error_expr = dispatcher.instantiation_expr,
+                            .error_expr = dispatcher.instantiation_expr.get(),
                         },
                     );
                 }
@@ -18781,11 +18799,11 @@ fn checkInstantiatedStaticDispatchConstraints(
             try self.enqueueDeferredDispatchConstraint(env, .{
                 .var_ = current.dispatcher_var,
                 .constraints = current.constraints,
-                .failure_expr = if (current.instantiation_expr) |expr_idx|
+                .failure_expr = if (current.instantiation_expr.get()) |expr_idx|
                     .from(@backingInt(expr_idx))
                 else
                     .none,
-            }, .{ .recorded = current.owner_group_index });
+            }, .{ .recorded = current.owner_group_index.get() });
             appended_deferred = true;
         }
 
@@ -44319,7 +44337,7 @@ fn appendBoundaryLocalKinds(
 fn dispatchInstantiationExpr(self: *Self, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
     const fn_root = self.types.resolveVar(constraint.fn_var).var_;
     for (self.instantiation_dispatchers.items) |dispatcher| {
-        const expr_idx = dispatcher.instantiation_expr orelse continue;
+        const expr_idx = dispatcher.instantiation_expr.get() orelse continue;
         for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |copied| {
             if (self.types.resolveVar(copied.fn_var).var_ == fn_root) return expr_idx;
         }
@@ -44556,11 +44574,11 @@ fn drainGroundedPendingSchemeRequirementDispatchers(
         try self.enqueueDeferredDispatchConstraint(env, .{
             .var_ = dispatcher.dispatcher_var,
             .constraints = dispatcher.constraints,
-            .failure_expr = if (dispatcher.instantiation_expr) |expr_idx|
+            .failure_expr = if (dispatcher.instantiation_expr.get()) |expr_idx|
                 .from(@backingInt(expr_idx))
             else
                 .none,
-        }, .{ .recorded = dispatcher.owner_group_index });
+        }, .{ .recorded = dispatcher.owner_group_index.get() });
         dispatcher.deferred_enqueued = true;
         appended = true;
     }
@@ -47591,7 +47609,7 @@ fn repeatedDispatchState(
                 repeat = .renamed;
             }
         }
-        ancestor_fn = ancestor.parent_constraint_fn_var;
+        ancestor_fn = ancestor.parent_constraint_fn_var.get();
     }
     return repeat;
 }
@@ -47651,7 +47669,7 @@ fn hasSameTargetDispatchAncestor(
         {
             return true;
         }
-        ancestor_fn = ancestor.parent_constraint_fn_var;
+        ancestor_fn = ancestor.parent_constraint_fn_var.get();
     }
     return false;
 }
@@ -47967,7 +47985,7 @@ fn dispatchStateGrowsAlongLineage(
                 }
             }
         }
-        ancestor_fn = ancestor.parent_constraint_fn_var;
+        ancestor_fn = ancestor.parent_constraint_fn_var.get();
     }
     return null;
 }
@@ -48836,7 +48854,7 @@ fn instantiateDispatchTargetMethodVar(
         .constraint_fn_var = constraint.fn_var,
         .is_literal_conversion = constraint.origin.literalKind() != null,
         .receiver_var = dispatcher_var,
-        .parent_constraint_fn_var = parent_constraint_fn_var,
+        .parent_constraint_fn_var = .of(parent_constraint_fn_var),
         .state_type_key = state_type_key,
         .grew_from_ancestor = grew_from_ancestor,
         .target_env = method_lookup.env,
@@ -48845,7 +48863,7 @@ fn instantiateDispatchTargetMethodVar(
         .method_var = method_var,
         .derivations_start = derivations_start,
         .derivations_end = derivations_end,
-        .intro_expr = constraintIntroExpr(constraint),
+        .intro_expr = .of(constraintIntroExpr(constraint)),
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
     // Only a settled root edge can make its binding replayable.
@@ -49084,7 +49102,7 @@ fn findDispatchReplaySource(self: *const Self, hash: u64, shape: []const u8) ?u3
         if (replayShapeEql(self.dispatch_replay_shapes.items[source.shape_start..][0..source.shape_len], shape)) {
             return source_idx;
         }
-        next = source.next_same_hash;
+        next = source.next_same_hash.get();
     }
     return null;
 }
@@ -49206,8 +49224,8 @@ noinline fn recordDispatchReplaySource(self: *Self, fn_var: Var) Allocator.Error
         .edge = raw_index,
         .shape_start = start,
         .shape_len = @intCast(self.pending_replay_shape.items.len),
-        .scheme_use = self.pending_replay_scheme_use,
-        .next_same_hash = next_same_hash,
+        .scheme_use = .of(self.pending_replay_scheme_use),
+        .next_same_hash = .of(next_same_hash),
     });
 }
 
@@ -49643,7 +49661,8 @@ fn saveDeferredCallables(
     }
     use.saved_len = @as(u32, @intCast(self.use_saved_copies.items.len)) - use.saved_start;
     use.deferred_linked = false;
-    use.link = link;
+    try self.use_link_contexts.append(self.gpa, link);
+    use.link = .some(@intCast(self.use_link_contexts.items.len - 1));
     try self.uses_with_deferred_callables.append(self.gpa, use_idx);
 }
 
@@ -49656,7 +49675,7 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
     const use = self.use_instances.items[use_idx];
     if (use.deferred_linked) return;
     self.use_instances.items[use_idx].deferred_linked = true;
-    const link = use.link.?;
+    const link = self.use_link_contexts.items[use.link.get().?];
 
     self.link_var_map.clearRetainingCapacity();
     for (self.use_saved_copies.items[use.saved_start..][0..use.saved_len]) |copy| {
@@ -49717,7 +49736,7 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
 /// progress, and extend the use's substitution and relations with them.
 fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCopy) Allocator.Error!void {
     const use = self.use_instances.items[use_idx];
-    const link = use.link.?;
+    const link = self.use_link_contexts.items[use.link.get().?];
     const env = link.env;
     self.link_var_map.clearRetainingCapacity();
     for (self.use_saved_copies.items[use.saved_start..][0..use.saved_len]) |copy| {
@@ -49735,9 +49754,9 @@ fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCop
     const outer_checking_executable_root = self.checking_executable_root;
     const outer_delayed_dependency_depth = self.delayed_dependency_depth;
     const outer_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
-    self.active_scheme_root = link.active_scheme_root;
-    self.instantiation_source_expr = link.instantiation_source_expr;
-    self.discarded_binding_rhs_expr = link.discarded_binding_rhs_expr;
+    self.active_scheme_root = link.active_scheme_root.get();
+    self.instantiation_source_expr = link.instantiation_source_expr.get();
+    self.discarded_binding_rhs_expr = link.discarded_binding_rhs_expr.get();
     self.checking_executable_root = link.checking_executable_root;
     self.delayed_dependency_depth = link.delayed_dependency_depth;
     self.instantiation_is_immediate_callee = link.instantiation_is_immediate_callee;
@@ -49768,8 +49787,8 @@ fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCop
         .records_scheme_use = !replayed,
         .target_fn_var = null,
         .registers_use = true,
-        .instantiation_expr = link.instantiation_expr,
-        .group_index = link.group_index,
+        .instantiation_expr = link.instantiation_expr.get(),
+        .group_index = link.group_index.get(),
         .region_behavior = link.region_behavior,
         .root_region = link.root_region,
         .deferred = null,
@@ -49829,7 +49848,7 @@ fn linkDeferredUsesFrom(self: *Self, min_rank: Rank) Allocator.Error!void {
         const use_idx = self.uses_with_deferred_callables.items[index];
         const use = self.use_instances.items[use_idx];
         if (!use.deferred_linked and use.state != .replayed and
-            @backingInt(use.link.?.rank) >= @backingInt(min_rank))
+            @backingInt(self.use_link_contexts.items[use.link.get().?].rank) >= @backingInt(min_rank))
         {
             try self.linkUseCallables(use_idx);
         }
@@ -50058,7 +50077,7 @@ fn findUseReplaySource(self: *const Self, hash: u64, shape: []const u8) ?u32 {
     while (next) |source_idx| {
         const source = self.use_replay_sources.items[source_idx];
         if (replayShapeEql(self.use_replay_shapes.items[source.shape_start..][0..source.shape_len], shape)) return source_idx;
-        next = source.next_same_hash;
+        next = source.next_same_hash.get();
     }
     return null;
 }
@@ -50093,7 +50112,7 @@ fn recordUseReplaySource(self: *Self, use_idx: u32) Allocator.Error!void {
         .use = use_idx,
         .shape_start = use.shape_start,
         .shape_len = use.shape_len,
-        .next_same_hash = next_same_hash,
+        .next_same_hash = .of(next_same_hash),
     });
 }
 
@@ -50429,7 +50448,7 @@ fn replayDispatchTarget(
             // A ground type changes later only by being poisoned, so an
             // instance still ground now is the one the source settled to.
             const frozen = if (try self.varIsReplayGround(source.method_var))
-                try self.freezeDispatchReplaySource(source, pending_source.scheme_use)
+                try self.freezeDispatchReplaySource(source, pending_source.scheme_use.get())
             else
                 null;
             const instance = frozen orelse {
@@ -50452,7 +50471,7 @@ fn replayDispatchTarget(
         },
     }
     const replay_source = self.dispatch_replay_sources.items[replay_source_idx];
-    const source_record: ?ModuleEnv.SchemeUseRecord = if (replay_source.scheme_use) |record_idx|
+    const source_record: ?ModuleEnv.SchemeUseRecord = if (replay_source.scheme_use.get()) |record_idx|
         self.cir.scheme_uses.items.items[record_idx]
     else
         null;
@@ -50514,14 +50533,14 @@ fn replayDispatchTarget(
         .constraint_fn_var = constraint.fn_var,
         .is_literal_conversion = false,
         .receiver_var = dispatcher_var,
-        .parent_constraint_fn_var = null,
+        .parent_constraint_fn_var = .none,
         .state_type_key = null,
         .grew_from_ancestor = false,
         .target_env = method_lookup.env,
         .target_binding = method_lookup.binding,
         .method_name = constraint.fn_name,
         .method_var = method_var,
-        .intro_expr = constraintIntroExpr(constraint),
+        .intro_expr = .of(constraintIntroExpr(constraint)),
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
     try self.dispatch_replayed_edges.append(self.gpa, raw_index);
@@ -50888,7 +50907,7 @@ fn resolveDispatchTargetMethodVar(
 ) Allocator.Error!?Var {
     if (self.cachedDispatchTargetInstantiationIndex(constraint, method_lookup)) |raw_index| {
         const existing = self.dispatch_target_instantiations.items[raw_index];
-        std.debug.assert(existing.parent_constraint_fn_var == parent_constraint_fn_var);
+        std.debug.assert(existing.parent_constraint_fn_var == collections.OptionalId(Var).of(parent_constraint_fn_var));
         return existing.method_var;
     }
 
@@ -51112,14 +51131,14 @@ fn closeRecursiveDispatch(
         .constraint_fn_var = constraint.fn_var,
         .is_literal_conversion = constraint.origin.literalKind() != null,
         .receiver_var = dispatcher_var,
-        .parent_constraint_fn_var = parent_constraint_fn_var,
+        .parent_constraint_fn_var = .of(parent_constraint_fn_var),
         .state_type_key = state_type_key,
         .grew_from_ancestor = false,
         .target_env = method_lookup.env,
         .target_binding = method_lookup.binding,
         .method_name = constraint.fn_name,
         .method_var = ancestor.method_var,
-        .intro_expr = constraintIntroExpr(constraint),
+        .intro_expr = .of(constraintIntroExpr(constraint)),
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
     if (!try self.varHasConcreteType(dispatcher_var) or !try self.varHasConcreteType(constraint.fn_var)) {
@@ -58287,7 +58306,7 @@ fn stepParseSettle(
                     .var_ = dispatcher.dispatcher_var,
                     .constraints = dispatcher.constraints,
                     .failure_expr = failure_expr_idx,
-                }, .{ .recorded = dispatcher.owner_group_index });
+                }, .{ .recorded = dispatcher.owner_group_index.get() });
                 self.instantiation_dispatchers.items[idx].deferred_enqueued = true;
                 settle.appended = true;
             }

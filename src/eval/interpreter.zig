@@ -2030,7 +2030,7 @@ pub const Interpreter = struct {
     ) Error!ProcStep {
         const dyn_result = self.pending_dyn_result;
         self.pending_dyn_result = null;
-        if ((proc_spec.dyn_result != null) != (dyn_result != null)) {
+        if ((proc_spec.dyn_result != .none) != (dyn_result != null)) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} dynamic result storage presence differed from its caller's",
                 .{@backingInt(proc_id)},
@@ -2087,7 +2087,7 @@ pub const Interpreter = struct {
         defer self.frame_stack.restore(frame.stack_mark);
         frame.caller_drives = self.erased_caller_drives;
         self.erased_caller_drives = false;
-        if (proc_spec.dyn_result) |result_local| {
+        if (proc_spec.dyn_result.get()) |result_local| {
             frame.dyn_result = dyn_result;
             bindDynAddress(&frame, result_local, dyn_result.?);
         }
@@ -2123,7 +2123,7 @@ pub const Interpreter = struct {
             const arg = args[i];
             const arg_layout = arg_layouts[i];
             const param_layout = self.store.getLocal(param).layout_idx;
-            const is_erased_reuse_arg = proc_spec.erased_reuse_arg == param;
+            const is_erased_reuse_arg = proc_spec.erased_reuse_arg.get() == param;
             if (proc_spec.abi == .erased_callable and i + 2 == params.len) {
                 if (param_layout != .opaque_ptr or arg_layout != .opaque_ptr) {
                     return self.invariantFailedError(
@@ -2199,7 +2199,7 @@ pub const Interpreter = struct {
                     // A procedure that left a call pending returns no value.
                     const returned = try self.localBytes(&frame, ret_local);
                     if (returned != result_storage and !self.hasPendingCall()) {
-                        boxy.walk.copy(try self.localDesc(&frame, proc_spec.dyn_result.?), result_storage, returned);
+                        boxy.walk.copy(try self.localDesc(&frame, proc_spec.dyn_result.get().?), result_storage, returned);
                     }
                     break :blk .{ .result = .{ .value = Value.zst, .layout = proc_spec.ret_layout } };
                 }
@@ -2434,14 +2434,14 @@ pub const Interpreter = struct {
                             .proc = assign.proc,
                             .args = arg_values,
                             .arg_layouts = arg_layouts,
-                            .dyn_result = if (callee.dyn_result == null) null else frame.dyn_result orelse return self.invariantFailedError(
+                            .dyn_result = if (callee.dyn_result == .none) null else frame.dyn_result orelse return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: proc {d} replaces its frame with a dynamic-result call but has no result storage",
                                 .{@backingInt(frame.proc_id)},
                             ),
                             .relocations = call_args.relocations,
                         } };
                     }
-                    const result_storage: ?[*]u8 = if (callee.dyn_result == null) null else try self.callResultStorage(frame, assign.target);
+                    const result_storage: ?[*]u8 = if (callee.dyn_result == .none) null else try self.callResultStorage(frame, assign.target);
                     const call_loc = self.activeStmtLoc();
                     const call_region = self.activeStmtRegion();
                     const call_inline_scope = self.activeStmtInlineScope();
@@ -3570,7 +3570,7 @@ pub const Interpreter = struct {
         const explicit_arg_count = proc_arg_locals.len - 2;
         var proc_args = try self.evalAllocator().alloc(Value, proc_arg_locals.len);
         var proc_arg_layouts = try self.evalAllocator().alloc(layout_mod.Idx, proc_arg_locals.len);
-        const arg_plan = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args orelse {
+        const arg_plan = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args.get() orelse {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased callable proc {d} has no argument plan",
                 .{@backingInt(proc_id)},
@@ -3683,13 +3683,13 @@ pub const Interpreter = struct {
                     .{@backingInt(proc_id)},
                 );
             }
-            const capture_param = proc_spec.erased_capture_arg orelse {
+            const capture_param = proc_spec.erased_capture_arg.get() orelse {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} had no capture parameter metadata",
                     .{@backingInt(proc_id)},
                 );
             };
-            const explicit_arg_count = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args.?).offsets.len;
+            const explicit_arg_count = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args.get().?).offsets.len;
             if (proc_params.len != explicit_arg_count + 2) {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} had {d} parameters for {d} explicit arguments plus capture/reuse",
@@ -3728,7 +3728,7 @@ pub const Interpreter = struct {
             proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
 
             const reuse_index = explicit_arg_count + 1;
-            const reuse_param = proc_spec.erased_reuse_arg orelse return self.invariantFailedError(
+            const reuse_param = proc_spec.erased_reuse_arg.get() orelse return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased callable proc had no reuse parameter metadata",
                 .{},
             );
@@ -8271,7 +8271,7 @@ pub const Interpreter = struct {
         reuse: ?[*]u8,
     ) Error!void {
         const params = self.store.getLocalSpan(proc_spec.args);
-        const capture_param = proc_spec.erased_capture_arg orelse return self.invariantFailedError(
+        const capture_param = proc_spec.erased_capture_arg.get() orelse return self.invariantFailedError(
             "LIR/interpreter invariant violated: erased_record proc {d} has no capture parameter",
             .{@backingInt(proc_id)},
         );
@@ -8288,7 +8288,7 @@ pub const Interpreter = struct {
                 proc_args[i] = cell;
                 continue;
             }
-            if (proc_spec.erased_reuse_arg != null and param_id == proc_spec.erased_reuse_arg.?) {
+            if (proc_spec.erased_reuse_arg != .none and param_id == proc_spec.erased_reuse_arg.get().?) {
                 const cell = try self.alloc(param.layout_idx);
                 cell.write(usize, @intFromPtr(reuse));
                 proc_args[i] = cell;
@@ -8315,7 +8315,7 @@ pub const Interpreter = struct {
                 .{ @backingInt(proc_id), explicit_count },
             );
         }
-        if (proc_spec.dyn_result != null) {
+        if (proc_spec.dyn_result != .none) {
             self.pending_dyn_result = ret orelse boxy.walk.zeroSizedPtr();
             _ = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
             return;

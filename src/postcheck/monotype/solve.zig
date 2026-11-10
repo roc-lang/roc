@@ -101,8 +101,12 @@ const FieldKindNode = struct {
     parent: FieldKindId,
     rank: u8 = 0,
     resolved: ?ResolvedFieldKind = null,
-    cells: ?FieldKindCells = null,
+    cells: collections.OptionalStruct(FieldKindCells, "slot") = .none,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(FieldKindNode) == 32);
+}
 
 /// The exact cells whose representation is selected by one generalized field
 /// kind. Producers register these when they instantiate the field; relation
@@ -741,7 +745,7 @@ pub const InterfaceConstraints = struct {
         for (self.kinds, instance.kinds) |kind, id| {
             const mapped = try mapValue(&instance, Kind, kind);
             graph.field_kinds.items[@backingInt(id)].resolved = mapped.resolved;
-            graph.field_kinds.items[@backingInt(id)].cells = mapped.cells;
+            graph.field_kinds.items[@backingInt(id)].cells = .of(mapped.cells);
         }
         for (self.nodes, instance.nodes) |reference, id| {
             const node = switch (reference) {
@@ -1346,14 +1350,14 @@ pub const InterfaceConstraints = struct {
                         const source = self.graph.field_kinds.items[@backingInt(root_kind)];
                         var refs: std.ArrayList(CaptureItem) = .empty;
                         defer refs.deinit(allocator);
-                        try collectCaptureRefs(allocator, Kind, .{ .resolved = source.resolved, .cells = source.cells }, &refs);
+                        try collectCaptureRefs(allocator, Kind, .{ .resolved = source.resolved, .cells = source.cells.get() }, &refs);
                         try refs.append(allocator, .{ .finish_kind = .{ .id = id, .root = root_kind } });
                         try top.items.insertSlice(allocator, top.next, refs.items);
                     },
                     .finish_kind => |finish| {
                         const source = self.graph.field_kinds.items[@backingInt(finish.root)];
                         var lookup = CaptureLookup{ .capture = self, .allocator = self.allocator };
-                        self.kinds.items[@backingInt(finish.id)] = try mapValue(&lookup, Kind, .{ .resolved = source.resolved, .cells = source.cells });
+                        self.kinds.items[@backingInt(finish.id)] = try mapValue(&lookup, Kind, .{ .resolved = source.resolved, .cells = source.cells.get() });
                     },
                     .source => |source| if (try self.beginNode(source)) |open| try self.pushCaptureFrame(frames, open),
                 }
@@ -2947,10 +2951,10 @@ pub const InstGraph = struct {
         self.requireRelationProduction();
         const root = self.findFieldKind(raw);
         const node = &self.field_kinds.items[@backingInt(root)];
-        if (node.cells != null) {
+        if (node.cells.get() != null) {
             Common.invariant("instantiation field kind registered its representation cells more than once");
         }
-        node.cells = .{ .slot = slot, .value = value };
+        node.cells = .some(.{ .slot = slot, .value = value });
     }
 
     fn findFieldKind(self: *InstGraph, raw: FieldKindId) FieldKindId {
@@ -3013,7 +3017,7 @@ pub const InstGraph = struct {
         if (self.field_kinds.items[@backingInt(left)].rank == self.field_kinds.items[@backingInt(right)].rank) {
             self.field_kinds.items[@backingInt(left)].rank += 1;
         }
-        if (self.field_kinds.items[@backingInt(left)].cells == null) {
+        if (self.field_kinds.items[@backingInt(left)].cells.get() == null) {
             self.field_kinds.items[@backingInt(left)].cells = right_cells;
         }
         if (right_state) |resolved| self.constrainUndeterminedFieldKind(left, resolved);
@@ -3336,7 +3340,7 @@ pub const InstGraph = struct {
             if (root != id) continue;
             const node = &self.field_kinds.items[raw_index];
             if (node.resolved != null) continue;
-            const cells = node.cells orelse
+            const cells = node.cells.get() orelse
                 Common.invariant("unresolved instantiation field kind had no registered representation cells");
             node.resolved = .required;
             try self.unify(cells.slot, cells.value);
@@ -14773,7 +14777,7 @@ test "interface constraints preserve recursive and field-presence topology" {
     try std.testing.expect(first_field.kind.undetermined != second_field.kind.undetermined);
     graph.constrainUndeterminedFieldKind(first_field.kind.undetermined, .optional);
     try std.testing.expect(graph.resolvedFieldKind(second_field.kind) == null);
-    const cells = graph.field_kinds.items[@backingInt(second_field.kind.undetermined)].cells.?;
+    const cells = graph.field_kinds.items[@backingInt(second_field.kind.undetermined)].cells.get().?;
     try std.testing.expectEqual(second_field.ty, cells.slot);
     try std.testing.expectEqual(second_field.value_ty.get().?, cells.value);
 }

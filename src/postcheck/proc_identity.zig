@@ -462,7 +462,7 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     var mono = @import("monotype/ast.zig").ProgramBuilder.init(allocator);
     defer mono.deinit();
     const capture_local = try mono.addLocal(first, try mono.types.add(.{ .primitive = .i64 }));
-    var capture = SolvedType.Capture{ .local = capture_local, .symbol = first, .binder = null, .ty = alone };
+    var capture = SolvedType.Capture{ .local = capture_local, .symbol = first, .binder = .none, .ty = alone };
     const captures_alone = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");
     capture.ty = beside_lambda;
     const captures_joined = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");

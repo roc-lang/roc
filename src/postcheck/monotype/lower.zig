@@ -9021,7 +9021,7 @@ const Builder = struct {
         // reach the host directly through its declared ABI.
         if (dev_diagnostics.isSet(.spec_census) and template.target != .hosted and try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
             const proc_base = view.names.procBase(template_ref.proc_base);
-            const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
+            const name: []const u8 = if (proc_base.export_name.get()) |e| view.names.exportNameText(e) else "?";
             const types = self.program.types.view();
             var where: []const u8 = "ret";
             var position: usize = 0;
@@ -9044,7 +9044,7 @@ const Builder = struct {
             if (template.provided_low_level) |op| fn_template.procedure_keyed_by_layout = op.procedureKeyedByLayout();
             if (dev_diagnostics.isSet(.spec_census)) {
                 const proc_base = view.names.procBase(template_ref.proc_base);
-                const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
+                const name: []const u8 = if (proc_base.export_name.get()) |e| view.names.exportNameText(e) else "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
         }
@@ -9679,7 +9679,7 @@ const Builder = struct {
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const proc_base = view.names.procBase(template_ref.proc_base);
-        const name: []const u8 = if (proc_base.export_name) |export_name| view.names.exportNameText(export_name) else "?";
+        const name: []const u8 = if (proc_base.export_name.get()) |export_name| view.names.exportNameText(export_name) else "?";
         std.debug.print("ctfe-demand {s} {s}.{s} fn#{d}\n", .{
             decision,
             view.names.moduleNameText(view.module_identity.module_name),
@@ -11483,7 +11483,7 @@ const Builder = struct {
     ) Allocator.Error!void {
         if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
-        const export_name = proc_base.export_name orelse return;
+        const export_name = proc_base.export_name.get() orelse return;
         const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
         try self.program.setProcDebugName(symbol, name);
     }
@@ -11497,7 +11497,7 @@ const Builder = struct {
     ) Allocator.Error!void {
         if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
-        const export_name = proc_base.export_name orelse return;
+        const export_name = proc_base.export_name.get() orelse return;
         const name = try self.activeNameStore().internExportName(view.names.exportNameText(export_name));
         try draft.proc_debug_names.append(self.allocator, .{ .symbol = symbol, .name = name });
     }
@@ -12252,7 +12252,7 @@ const Builder = struct {
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(module_name.len))));
         hasher.update(module_name);
         hasher.update(@tagName(proc_base.kind));
-        if (proc_base.export_name) |name| {
+        if (proc_base.export_name.get()) |name| {
             const text = view.names.exportNameText(name);
             hasher.update("named");
             hasher.update(std.mem.asBytes(&@as(u32, @intCast(text.len))));
@@ -13462,7 +13462,7 @@ const Builder = struct {
             cached
         else blk: {
             for (view.nested_proc_sites.sites) |candidate| {
-                if (candidate.checked_expr == null or candidate.checked_expr.? != expr_id) continue;
+                if (candidate.checked_expr.get() != expr_id) continue;
                 // A default-root site (a lambda/closure inside a defaulted-field
                 // expression) is matched only while materializing a default; it
                 // has no owning template, so the requesting context's owner
@@ -13477,7 +13477,7 @@ const Builder = struct {
                 }
                 if (@import("builtin").mode == .debug) {
                     for (view.nested_proc_sites.sites[@backingInt(candidate.site) + 1 ..]) |later| {
-                        if (later.checked_expr == null or later.checked_expr.? != expr_id) continue;
+                        if (later.checked_expr.get() != expr_id) continue;
                         const same_owner = switch (later.owner) {
                             .template => |site_owner| !in_default_expr and names.procedureTemplateRefEql(site_owner, owner),
                             .default_root => in_default_expr,
@@ -51748,7 +51748,7 @@ const BodyContext = struct {
                 names.procedureTemplateRefEql(site_owner, self.owner_template),
             .default_root => self.in_default_expr,
         };
-        if (!owner_matches or site.checked_expr == null or site.checked_expr.? != expr_id.node()) {
+        if (!owner_matches or site.checked_expr.get() != expr_id.node()) {
             Common.invariant("nested function site did not match its checked expression owner");
         }
 
@@ -53440,7 +53440,7 @@ const BodyContext = struct {
             .generalized => |scope_id| scope_id,
         };
         const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
-        if (site.checked_expr == null or scope.checked_expr != site.checked_expr.?) return evidence;
+        if (site.checked_expr == .none or scope.checked_expr != site.checked_expr.get().?) return evidence;
         switch (evidence.scope.lexical) {
             .generalized => |frame_scope| if (frame_scope != scope_id) {
                 Common.invariant("nested function that owns a dispatch scope was requested outside that scope's frame");
@@ -53493,7 +53493,7 @@ const BodyContext = struct {
                 ) orelse
                     Common.invariant("callable-derived evidence path did not match its function request");
                 const resolvable = (try self.methodOwnerFromNode(component_node)) != null or
-                    param.structural != null or
+                    param.structural != .none or
                     try self.nodeIsProvenUninhabited(component_node) or
                     (try self.nodeFinalizesAsUninhabitedLeaf(component_node));
                 if (resolvable) {
@@ -53502,7 +53502,7 @@ const BodyContext = struct {
                         .entry = try self.synthesizeComponentEvidenceAtNodeForPurpose(
                             view,
                             param.method,
-                            param.structural,
+                            param.structural.get(),
                             component_node,
                             purpose,
                         ),
@@ -54336,8 +54336,8 @@ const BodyContext = struct {
             if (param.source == .scheme_requirement) {
                 Common.invariant("composite scheme requirement had no checked call-site evidence");
             }
-            if (param.slot.? >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
-            if (subst[param.slot.?] == .checked_error) {
+            if (param.slot.get().? >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
+            if (subst[param.slot.get().?] == .checked_error) {
                 out[k] = .checked_error;
                 derived[k] = true;
             }
@@ -54359,7 +54359,7 @@ const BodyContext = struct {
             progress = false;
             for (schema.params, 0..) |param, k| {
                 if (derived[k]) continue;
-                const node = subst[param.slot.?].node;
+                const node = subst[param.slot.get().?].node;
                 if (self.forwardedRequirement(node, schema.view.names, param.method)) |forwarded| switch (forwarded) {
                     // Callable targets are selected again from this scheme's
                     // substitution below. Terminal evidence belongs to the
@@ -54392,7 +54392,7 @@ const BodyContext = struct {
                     .target => {},
                 };
                 if ((try self.methodOwnerFromNode(node)) == null) continue;
-                out[k] = try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural, node, purpose);
+                out[k] = try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural.get(), node, purpose);
                 derived[k] = true;
                 progress = true;
                 switch (out[k]) {
@@ -54417,7 +54417,7 @@ const BodyContext = struct {
 
         for (schema.params, 0..) |param, k| {
             if (derived[k]) continue;
-            out[k] = try self.deriveOpenRequirement(schema.view, param, subst[param.slot.?].node, purpose);
+            out[k] = try self.deriveOpenRequirement(schema.view, param, subst[param.slot.get().?].node, purpose);
         }
         return out;
     }
@@ -54454,20 +54454,20 @@ const BodyContext = struct {
         const out = try self.builder.evidence_arena.allocator().alloc(SpecEvidence, schema.params.len);
         for (refs, schema.params, out, 0..) |ref, param, *entry, k| {
             if (param.source == .scheme_requirement) {
-                if (param.slot != null) Common.invariant("composite requirement occupied a quantified-variable slot");
+                if (param.slot != .none) Common.invariant("composite requirement occupied a quantified-variable slot");
                 entry.* = if (ref.resolution == .from_scheme)
                     .{ .from_scheme = @intCast(k) }
                 else
                     try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose);
                 continue;
             }
-            if (param.slot.? >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
+            if (param.slot.get().? >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
             entry.* = switch (ref.resolution) {
                 .from_callable => .{ .from_callable = .{ .independent_callable = false } },
                 .from_scheme => Common.invariant("abstract scheme evidence named an ordinary callable parameter"),
                 .direct, .constraint, .structural, .unreachable_value, .checked_error => try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose),
             };
-            if (subst[param.slot.?] == .checked_error) {
+            if (subst[param.slot.get().?] == .checked_error) {
                 entry.* = switch (ref.resolution) {
                     .direct, .constraint => try self.mergeCheckedEvidenceContract(.checked_error, entry.*),
                     .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => .checked_error,
@@ -54483,14 +54483,14 @@ const BodyContext = struct {
             // Structural entries already carry the checked callable contracts
             // materialized above; only targets need receiver-based selection.
             if (param.source == .scheme_requirement or entry.* != .target) continue;
-            const node = subst[param.slot.?].node;
+            const node = subst[param.slot.get().?].node;
             const derived = derive: {
                 if (self.forwardedRequirement(node, schema.view.names, param.method)) |forwarded| switch (forwarded) {
                     .target => {},
                     .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => break :derive forwarded,
                 };
                 break :derive if ((try self.methodOwnerFromNode(node)) != null)
-                    try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural, node, purpose)
+                    try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural.get(), node, purpose)
                 else
                     try self.deriveOpenRequirement(schema.view, param, node, purpose);
             };
@@ -54835,10 +54835,10 @@ const BodyContext = struct {
                     .str => .str,
                 };
                 const default_node = try self.graph.newNode(.{ .primitive = primitive });
-                return try self.synthesizeComponentEvidenceAtNodeForPurpose(view, param.method, param.structural, default_node, purpose);
+                return try self.synthesizeComponentEvidenceAtNodeForPurpose(view, param.method, param.structural.get(), default_node, purpose);
             }
         }
-        return try self.synthesizeComponentEvidenceAtNodeForPurpose(view, param.method, param.structural, node, purpose);
+        return try self.synthesizeComponentEvidenceAtNodeForPurpose(view, param.method, param.structural.get(), node, purpose);
     }
 
     /// The enclosing frame entry that already answers `method` for the
@@ -54859,7 +54859,7 @@ const BodyContext = struct {
                 schema.view.names.lookupMethodName(method_names.methodNameText(method)) orelse continue;
             for (schema.params, 0..) |param, k| {
                 if (param.method != frame_method) continue;
-                const receiver_slot = param.slot orelse continue;
+                const receiver_slot = param.slot.get() orelse continue;
                 const slot = switch (current.subst[receiver_slot]) {
                     .node => |slot_node| slot_node,
                     .checked_error => continue,
@@ -55371,7 +55371,7 @@ const BodyContext = struct {
                             .derivation = derivation,
                             .dispatcher_ty = plan.dispatcher_ty,
                             .callable_ty = plan.callable_ty,
-                            .generated_codec_derivation = plan.generated_codec_derivation orelse
+                            .generated_codec_derivation = plan.generated_codec_derivation.get() orelse
                                 Common.invariant("direct structural codec plan had no checked derivation contract"),
                         },
                     },
@@ -55616,7 +55616,7 @@ const BodyContext = struct {
         // Without a lowered declaration instance, the target's checked
         // declaration names the procedure template whose body declares it.
         for (lookup.view.nested_proc_sites.sites) |site| {
-            if (site.checked_expr == null or site.checked_expr.? != local.expr) continue;
+            if (site.checked_expr.get() != local.expr) continue;
             return switch (site.owner) {
                 .template => |template| template,
                 .default_root => Common.invariant("local method declaration had no owning procedure template"),
@@ -66689,7 +66689,7 @@ const BodyContext = struct {
     ) Allocator.Error!RestoredLocalProcDeclaration {
         var site: ?checked.NestedProcSite = null;
         for (view.nested_proc_sites.sites) |candidate| {
-            if (candidate.checked_expr == null or candidate.checked_expr.? != expr) continue;
+            if (candidate.checked_expr.get() != expr) continue;
             switch (candidate.owner) {
                 .template => if (self.in_default_expr) continue,
                 .default_root => if (!self.in_default_expr) continue,
@@ -69632,9 +69632,9 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     frame_view.names = &frame_names;
     frame_view.types = checked_types.view();
     const params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = 0 },
-        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = 1 },
-        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0 },
+        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = .some(0) },
+        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = .some(1) },
+        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = .some(0) },
     };
     const frame: EvidenceChain = .{
         .scope = undefined,
@@ -69676,7 +69676,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
             .view = inner_view,
             .root = null,
             .scheme_vars = &.{receiver_ty},
-            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0 }},
+            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = .some(0) }},
             .params_start = 0,
         },
         .subst = &.{.{ .node = receiver }},
@@ -70583,7 +70583,7 @@ fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) ExprSite {
     return switch (fn_def) {
         .nested => |nested| blk: {
             const site = checkedNestedSite(view, nested);
-            const expr_id = site.checked_expr orelse Common.invariant("stored nested function had no checked expression site");
+            const expr_id = site.checked_expr.get() orelse Common.invariant("stored nested function had no checked expression site");
             const expr = checkedExpr(view, ExprSite.read(expr_id));
             break :blk switch (expr.data) {
                 .lambda => ExprSite.read(expr_id),

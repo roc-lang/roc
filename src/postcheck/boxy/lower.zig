@@ -836,7 +836,7 @@ pub const Program = struct {
             }
         }
         for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
-            const site_expr = site.checked_expr orelse continue;
+            const site_expr = site.checked_expr.get() orelse continue;
             try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
             // A closure's site is also its lambda's, which names its worker.
             const site_data = view.bodies().exprData(site_expr);
@@ -1242,7 +1242,7 @@ pub const Program = struct {
         } else {
             proc.ret_layout = dynamic_layout;
             const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
-            proc.dyn_result = try store.addLocal(.{ .layout_idx = dynamic_layout, .dyn = .{ .desc = desc, .storage = .result } });
+            proc.dyn_result = .of(try store.addLocal(.{ .layout_idx = dynamic_layout, .dyn = .{ .desc = desc, .storage = .result } }));
         }
     }
 
@@ -1421,7 +1421,7 @@ pub const Program = struct {
         const literal_requirements = templates.templateLiteralRequirements(&template);
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
-            const sealed_dispatcher = if (param.slot) |slot|
+            const sealed_dispatcher = if (param.slot.get()) |slot|
                 std.mem.findScalar(u32, sealed_slots, slot) != null and self.converter().platformIdentity(module_index, checked_scheme_vars[slot]) == null
             else
                 false;
@@ -2340,7 +2340,7 @@ pub const Program = struct {
             requirement.* = .{
                 .module = key.module,
                 .method = param.method,
-                .structural = param.structural,
+                .structural = param.structural.get(),
                 .dispatcher = try self.converter().convert(key.module, param.dispatcher_ty, env),
                 .callable = try self.converter().convert(key.module, param.callable_ty, env),
             };
@@ -2519,7 +2519,7 @@ pub const Program = struct {
                 const dispatcher = try self.converter().convert(module_index, param.dispatcher_ty, env);
                 if (try self.mentionsPlaceholder(dispatcher)) continue;
                 const callable = try self.converter().convert(module_index, param.callable_ty, env);
-                const method_target = switch (try self.resolveRequirement(.{ .module = module_index, .method = param.method, .structural = param.structural, .dispatcher = dispatcher, .callable = callable })) {
+                const method_target = switch (try self.resolveRequirement(.{ .module = module_index, .method = param.method, .structural = param.structural.get(), .dispatcher = dispatcher, .callable = callable })) {
                     .target => |method_target| method_target,
                     .structural, .crash, .scope_variable, .derived, .callable_eval => continue,
                 };
@@ -3438,7 +3438,7 @@ fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerI
                 .generic => "",
                 .list_int => |item| item.nameSuffix(),
             };
-            break :blk if (name_store.procBase(template.proc_base).export_name) |export_name|
+            break :blk if (name_store.procBase(template.proc_base).export_name.get()) |export_name|
                 .{ .module = moduleUnlessPrefixed(module_name, name_store.exportNameText(export_name)), .text = name_store.exportNameText(export_name), .suffix = suffix }
             else
                 .{ .module = module_name, .text = "template", .number = @backingInt(key.template), .suffix = suffix };
@@ -3701,7 +3701,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const view = program.module(key.module);
                     const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
                     const names = view.nameStore();
-                    const export_name = names.procBase(template.proc_base).export_name orelse break :blk switch (key.binding) {
+                    const export_name = names.procBase(template.proc_base).export_name.get() orelse break :blk switch (key.binding) {
                         .generic => "boxy.template",
                         .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "boxy.template{s}", .{item.nameSuffix()}),
                     };
