@@ -38,12 +38,13 @@ pub const Entry = enum {
 pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 19 stores a padded record's
+/// reflected in layout fingerprints. Version 20 stores a padded record's
 /// declaration entries, not its slots, in Boxy stored-function type tables,
 /// alongside field-default identities in those types and integer list worker
-/// item-type bindings. It rejects every incompatible version 17 and 18 recipe
-/// format. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 19;
+/// item-type bindings. It rejects every incompatible version 17, 18, and 19
+/// format, including the version 19 report-cache format. Platform-pairing
+/// entries share it.
+const checked_envelope_version: u32 = 20;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
