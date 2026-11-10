@@ -687,8 +687,12 @@ const MetadataReader = struct {
                 if (declared > 1) return error.InvalidMetadata;
                 if (declared == 1) {
                     try self.typeSpan();
-                    const slots = try self.word();
-                    _ = try self.takeProduct(slots, 4);
+                    const entries = try self.word();
+                    if (entries > self.remaining() / 5) return error.InvalidMetadata;
+                    for (0..entries) |_| switch (try self.tag(std.meta.Tag(types.DeclaredEntry))) {
+                        .named => try self.name(),
+                        .padding => _ = try self.word(),
+                    };
                 }
             },
             .tuple => try self.typeSpan(),
@@ -1126,9 +1130,15 @@ const Encoder = struct {
                 try self.table.append(self.allocator, @intFromBool(record.declared != null));
                 if (record.declared) |declared| {
                     try self.tableTypes(store.span(declared.padding));
-                    const slots = store.declaredSlots(declared);
-                    try self.tableWord(@intCast(slots.len));
-                    for (slots) |slot| try self.tableWord(slot);
+                    const entries = store.declaredEntries(declared);
+                    try self.tableWord(@intCast(entries.len));
+                    for (entries) |entry| {
+                        try self.table.append(self.allocator, @backingInt(std.meta.activeTag(entry)));
+                        switch (entry) {
+                            .named => |label| try self.tableName(label),
+                            .padding => |ordinal| try self.tableWord(ordinal),
+                        }
+                    }
                 }
             },
             .tuple => |items| try self.tableTypes(store.span(items)),
@@ -1434,9 +1444,15 @@ const Decoder = struct {
                 var declared: ?types.DeclaredOrderInput = null;
                 if (self.byte() != 0) {
                     const padding = try self.typeSpan();
-                    const slots = try program.arena.allocator().alloc(u32, self.word());
-                    for (slots) |*slot| slot.* = self.word();
-                    declared = .{ .padding = padding, .slots = slots };
+                    const entries = try program.arena.allocator().alloc(types.DeclaredEntry, self.word());
+                    for (entries) |*entry| {
+                        const kind: std.meta.Tag(types.DeclaredEntry) = @fromBackingInt(@intCast(self.byte()));
+                        entry.* = switch (kind) {
+                            .named => .{ .named = try self.name() },
+                            .padding => .{ .padding = self.word() },
+                        };
+                    }
+                    declared = .{ .padding = padding, .entries = entries };
                 }
                 break :blk try store.intern(.{ .record = .{ .fields = fields, .ext = remainder, .declared = declared } });
             },

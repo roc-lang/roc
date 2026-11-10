@@ -1340,6 +1340,19 @@ pub const Store = struct {
         }
     }
 
+    /// The explicit `.box` node over `ref`'s target, seen through nominal
+    /// wrappers, if the commit's graph has one.
+    fn explicitBoxNode(
+        graph: *const LayoutGraph,
+        box_node_of_target: []const ?GraphNodeId,
+        ref: GraphRef,
+    ) ?GraphNodeId {
+        return switch (RecursiveGraphAnalysis.resolveNominalRef(graph, ref)) {
+            .canonical => null,
+            .local => |target_id| box_node_of_target[@backingInt(target_id)],
+        };
+    }
+
     /// Commit a working graph, returning each node's value layout.
     ///
     /// Distinct logical graphs can describe one layout: a graph whose
@@ -1354,7 +1367,10 @@ pub const Store = struct {
     /// without the duplicates, so every representation keeps one layout
     /// index, which is what lets equal content digests stand for equal
     /// layouts. The layouts of the first attempt that the second does not
-    /// reuse stay in the store unreferenced.
+    /// reuse stay in the store unreferenced. The recursion boxes a commit
+    /// inserts are not nodes, so the redirect cannot reach them; a commit
+    /// instead gives a recursive slot an explicit `.box` node over the same
+    /// target when the graph has one (`explicitBoxNode`).
     fn commitWorkingGraph(
         self: *Self,
         scratch: Allocator,
@@ -1417,7 +1433,41 @@ pub const Store = struct {
                 entry.value_ptr.* = layout_idx;
             }
         }
+        if (std.debug.runtime_safety) try self.assertOneLayoutPerDigest(scratch, layouts_before, committed);
         return committed;
+    }
+
+    /// Debug-only check that no two layouts a recursive commit created and
+    /// its committed layouts reach have the same content, including the
+    /// recursion boxes the commit inserted, which are not graph nodes.
+    fn assertOneLayoutPerDigest(
+        self: *Self,
+        scratch: Allocator,
+        layouts_before: u64,
+        committed: []const Idx,
+    ) Allocator.Error!void {
+        var by_digest = std.AutoHashMap(digest_mod.Digest, Idx).init(scratch);
+        var visited = std.AutoHashMap(Idx, void).init(scratch);
+        var stack: std.ArrayList(Idx) = .empty;
+        for (committed) |root| {
+            if (@backingInt(root) < layouts_before) continue;
+            try stack.append(scratch, root);
+            while (stack.pop()) |layout_idx| {
+                if ((try visited.getOrPut(layout_idx)).found_existing) continue;
+                const entry = try by_digest.getOrPut(try self.contentDigest(layout_idx));
+                if (entry.found_existing) {
+                    base.invariant(
+                        "layout.Store invariant violated: a recursive commit gave one runtime representation layouts {d} and {d}",
+                        .{ @backingInt(entry.value_ptr.*), @backingInt(layout_idx) },
+                    );
+                }
+                entry.value_ptr.* = layout_idx;
+                var children = digest_mod.Digests.Children.init(self, layout_idx);
+                while (children.next()) |child| {
+                    if (@backingInt(child) >= layouts_before) try stack.append(scratch, child);
+                }
+            }
+        }
     }
 
     /// Commit a graph of uncommitted nodes, returning each node's value
@@ -1731,6 +1781,12 @@ pub const Store = struct {
         @memset(finalize_state, .unseen);
         const raw_used = try scratch.alloc(bool, node_count);
         @memset(raw_used, false);
+        // The first explicit `.box` node over each non-nominal node, filled
+        // while raw slots are reserved. A recursive slot edge to a node with
+        // one reads that box node rather than minting a box of its own, so
+        // `box(target)` has one layout in the commit.
+        const box_node_of_target = try scratch.alloc(?GraphNodeId, node_count);
+        @memset(box_node_of_target, null);
 
         const Finalizer = struct {
             store: *Self,
@@ -1742,6 +1798,7 @@ pub const Store = struct {
             raw_used: []bool,
             recursive_nodes: []bool,
             component_ids: []u32,
+            box_node_of_target: []const ?GraphNodeId,
 
             /// The layout of child `ref`, or the node that must be finalized
             /// first to produce it.
@@ -1885,6 +1942,7 @@ pub const Store = struct {
                             while (frame.children.items.len < graph_fields.len) {
                                 const field = graph_fields[frame.children.items.len];
                                 if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child)) break :blk field.child;
+                                if (explicitBoxNode(self_finalizer.graph, self_finalizer.box_node_of_target, field.child)) |box_node| break :blk .{ .local = box_node };
                                 try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(field.child));
                             }
                             break :blk null;
@@ -1894,6 +1952,7 @@ pub const Store = struct {
                             while (frame.children.items.len < graph_refs.len) {
                                 const variant_ref = graph_refs[frame.children.items.len];
                                 if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref)) break :blk variant_ref;
+                                if (explicitBoxNode(self_finalizer.graph, self_finalizer.box_node_of_target, variant_ref)) |box_node| break :blk .{ .local = box_node };
                                 try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(variant_ref));
                             }
                             break :blk null;
@@ -1911,13 +1970,24 @@ pub const Store = struct {
                     }
 
                     const children = frame.children.items;
+                    const index = @backingInt(node_id);
                     const value_layout = switch (node) {
                         .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                         .nominal => children[0],
-                        .box => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
-                            try self_finalizer.store.insertLayout(Layout.boxOfZst())
-                        else
-                            try self_finalizer.store.insertBox(children[0]),
+                        .box => blk_box: {
+                            const box_layout = if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
+                                Layout.boxOfZst()
+                            else
+                                Layout.box(children[0]);
+                            // A box read before it finished keeps its raw slot,
+                            // so it fills that slot rather than interning a
+                            // second layout of the same content.
+                            if (self_finalizer.raw_used[index]) {
+                                self_finalizer.store.setCommitLayout(self_finalizer.raw_layouts[index], box_layout);
+                                break :blk_box self_finalizer.raw_layouts[index];
+                            }
+                            break :blk_box try self_finalizer.store.insertLayout(box_layout);
+                        },
                         .list => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
                             try self_finalizer.store.insertLayout(Layout.listOfZst())
                         else
@@ -1942,8 +2012,7 @@ pub const Store = struct {
                         .tag_union => try self_finalizer.store.putTagUnion(children),
                     };
 
-                    const index = @backingInt(node_id);
-                    if (self_finalizer.raw_used[index]) {
+                    if (self_finalizer.raw_used[index] and value_layout != self_finalizer.raw_layouts[index]) {
                         self_finalizer.store.setCommitLayout(
                             self_finalizer.raw_layouts[index],
                             self_finalizer.store.getLayout(value_layout),
@@ -1971,6 +2040,7 @@ pub const Store = struct {
             .raw_used = raw_used,
             .recursive_nodes = recursive_nodes,
             .component_ids = component_ids,
+            .box_node_of_target = box_node_of_target,
         };
 
         // A node that reaches no cycle reads no raw slot, and neither does
@@ -1988,6 +2058,18 @@ pub const Store = struct {
         const layouts_start = self.layouts.len();
         for (graph.nodes.items, reaches_cycle, 0..) |node, reaches, i| {
             if (!reaches) continue;
+            // A box over a node on a cycle reaches that cycle itself, so this
+            // loop sees every box a recursive slot edge can read.
+            switch (node) {
+                .box => |child| switch (RecursiveGraphAnalysis.resolveNominalRef(graph, child)) {
+                    .canonical => {},
+                    .local => |target_id| {
+                        const entry = &box_node_of_target[@backingInt(target_id)];
+                        if (entry.* == null) entry.* = @fromBackingInt(@intCast(i));
+                    },
+                },
+                .pending, .committed, .nominal, .list, .closure, .erased_callable, .struct_, .tag_union => {},
+            }
             raw_layouts[i] = try self.reserveLayout(switch (node) {
                 .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                 .nominal, .struct_, .tag_union => Layout.zst(),
@@ -2008,6 +2090,7 @@ pub const Store = struct {
             resolved: []bool,
             recursive_nodes: []bool,
             component_ids: []u32,
+            box_node_of_target: []const ?GraphNodeId,
 
             fn valueIdx(self_resolver: *@This(), ref: GraphRef) Idx {
                 return switch (ref) {
@@ -2101,10 +2184,15 @@ pub const Store = struct {
                 return self_resolver.pointerTargetLayout(child_ref);
             }
 
+            /// The target's explicit box node, whose raw slot is ready from
+            /// the start, or else a box minted over the target's raw slot.
             fn recursiveSlotLayout(
                 self_resolver: *@This(),
                 child_ref: GraphRef,
             ) std.mem.Allocator.Error!Idx {
+                if (explicitBoxNode(self_resolver.graph, self_resolver.box_node_of_target, child_ref)) |box_node| {
+                    return self_resolver.raw_layouts[@backingInt(box_node)];
+                }
                 return try self_resolver.store.insertBox(self_resolver.recursiveSlotTargetLayout(child_ref));
             }
 
@@ -2221,6 +2309,7 @@ pub const Store = struct {
             .resolved = resolved,
             .recursive_nodes = recursive_nodes,
             .component_ids = component_ids,
+            .box_node_of_target = box_node_of_target,
         };
 
         // A node resolves once the children it waits on have, so each node is
@@ -4096,6 +4185,44 @@ test "commitGraph resolves recursive Box back-edges to the union layout itself (
         // Str payload (24 bytes) dominates the Box pointer payload; the
         // 1-byte discriminant lands after it and pads to 8-byte alignment.
         try testing.expectEqual(@as(u32, 32), info.size());
+    }
+}
+
+/// Commits `T := [Nil, Cons({ t : T, bt : Box(T) })]` and returns the layouts
+/// of the `t` and `bt` fields, with the explicit box node reserved first when
+/// `box_first`, so the finalizer reaches it before its target.
+fn commitRecursionBoxBesideExplicitBox(store: *Store, box_first: bool) Allocator.Error![2]Idx {
+    const allocator = std.testing.allocator;
+    var graph = LayoutGraph{};
+    defer graph.deinit(allocator);
+    var box_node: GraphNodeId = undefined;
+    if (box_first) box_node = try graph.reserveNode(allocator);
+    const union_node = try graph.reserveNode(allocator);
+    const cons_node = try graph.reserveNode(allocator);
+    if (!box_first) box_node = try graph.reserveNode(allocator);
+    graph.setNode(box_node, .{ .box = .{ .local = union_node } });
+    graph.setNode(cons_node, .{ .struct_ = try graph.appendFields(allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = union_node } },
+        .{ .index = 1, .child = .{ .local = box_node } },
+    }) });
+    graph.setNode(union_node, .{ .tag_union = try graph.appendRefs(allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = cons_node } }) });
+    var commit = try store.commitGraph(&graph, .{ .local = if (box_first) box_node else union_node });
+    defer commit.deinit(allocator);
+    const cons_struct = store.getLayout(commit.value_layouts[@backingInt(cons_node)]).getStruct().idx;
+    return .{
+        store.getStructFieldLayoutByOriginalIndex(cons_struct, 0),
+        store.getStructFieldLayoutByOriginalIndex(cons_struct, 1),
+    };
+}
+
+test "commitGraph gives a recursion box and an explicit Box of the same type one layout (issue #12927)" {
+    const testing = std.testing;
+    for ([_]bool{ true, false }) |box_first| {
+        var store = try Store.init(testing.allocator, .u64);
+        defer store.deinit();
+        const fields = try commitRecursionBoxBesideExplicitBox(&store, box_first);
+        try testing.expectEqual(LayoutTag.box, store.getLayout(fields[0]).tag);
+        try testing.expectEqual(fields[0], fields[1]);
     }
 }
 
