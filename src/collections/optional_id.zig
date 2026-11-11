@@ -222,8 +222,8 @@ test "optional raw values, enums and structs fit their payload width" {
     const OptPair = OptionalStruct(Pair, "offset");
     try std.testing.expectEqual(@sizeOf(Pair), @sizeOf(OptPair));
     try std.testing.expect(OptPair.none.get() == null);
-    const zero_pair: Pair = .{ .id = @fromBackingInt(0), .offset = 0 };
-    try std.testing.expectEqual(zero_pair, OptPair.some(zero_pair).get().?);
+    const zero_offset_pair: Pair = .{ .id = @fromBackingInt(3), .offset = 0 };
+    try std.testing.expectEqual(zero_offset_pair, OptPair.some(zero_offset_pair).get().?);
     const OptById = OptionalStruct(Pair, "id");
     const pair: Pair = .{ .id = @fromBackingInt(7), .offset = 9 };
     try std.testing.expectEqual(pair, OptById.of(pair).get().?);
