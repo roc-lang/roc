@@ -203,9 +203,9 @@ pub const UseAbsorbers = struct {
                             .structure => |ext| switch (ext) {
                                 .empty_tag_union => return .tags,
                                 .tag_union => |next| row = next,
-                                else => return .open_tags,
+                                .record, .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return .open_tags,
                             },
-                            else => return .open_tags,
+                            .flex, .rigid, .alias, .field_presence, .err => return .open_tags,
                         }
                     }
                 },
@@ -220,9 +220,9 @@ pub const UseAbsorbers = struct {
                             .structure => |ext| switch (ext) {
                                 .empty_record => return .records,
                                 .record => |next| row = next,
-                                else => return .open_records,
+                                .tag_union, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return .open_records,
                             },
-                            else => return .open_records,
+                            .flex, .rigid, .alias, .field_presence, .err => return .open_records,
                         }
                     }
                 },
@@ -316,7 +316,7 @@ pub const UseAbsorbers = struct {
                 }
                 return self.records.mayTakeIn(sortUnique(self.scratch.items));
             },
-            else => unreachable,
+            .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => unreachable, // liftsIntoNominal admits only records and tag unions
         }
     }
 };
@@ -338,7 +338,7 @@ fn kindOf(store: *const Store, presence: types_mod.RecordField.Presence) FieldKi
                 .required => .required,
                 .optional, .defaulted => .may_widen,
             },
-            else => .unsettled,
+            .flex, .rigid, .alias, .structure, .err => .unsettled,
         },
     };
 }

@@ -10631,10 +10631,9 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     var slots: std.ArrayListUnmanaged(types_mod.NominalDecl.Idx) = .empty;
     defer slots.deinit(self.gpa);
     const SlotId = enum(u32) { _ };
-    const SlotColumn = collections.ZeroSentinelIndexColumn(SlotId);
-    const first_slot: usize = 1;
+    // Each declaration's slot, or absent, as a column over declarations.
+    const SlotColumn = collections.OptionalIndexColumn(SlotId);
     if (decl_count == 0) return;
-    try slots.append(self.gpa, @fromBackingInt(0));
     var slot_by_decl = try SlotColumn.initFilled(self.gpa, decl_count);
     defer slot_by_decl.deinit(self.gpa);
 
@@ -10651,7 +10650,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
         try slots.append(self.gpa, decl_idx);
         slot_by_decl.set(decl_int, @fromBackingInt(slot));
     }
-    if (slots.items.len == first_slot) return;
+    if (slots.items.len == 0) return;
     const slot_count = slots.items.len;
 
     // Collect every local-declaration mention inside each backing template
@@ -10665,7 +10664,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     var visited = collections.DenseMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
-    for (slots.items[first_slot..], first_slot..) |decl_idx, from_slot_usize| {
+    for (slots.items, 0..) |decl_idx, from_slot_usize| {
         const from_slot: u32 = @intCast(from_slot_usize);
         const decl = self.types.getNominalDecl(decl_idx);
         visited.clearRetainingCapacity();
@@ -10754,8 +10753,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     var formal_base = try self.gpa.alloc(u32, slot_count + 1);
     defer self.gpa.free(formal_base);
     formal_base[0] = 0;
-    formal_base[first_slot] = 0;
-    for (slots.items[first_slot..], first_slot..) |decl_idx, slot| {
+    for (slots.items, 0..) |decl_idx, slot| {
         const decl = self.types.getNominalDecl(decl_idx);
         formal_base[slot + 1] = formal_base[slot] + @as(u32, @intCast(self.types.sliceVars(decl.formals).len));
     }
@@ -10763,7 +10761,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     var formal_roots = try self.gpa.alloc(Var, formal_count);
     defer self.gpa.free(formal_roots);
     var max_decl_formals: usize = 0;
-    for (slots.items[first_slot..], first_slot..) |decl_idx, slot| {
+    for (slots.items, 0..) |decl_idx, slot| {
         const decl = self.types.getNominalDecl(decl_idx);
         const formals = self.types.sliceVars(decl.formals);
         max_decl_formals = @max(max_decl_formals, formals.len);
@@ -10871,7 +10869,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     // Two formals of one declaration share a component exactly when a
     // formal-flow cycle brings one back as the other, so a trip around the
     // recursion reorders the declaration's arguments.
-    for (slots.items[first_slot..], first_slot..) |decl_idx, slot| {
+    for (slots.items, 0..) |decl_idx, slot| {
         if (reported[slot]) continue;
         const formal_components = flow_component[formal_base[slot]..formal_base[slot + 1]];
         const reorders = for (formal_components, 0..) |component, position| {
@@ -37275,25 +37273,21 @@ fn collectUseAbsorbers(self: *Self) Allocator.Error!void {
     const node_count: usize = @intCast(self.cir.store.nodes.len());
     for (0..node_count) |index| {
         const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(index));
-        const node = self.cir.store.nodes.get(node_idx);
-        switch (node.tag) {
-            .statement_nominal_decl => {
-                const nominal = self.cir.store.getStatement(@fromBackingInt(@intCast(index))).s_nominal_decl;
-                try self.addLocalUseAbsorber(nominal.anno);
-            },
-            .ty_record_field, .ty_record_field_defaulted => {
-                const field = self.cir.store.getAnnoRecordField(@fromBackingInt(@intCast(index)));
-                if (field.is_optional or field.default_value != null) try absorbers.addWideningField(self.gpa, self.cir.getIdentText(field.name));
-            },
-            .field_access_segment => {
-                const segment = self.cir.store.getFieldAccessSegment(@fromBackingInt(@intCast(index)));
-                if (segment.mode == .optional) try absorbers.addWideningField(self.gpa, self.cir.getIdentText(segment.name));
-            },
-            .record_unset_field => {
-                const field = self.cir.store.getUnsetField(@fromBackingInt(@intCast(index)));
-                try absorbers.addWideningField(self.gpa, self.cir.getIdentText(field.name));
-            },
-            else => {},
+        // Only these four node kinds name a nominal backing or a widening
+        // field; every other kind contributes nothing.
+        const tag = self.cir.store.nodes.get(node_idx).tag;
+        if (tag == .statement_nominal_decl) {
+            const nominal = self.cir.store.getStatement(@fromBackingInt(@intCast(index))).s_nominal_decl;
+            try self.addLocalUseAbsorber(nominal.anno);
+        } else if (tag == .ty_record_field or tag == .ty_record_field_defaulted) {
+            const field = self.cir.store.getAnnoRecordField(@fromBackingInt(@intCast(index)));
+            if (field.is_optional or field.default_value != null) try absorbers.addWideningField(self.gpa, self.cir.getIdentText(field.name));
+        } else if (tag == .field_access_segment) {
+            const segment = self.cir.store.getFieldAccessSegment(@fromBackingInt(@intCast(index)));
+            if (segment.mode == .optional) try absorbers.addWideningField(self.gpa, self.cir.getIdentText(segment.name));
+        } else if (tag == .record_unset_field) {
+            const field = self.cir.store.getUnsetField(@fromBackingInt(@intCast(index)));
+            try absorbers.addWideningField(self.gpa, self.cir.getIdentText(field.name));
         }
     }
 
@@ -37323,14 +37317,9 @@ fn debugAssertLocalUseAbsorbersCovered(self: *Self) Allocator.Error!void {
         const var_: Var = @fromBackingInt(@intCast(index));
         const resolved = self.types.resolveVar(var_);
         if (resolved.var_ != var_) continue;
-        switch (resolved.desc.content) {
-            .structure => |flat| switch (flat) {
-                .record => |record| if (!self.use_absorbers.coversRecordFields(self.types, idents, record)) {
-                    base.invariant("a record holds an optional or defaulted field no collected source names", .{});
-                },
-                else => {},
-            },
-            else => {},
+        const record = resolved.desc.content.unwrapRecord() orelse continue;
+        if (!self.use_absorbers.coversRecordFields(self.types, idents, record)) {
+            base.invariant("a record holds an optional or defaulted field no collected source names", .{});
         }
     }
 }
@@ -37360,7 +37349,7 @@ fn addLocalUseAbsorber(self: *Self, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!
             absorbers.scratch.clearRetainingCapacity();
             for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_anno| switch (self.cir.store.getTypeAnno(tag_anno)) {
                 .tag => |tag| try absorbers.scratch.append(self.gpa, hash(self.cir.getIdentText(tag.name))),
-                else => {
+                .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {
                     absorbers.tags.every = true;
                     return;
                 },

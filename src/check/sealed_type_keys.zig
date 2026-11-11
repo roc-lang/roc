@@ -401,9 +401,9 @@ test "a canonical id slot leaves the unencodable largest id unmemoized" {
 
 test "the zero word is an empty canonical id slot of four bytes" {
     try std.testing.expectEqual(@as(usize, 4), @sizeOf(CanonicalIdSlot));
-    var zeroed: [8]CanonicalIdSlot = undefined;
-    @memset(std.mem.sliceAsBytes(&zeroed), 0);
-    for (&zeroed) |*slot| try std.testing.expect(slot.get() == null);
+    const bytes: [8 * @sizeOf(CanonicalIdSlot)]u8 align(@alignOf(CanonicalIdSlot)) = @splat(0);
+    const zeroed: *const [8]CanonicalIdSlot = @ptrCast(&bytes);
+    for (zeroed) |*slot| try std.testing.expect(slot.get() == null);
 }
 
 /// Real solver-assigned representatives spanning full pages and a partial

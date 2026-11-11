@@ -11,20 +11,13 @@ const ModuleEnv = can.ModuleEnv;
 
 /// Whether the tag union or record bound by the `stmt_index`th statement of
 /// `f`'s body is per-use structure.
-fn localIsPerUse(env: *TestEnv, stmt_index: usize) !bool {
+fn localIsPerUse(env: *TestEnv, stmt_index: usize) TestEnv.TestEnvError!bool {
     const stmt = try env.lambdaBodyStatement("f", stmt_index);
-    const pattern = switch (stmt) {
-        .s_decl => |decl| decl.pattern,
-        else => return error.TestUnexpectedResult,
-    };
-    const resolved = env.module_env.types.resolveVar(ModuleEnv.varFrom(pattern));
-    switch (resolved.desc.content) {
-        .structure => |flat| switch (flat) {
-            .tag_union, .record => {},
-            else => return error.TestUnexpectedResult,
-        },
-        else => return error.TestUnexpectedResult,
-    }
+    try std.testing.expect(stmt == .s_decl);
+    const resolved = env.module_env.types.resolveVar(ModuleEnv.varFrom(stmt.s_decl.pattern));
+    try std.testing.expect(resolved.desc.content == .structure);
+    const flat = resolved.desc.content.structure;
+    try std.testing.expect(flat == .tag_union or flat == .record);
     return resolved.desc.flags.per_use_structure;
 }
 

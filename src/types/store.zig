@@ -470,7 +470,7 @@ pub const Store = struct {
                 .required => false,
                 .unknown => |unknown| switch (self.resolveVar(unknown.presence).desc.content) {
                     .field_presence => |kind| kind != .required,
-                    else => false,
+                    .flex, .rigid, .alias, .structure, .err => false,
                 },
             };
             if (may_widen) try hashes.append(self.gpa, use_absorbers.nameHash(idents.getText(field.name)));

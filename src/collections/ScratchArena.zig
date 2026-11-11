@@ -122,8 +122,7 @@ fn notePeak(self: *ScratchArena) void {
     self.requested = @max(self.requested, self.preceding_bytes +| self.used);
 }
 
-fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
-    _ = ret_addr;
+fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, _: usize) ?[*]u8 {
     const self: *ScratchArena = @ptrCast(@alignCast(ctx));
     const ptr = self.bump(len, alignment) orelse return null;
     storage_work.add(.scratch_bytes, len);
@@ -136,9 +135,7 @@ fn isLast(self: *const ScratchArena, memory: []u8) bool {
     return @intFromPtr(memory.ptr) + memory.len == @intFromPtr(block.ptr) + self.used;
 }
 
-fn resize(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
-    _ = alignment;
-    _ = ret_addr;
+fn resize(ctx: *anyopaque, memory: []u8, _: Alignment, new_len: usize, _: usize) bool {
     const self: *ScratchArena = @ptrCast(@alignCast(ctx));
     if (new_len <= memory.len) {
         if (self.isLast(memory)) self.used -= memory.len - new_len;
@@ -158,9 +155,7 @@ fn remap(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, re
     return if (resize(ctx, memory, alignment, new_len, ret_addr)) memory.ptr else null;
 }
 
-fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
-    _ = alignment;
-    _ = ret_addr;
+fn free(ctx: *anyopaque, memory: []u8, _: Alignment, _: usize) void {
     const self: *ScratchArena = @ptrCast(@alignCast(ctx));
     if (self.isLast(memory)) self.used -= memory.len;
 }

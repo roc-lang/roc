@@ -219,6 +219,10 @@ const ProcArcDomain = struct {
             mapped_len += 1;
         }
 
+        // Which frame locals are resources; their bits are assigned in frame
+        // order once every resource is known.
+        const is_resource = try allocator.alloc(bool, frame_len);
+        @memset(is_resource, false);
         for (frame_locals) |local| {
             const local_index = @backingInt(local);
             if (local_index >= local_contains_refcounted.len) arcInvariant("ARC refcounted-local table did not cover frame local");
@@ -231,13 +235,13 @@ const ProcArcDomain = struct {
             };
             for (resource_locals) |resource_local| {
                 const resource_frame_index = requiredFrameIndex(global_local_index, resource_local);
-                resource_bit_index.set(resource_frame_index, @fromBackingInt(0));
+                is_resource[resource_frame_index] = true;
             }
         }
 
         var resource_count: usize = 0;
         for (0..frame_len) |frame_index| {
-            if (!resource_bit_index.isPresent(frame_index)) continue;
+            if (!is_resource[frame_index]) continue;
             resource_bit_index.set(frame_index, @fromBackingInt(@as(u32, @intCast(resource_count))));
             resource_locals_buffer[resource_count] = frame_locals[frame_index];
             resource_count += 1;
