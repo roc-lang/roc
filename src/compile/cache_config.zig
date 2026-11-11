@@ -349,7 +349,10 @@ pub const Constants = struct {
     /// 164: sorted array builders serialize zeroed entry padding and an
     ///      integer offset that the cache validator checks.
     /// 165: compile-time reads persist placement and semantic root identity.
-    pub const CACHE_VERSION = 175;
+    /// 177: checked-module entries store reproducible checking and evaluation
+    ///      reports beside body-local type context arguments, per-use
+    ///      anonymous structure and generated-codec recurrences.
+    pub const CACHE_VERSION = 177;
 };
 
 /// Configuration for the Roc cache system.

@@ -334,13 +334,17 @@ pub const LiteralRootPlan = struct {
 pub const StaticDataValue = struct {
     /// Post-ARC guards reading this slot; threaded through ComptimeValueGuard.
     first_comptime_guard: ?u32 = null,
-    /// Null when completed frozen data or a stored node supplies this slot
-    /// directly.
+    /// Null when completed frozen data, a stored node, or a capture-free
+    /// callable supplies this slot directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
     /// The completed ConstStore node frozen directly at its explicit layout
     /// and storage plan, without an initializer procedure.
     stored: ?StoredStaticValue = null,
+    /// The capture-free erased callable of this procedure, which needs no
+    /// initializer: its value is the callable's payload (the function
+    /// pointer, no `on_drop`, no capture bytes) with the static refcount.
+    callable: ?LIR.LirProcSpecId = null,
     /// Final constant data assembled by the compiler, never runtime LIR.
     parts: ?StaticDataParts = null,
     /// Another physical representation of this canonical completed root.

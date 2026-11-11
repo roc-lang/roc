@@ -326,8 +326,14 @@ pub fn adapt(plan: *const AdaptPlan, dst: [*]u8, src: [*]const u8, ops: *RocOps)
                 }
                 const data = utils.allocateWithRefcount(to_elem.size * len, to_elem.alignment, to_elem.flags.contains_refcounted, ops);
                 target.* = .{ .bytes = data, .length = len, .capacity_or_alloc_ptr = RocList.encodeCapacity(len) };
+                // A list of zero-sized elements has no bytes (`zstList`):
+                // each element reads none, so any address stands for it.
+                const elements: [*]u8 = source.bytes orelse elements: {
+                    if (from_elem.size != 0) invariant(ops, "a list of sized elements has no bytes");
+                    break :elements data;
+                };
                 for (0..len) |index| {
-                    stack.push(.{ .plan = node.child.?, .src = source.bytes.? + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
+                    stack.push(.{ .plan = node.child.?, .src = elements + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
                 }
             },
             .box => {

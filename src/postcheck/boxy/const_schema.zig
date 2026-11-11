@@ -197,8 +197,8 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
             const view = program.module(nominal.decl.module);
             const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
             // The declaration's own arguments; a block-local declaration's
-            // outer variables follow them and are not stored.
-            const formal_count = declaration.formalArgs(view.types()).len;
+            // context arguments follow them and are not stored.
+            const formal_count = declaration.declaredFormalArgs(view.types()).len;
             const all_args = try allocator.dupe(TypeId, store.nominalArgs(nominal));
             defer allocator.free(all_args);
             if (all_args.len < formal_count) invariant("a nominal type has fewer arguments than its declaration's formals");

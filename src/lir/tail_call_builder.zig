@@ -26,6 +26,21 @@ published: bool = false,
 /// its next call's dynamic arguments live in that region, which a loop
 /// iteration would allocate again while they are still read.
 self_calls: enum { loop, replace_frame } = .loop,
+/// The parameters of a `.boxy` procedure, and where its trailing parameters
+/// that fix its instantiation (its descriptors, dictionaries, and literal
+/// arguments) start. A call to the procedure itself is a loop only when it
+/// passes each of those along unchanged, and each dynamic parameter too;
+/// any other self call replaces the frame like a tail call to any other
+/// procedure. Everything the body composes from its instance is composed at
+/// entry, so a call at another instantiation (polymorphic recursion) needs
+/// a new entry. A dynamic parameter is the address of storage its caller
+/// owns, which a loop jump cannot rebind by writing bytes, while a
+/// frame-replacing call moves its dynamic arguments.
+loop_params: []const LIR.LocalId = &.{},
+instance_start: usize = 0,
+/// The statement a self-tail loop begins at, when it is not the body's
+/// first: a `.boxy` procedure composes its descriptors at entry, before it.
+loop_entry: ?LIR.CFStmtId = null,
 
 /// Start recording one exact procedure identity.
 pub fn init(allocator: std.mem.Allocator, proc: LIR.LirProcSpecId) Self {
@@ -62,6 +77,9 @@ pub fn reset(self: *Self, proc: LIR.LirProcSpecId) void {
     self.next_join = 0;
     self.published = false;
     self.self_calls = .loop;
+    self.loop_params = &.{};
+    self.instance_start = 0;
+    self.loop_entry = null;
 }
 
 /// Called by the statement producer, including when filling a placeholder.
@@ -134,7 +152,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         if (call.tail_call.isSite()) continue;
         const returned = try self.returnedLocal(store, call.next) orelse continue;
         if (returned != call.target) continue;
-        if (call.proc == proc and self.self_calls == .loop) {
+        if (call.proc == proc and self.self_calls == .loop and self.keepsLoopParams(store, call.args)) {
             store.getCFStmtPtr(id).assign_call.tail_call = .site(head);
             head = id;
         } else if (store.getCFStmtImmediate(call.next).* != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
@@ -143,7 +161,20 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         }
     }
     self.published = true;
-    return if (head) |first| .{ .head = first, .loop = @fromBackingInt(self.next_join) } else null;
+    return if (head) |first| .{ .head = first, .loop = @fromBackingInt(self.next_join), .entry = self.loop_entry } else null;
+}
+
+/// Whether a call to the procedure itself passes its instance parameters
+/// and its dynamic parameters along unchanged (`loop_params`).
+fn keepsLoopParams(self: *const Self, store: anytype, args: LIR.LocalSpan) bool {
+    if (self.loop_params.len == 0) return true;
+    const passed = store.getLocalSpan(args);
+    std.debug.assert(collections.GuardedList.borrowLen(passed) == self.loop_params.len);
+    for (self.loop_params, 0..) |param, index| {
+        const fixed = index >= self.instance_start or store.getLocal(param).dyn != null;
+        if (fixed and collections.GuardedList.at(passed, index) != param) return false;
+    }
+    return true;
 }
 
 fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
