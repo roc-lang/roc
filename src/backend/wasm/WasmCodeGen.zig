@@ -3483,7 +3483,27 @@ const WasmPlanExtra = struct {
             switch (self.store.stmtRow(stmt.dyn.data)) {
                 .field_addr => |field| try self.pinned_backing.put(field.base, {}),
                 .tag_payload_addr => |payload| try self.pinned_backing.put(payload.base, {}),
-                else => {},
+                .frame_alloc,
+                .table_entry,
+                .copy,
+                .list_item_addr,
+                .box_payload_addr,
+                .tag_discriminant,
+                .record,
+                .record_update,
+                .tag,
+                .list,
+                .box,
+                .slot_alloc,
+                .slot_store,
+                .eq,
+                .hash,
+                .inspect,
+                .call_erased,
+                .closure,
+                .view,
+                .adapt,
+                => {},
             }
         }
     }
@@ -3538,7 +3558,36 @@ fn planProcLocals(self: *Self, frame_locals: ProcLocalSpan, root: CFStmtId) Allo
                     try plan.access(indexes.nodeOf(GuardedList.at(arms, i).on_match).?, match_.source, true, false);
                 }
             },
-            else => {},
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .dyn,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => {},
         }
         if (stmt != .assign_low_level) continue;
         if (OverflowFusion.findResultConsumer(self.store, id)) |fusion| {
@@ -19330,7 +19379,7 @@ const ListWindowLengthError = Allocator.Error ||
     error{TestExpectedEqual};
 
 /// Every way building, running and checking a split or copy fixture can fail.
-const WasmFixtureError = ListWindowLengthError || error{TestUnexpectedResult};
+const WasmFixtureError = ListWindowLengthError || WasmModule.ParseError || error{TestUnexpectedResult};
 
 fn expectSublistWindowLength(element: layout.Idx, start: u64, len: u64, expected: i32) ListWindowLengthError!void {
     try expectListWindowLength(element, start, len, expected, .sublist);
@@ -19682,26 +19731,26 @@ test "copies and zero fills of every width write exactly their bytes with bounde
 
 /// The frame size an encoded code section entry's prologue reserves, or
 /// zero when it has no prologue.
-fn prologueFrameBytes(entry: []const u8) u32 {
+fn prologueFrameBytes(entry: []const u8) WasmModule.ParseError!u32 {
     var cursor: usize = 0;
-    _ = WasmModule.readU32(entry, &cursor) catch unreachable; // every code section entry starts with the body size the encoder wrote
-    const groups = WasmModule.readU32(entry, &cursor) catch unreachable; // every body starts with the local group count the encoder wrote
+    _ = try WasmModule.readU32(entry, &cursor);
+    const groups = try WasmModule.readU32(entry, &cursor);
     for (0..groups) |_| {
-        _ = WasmModule.readU32(entry, &cursor) catch unreachable; // the encoder wrote one count per local group
+        _ = try WasmModule.readU32(entry, &cursor);
         cursor += 1;
     }
     if (entry[cursor] != Op.global_get) return 0;
     cursor += 1;
-    _ = WasmModule.readU32(entry, &cursor) catch unreachable; // a prologue's global.get names the stack pointer global
+    _ = try WasmModule.readU32(entry, &cursor);
     std.debug.assert(entry[cursor] == Op.i32_const);
     cursor += 1;
-    var result: u32 = @intCast(WasmModule.readI32(entry, &cursor) catch unreachable);
+    var result: u32 = @intCast(try WasmModule.readI32(entry, &cursor));
     std.debug.assert(entry[cursor] == Op.i32_sub and entry[cursor + 1] == Op.local_tee);
     cursor += 2;
-    _ = WasmModule.readU32(entry, &cursor) catch unreachable;
+    _ = try WasmModule.readU32(entry, &cursor);
     if (entry[cursor] == Op.i32_const) {
         cursor += 1;
-        result += @as(u32, @intCast(WasmModule.readI32(entry, &cursor) catch unreachable));
+        result += @as(u32, @intCast(try WasmModule.readI32(entry, &cursor)));
         std.debug.assert(entry[cursor] == Op.i32_sub);
     }
     return result;
@@ -19806,7 +19855,7 @@ fn runAggregateBranchFixture(
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     try codegen.flushPendingBodies();
     const function = codegen.registered_procs.get(@backingInt(caller)).?;
-    const frame_bytes = prologueFrameBytes(emittedBody(&codegen.module, function));
+    const frame_bytes = try prologueFrameBytes(emittedBody(&codegen.module, function));
     try codegen.module.addExport("f", .func, function);
     try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
     try codegen.module.materializeFuncBodies();
@@ -19963,7 +20012,7 @@ fn runRecordAliasChain(allocator: Allocator, alias_count: usize) WasmFixtureErro
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     try codegen.flushPendingBodies();
-    const frame_bytes = prologueFrameBytes(emittedBody(&codegen.module, 0));
+    const frame_bytes = try prologueFrameBytes(emittedBody(&codegen.module, 0));
     try codegen.module.addExport("f", .func, codegen.registered_procs.get(0).?);
     try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
     try codegen.module.materializeFuncBodies();
