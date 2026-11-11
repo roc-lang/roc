@@ -25130,6 +25130,9 @@ fn commitUncommittedTails(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         if (resolved.var_ != var_) continue;
         if (!types_mod.generalize.isUncommittedTail(resolved.desc)) continue;
         if (resolved.desc.rank == .generalized) continue;
+        // A frozen class is a settled instance several uses share; its
+        // descriptor never changes, and no relation lifts it any more.
+        if (resolved.desc.flags.frozen) continue;
         try tails.append(self.gpa, var_);
     }
     for (tails.items) |tail| try self.commitUncommittedTail(tail, env);
