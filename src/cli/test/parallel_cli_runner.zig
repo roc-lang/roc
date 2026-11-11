@@ -7303,7 +7303,7 @@ const hot_reload_host_c_source =
     \\    struct RocErasedCallablePayload *payload = (struct RocErasedCallablePayload *)boxed;
     \\    struct I64Args args = { .arg0 = value };
     \\    int64_t result = 0;
-++ "\n    payload->callable(" ++ shim_symbols.roc_shim_get_ops ++ "(), &result, &args, boxed + 32, NULL);\n" ++
+++ "\n    payload->callable(" ++ shim_symbols.roc_shim_get_ops ++ "(), &result, &args, boxed + " ++ std.fmt.comptimePrint("{d}", .{builtins.erased_callable.capture_offset}) ++ ", NULL);\n" ++
     \\    return result;
     \\}
     \\
@@ -8847,7 +8847,7 @@ fn issue12633PlatformSource(allocator: Allocator, target: NativeMuslTarget) CliR
         \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
-        \\capture_for_host : U64 -> Box((Box(State -> U64) -> U64))
+        \\capture_for_host : U64 -> Box((Box((State -> U64)) -> U64))
         \\capture_for_host = |seed| {{
         \\    init_fn = main.init
         \\    state = init_fn(seed)
@@ -8855,7 +8855,7 @@ fn issue12633PlatformSource(allocator: Allocator, target: NativeMuslTarget) CliR
         \\    Box.box(|reader| Box.unbox(reader)(state))
         \\}}
         \\
-        \\read_for_host : Box((Box(State -> U64) -> U64)) -> U64
+        \\read_for_host : Box((Box((State -> U64)) -> U64)) -> U64
         \\read_for_host = |boxed| {{
         \\    value_fn = main.value
         \\

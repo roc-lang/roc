@@ -1731,10 +1731,11 @@ pub const Builder = struct {
                 self.own_root = wrapper.root;
                 self.comptime_root_body = root.kind != .literal_argument and root.literalConversionKind() == null;
                 try self.tasks.append(self.allocator, .ret);
-                // Polymorphic constants are explicit evaluation templates,
-                // instantiated at their runtime read rather than CTFE roots.
-                // Unit producers also supply factories for CTFE, so only a whole
-                // runtime program promises a completed value here.
+                // Unit producers also supply factories for CTFE, and contextual
+                // constants retain factory bodies. Polymorphic constants are
+                // explicit evaluation templates, instantiated at their runtime
+                // read rather than CTFE roots. A whole runtime program instead
+                // promises a completed value for context-free roots.
                 if (self.program.moduleUnit() == null and !self.program.input.compile_time and root.request_eligibility == .eligible and root.payloadFor(.boxy) == .pending) {
                     // Exact aliases also compute their already-proven
                     // procedure reference without an evaluator.
