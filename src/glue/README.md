@@ -79,6 +79,12 @@ compiler-owned release root or descriptor rather than host-side guessing.
 
 ## Pointer-Width Contract
 
+Crossing the host boundary does not make a value indirect. Arguments, results,
+and provided values need a committed representation; glue rejects unresolved
+by-value types before running a generator. An actual box can carry an unknown
+payload, and an erased callable can remain opaque when its invocation signature
+has no standalone representation.
+
 The glue script input is targetless. It carries no concrete Roc build target,
 OS, or architecture, and `roc glue` has no `--target` flag: running it on any
 machine produces the same generated source for a given platform and glue
@@ -173,6 +179,12 @@ never passed across compiled Roc entrypoints.
 
 ## Glue platform marshalling
 
+Glue generators carry their frozen constants in the same relocatable object as
+their code, so installed generators need neither process-local addresses nor a
+second data object. The image stays loaded until returned values have been
+copied. Both lowering strategies publish the named field/tag schemas of their
+platform boundary and complete constants using that same strategy.
+
 `glue.zig` materializes glue input and reads its result through the checked
 platform's runtime schemas and committed LIR layouts. The old
 `platform/host.zig` extern records have been removed; alphabetical field order
@@ -190,6 +202,12 @@ payloads. Every mutated checked schema must fail the same lock. Run both with:
 ```sh
 zig build run-test-zig-module-glue -- --test-filter 'glue platform'
 ```
+
+The `frozen generator` CLI regression checks long strings, shared nested
+constants, captured functions, copy-on-write, and zero-filled data under both
+strategies and all three glue optimization modes. The `install/glue roundtrip`
+test loads that same generator in separate processes, including after cache
+removal.
 
 ## ABI Risk Register and Roc Glue Runtime Controls
 
