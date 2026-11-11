@@ -24,10 +24,12 @@ const PlatformPairing = check.CheckedArtifact.PlatformPairing;
 
 /// A kind of persisted cache entry.
 pub const Entry = enum {
-    /// One combined checking entry: source env, publication inputs, and artifact.
+    /// One combined checking entry: source env, publication inputs, artifact,
+    /// and the reports its checking and evaluation produced.
     checked_module,
-    /// One exact platform/app composition's changed columns, written in the
-    /// checked-module envelope with an empty env body.
+    /// One exact platform/app composition's changed columns and the reports
+    /// its evaluation produced, written in the checked-module envelope with an
+    /// empty env body.
     platform_pairing,
     /// One module's canonicalization output: an env body and the encoded
     /// parse-stage record.
@@ -37,12 +39,17 @@ pub const Entry = enum {
 /// Layout fingerprint of `ModuleEnv.Serialized`.
 pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
+/// Layout fingerprint of `CheckedReports.Serialized`, the reports body of
+/// checked-module and platform-pairing entries.
+const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
+
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 21 records paired callable
-/// forwarding and request completion for both strategies, preserves
-/// field-default identities in Boxy stored-function types, and binds integer
-/// list worker item types. It rejects every version 18 recipe format and the
-/// independent version 19 and 20 formats. Platform-pairing entries share it.
+/// reflected in layout fingerprints. Version 21 stores reproducible checking
+/// and evaluation reports beside paired callable forwarding and request
+/// completion for both strategies, field-default identities in Boxy
+/// stored-function types, and integer list worker item-type bindings. It
+/// rejects every version 18 recipe format and the independent version 19 and
+/// 20 formats. Platform-pairing entries share it.
 const checked_envelope_version: u32 = 21;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
@@ -55,12 +62,12 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout, check.rootLayoutVersionHash(check.CheckingReuse.Serialized, 1) },
+            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout, check.rootLayoutVersionHash(check.CheckingReuse.Serialized, 1), checked_reports_layout },
         ),
         .platform_pairing => compose(
             "roc-platform-pairing-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH },
+            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH, checked_reports_layout },
         ),
         .canonicalized_module => compose(
             "roc-canonicalized-module-entry-v1",
@@ -142,8 +149,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x7D, 0x1C, 0x65, 0xCE, 0x04, 0x79, 0xF7, 0x3F, 0x23, 0x08, 0x09, 0x50, 0xA6, 0xE9, 0x6F, 0xB1,
-        0xD2, 0xED, 0x52, 0x8A, 0x6E, 0xFD, 0xAF, 0x0B, 0x0F, 0x7E, 0x4C, 0x8B, 0x88, 0x40, 0xBA, 0x41,
+        0xCC, 0xE5, 0xBD, 0x5B, 0x98, 0xB2, 0xA4, 0xD3, 0x9C, 0xC7, 0xB9, 0x22, 0xD4, 0xDE, 0x4B, 0xAE,
+        0x16, 0xD2, 0x27, 0xF7, 0x82, 0xC4, 0x93, 0x99, 0xD1, 0xED, 0xE5, 0x52, 0x31, 0xB4, 0x4B, 0xF9,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

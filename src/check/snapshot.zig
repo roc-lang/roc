@@ -187,6 +187,16 @@ pub const FormatContext = struct {
     import_mapping: ?types.import_mapping.ImportMapping,
     default_source: @FieldType(TypeWriter, "mb_default_source"),
     default_source_ctx: *const anyopaque,
+
+    /// The context `writer` renders with.
+    pub fn of(writer: *const TypeWriter) FormatContext {
+        return .{
+            .idents = writer.idents,
+            .import_mapping = if (writer.import_mapping) |mapping| mapping.* else null,
+            .default_source = writer.mb_default_source,
+            .default_source_ctx = writer.default_source_ctx,
+        };
+    }
 };
 
 /// A node's identity and presentation context at capture time.
@@ -420,12 +430,7 @@ pub const Store = struct {
     }
 
     pub fn setFormatContext(self: *Self, writer: *const TypeWriter) void {
-        self.format_context = .{
-            .idents = writer.idents,
-            .import_mapping = if (writer.import_mapping) |mapping| mapping.* else null,
-            .default_source = writer.mb_default_source,
-            .default_source_ctx = writer.default_source_ctx,
-        };
+        self.format_context = FormatContext.of(writer);
     }
 
     fn renderGraph(self: *Self, capture: u32) Allocator.Error!*RenderGraph {

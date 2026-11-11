@@ -16,7 +16,9 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 
 const Check = @import("Check.zig");
+const CheckedReports = @import("checked_reports.zig");
 const report = @import("report.zig");
+const snapshot = @import("snapshot.zig");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -92,6 +94,63 @@ pub fn appendTypes(
     defer builder.deinit();
     for (checker.problems.problems.items) |type_problem| {
         try appendOwned(gpa, reports, try builder.build(type_problem));
+    }
+}
+
+/// Appends the reports a checked module's checking and compile-time evaluation
+/// produced, rendered from the problems its checked cache entry stores with
+/// the same builders and inputs the compilation that stored them used:
+/// checking's problems with its snapshots and regions, then evaluation's.
+pub fn appendStored(
+    gpa: Allocator,
+    reports: *std.ArrayList(Report),
+    env: *ModuleEnv,
+    stored: *const CheckedReports,
+    filename: []const u8,
+    other_modules: []const *const ModuleEnv,
+    platform_requirement_source: ?report.PlatformRequirementSource,
+) Allocator.Error!void {
+    if (stored.isEmpty()) return;
+    var problems = try stored.instantiateProblems(gpa);
+    defer problems.deinit();
+    var import_mapping = try stored.instantiateImportMapping(gpa);
+    defer import_mapping.deinit();
+    const checking_count: usize = @intCast(stored.checking_problem_count);
+    if (checking_count != 0) {
+        var snapshots = try snapshot.Store.initCapacity(gpa, stored.outcome.contents.len);
+        defer snapshots.deinit();
+        var regions = base.Region.List{};
+        defer regions.deinit(gpa);
+        // Snapshots render with the names, import display names and default
+        // sources the checker's type writer rendered them with.
+        try stored.instantiateRendering(gpa, &snapshots, &regions, .{
+            .idents = env.getIdentStoreConst(),
+            .import_mapping = import_mapping,
+            .default_source = ModuleEnv.typeWriterDefaultSource,
+            .default_source_ctx = env,
+        });
+        var builder = try report.ReportBuilder.init(
+            gpa,
+            env,
+            env,
+            &snapshots,
+            &problems,
+            filename,
+            other_modules,
+            &import_mapping,
+            &regions,
+            platform_requirement_source,
+        );
+        defer builder.deinit();
+        for (problems.problems.items[0..checking_count]) |type_problem| {
+            try appendOwned(gpa, reports, try builder.build(type_problem));
+        }
+    }
+    if (checking_count == problems.problems.items.len) return;
+    var builder = try report.ReportBuilder.initEvaluation(gpa, env, &problems, filename, other_modules, &import_mapping);
+    defer builder.deinit();
+    for (problems.problems.items[checking_count..]) |evaluation_problem| {
+        try appendOwned(gpa, reports, try builder.build(evaluation_problem));
     }
 }
 
