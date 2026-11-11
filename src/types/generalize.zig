@@ -167,11 +167,12 @@ pub const Generalizer = struct {
     rank_frames: std.ArrayList(RankFrame),
     /// Settled child ranks, consumed by the frame that requested them.
     pending_ranks: std.ArrayList(Rank),
-    /// The uncommitted record and tag tails the next pass may quantify
-    /// (design.md "Uncommitted Record Tails", "Uncommitted Tag Tails"). The
-    /// caller fills it before each pass.
+    /// The uncommitted record tails the next pass may quantify (design.md
+    /// "Uncommitted Record Tails"). The caller fills it before each pass. An
+    /// uncommitted tag tail is always quantified (design.md "Uncommitted Tag
+    /// Tails").
     quantifiable_tails: @import("collections").DenseMap(Var, void),
-    /// The uncommitted tails the last pass would have quantified but
+    /// The uncommitted record tails the last pass would have quantified but
     /// `quantifiable_tails` does not hold. The pass leaves them unquantified
     /// at their rank, and the caller commits each to the empty record.
     unquantified_tails: std.ArrayListUnmanaged(Var) = .empty,
@@ -293,7 +294,7 @@ pub const Generalizer = struct {
         // "Uncommitted Record Tails").
         for (self.tmp_vars.items) |ranked| {
             const resolved = self.store.resolveVar(ranked.var_);
-            if (!resolved.is_root or !isUncommittedTail(resolved.desc)) continue;
+            if (!resolved.is_root or resolved.desc.content != .flex or !resolved.desc.flags.uncommitted_record_tail) continue;
             if (@backingInt(resolved.desc.rank) != rank_to_generalize_int) continue;
             if (self.quantifiable_tails.contains(resolved.var_)) continue;
             try self.unquantified_tails.append(self.gpa, resolved.var_);
@@ -343,7 +344,8 @@ pub const Generalizer = struct {
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // The caller committed every tail `adjust` listed.
-                    std.debug.assert(!(isUncommittedTail(resolved.desc) and !self.quantifiable_tails.contains(resolved.var_)));
+                    std.debug.assert(!(resolved.desc.content == .flex and resolved.desc.flags.uncommitted_record_tail and
+                        !self.quantifiable_tails.contains(resolved.var_)));
                     // Safe to generalize
                     try self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }

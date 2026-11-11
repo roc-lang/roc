@@ -1,4 +1,3 @@
 Other := [].{
-	thing : { size : U64, name : Str }
-	thing = { size: 9, name: "nine" }
+	thing = |_| { size: 9.U64, name: "nine" }
 }

@@ -16,7 +16,6 @@ Padded := { z : U32, _ : U32, a : Str, b : U8 }.{
 }
 
 Plain := { z : U32, _ : U32, a : U64 }.{
-	both : Plain, { z : U32, a : U64 } -> U64
 	both = |p, r| p.z.to_u64() + r.a
 }
 
@@ -124,27 +123,23 @@ poke = |r| { ..r, z: 5 }
 
 read_each = |xs| List.map(xs, |r| r.z)
 
-closed_param : { z : U32, a : U64 } -> U32
+# These bodies read a record by its row, at every position a padded nominal
+# can reach them.
 closed_param = |r| r.z
 
-list_param : List({ z : U32, a : U64 }) -> U64
 list_param = |xs| List.fold(xs, 0, |n, r| n + r.a)
 
-tag_param : [Has({ z : U32, a : U64 }), No] -> U32
 tag_param = |t| match t {
 	Has(r) => r.z
 	No => 0
 }
 
-tuple_param : ({ z : U32, a : U64 }, U8) -> U32
 tuple_param = |(r, b)| r.z + b.to_u32()
 
-nested_param : { p : { z : U32, a : U64 }, n : U8 } -> U64
 nested_param = |r| r.p.a + r.n.to_u64()
 
 # An empty record takes no space where the padded record it stands for does, so
 # the field beside it moves.
-unit_param : { k : {}, n : U64 } -> U64
 unit_param = |r| r.n
 
 apply : (a -> b), a -> b
@@ -247,15 +242,15 @@ main! = |args| {
 	echo!("${Str.inspect(List.map(plains, read_z))} ${Str.inspect(apply(read_z, plain))} ${Str.inspect(read_value(plain))}\n")
 
 	lifted : Plain
-	lifted = Lifted.plain
+	lifted = Lifted.plain({})
 	lifted_list : List(Plain)
-	lifted_list = Lifted.plains
+	lifted_list = Lifted.plains({})
 	lifted_fn : U32 -> Plain
 	lifted_fn = Lifted.to_plain
 	lifted_unit : Only
-	lifted_unit = Lifted.nothing
+	lifted_unit = Lifted.nothing({})
 	beside : { k : Only, n : U64 }
-	beside = Lifted.beside
+	beside = Lifted.beside({})
 	nested : { p : Plain, n : U8 }
 	nested = { p: plain, n: 3 }
 	echo!("${Str.inspect(beside.n)} ${Str.inspect(unit_param(beside))} ${Str.inspect(nested_param(nested))} ${Str.inspect(stored_adder(1))}\n")

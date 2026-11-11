@@ -5153,7 +5153,9 @@ a function's own result, reached through data alone (record fields, tuple
 items, tag payloads, alias and nominal arguments), never in an argument,
 never inside a function type nested in the result, and never in a
 static-dispatch constraint, and its own constraints are ones the empty
-record discharges (`Check.collectQuantifiableTails`). After rank adjustment
+record discharges (`Check.collectQuantifiableTails`). A definition a
+`provides` entry names quantifies no record tail: the host compiled against
+its closed rows (Host Symbol ABI). After rank adjustment
 and before quantifying, the generalizer hands the checker every other
 uncommitted tail the boundary owns, and the checker commits each to the
 empty record by ordinary unification (`Check.generalizeRank`,
@@ -5254,10 +5256,13 @@ with a `Try`), and no instantiation of a tag tail changes a layout: it can
 only commit or let its union lift, and an anonymous closed tag union and a
 nominal type over the same backing have one representation (`.boxy`'s
 `Program.storageDifference` reads a nominal through its backing, and a
-lowered nominal shares its backing's layout). An uncommitted tag tail the
-boundary owns that its binding does not reach commits there, and one no
-scheme quantifies commits when the module finishes checking. Committing
-only clears the mark; the empty tag union stays.
+lowered nominal shares its backing's layout). A generalization boundary
+therefore quantifies every uncommitted tag tail it owns, without asking what
+reaches it: a tail in a dispatch requirement the scheme captures after it
+quantifies must be copied by each use, and quantifying one nothing reaches
+costs nothing. One that no scheme quantifies commits when the module
+finishes checking. Committing only clears the mark; the empty tag union
+stays.
 
 Post-check stages read an uncommitted tag tail as the empty tag union it
 is. It is no identity variable of a scheme, so a worker takes no hidden
@@ -14067,9 +14072,8 @@ Other solved-graph mutations:
   rank adjustment and before quantifying, a generalization boundary walks
   the binding's type and the constraints of the variables in it, and commits
   every uncommitted record tail it would quantify that does not occur only
-  in a function's result data, and every uncommitted tag tail the walk does
-  not reach. A record tail commits by ordinary unification with the empty
-  record; a tag tail commits by clearing its mark
+  in a function's result data, by ordinary unification with the empty
+  record. Finalization commits a tag tail by clearing its mark
   (`Store.commitUncommittedTagTail`), which keeps its content. The accepted
   side (a returned record literal's tail and a matched parameter's tag tail
   stay quantified, so each use lifts or widens its own copy) and the rejected

@@ -5899,7 +5899,7 @@ fn commitUncommittedTail(self: *Self, tail: Var, env: *Env) Allocator.Error!void
 /// fields, tuple items, tag payloads, alias and nominal arguments) to the
 /// empty record. A derivation decided against those exact shapes is a
 /// commitment point (design.md "Uncommitted Record Tails").
-fn commitUncommittedRecordTailsIn(self: *Self, root: Var, env: *Env) Allocator.Error!void {
+fn commitUncommittedRecordTailsIn(self: *Self, root: Var, env: *Env) Allocator.Error!bool {
     var tails: std.ArrayListUnmanaged(Var) = .empty;
     defer tails.deinit(self.gpa);
     var seen: collections.DenseMapUnmanaged(Var, void) = .empty;
@@ -5933,6 +5933,21 @@ fn commitUncommittedRecordTailsIn(self: *Self, root: Var, env: *Env) Allocator.E
         }
     }
     for (tails.items) |tail| try self.commitUncommittedTail(tail, env);
+    return tails.items.len != 0;
+}
+
+/// Whether any of `roots` is the type of a definition a `provides` entry
+/// names.
+fn rootsIncludeProvidedDef(self: *Self, roots: []const Var) bool {
+    for (self.cir.provides_entries.items.items) |provides_entry| {
+        const def_idx = provides_entry.local_def orelse continue;
+        const def = self.cir.store.getDef(def_idx);
+        const def_root = self.types.resolveVar(ModuleEnv.varFrom(def.expr)).var_;
+        for (roots) |root| {
+            if (self.types.resolveVar(root).var_ == def_root) return true;
+        }
+    }
+    return false;
 }
 
 /// Where a walk of a binding's type has reached a var: in a function's own
@@ -5948,6 +5963,9 @@ const TailPosition = enum { result_data, elsewhere };
 fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!void {
     const quantifiable = &self.generalizer.quantifiable_tails;
     quantifiable.clearRetainingCapacity();
+    // A definition the platform provides to the host has a fixed host ABI, so
+    // its record tails commit (design.md "Host Symbol ABI").
+    const host_bound = self.rootsIncludeProvidedDef(roots);
     var disqualified: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer disqualified.deinit(self.gpa);
     var seen: collections.DenseMapUnmanaged(Var, TailPosition) = .empty;
@@ -5991,7 +6009,7 @@ fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!voi
                     try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = .elsewhere });
                 }
                 if (resolved.desc.flags.uncommitted_record_tail) {
-                    if (position == .result_data and self.rowDefaultDischargesConstraints(flex.constraints)) {
+                    if (position == .result_data and !host_bound and self.rowDefaultDischargesConstraints(flex.constraints)) {
                         if (!disqualified.contains(resolved.var_)) try quantifiable.put(resolved.var_, {});
                     } else {
                         try disqualified.put(self.gpa, resolved.var_, {});
@@ -6007,10 +6025,7 @@ fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!voi
                 for (self.types.sliceAliasArgs(alias)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position });
             },
             .structure => |flat| switch (flat) {
-                .empty_record => {},
-                // A tag tail is quantified wherever instantiation reaches it
-                // (design.md "Uncommitted Tag Tails").
-                .empty_tag_union => if (resolved.desc.flags.uncommitted_tag_tail) try quantifiable.put(resolved.var_, {}),
+                .empty_record, .empty_tag_union => {},
                 .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try pending.append(self.gpa, .{ .var_ = elem, .position = position }),
                 .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position }),
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
@@ -54268,6 +54283,13 @@ fn satisfyDerivedCodecForShape(
                 try self.scratch_deferred_static_dispatch_constraints.append(deferred);
                 return .redeferred;
             }
+            // Nothing further will arrive to decide the shape, so the
+            // uncommitted record tails it holds commit (design.md
+            // "Uncommitted Record Tails") and the dispatch is decided again.
+            if (try self.commitUncommittedRecordTailsIn(deferred.var_, env)) {
+                try self.scratch_deferred_static_dispatch_constraints.append(deferred);
+                return .redeferred;
+            }
             if (!anonymous) {
                 try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
                 try self.settleUndeterminedDerivedCodec(deferred, constraint, env);
@@ -56974,7 +56996,7 @@ fn satisfyDerivedMapConstraint(
     // The derivation decides its plan against the exact payloads, so a
     // payload record's uncommitted tail commits here (design.md "Uncommitted
     // Record Tails").
-    try self.commitUncommittedRecordTailsIn(dispatcher_var, env);
+    _ = try self.commitUncommittedRecordTailsIn(dispatcher_var, env);
     var tags = std.ArrayList(types_mod.Tag).empty;
     defer tags.deinit(self.gpa);
     const analysis = (try self.analyzeDerivedMap(dispatcher_var, env, region, &tags)) orelse return .unsupported;
