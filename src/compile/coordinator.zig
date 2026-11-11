@@ -3987,8 +3987,9 @@ pub const Coordinator = struct {
     };
 
     /// Write every pending store, on the post-check workers where the
-    /// coordinator has them.
-    fn writePendingStores(self: *Coordinator, stores: []PendingStore) CoordinatorError!void {
+    /// coordinator has them. Only task acceptance can fail here; individual
+    /// cache-write failures are recorded by PendingStore.run.
+    fn writePendingStores(self: *Coordinator, stores: []PendingStore) Allocator.Error!void {
         if (stores.len == 0) return;
         if (self.hasWorkers()) {
             var session = try self.postCheckExecutor().begin();
@@ -7739,6 +7740,8 @@ const CompiledBuildFacts = struct {
     reports: []u8,
     /// Every published checked-artifact key, sorted.
     artifact_keys: [][32]u8,
+    /// Native checking-entry storage identities, distinct from artifact identities.
+    typing_storage_keys: [][32]u8,
     artifact_digests: [][32]u8,
     checking: []ModuleCheckingFacts,
     rejected_modules: usize,
@@ -7748,6 +7751,7 @@ const CompiledBuildFacts = struct {
     fn deinit(self: *CompiledBuildFacts, allocator: Allocator) void {
         allocator.free(self.reports);
         allocator.free(self.artifact_keys);
+        allocator.free(self.typing_storage_keys);
         allocator.free(self.artifact_digests);
         for (self.checking) |facts| allocator.free(facts.name);
         allocator.free(self.checking);
@@ -7865,6 +7869,8 @@ fn compileAppFactsWithWorkers(
     var failed_modules: usize = 0;
     var keys = std.ArrayList([32]u8).empty;
     errdefer keys.deinit(allocator);
+    var storage_keys = std.ArrayList([32]u8).empty;
+    errdefer storage_keys.deinit(allocator);
     var digests = std.ArrayList([32]u8).empty;
     errdefer digests.deinit(allocator);
     var checking = std.ArrayList(ModuleCheckingFacts).empty;
@@ -7875,6 +7881,7 @@ fn compileAppFactsWithWorkers(
     var pkg_it = coord.packages.iterator();
     while (pkg_it.next()) |pkg_entry| {
         for (pkg_entry.value_ptr.*.modules.items) |*mod| {
+            if (mod.typing_storage_key) |key| try storage_keys.append(allocator, key.bytes);
             if (mod.completedWithFailure()) failed_modules += 1;
             if (mod.cached_ast) |ast| {
                 if (ast.source_rejected) {
@@ -7906,6 +7913,7 @@ fn compileAppFactsWithWorkers(
         }
     }
     std.mem.sort([32]u8, keys.items, {}, lessThanBytes);
+    std.mem.sort([32]u8, storage_keys.items, {}, lessThanBytes);
     std.mem.sort([32]u8, digests.items, {}, lessThanBytes);
 
     return .{
@@ -7914,6 +7922,7 @@ fn compileAppFactsWithWorkers(
         .reports = owned_reports,
         .checking_work = coord.getTimingInfo().checking_work,
         .artifact_keys = try keys.toOwnedSlice(allocator),
+        .typing_storage_keys = try storage_keys.toOwnedSlice(allocator),
         .artifact_digests = try digests.toOwnedSlice(allocator),
         .checking = try checking.toOwnedSlice(allocator),
         .has_errors = coord.hasUserErrors(),
@@ -10344,8 +10353,8 @@ test "issue 12059: a checked module's cache entry does not depend on how an impo
     // key in both builds, and its entry holds the same bytes whichever app
     // was compiled: only the app module itself differs.
     var shared_entries: usize = 0;
-    for (lifted.artifact_keys) |key| {
-        const in_both = for (unlifted.artifact_keys) |other| {
+    for (lifted.typing_storage_keys) |key| {
+        const in_both = for (unlifted.typing_storage_keys) |other| {
             if (std.mem.eql(u8, &key, &other)) break true;
         } else false;
         if (!in_both) continue;

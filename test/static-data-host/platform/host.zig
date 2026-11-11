@@ -355,7 +355,6 @@ fn expectBoxedStaticLabel(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostC
     try expectStaticDataPtr(ptr, "boxed_static_label");
 
     const payload = builtins.erased_callable.payloadPtr(ptr);
-    const on_drop = payload.on_drop orelse return fail("expected boxed_static_label on_drop helper");
 
     var args = I64Arg{ .arg0 = 0 };
     var result: RocStr = undefined;
@@ -370,9 +369,12 @@ fn expectBoxedStaticLabel(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostC
     );
     try expectStr(result, expected, roc_ops, "boxed_static_label call");
 
-    // Exercise the explicitly relocated helper as well as the callable proc.
-    // Its captured string is static, so final-drop preserves the backing.
-    on_drop(builtins.erased_callable.capturePtr(ptr), roc_ops);
+    // Immortal capture graphs need no drop helper. If the representation
+    // carries one, exercise its relocation too: dropping a static string
+    // must preserve its backing. In either case decref keeps the callable.
+    if (payload.on_drop) |on_drop| on_drop(builtins.erased_callable.capturePtr(ptr), roc_ops);
+    builtins.erased_callable.decref(ptr, roc_ops);
+    try expectStaticDataPtr(ptr, "boxed_static_label after decref");
     try expectStr(result, expected, roc_ops, "boxed_static_label on_drop");
 }
 

@@ -140,6 +140,7 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
         TestUnexpectedResult,
         UnsupportedBuiltinAnnotationOnly,
         UnsupportedHeader,
+        UnsupportedTarget,
         WriteFailed,
         Issue806UnsafeLargeStackStructAssign,
         Issue806UnsafeLargeStackTagAssign,
@@ -1202,6 +1203,7 @@ fn lowerAppPathToLir(
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = opts.specialization_strategy;
 
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
@@ -1302,6 +1304,10 @@ fn lowerAppPathToLir(
     };
     const lower_target: lir.CheckedPipeline.TargetConfig = .{
         .comptime_value_reads = opts.shared_comptime_reads,
+        .completed_scalar_values = if (coord.program_session) |*session|
+            if (session.completed) |*completed| &completed.scalar_values else null
+        else
+            null,
         .specialization_strategy = opts.specialization_strategy,
         .target_usize = opts.target_usize,
         .inline_mode = opts.inline_mode,
@@ -1328,6 +1334,12 @@ fn lowerAppPathToLir(
     }
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(gpa, lower_modules, lower_roots, lower_target);
     defer lowered.deinit();
+    const static_data = try eval.buildStaticDataForWidth(gpa, .{
+        .root = lower_modules.root,
+        .imports = lower_modules.imports,
+    }, &lowered, lowered.target_usize, .{});
+    if (lowered.frozen_static_data) |*previous| previous.deinit();
+    lowered.frozen_static_data = .{ .allocator = gpa, .exports = static_data };
     if (opts.timing_out) |timing_out| timing_out.* = timing.snapshot();
 
     if (dump) |writer| {

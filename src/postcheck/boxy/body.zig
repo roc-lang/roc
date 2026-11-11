@@ -1621,7 +1621,10 @@ pub const Builder = struct {
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
-                if (!self.program.input.compile_time and root.payloadFor(.boxy) == .pending) invariant("a runtime entry wrapper has no completed Boxy value");
+                // Ineligible roots depend on a use's type arguments and are
+                // computed by their generic runtime wrapper, not the global
+                // compile-time evaluator.
+                if (!self.program.input.compile_time and root.request_eligibility == .eligible and root.payloadFor(.boxy) == .pending) invariant("a runtime entry wrapper has no completed Boxy value");
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
                 } else switch (root.kind) {

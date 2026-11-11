@@ -3595,9 +3595,13 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
-        .entry_wrapper => |wrapper_id| switch (view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root).kind) {
-            .expect, .repl_expr => false,
-            .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
+        .entry_wrapper => |wrapper_id| blk: {
+            const root = view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root);
+            if (checked.compileTimeCallableRootIsProcedureReference(view.bodies(), view.view.resolved_value_refs, root)) break :blk false;
+            break :blk switch (root.kind) {
+                .expect, .repl_expr => false,
+                .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
+            };
         },
     };
 }
@@ -3883,6 +3887,7 @@ test "Boxy error reachability Program owns one lazy memo and releases it before 
     const allocator = std.testing.allocator;
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(allocator);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(allocator, std.testing.io, 0));
     const bad = try checked_types.appendSyntheticPayloadRoot(allocator, .err);
     const root = try checked_types.appendSyntheticPayloadRoot(allocator, .{ .tuple = try allocator.dupe(checked.CheckedTypeId, &.{bad}) });
     var view: checked.ImportedModuleView = undefined;

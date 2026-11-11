@@ -7400,10 +7400,21 @@ const Lowerer = struct {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
         const in_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
-        // These expressions describe data to the compile-time encoder only.
-        // Runtime reads always reference the finished value, even when it is
-        // empty or a consumer will subsequently mutate it.
-        if (in_initializer) switch (candidate.value) {
+        const value_layout = self.result.layouts.getLayout(layout_idx);
+        const immediate_scalar = switch (value_layout.tag) {
+            .scalar => switch (value_layout.getScalar().tag) {
+                .int, .frac, .vector => true,
+                .str, .opaque_ptr => false,
+            },
+            .tag_union => self.result.layouts.getTagUnionInfo(value_layout).discriminant_offset == 0,
+            .zst => true,
+            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole, .dynamic => false,
+        };
+        // Scalars (including payload-free tag discriminants) and short strings
+        // are immediate values. Hiding them behind static-data loads loses
+        // their known values before constant folding and range proofs.
+        // Aggregates still read their immutable finished storage.
+        if (in_initializer or immediate_scalar or !candidate.storage.needsTargetStorage(self.result.layouts.targetUsize())) switch (candidate.value) {
             .runtime => |runtime| return .{ .tail = exprTask(where, target, runtime, ty, next) },
             .stored => {},
         };

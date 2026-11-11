@@ -2158,8 +2158,9 @@ fn compileTimeRootHasRootRequest(
 
 /// An exact checked procedure lookup already carries the callable identity
 /// that compile-time evaluation would rediscover. Keep its callable binding
-/// pending for runtime demand instead of scheduling an evaluator wrapper.
-fn compileTimeCallableRootIsProcedureReference(
+/// out of both evaluator scheduling and runtime initializer-wrapper emission:
+/// uses refer to the checked procedure directly.
+pub fn compileTimeCallableRootIsProcedureReference(
     bodies: CheckedBodies,
     resolved_value_refs: *const ResolvedValueRefTable,
     root: CompileTimeRoot,
@@ -22593,6 +22594,7 @@ pub const PlatformPairing = struct {
         platform_requirement_relations: PlatformRequirementRelationTable.Serialized,
         platform_required_bindings: PlatformRequiredBindingTable.Serialized,
         resolved_value_refs: ResolvedValueRefTable.Serialized,
+        callable_eval_templates: CallableEvalTemplateTable.Serialized,
         provided_exports: ProvidedExportTable.Serialized,
         root_requests: RootRequestTable.Serialized,
         exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
@@ -22635,7 +22637,6 @@ pub const PlatformPairing = struct {
                 "static_dispatch_plans",
                 "nested_proc_sites",
                 "top_level_procedure_bindings",
-                "callable_eval_templates",
                 "hosted_procs",
                 "hosted_bindings",
                 "platform_required_declarations",
@@ -22681,6 +22682,7 @@ pub const PlatformPairing = struct {
             try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
             try self.platform_required_bindings.serialize(&artifact.platform_required_bindings, gpa, writer);
             try self.resolved_value_refs.serialize(&artifact.resolved_value_refs, gpa, writer);
+            try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
             try self.provided_exports.serialize(&artifact.provided_exports, gpa, writer);
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
@@ -22741,6 +22743,7 @@ pub const PlatformPairing = struct {
             result.platform_requirement_relations = self.platform_requirement_relations.deserialize(address);
             result.platform_required_bindings = self.platform_required_bindings.deserialize(address);
             result.resolved_value_refs = self.resolved_value_refs.deserialize(address);
+            result.callable_eval_templates = self.callable_eval_templates.deserialize(address);
             result.provided_exports = self.provided_exports.deserialize(address);
             result.root_requests = self.root_requests.deserialize(address);
             result.exhaustiveness_sites = self.exhaustiveness_sites.deserialize(address);
@@ -22822,6 +22825,23 @@ pub fn pairCheckedPlatform(
         }
         result.pairing_types = .{ .images = try images.toOwnedSlice(session) };
     }
+
+    // Binding a platform requirement can turn a computed-callable placeholder
+    // into an exact procedure alias. Publish the forwarding fact before call
+    // targets and root scheduling consume it, and keep it in the pairing's
+    // owned/persisted columns rather than mutating the shared platform.
+    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
+    publishCallableEvalForwarding(
+        &result.callable_eval_templates,
+        result.bodies(),
+        &result.resolved_value_refs,
+        &result.compile_time_roots,
+        result.key,
+        &result.top_level_procedure_bindings,
+        &.{},
+        available_artifacts,
+        &relations,
+    );
 
     // A requirement lookup whose binding the app rejected produces no value,
     // and a call of a requirement the binding classifies may become direct.
@@ -22921,7 +22941,10 @@ pub fn pairCheckedPlatform(
         try roots.append(session, selected);
     }
     for (roots.items) |*request| {
-        request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
+        request.evaluation_complete = if (request.abi == .compile_time and !request.requires_pairing) blk: {
+            const root = result.compile_time_roots.root(request.compile_time_root.?);
+            break :blk !root.needsEvaluation(.lss) and !root.needsEvaluation(.boxy);
+        } else false;
         request.requires_pairing = false;
         request.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, request.checked_type, &type_memo);
     }
@@ -22946,8 +22969,7 @@ pub fn pairCheckedPlatform(
         // A paired platform may inherit a semantically completed value but
         // still need the other strategy's function representation. Keep its
         // declared request so that strategy can run the producer later.
-        const root = result.compile_time_roots.root(request.compile_time_root.?);
-        if (!request.evaluation_complete or root.needsEvaluation(.lss) or root.needsEvaluation(.boxy)) try schedule.append(session, request);
+        if (!request.evaluation_complete) try schedule.append(session, request);
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
