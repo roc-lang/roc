@@ -154,11 +154,24 @@ pub const CFStmtId = enum(u32) {
     _,
 };
 
-/// Identifier of one virtual source frame introduced by inlining.
+/// Identifier of one virtual source frame introduced by inlining, or `none`.
+/// A frame's id is its row in `LirStore.inline_scopes` plus one, so a zeroed
+/// column holds `none`.
 pub const InlineScopeId = enum(u32) {
+    none = 0,
     _,
 
-    pub const none: InlineScopeId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
+    /// The id of the frame at `inline_scopes` row `row_index`.
+    pub fn fromRow(row_index: u32) InlineScopeId {
+        std.debug.assert(row_index < std.math.maxInt(u32));
+        return @fromBackingInt(row_index + 1);
+    }
+
+    /// The `inline_scopes` row of a frame.
+    pub fn row(self: InlineScopeId) u32 {
+        std.debug.assert(self != .none);
+        return @backingInt(self) - 1;
+    }
 };
 
 /// A virtual source frame retained independently of physical procedures.
@@ -1106,13 +1119,28 @@ pub const CrashMessage = union(enum) {
 /// changes one of its fields adds a new row and points the statement at it,
 /// and statements copied from one another share their rows. `none` names no
 /// row; it is valid only for an optional row, whose absence means every field
-/// of the row has its default.
+/// of the row has its default. A row's id is its position in its column plus
+/// one, so a zeroed statement field holds `none`.
 pub fn StmtRowId(comptime T: type) type {
     return enum(u32) {
-        none = std.math.maxInt(u32),
+        none = 0,
         _,
 
+        const Self = @This();
+
         pub const Row = T;
+
+        /// The id of position `index` of the row's column.
+        pub fn fromPosition(index: u32) Self {
+            std.debug.assert(index < std.math.maxInt(u32));
+            return @fromBackingInt(index + 1);
+        }
+
+        /// The position of a row in its column.
+        pub fn position(self: Self) u32 {
+            std.debug.assert(self != .none);
+            return @backingInt(self) - 1;
+        }
     };
 }
 

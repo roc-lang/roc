@@ -1018,7 +1018,7 @@ const State = struct {
     allocator: Allocator,
     /// Dense proc-local position per store local, owned by the certifier and
     /// stable for the lifetime of every state for the current proc.
-    local_dense: []const u32,
+    local_dense: []const collections.OptionalU32,
     /// Value bound to each reference-counted local used by this proc;
     /// `no_value` when unbound.
     local_value: ArcSnapshot(ValueId, no_value),
@@ -1077,7 +1077,7 @@ const State = struct {
         mask: u64 = 0,
     };
 
-    fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
+    fn init(allocator: Allocator, local_dense: []const collections.OptionalU32, proc_local_count: usize) Allocator.Error!State {
         return .{
             .allocator = allocator,
             .local_dense = local_dense,
@@ -1137,10 +1137,8 @@ const State = struct {
 
     fn denseIndex(self: *const State, local: LIR.LocalId) usize {
         const raw = @backingInt(local);
-        if (raw >= self.local_dense.len or self.local_dense[raw] == no_dense) {
-            base.invariant("ARC certifier invariant violated: local {d} is outside the current proc-local map", .{raw});
-        }
-        return @intCast(self.local_dense[raw]);
+        const dense = if (raw < self.local_dense.len) self.local_dense[raw].get() else null;
+        return dense orelse base.invariant("ARC certifier invariant violated: local {d} is outside the current proc-local map", .{raw});
     }
 
     fn valueOf(self: *const State, local: LIR.LocalId) ValueId {
@@ -1249,7 +1247,7 @@ test "forked state preserves independent tag-union variant witnesses" {
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
     const discriminant = try store.addLocal(.{ .layout_idx = .u8 });
-    var source = try State.init(arena.allocator(), &.{0}, 1);
+    var source = try State.init(arena.allocator(), &[_]collections.OptionalU32{.some(0)}, 1);
     try source.setKnownVariant(0, 1);
     try source.put(&source.variant_discriminants, @backingInt(discriminant), @as(ValueId, 0));
     var forked = try source.clone();
@@ -1878,8 +1876,9 @@ const Certifier = struct {
     provenance_holder_scratch: std.ArrayList(u32) = .empty,
     provenance_relevant_work: std.ArrayList(u32) = .empty,
     /// Dense position per reference-counted store local used by the proc
-    /// being certified, or `no_dense` otherwise.
-    local_dense: std.ArrayList(u32) = .empty,
+    /// being certified, absent otherwise. Retained across procs: each proc
+    /// clears only its own locals, and growth adds absent (zero) entries.
+    local_dense: std.ArrayList(collections.OptionalU32) = .empty,
     /// Reference-counted store local id per dense position.
     proc_locals: std.ArrayList(LIR.LocalId) = .empty,
     /// Join bodies of the proc being certified, for jump-following scans.
@@ -2117,7 +2116,7 @@ const Certifier = struct {
     fn denseOf(self: *const Certifier, local: LIR.LocalId) u32 {
         const index = @backingInt(local);
         if (index >= self.local_dense.items.len) return no_dense;
-        return self.local_dense.items[index];
+        return self.local_dense.items[index].get() orelse no_dense;
     }
 
     fn newValue(
@@ -3812,14 +3811,14 @@ const Certifier = struct {
     }
 
     fn collectProcLocals(self: *Certifier, proc: LIR.LirProcSpec, body: LIR.CFStmtId) CertifyError!void {
-        for (self.proc_locals.items) |local| self.local_dense.items[@backingInt(local)] = no_dense;
+        for (self.proc_locals.items) |local| self.local_dense.items[@backingInt(local)] = .none;
         self.proc_locals.clearRetainingCapacity();
         self.erased_owners.clear();
         self.erased_call_owner_checks.clearRetainingCapacity();
         if (self.local_dense.items.len < self.store.localCount()) {
             const old_len = self.local_dense.items.len;
             try self.local_dense.resize(self.allocator, self.store.localCount());
-            @memset(self.local_dense.items[old_len..], no_dense);
+            @memset(self.local_dense.items[old_len..], .none);
         }
 
         self.region_parent.clearRetainingCapacity();
@@ -4850,11 +4849,13 @@ const Certifier = struct {
         if (!self.isRc(local)) return;
         const index = @backingInt(local);
         if (index >= self.local_dense.items.len) return;
-        if (self.local_dense.items[index] == no_dense) {
-            self.local_dense.items[index] = @intCast(self.proc_locals.items.len);
+        const dense = self.local_dense.items[index].get() orelse added: {
+            const added: u32 = @intCast(self.proc_locals.items.len);
+            self.local_dense.items[index] = .some(added);
             try self.proc_locals.append(self.allocator, local);
-        }
-        try self.mention_sites.append(self.allocator, .{ .dense = self.local_dense.items[index], .region = self.collect_region });
+            break :added added;
+        };
+        try self.mention_sites.append(self.allocator, .{ .dense = dense, .region = self.collect_region });
     }
 
     /// Numbers the region tree in preorder and indexes, per dense local, the
@@ -6734,7 +6735,7 @@ const testing = std.testing;
 test "certifier state indexes explicit proc locals" {
     const first: LIR.LocalId = @fromBackingInt(@intCast(1));
     const second: LIR.LocalId = @fromBackingInt(@intCast(3));
-    const local_dense = [_]u32{ no_dense, 0, no_dense, 1 };
+    const local_dense = [_]collections.OptionalU32{ .none, .some(0), .none, .some(1) };
     var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
 

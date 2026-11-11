@@ -21,6 +21,7 @@ const JoinPoint = lir_defs.JoinPoint;
 const JoinPointSpan = lir_defs.JoinPointSpan;
 const InlineScope = lir_defs.InlineScope;
 const InlineScopeId = lir_defs.InlineScopeId;
+const OptionalU32 = collections.OptionalU32;
 const OriginKind = lir_defs.OriginKind;
 const StoredOriginKind = lir_defs.StoredOriginKind;
 const StmtOrigin = lir_defs.StmtOrigin;
@@ -717,7 +718,7 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
     if (comptime isStmtRowId(T)) {
         if (value == .none) return value;
         const column = comptime stmtRowColumn(T.Row);
-        return @fromBackingInt(movedIndex(@backingInt(value), prefix.stmt_rows[column], bases.stmt_rows[column]));
+        return .fromPosition(movedIndex(value.position(), prefix.stmt_rows[column], bases.stmt_rows[column]));
     }
     if (T == lir_defs.TailCallLink) {
         if (!value.isSite()) return value;
@@ -726,7 +727,7 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
     }
     if (T == StoredLocal) {
         var result = value;
-        if (value.dyn_desc != StoredLocal.no_dyn_desc) result.dyn_desc = movedIndex(value.dyn_desc, prefix.locals, bases.locals);
+        if (value.dyn_desc.get()) |desc| result.dyn_desc = .some(relocateBodyValue(LocalId, desc, prefix, bases));
         result.product = relocateBodyValue(lir_defs.StmtRowId(lir_defs.ProductShape), value.product, prefix, bases);
         return result;
     }
@@ -740,7 +741,7 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
     if (T == StmtSourceId) return @fromBackingInt(movedIndex(@backingInt(value), prefix.stmt_sources, bases.stmt_sources));
     if (T == InlineScopeId) {
         if (value == InlineScopeId.none) return value;
-        return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.inline_scopes, bases.inline_scopes)));
+        return .fromRow(movedIndex(value.row(), prefix.inline_scopes, bases.inline_scopes));
     }
     if (T == lir_defs.JoinPointId and bases.relocate_join_point_ids) {
         const raw = @backingInt(value);
@@ -1434,7 +1435,7 @@ pub fn stmtInlineScope(self: *const Self, id: CFStmtId) InlineScopeId {
 
 /// Retrieve one virtual source frame.
 pub fn inlineScope(self: *const Self, id: InlineScopeId) InlineScope {
-    const index = @backingInt(id);
+    const index = id.row();
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.inline_scopes) return coordinator.inlineScope(id);
         return self.inline_scopes.get(index - self.body_prefix.inline_scopes);
@@ -1449,9 +1450,9 @@ pub fn bodyOwnedInlineScopeCount(self: *const Self) usize {
 
 /// Intern one virtual source frame and return its identifier.
 pub fn addInlineScope(self: *Self, scope: InlineScope) Allocator.Error!InlineScopeId {
-    const id: InlineScopeId = @fromBackingInt(@intCast(@as(u32, @intCast(
+    const id: InlineScopeId = .fromRow(@intCast(
         self.inline_scopes.len() + if (self.body_coordinator != null) self.body_prefix.inline_scopes else 0,
-    ))));
+    ));
     try self.inline_scopes.append(self.allocator, scope);
     return id;
 }
@@ -1646,21 +1647,19 @@ fn assertBodyMetadataImmutable(self: *const Self) void {
 /// dynamic local, its descriptor local and storage (`LIR.DynLocal`).
 pub const StoredLocal = struct {
     layout_idx: layout.Idx,
-    /// The descriptor local of a dynamic local; `no_dyn_desc` otherwise.
-    dyn_desc: u32 = no_dyn_desc,
+    /// The descriptor local of a dynamic local; absent otherwise.
+    dyn_desc: collections.OptionalId(LocalId) = .none,
     dyn_storage: lir_defs.DynStorage = .frame,
     product: lir_defs.StmtRowId(lir_defs.ProductShape) = .none,
 
-    pub const no_dyn_desc: u32 = std.math.maxInt(u32);
-
     fn fromLocal(local: Local) StoredLocal {
         const dyn = local.dyn orelse return .{ .layout_idx = local.layout_idx };
-        return .{ .layout_idx = local.layout_idx, .dyn_desc = @backingInt(dyn.desc), .dyn_storage = dyn.storage, .product = local.product };
+        return .{ .layout_idx = local.layout_idx, .dyn_desc = .some(dyn.desc), .dyn_storage = dyn.storage, .product = local.product };
     }
 
     pub fn toLocal(self: StoredLocal) Local {
-        if (self.dyn_desc == no_dyn_desc) return .{ .layout_idx = self.layout_idx };
-        return .{ .layout_idx = self.layout_idx, .dyn = .{ .desc = @fromBackingInt(self.dyn_desc), .storage = self.dyn_storage }, .product = self.product };
+        const desc = self.dyn_desc.get() orelse return .{ .layout_idx = self.layout_idx };
+        return .{ .layout_idx = self.layout_idx, .dyn = .{ .desc = desc, .storage = self.dyn_storage }, .product = self.product };
     }
 };
 
@@ -1848,10 +1847,10 @@ pub fn stmtRowCount(self: *const Self, comptime column: usize) usize {
 pub fn addStmtRow(self: *Self, comptime T: type, row: T) Allocator.Error!lir_defs.StmtRowId(T) {
     const column = comptime stmtRowColumn(T);
     const index = self.stmtRowCount(column);
-    // The largest id names no row.
+    // A row's id is its position plus one, so the last position has no id.
     if (index >= std.math.maxInt(u32)) return error.OutOfMemory;
     try self.stmt_rows[column].append(self.allocator, row);
-    return @fromBackingInt(@intCast(index));
+    return .fromPosition(@intCast(index));
 }
 
 /// The out-of-line statement row `id` names, which must not be `none`.
@@ -1860,7 +1859,7 @@ pub fn stmtRow(self: *const Self, id: anytype) @TypeOf(id).Row {
     comptime std.debug.assert(isStmtRowId(Id));
     std.debug.assert(id != .none);
     const column = comptime stmtRowColumn(Id.Row);
-    const index = @backingInt(id);
+    const index = id.position();
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.stmt_rows[column]) return coordinator.stmtRow(id);
         return self.stmt_rows[column].get(index - self.body_prefix.stmt_rows[column]);
@@ -2969,20 +2968,19 @@ pub fn compactCFStmts(self: *Self, reachable: *const std.bit_set.DynamicBitSetUn
     try self.compactStmtRows();
 }
 
-/// Marks a remapped row that no statement or local names.
-const unnamed_stmt_row = std.math.maxInt(u32);
-
 /// Drops every out-of-line row no statement or local names, renumbering the rest in
 /// order. Every remap is allocated before any row moves, so allocation
-/// failure leaves the store unchanged.
+/// failure leaves the store unchanged. A remap is absent for a row nothing
+/// names; marking and the renumbering sweep read every entry, so each remap
+/// starts cleared to absent (zero).
 fn compactStmtRows(self: *Self) Allocator.Error!void {
-    var remaps: [stmt_row_column_count][]u32 = undefined;
+    var remaps: [stmt_row_column_count][]OptionalU32 = undefined;
     var allocated: usize = 0;
     defer for (remaps[0..allocated]) |remap| self.allocator.free(remap);
     inline for (0..stmt_row_column_count) |column| {
-        remaps[column] = try self.allocator.alloc(u32, self.stmt_rows[column].len());
+        remaps[column] = try self.allocator.alloc(OptionalU32, self.stmt_rows[column].len());
         allocated += 1;
-        @memset(remaps[column], unnamed_stmt_row);
+        @memset(remaps[column], .none);
     }
     for (self.cf_stmts.unsafeRawItemsMutForStore()) |*stmt| visitStmtRowIds(CFStmt, stmt, &remaps, .mark);
     for (self.locals.unsafeRawItemsMutForStore()) |*local| visitStmtRowIds(StoredLocal, local, &remaps, .mark);
@@ -2990,8 +2988,8 @@ fn compactStmtRows(self: *Self) Allocator.Error!void {
         const rows = self.stmt_rows[column].unsafeRawItemsMutForStore();
         var write: u32 = 0;
         for (remaps[column], 0..) |*remap, index| {
-            if (remap.* == unnamed_stmt_row) continue;
-            remap.* = write;
+            if (remap.* == .none) continue;
+            remap.* = .some(write);
             rows[write] = rows[index];
             write += 1;
         }
@@ -3004,13 +3002,14 @@ fn compactStmtRows(self: *Self) Allocator.Error!void {
 
 /// Marks (`.mark`) or renames to their remapped ids (`.rename`) the
 /// out-of-line row ids a statement value holds.
-fn visitStmtRowIds(comptime T: type, value: *T, remaps: *[stmt_row_column_count][]u32, comptime action: enum { mark, rename }) void {
+fn visitStmtRowIds(comptime T: type, value: *T, remaps: *[stmt_row_column_count][]OptionalU32, comptime action: enum { mark, rename }) void {
     if (comptime isStmtRowId(T)) {
         if (value.* == .none) return;
         const remap = remaps[comptime stmtRowColumn(T.Row)];
         switch (action) {
-            .mark => remap[@backingInt(value.*)] = 0,
-            .rename => value.* = @fromBackingInt(remap[@backingInt(value.*)]),
+            // Any present value marks the row; the sweep renumbers it.
+            .mark => remap[value.position()] = .some(0),
+            .rename => value.* = .fromPosition(remap[value.position()].get().?),
         }
         return;
     }

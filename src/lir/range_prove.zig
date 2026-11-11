@@ -1254,13 +1254,13 @@ const SumRoot = struct {
     a: NodeId,
     b: NodeId,
     /// The previous sum touching this sum's root, `a`, and `b`, in that
-    /// order, under `Pass.sum_heads`; `no_sum` ends each chain.
-    prev: [3]u32 = .{ no_sum, no_sum, no_sum },
+    /// order, under `Pass.sum_heads`; absent ends each chain.
+    prev: [3]OptionalU32 = @splat(.none),
     /// `Pass.fact_epoch` when this sum's facts were last stated on the
     /// path; another value means they may be missing or stale.
     fresh: u32 = 0,
 };
-const no_sum: u32 = std.math.maxInt(u32);
+const OptionalU32 = collections.OptionalU32;
 
 /// Constant bounds of a root under the path facts, with the assumptions
 /// each bound's derivation touched.
@@ -1328,10 +1328,9 @@ const QueryBest = struct {
 
 /// Index links of one path fact, see `Pass.fact_links`.
 const FactLink = struct {
-    fwd_prev: u32,
-    bwd_prev: u32,
+    fwd_prev: OptionalU32,
+    bwd_prev: OptionalU32,
 };
-const no_fact: u32 = std.math.maxInt(u32);
 
 /// Bound on synthesized upper bounds per met local.
 const meet_bound_cap: usize = 6;
@@ -1732,10 +1731,11 @@ const Pass = struct {
     sum_roots: PairMap(NodeId, NodeId),
     sums: std.ArrayList(SumRoot),
     /// Per root, the most recent sum whose root or operand it is this
-    /// round, or `no_sum`: the sums' derived facts touch only these roots,
-    /// so a query reaching none of them cannot be changed by deriving
-    /// them. Indexed by root; grown as sums appear.
-    sum_heads: std.ArrayList(u32),
+    /// round, if any: the sums' derived facts touch only these roots, so a
+    /// query reaching none of them cannot be changed by deriving them.
+    /// Indexed by root; grown as sums appear. Emptied every round, so it
+    /// empties by advancing an epoch.
+    sum_heads: collections.EpochColumn(NodeId, u32, .internal),
     /// Sums whose facts the current query needs stated, by index.
     refresh_set: std.ArrayList(u32),
     /// Per sum, the `refresh_stamp` under which it joined `refresh_set`.
@@ -1818,10 +1818,10 @@ const Pass = struct {
     /// touching the roots it reaches. Parallel to `facts`.
     fact_links: std.ArrayList(FactLink),
     /// Per root, the most recent path fact whose left root (`fwd_heads`)
-    /// or right root (`bwd_heads`) it is, or `no_fact`. Indexed by root;
-    /// grown as roots appear.
-    fwd_heads: std.ArrayList(u32),
-    bwd_heads: std.ArrayList(u32),
+    /// or right root (`bwd_heads`) it is, if any. Indexed by root; grown
+    /// absent (zero) as roots appear.
+    fwd_heads: std.ArrayList(OptionalU32),
+    bwd_heads: std.ArrayList(OptionalU32),
     /// The facts seeded into the region so far, while `seeding`.
     fact_seen: std.AutoHashMap(FactKey, void),
     seeding: bool = false,
@@ -1906,7 +1906,7 @@ const Pass = struct {
             .seeded_param_roots = PairMap(JoinPointId, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = PairMap(NodeId, NodeId).init(allocator),
-            .sum_heads = .empty,
+            .sum_heads = .{},
             .refresh_set = .empty,
             .refresh_marks = .empty,
             .root_bounds = collections.DenseMap(NodeId, RootBounds).init(allocator),
@@ -1978,7 +1978,7 @@ const Pass = struct {
         self.merge_facts.clearRetainingCapacity();
         self.merge_env.clearRetainingCapacity();
         self.freeMergeStates();
-        self.sum_heads.clearRetainingCapacity();
+        self.sum_heads.reset();
         self.refresh_set.clearRetainingCapacity();
         self.refresh_stamp = 0;
         self.fact_epoch = 1;
@@ -2112,7 +2112,7 @@ const Pass = struct {
         self.sum_roots.clearRetainingCapacity();
         self.sums.clearRetainingCapacity();
         self.refresh_marks.clearRetainingCapacity();
-        @memset(self.sum_heads.items, no_sum);
+        self.sum_heads.reset();
         self.path_value_roots.clearRetainingCapacity();
         self.path_len_roots.clearRetainingCapacity();
         self.global_env.clearRetainingCapacity();
@@ -2344,15 +2344,15 @@ const Pass = struct {
 
     /// Gather the sums touching `root` whose facts are not current.
     fn gatherStaleSums(self: *Pass, root: NodeId) ResourceError!void {
-        if (root >= self.sum_heads.items.len) return;
-        var index = self.sum_heads.items[root];
-        while (index != no_sum) {
+        if (root >= self.sum_heads.len()) return;
+        var cursor = self.sum_heads.get(root);
+        while (cursor) |index| {
             const sum = self.sums.items[index];
             if (sum.fresh != self.fact_epoch and self.refresh_marks.items[index] != self.refresh_stamp) {
                 self.refresh_marks.items[index] = self.refresh_stamp;
                 try self.refresh_set.append(self.allocator, index);
             }
-            index = sum.prev[sumSlot(sum, root)];
+            cursor = sum.prev[sumSlot(sum, root)].get();
         }
     }
 
@@ -2401,19 +2401,18 @@ const Pass = struct {
             if (own.lo == own.hi) continue;
             if (node >= self.fwd_heads.items.len) continue;
             for ([_]Direction{ .forward, .backward }) |direction| {
-                var index = switch (direction) {
+                var cursor = switch (direction) {
                     .forward => self.fwd_heads.items[node],
                     .backward => self.bwd_heads.items[node],
                 };
-                while (index != no_fact) {
-                    const fact_index = index;
+                while (cursor.get()) |fact_index| {
                     const fact = self.facts.items[fact_index];
                     const link = self.fact_links.items[fact_index];
                     const other = switch (direction) {
                         .forward => fact.b,
                         .backward => fact.a,
                     };
-                    index = switch (direction) {
+                    cursor = switch (direction) {
                         .forward => link.fwd_prev,
                         .backward => link.bwd_prev,
                     };
@@ -2558,16 +2557,16 @@ const Pass = struct {
         const index: u32 = @intCast(self.facts.items.len);
         const top = @max(fact.a, fact.b);
         if (top >= self.fwd_heads.items.len) {
-            try self.fwd_heads.appendNTimes(self.allocator, no_fact, top + 1 - self.fwd_heads.items.len);
-            try self.bwd_heads.appendNTimes(self.allocator, no_fact, top + 1 - self.bwd_heads.items.len);
+            try self.fwd_heads.appendNTimes(self.allocator, .none, top + 1 - self.fwd_heads.items.len);
+            try self.bwd_heads.appendNTimes(self.allocator, .none, top + 1 - self.bwd_heads.items.len);
         }
         try self.facts.append(self.allocator, fact);
         try self.fact_links.append(self.allocator, .{
             .fwd_prev = self.fwd_heads.items[fact.a],
             .bwd_prev = self.bwd_heads.items[fact.b],
         });
-        self.fwd_heads.items[fact.a] = index;
-        self.bwd_heads.items[fact.b] = index;
+        self.fwd_heads.items[fact.a] = .some(index);
+        self.bwd_heads.items[fact.b] = .some(index);
     }
 
     /// Drop the facts above `len`, unlinking each from its roots.
@@ -2584,7 +2583,7 @@ const Pass = struct {
     /// Whether any path fact mentions a root.
     fn rootHasFacts(self: *const Pass, root: NodeId) bool {
         if (root >= self.fwd_heads.items.len) return false;
-        return self.fwd_heads.items[root] != no_fact or self.bwd_heads.items[root] != no_fact;
+        return self.fwd_heads.items[root] != .none or self.bwd_heads.items[root] != .none;
     }
 
     const Direction = enum { forward, backward };
@@ -2620,14 +2619,14 @@ const Pass = struct {
             if (node >= self.fwd_heads.items.len) continue;
             // The links run newest first; gather them to walk oldest first.
             self.query_edges.clearRetainingCapacity();
-            var index = switch (direction) {
+            var cursor = switch (direction) {
                 .forward => self.fwd_heads.items[node],
                 .backward => self.bwd_heads.items[node],
             };
-            while (index != no_fact) {
+            while (cursor.get()) |index| {
                 try self.query_edges.append(self.allocator, index);
                 const link = self.fact_links.items[index];
-                index = switch (direction) {
+                cursor = switch (direction) {
                     .forward => link.fwd_prev,
                     .backward => link.bwd_prev,
                 };
@@ -2737,11 +2736,11 @@ const Pass = struct {
     /// it was added.
     fn addFactOnce(self: *Pass, fact: Fact) ResourceError!bool {
         if (fact.a < self.fwd_heads.items.len) {
-            var index = self.fwd_heads.items[fact.a];
-            while (index != no_fact) {
+            var cursor = self.fwd_heads.items[fact.a];
+            while (cursor.get()) |index| {
                 const have = self.facts.items[index];
                 if (have.b == fact.b and have.c <= fact.c) return false;
-                index = self.fact_links.items[index].fwd_prev;
+                cursor = self.fact_links.items[index].fwd_prev;
             }
         }
         const before = self.facts.items.len;
@@ -2764,15 +2763,13 @@ const Pass = struct {
 
     /// Link the sum at `index` under one of its roots.
     fn linkSum(self: *Pass, index: u32, slot: usize, root: NodeId) ResourceError!void {
-        if (root >= self.sum_heads.items.len) {
-            try self.sum_heads.appendNTimes(self.allocator, no_sum, root + 1 - self.sum_heads.items.len);
-        }
-        self.sums.items[index].prev[slot] = self.sum_heads.items[root];
-        self.sum_heads.items[root] = index;
+        if (root >= self.sum_heads.len()) try self.sum_heads.ensureLen(self.allocator, root + 1);
+        self.sums.items[index].prev[slot] = .of(self.sum_heads.get(root));
+        self.sum_heads.set(root, index);
     }
 
     fn isSumEnd(self: *const Pass, root: NodeId) bool {
-        return root < self.sum_heads.items.len and self.sum_heads.items[root] != no_sum;
+        return root < self.sum_heads.len() and self.sum_heads.contains(root);
     }
 
     /// Relate the sum `root` of the roots `ra` and `rb` to every other sum
@@ -2794,11 +2791,11 @@ const Pass = struct {
             var from_a = self.operand_slack.iterator();
             while (from_a.next()) |entry| {
                 const p = entry.key_ptr.*;
-                if (p >= self.sum_heads.items.len) continue;
-                var index = self.sum_heads.items[p];
-                while (index != no_sum) {
+                if (p >= self.sum_heads.len()) continue;
+                var cursor = self.sum_heads.get(p);
+                while (cursor) |index| {
                     const other = self.sums.items[index];
-                    index = other.prev[sumSlot(other, p)];
+                    cursor = other.prev[sumSlot(other, p)].get();
                     // Under `p` as the sum's own root, not one of its operands.
                     if (other.root == root or other.root == p) continue;
                     const q = if (other.a == p) other.b else other.a;
@@ -2842,10 +2839,10 @@ const Pass = struct {
         // The sums sharing an operand are the ones chained under `ra` or
         // `rb` as an operand; one chained under both is this sum itself.
         for ([_]NodeId{ ra, rb }) |shared| {
-            var index = self.sum_heads.items[shared];
-            while (index != no_sum) {
+            var cursor = self.sum_heads.get(shared);
+            while (cursor) |index| {
                 const other = self.sums.items[index];
-                index = other.prev[sumSlot(other, shared)];
+                cursor = other.prev[sumSlot(other, shared)].get();
                 if (other.root == root or other.root == shared) continue;
                 const pair: [2]NodeId = if (other.a == ra)
                     .{ rb, other.b }
@@ -3877,10 +3874,10 @@ const Pass = struct {
                 var present = false;
                 var same_origin = false;
                 // The earliest matching path fact decides the origin.
-                var index = if (fact.a < self.fwd_heads.items.len) self.fwd_heads.items[fact.a] else no_fact;
-                while (index != no_fact) {
+                var cursor: OptionalU32 = if (fact.a < self.fwd_heads.items.len) self.fwd_heads.items[fact.a] else .none;
+                while (cursor.get()) |index| {
                     const mine = self.facts.items[index];
-                    index = self.fact_links.items[index].fwd_prev;
+                    cursor = self.fact_links.items[index].fwd_prev;
                     if (mine.b == fact.b and mine.c == fact.c) {
                         present = true;
                         same_origin = std.meta.eql(mine.origin, fact.origin);

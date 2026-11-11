@@ -354,7 +354,8 @@ fn componentOrder(allocator: Allocator, count: usize, targets: []const u32, targ
     errdefer allocator.free(cyclic);
     @memset(cyclic, false);
 
-    const unindexed: u32 = none;
+    // Visit indices are issued from one, so zero marks an unindexed node.
+    const unindexed: u32 = 0;
     const index = try allocator.alloc(u32, count);
     defer allocator.free(index);
     @memset(index, unindexed);
@@ -370,7 +371,7 @@ fn componentOrder(allocator: Allocator, count: usize, targets: []const u32, targ
     var component_stack = std.ArrayList(u32).empty;
     defer component_stack.deinit(allocator);
 
-    var next_index: u32 = 0;
+    var next_index: u32 = 1;
     var emitted: usize = 0;
     for (0..count) |root| {
         if (index[root] != unindexed) continue;

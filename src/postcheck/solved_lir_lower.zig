@@ -294,15 +294,10 @@ const CaptureSpanId = struct {
     fn fromOwn(start: u32, len: u32) CaptureSpanId {
         return .{ .source = .own, .start = start, .len = len };
     }
-
-    /// Marks a column slot whose span is not computed yet; no span starts at
-    /// this offset.
-    const unset: CaptureSpanId = .{ .source = .own, .start = std.math.maxInt(u32), .len = 0 };
-
-    fn isUnset(self: CaptureSpanId) bool {
-        return self.source == .own and self.start == std.math.maxInt(u32);
-    }
 };
+
+/// A capture span not computed yet, or the span: all zeros is absent.
+const OptionalCaptureSpanId = collections.OptionalStruct(CaptureSpanId, "start");
 
 /// Marks a compile-time site column slot whose LIR site is not added yet.
 const ComptimeSiteMap = collections.OptionalIndexColumn(LIR.ComptimeSiteId);
@@ -856,8 +851,9 @@ const Lowerer = struct {
     recursive_value_capture_ids: collections.DenseMap(check.CheckedModule.CaptureId, void),
     recursive_slot_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     own_captures: std.ArrayList(SolvedType.Capture),
-    /// Each lifted function's own capture span, or `CaptureSpanId.unset`.
-    own_capture_spans: []CaptureSpanId,
+    /// Each lifted function's own capture span, absent until computed. Read
+    /// before written, so it starts cleared to absent (zero).
+    own_capture_spans: []OptionalCaptureSpanId,
     roots: std.ArrayList(RootEntry),
     literal_roots: std.ArrayList(LiteralRootEntry),
     layout_requests: std.ArrayList(LayoutRequest),
@@ -1181,9 +1177,9 @@ const Lowerer = struct {
         var comptime_site_map = try ComptimeSiteMap.initFilled(allocator, solved.lifted.comptimeSiteCount());
         errdefer comptime_site_map.deinit(allocator);
 
-        const own_capture_spans = try allocator.alloc(CaptureSpanId, solved.lifted.fnCount());
+        const own_capture_spans = try allocator.alloc(OptionalCaptureSpanId, solved.lifted.fnCount());
         errdefer allocator.free(own_capture_spans);
-        @memset(own_capture_spans, CaptureSpanId.unset);
+        @memset(own_capture_spans, OptionalCaptureSpanId.none);
 
         var recursive_value_locals = collections.DenseMap(Lifted.LocalId, void).init(allocator);
         errdefer recursive_value_locals.deinit();
@@ -1670,7 +1666,7 @@ const Lowerer = struct {
         const lifted = self.solved.lifted.view();
         try self.result.store.inline_scopes.ensureTotalCapacity(self.allocator, lifted.inline_scopes.len);
         for (lifted.inline_scopes, 0..) |scope, index| {
-            const expected: LIR.InlineScopeId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const expected: LIR.InlineScopeId = .fromRow(@intCast(index));
             const actual = try self.result.store.addInlineScope(.{
                 .source_identity = self.inlineSourceIdentity(scope.source_symbol),
                 .copies_site_code = self.inlineSourceIsSite(scope.source_symbol),
@@ -3122,14 +3118,13 @@ const Lowerer = struct {
     fn ownCaptureSpanForFn(self: *Lowerer, fn_id: Lifted.FnId) std.mem.Allocator.Error!CaptureSpanId {
         const raw_fn = @backingInt(fn_id);
         if (raw_fn >= self.own_capture_spans.len) Common.invariant("own capture span requested for a missing lifted function");
-        const existing = self.own_capture_spans[raw_fn];
-        if (!existing.isUnset()) return existing;
+        if (self.own_capture_spans[raw_fn].get()) |existing| return existing;
 
         const fn_ = self.solved.lifted.getFn(fn_id);
         const capture_locals = self.solved.lifted.typedLocalSpan(fn_.captures);
         if (capture_locals.len == 0) {
             const empty = CaptureSpanId.fromOwn(0, 0);
-            self.own_capture_spans[raw_fn] = empty;
+            self.own_capture_spans[raw_fn] = .some(empty);
             return empty;
         }
 
@@ -3152,7 +3147,7 @@ const Lowerer = struct {
         }
 
         const span = CaptureSpanId.fromOwn(start, @intCast(capture_locals.len));
-        self.own_capture_spans[raw_fn] = span;
+        self.own_capture_spans[raw_fn] = .some(span);
         return span;
     }
 
@@ -15447,7 +15442,8 @@ fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
 }
 
 fn lirInlineScopeId(scope: Lifted.InlineScopeId) LIR.InlineScopeId {
-    return @fromBackingInt(@intCast(@backingInt(scope)));
+    if (scope == Lifted.InlineScopeId.none) return LIR.InlineScopeId.none;
+    return .fromRow(scope.row());
 }
 
 fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Error!LirProgram.FnTemplate {

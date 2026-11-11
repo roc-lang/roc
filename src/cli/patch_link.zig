@@ -623,13 +623,14 @@ const hole: u32 = std.math.maxInt(u32);
 /// compacted block, `hole` for an unreached one, and the compacted size.
 fn compactAtoms(gpa: Allocator, view: UnitImage.View, reached: []const bool) Allocator.Error!struct { offsets: []u32, size: u64 } {
     const starts = view.atoms();
+    // One sweep writes every atom's entry, so the table needs no fill.
     const offsets = try gpa.alloc(u32, starts.len);
-    @memset(offsets, hole);
     const block_align: u64 = view.blockAlign();
     var cursor: u64 = 0;
     var atom: usize = 0;
     while (atom < starts.len) {
         if (!reached[atom]) {
+            offsets[atom] = hole;
             atom += 1;
             continue;
         }

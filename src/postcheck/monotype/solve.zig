@@ -43,22 +43,10 @@ pub const EntryRoot = struct {
 /// Identity of a node in a specialization's instantiation graph.
 pub const NodeId = enum(u32) { _ };
 
-/// A node id or none in one id's width. `InstGraph.newNode` never issues the
-/// `none` value as an id.
-pub const MaybeNodeId = enum(u32) {
-    none = std.math.maxInt(u32),
-    _,
-
-    pub fn of(node: ?NodeId) MaybeNodeId {
-        const present = node orelse return .none;
-        return @fromBackingInt(@backingInt(present));
-    }
-
-    pub fn get(self: MaybeNodeId) ?NodeId {
-        if (self == .none) return null;
-        return @fromBackingInt(@backingInt(self));
-    }
-};
+/// A node id or none in one id's width; zero is none, so tables of these
+/// start from zeroed memory. `InstGraph.newNode` never issues
+/// `maxInt(u32)`, which has no biased form.
+pub const MaybeNodeId = collections.OptionalId(NodeId);
 
 /// Tag variant inside an instantiation-graph row. Names are program NameStore
 /// ids translated at instantiation so rows from different checked modules
@@ -347,9 +335,6 @@ const TypeMarks = struct {
 /// A type `measureTypeHeight` is visiting, and its next component.
 const HeightFrame = struct { ty: Type.TypeId, components_start: usize, next: usize };
 
-/// `typeHeight`'s entry for a type it has not measured.
-const unmeasured_height = std.math.maxInt(u32);
-
 /// One type a holds search reached, and the step it was reached from.
 const HoldsSearchStep = struct {
     ty: Type.TypeId,
@@ -379,7 +364,7 @@ const ScannedJoinedClass = struct {
     root: NodeId,
     /// The class type's height once measured: a cell taller than it is not
     /// held by it.
-    height: u32 = unmeasured_height,
+    height: collections.OptionalU32 = .none,
     checks: u32 = 0,
     /// The check count at which building the held list is next tried.
     budget: u32 = 1,
@@ -2541,7 +2526,9 @@ pub const InstGraph = struct {
     type_holds_memo_component: std.AutoHashMapUnmanaged(u64, bool) = .empty,
     /// Each store type's height (see `typeHeight`), outliving graph resets
     /// for the same reason.
-    type_heights: std.ArrayList(u32) = .empty,
+    /// Each measured type's height by type id, absent until measured. Read
+    /// before written, so it grows cleared to absent (zero).
+    type_heights: std.ArrayList(collections.OptionalU32) = .empty,
     /// Scratch for `measureTypeHeight`.
     height_frames: std.ArrayList(HeightFrame) = .empty,
     height_components: std.ArrayList(ImportComponent) = .empty,
@@ -4089,7 +4076,7 @@ pub const InstGraph = struct {
     /// column's capacity is kept at least `nodes`'s, so a node fitting in
     /// `nodes` fits everywhere and costs one capacity check.
     fn reserveNode(self: *InstGraph) Allocator.Error!void {
-        // `MaybeNodeId.none` is never an id.
+        // `MaybeNodeId` stores an id plus one, so `maxInt(u32)` is never an id.
         if (self.nodes.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
         if (self.nodes.items.len < self.nodes.capacity) return;
         const capacity = std.math.add(usize, self.nodes.capacity, @max(self.nodes.capacity / 2, 8)) catch return error.OutOfMemory;
@@ -4599,10 +4586,14 @@ pub const InstGraph = struct {
             };
             entry.root = root;
             entry.checks += 1;
-            if (entry.height == unmeasured_height) entry.height = try self.typeHeight(leaf.ty);
+            const class_height = entry.height.get() orelse measured: {
+                const measured = try self.typeHeight(leaf.ty);
+                entry.height = .some(measured);
+                break :measured measured;
+            };
             const checks = entry.checks;
             const budget = entry.budget;
-            if (cell_height <= entry.height and
+            if (cell_height <= class_height and
                 self.cellNeedsOriginJoins(root, leaf, cell) and
                 try self.typeHoldsMemoComponent(leaf.ty, cell.ty))
             {
@@ -4934,9 +4925,9 @@ pub const InstGraph = struct {
             for (group_stack.items[index..]) |member| {
                 const slot: usize = @backingInt(member);
                 if (slot >= self.type_heights.items.len) {
-                    try self.type_heights.appendNTimes(self.allocator, unmeasured_height, slot + 1 - self.type_heights.items.len);
+                    try self.type_heights.appendNTimes(self.allocator, .none, slot + 1 - self.type_heights.items.len);
                 }
-                self.type_heights.items[slot] = height;
+                self.type_heights.items[slot] = .some(height);
                 on_stack.unmark(member);
             }
             group_stack.shrinkRetainingCapacity(index);
@@ -4954,8 +4945,7 @@ pub const InstGraph = struct {
     fn knownTypeHeight(self: *const InstGraph, ty: Type.TypeId) ?u32 {
         const slot: usize = @backingInt(ty);
         if (slot >= self.type_heights.items.len) return null;
-        const height = self.type_heights.items[slot];
-        return if (height == unmeasured_height) null else height;
+        return self.type_heights.items[slot].get();
     }
 
     fn heldContains(held: []const Type.TypeId, target: Type.TypeId) bool {
@@ -14576,8 +14566,8 @@ test "generated iterator index follows content replacement and argument unions" 
             // Every failed insertion/replacement must leave all previously created
             // nodes in their exact buckets, with no dangling candidate ids.
             errdefer {
-                for (graph.generated_iterator_index.slots) |slot| {
-                    const entry = slot orelse continue;
+                for (graph.generated_iterator_index.slots) |entry| {
+                    if (!entry.occupied()) continue;
                     var next: ?NodeId = entry.value;
                     while (next) |node| {
                         std.debug.assert(@backingInt(node) < graph.nodes.items.len);

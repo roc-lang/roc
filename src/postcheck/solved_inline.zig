@@ -465,7 +465,8 @@ const InlineAnalyzer = struct {
     /// never become native call depth.
     fn rejectCandidateCycles(self: *InlineAnalyzer, graph: *const CandidateGraph, pass: CyclePass) std.mem.Allocator.Error!void {
         const node_count = graph.nodes.items.len;
-        const unvisited = std.math.maxInt(u32);
+        // Visit orders are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
         const order = try self.allocator.alloc(u32, node_count);
         defer self.allocator.free(order);
         const low = try self.allocator.alloc(u32, node_count);
@@ -480,7 +481,7 @@ const InlineAnalyzer = struct {
         defer frames.deinit(self.allocator);
         var component_stack: std.ArrayList(u32) = .empty;
         defer component_stack.deinit(self.allocator);
-        var next_order: u32 = 0;
+        var next_order: u32 = 1;
 
         for (0..node_count) |root_index| {
             const root: u32 = @intCast(root_index);

@@ -50,7 +50,9 @@ cached_malformed_node: ?Node.Idx,
 expr_kernel_scratch: ParserKernelScratch,
 bracket_matches: BracketMatches,
 
-const no_bracket_match = std.math.maxInt(u32);
+/// A closing token always follows its opener, so its index is never zero
+/// and zero marks an opener without a match.
+const no_bracket_match: u32 = 0;
 
 /// For each opening bracket token, the token that closes it, found in one pass
 /// over the tokens. Lookaheads that skip a bracketed group jump to its close
@@ -69,6 +71,8 @@ const BracketMatches = struct {
         errdefer gpa.free(any);
         const same_kind = try gpa.alloc(u32, tags.len);
         errdefer gpa.free(same_kind);
+        // Only openers get a match, and every lookahead reads an opener's
+        // row, so both tables start cleared to `no_bracket_match` (zero).
         @memset(any, no_bracket_match);
         @memset(same_kind, no_bracket_match);
         var any_open: std.ArrayList(u32) = .empty;
@@ -90,20 +94,25 @@ const BracketMatches = struct {
                     try curly_open.append(gpa, index);
                 },
                 .CloseRound => {
-                    if (any_open.pop()) |open| any[open] = index;
-                    if (round_open.pop()) |open| same_kind[open] = index;
+                    if (any_open.pop()) |open| any[open] = matched(open, index);
+                    if (round_open.pop()) |open| same_kind[open] = matched(open, index);
                 },
                 .CloseSquare => {
-                    if (any_open.pop()) |open| any[open] = index;
+                    if (any_open.pop()) |open| any[open] = matched(open, index);
                 },
                 .CloseCurly => {
-                    if (any_open.pop()) |open| any[open] = index;
-                    if (curly_open.pop()) |open| same_kind[open] = index;
+                    if (any_open.pop()) |open| any[open] = matched(open, index);
+                    if (curly_open.pop()) |open| same_kind[open] = matched(open, index);
                 },
                 .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .LowerIdent, .MalformedUnicodeIdent, .Underscore, .DotInt, .NoSpaceDotInt, .DotLowerIdent, .NoSpaceDotLowerIdent, .DotQuestionLowerIdent, .NoSpaceDotQuestionLowerIdent, .DotUpperIdent, .NoSpaceDotUpperIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedDotQuestionUnicodeIdent, .MalformedNoSpaceDotQuestionUnicodeIdent, .NamedUnderscore, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenStringInterpolation, .CloseStringInterpolation, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpDoubleDotLessThan, .OpDoubleDotEquals, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwForBang, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => {},
             }
         }
         return .{ .any = any, .same_kind = same_kind };
+    }
+
+    fn matched(open: u32, close: u32) u32 {
+        std.debug.assert(open < close);
+        return close;
     }
 
     fn deinit(self: *BracketMatches, gpa: std.mem.Allocator) void {

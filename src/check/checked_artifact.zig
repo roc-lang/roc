@@ -13555,7 +13555,10 @@ const EvidencePass = struct {
     evidence_params_pool: std.ArrayList(static_dispatch.EvidenceParamRecord),
     evidence_path_nodes: std.ArrayList(static_dispatch.EvidencePathNode),
     /// Scheme path node -> published path node, for the scheme being published.
-    published_path_nodes: std.ArrayList(u32),
+    /// Each scheme path node's published node, absent until published.
+    /// Read for each node a published path reaches, so it starts cleared to
+    /// absent (zero) for each scheme.
+    published_path_nodes: std.ArrayList(collections.OptionalU32),
     published_path_chain: std.ArrayList(u32),
     evidence_param_callables: std.ArrayList(CheckedTypeId),
     scheme_vars_pool: std.ArrayList(CheckedTypeId),
@@ -14685,7 +14688,7 @@ const EvidencePass = struct {
         const idents = self.module.identStoreConst();
         const pool_start: u32 = @intCast(self.evidence_params_pool.items.len);
         self.published_path_nodes.clearRetainingCapacity();
-        try self.published_path_nodes.appendNTimes(self.allocator, static_dispatch.no_evidence_path_node, path_nodes.len);
+        try self.published_path_nodes.appendNTimes(self.allocator, .none, path_nodes.len);
         for (params) |param| {
             const source: static_dispatch.EvidenceParamSource = switch (param.source) {
                 .scheme_callable => if (param.path_len == 0) explicit: {
@@ -14753,11 +14756,11 @@ const EvidencePass = struct {
         const published = self.published_path_nodes.items;
         self.published_path_chain.clearRetainingCapacity();
         var node = scheme_node;
-        while (node != no_node and published[node] == no_node) {
+        while (node != no_node and published[node] == .none) {
             try self.published_path_chain.append(self.allocator, node);
             node = path_nodes[node].parent;
         }
-        var parent = if (node == no_node) no_node else published[node];
+        var parent = if (node == no_node) no_node else published[node].get().?;
         var i = self.published_path_chain.items.len;
         while (i > 0) {
             i -= 1;
@@ -14778,10 +14781,10 @@ const EvidencePass = struct {
             }
             const published_node: u32 = @intCast(self.evidence_path_nodes.items.len);
             try self.evidence_path_nodes.append(self.allocator, .{ .parent = parent, .step = converted });
-            published[next] = published_node;
+            published[next] = .some(published_node);
             parent = published_node;
         }
-        return published[scheme_node];
+        return published[scheme_node].get().?;
     }
 
     fn pathlessDefaultPhaseForParam(self: *EvidencePass, param: EvidenceParam) ?NumericDefaultPhase {

@@ -3711,15 +3711,17 @@ const ProducerGroups = struct {
         const count = deps_of.len;
         var result = ProducerGroups{};
         errdefer result.deinit(allocator);
-        const unvisited = std.math.maxInt(u32);
+        // Visit indices are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
         const index = try allocator.alloc(u32, count);
         defer allocator.free(index);
         @memset(index, unvisited);
         const low = try allocator.alloc(u32, count);
         defer allocator.free(low);
-        const group_of = try allocator.alloc(u32, count);
-        defer allocator.free(group_of);
-        @memset(group_of, unvisited);
+        // A group reads only its own members and earlier groups, so every
+        // read finds a group already assigned.
+        var group_of = try collections.WriteFirstSlice(u32).init(allocator, count);
+        defer group_of.deinit(allocator);
         const on_stack = try allocator.alloc(bool, count);
         defer allocator.free(on_stack);
         @memset(on_stack, false);
@@ -3728,7 +3730,7 @@ const ProducerGroups = struct {
         const Frame = struct { node: usize, next: usize };
         var frames = std.ArrayList(Frame).empty;
         defer frames.deinit(allocator);
-        var next_index: u32 = 0;
+        var next_index: u32 = 1;
         for (0..count) |start| {
             if (scheduler.canonical(start) != start) continue;
             if (index[start] != unvisited) continue;
@@ -3770,7 +3772,7 @@ const ProducerGroups = struct {
                 while (true) {
                     const member = stack.pop().?;
                     on_stack[member] = false;
-                    group_of[member] = group_id;
+                    group_of.set(member, group_id);
                     try result.member_list.append(allocator, member);
                     if (member == node) break;
                 }
@@ -3780,10 +3782,11 @@ const ProducerGroups = struct {
                 for (members) |member| {
                     for (deps_of[member]) |raw_dep| {
                         const dep = scheduler.canonical(raw_dep);
-                        if (group_of[dep] == group_id) {
+                        const dep_group = group_of.get(dep);
+                        if (dep_group == group_id) {
                             reads_itself = true;
                         } else {
-                            level = @max(level, result.groups.items[group_of[dep]].level + 1);
+                            level = @max(level, result.groups.items[dep_group].level + 1);
                         }
                     }
                 }
