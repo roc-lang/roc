@@ -120,7 +120,8 @@ pub fn listElemAddr(elem: *const TypeDesc, roc_list: *const RocList, index: u64)
 /// zero-sized payload holds no allocation.
 pub fn boxPayloadAddr(desc: *const TypeDesc, box: *const usize) [*]u8 {
     // A box of a function is the callable itself (design.md "Function Values").
-    if (desc.kind == .erased_callable) return @ptrCast(@constCast(box));
+    if (desc.kind == .erased_callable and desc.child == null) return @ptrCast(@constCast(box));
+    if (desc.flags.sequence) return builtins.boxed_sequence.recordPtr(@ptrFromInt(box.*));
     const word = box.* & ~utils.DATA_PTR_TAG_MASK;
     if (desc.size == 0 or word == 0) return walk.zeroSizedPtr();
     return @ptrFromInt(word);
@@ -220,8 +221,15 @@ pub fn buildList(elem: *const TypeDesc, dst: *RocList, elems: []const [*]const u
 pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *RocOps) void {
     // A box of a function is the callable itself (design.md "Function Values"), which
     // the box takes over.
-    if (desc.kind == .erased_callable) {
+    if (desc.kind == .erased_callable and desc.child == null) {
         dst.* = @as(*align(1) const usize, @ptrCast(payload)).*;
+        return;
+    }
+    if (desc.flags.sequence) {
+        const record = recordOf(desc, ops);
+        const fields = record.fields();
+        if (fields.len != 2) invariant(ops, "builtin sequence descriptor must contain its two-field record");
+        dst.* = @intFromPtr(builtins.boxed_sequence.pack(payload, desc.size, fields[1].offset, ops));
         return;
     }
     if (desc.size == 0) {
@@ -318,8 +326,14 @@ pub fn adapt(plan: *const AdaptPlan, dst: [*]u8, src: [*]const u8, ops: *RocOps)
                 }
                 const data = utils.allocateWithRefcount(to_elem.size * len, to_elem.alignment, to_elem.flags.contains_refcounted, ops);
                 target.* = .{ .bytes = data, .length = len, .capacity_or_alloc_ptr = RocList.encodeCapacity(len) };
+                // A list of zero-sized elements has no bytes (`zstList`):
+                // each element reads none, so any address stands for it.
+                const elements: [*]u8 = source.bytes orelse elements: {
+                    if (from_elem.size != 0) invariant(ops, "a list of sized elements has no bytes");
+                    break :elements data;
+                };
                 for (0..len) |index| {
-                    stack.push(.{ .plan = node.child.?, .src = source.bytes.? + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
+                    stack.push(.{ .plan = node.child.?, .src = elements + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
                 }
             },
             .box => {

@@ -245,13 +245,22 @@ test "checking evaluates a generic function's conversion at its concrete runtime
     var checked = try checkApp(std.testing.allocator, genericLabelApp("good"), &.{helper_module}, null);
     defer checked.deinit();
     try checked.expectErrors(false);
-    // The generic function's literal depends on its instance, so the app's
-    // runtime root is lowered for discovery; the unrelated helper's
-    // specialization is parked and never lowered.
+    // The generic function's literal depends on its instance, and `main!`'s
+    // call fixes that instance to `Word`: checking records the call, so the
+    // conversion is a literal argument root of the app, which evaluation
+    // completes and stores (design.md "Literal Arguments"). No runtime body
+    // can register a literal root, so nothing is specialized for discovery.
+    const root = checked.coord.appRootCheckedArtifact();
+    var stored: usize = 0;
+    for (root.compile_time_roots.roots) |compile_time_root| {
+        if (compile_time_root.kind != .literal_argument) continue;
+        try std.testing.expect(compile_time_root.payload == .const_node);
+        stored += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), stored);
     const demand = checked.demand();
-    try std.testing.expect(demand.discovery_roots != 0);
-    try std.testing.expect(demand.monotype.parked != 0);
-    try std.testing.expectEqual(demand.monotype.parked, demand.monotype.stubs + demand.monotype.unparked);
+    try std.testing.expectEqual(@as(u64, 0), demand.discovery_roots);
+    try std.testing.expectEqual(@as(u64, 0), demand.monotype.discovery_bodies);
 }
 
 test "checking specializes no runtime body that cannot reach its module's dependent conversion" {
@@ -285,7 +294,7 @@ test "checking reports a generic function's conversion rejected at its concrete 
     try checked.expectErrors(true);
 }
 
-test "a build that evaluates compile-time roots specializes its runtime program apart from that evaluation" {
+test "a build continues the evaluation's program with every runtime body" {
     if (is_freestanding) return error.SkipZigTest;
     const target: lir.CheckedPipeline.TargetConfig = .{
         .inline_mode = .wrappers,
@@ -295,14 +304,12 @@ test "a build that evaluates compile-time roots specializes its runtime program 
     var checked = try checkApp(std.testing.allocator, genericLabelApp("good"), &.{helper_module}, target);
     defer checked.deinit();
     try checked.expectErrors(false);
-    // The app hoists compile-time constants, so the build evaluates exactly
-    // what checking evaluates: `main!` is a discovery root for its generic
-    // conversion. The runtime program is specialized from the program roots
-    // alone, with every runtime body.
+    // A build's evaluation names its program roots in full: nothing is
+    // discovered, and nothing is parked.
     const demand = checked.demand();
-    try std.testing.expectEqual(@as(u64, 1), demand.discovery_roots);
+    try std.testing.expectEqual(@as(u64, 0), demand.discovery_roots);
+    try std.testing.expectEqual(@as(u64, 0), demand.monotype.parked);
     const session = &checked.coord.program_session.?;
-    try std.testing.expect(session.runtime_stages == .respecialized);
     try std.testing.expect(session.runtime_prepared != null);
     var runtime = try session.takeRuntime(std.testing.allocator, session.runtime_roots, target);
     defer runtime.deinit();

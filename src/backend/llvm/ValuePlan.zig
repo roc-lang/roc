@@ -98,6 +98,8 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         return .all_values;
     }
     return switch (op) {
+        .boxed_sequence_pack => OpAccess.args(2, false),
+        .boxed_sequence_unpack => OpAccess.args(0, false),
         .bool_not,
         .bool_likely,
         .num_is_eq,
@@ -237,6 +239,7 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         .str_static_small_word_eq,
         .str_static_small_word_caseless_eq,
         .str_concat,
+        .str_append,
         .str_contains,
         .str_trim,
         .str_trim_start,

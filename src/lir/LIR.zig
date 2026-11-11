@@ -942,6 +942,14 @@ pub const SetLocalWriteMode = enum {
 pub const ErasedCallableOnDrop = union(enum) {
     none,
     rc_helper: layout.RcHelperKey,
+
+    /// The producer's matching retain plan for an independently copied capture.
+    pub fn copyCallback(self: ErasedCallableOnDrop) ErasedCallableOnDrop {
+        return switch (self) {
+            .none => .none,
+            .rc_helper => |key| .{ .rc_helper = .{ .op = .incref, .layout_idx = key.layout_idx } },
+        };
+    }
 };
 
 /// Concrete callable ABI used to enter a LIR procedure.
@@ -1030,6 +1038,9 @@ pub const TailGroupId = enum(u32) { _ };
 pub const TailCalls = struct {
     head: CFStmtId,
     loop: JoinPointId,
+    /// The statement the loop begins at, when it is not the body's first:
+    /// the statements before it run once per call.
+    entry: ?CFStmtId = null,
 };
 
 /// Which tail-recursion rewrite the TRMC pass (src/lir/trmc.zig) applied to a
@@ -1296,6 +1307,10 @@ pub const PackedErasedFnData = struct {
     capture: ?LocalId,
     capture_layout: ?layout.Idx,
     on_drop: ErasedCallableOnDrop,
+    /// Explicit retain callback for copying the inline capture.
+    on_copy: ErasedCallableOnDrop = .none,
+    /// Frozen callbacks see the runtime prefix too, without a hot-reload adapter.
+    frozen_capture_layout: ?layout.Idx = null,
     /// Optional local containing a consumed erased callable allocation to
     /// repack. The local itself is present statically, but its runtime value
     /// may be null when an ABI caller declined to transfer ownership.

@@ -880,18 +880,18 @@ pub fn rewritableProcBody(store: *const LirStore, proc_id: LIR.LirProcSpecId) ?C
 /// Every statement reachable from a proc body, visited exactly once. Shared
 /// join targets are reached through whichever predecessor arrives first.
 pub const ReachableStmts = struct {
-    store: *LirStore,
+    store: *const LirStore,
     allocator: Allocator,
     work: std.ArrayList(CFStmtId),
     visited: collections.DenseMap(CFStmtId, void),
     lease: ?*WalkPool.Lease = null,
 
     /// Start a walk rooted at `body`.
-    pub fn init(store: *LirStore, body: CFStmtId) Allocator.Error!ReachableStmts {
+    pub fn init(store: *const LirStore, body: CFStmtId) Allocator.Error!ReachableStmts {
         return initWithAllocator(store, body, store.allocator);
     }
 
-    pub fn initWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReachableStmts {
+    pub fn initWithAllocator(store: *const LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReachableStmts {
         var work = std.ArrayList(CFStmtId).empty;
         errdefer work.deinit(allocator);
         try work.append(allocator, body);
@@ -904,7 +904,7 @@ pub const ReachableStmts = struct {
     }
 
     /// Lease an empty traversal, including its retained work stack and visited map.
-    pub fn initWithScratch(store: *LirStore, body: CFStmtId, scratch: *AnalysisScratch) Allocator.Error!ReachableStmts {
+    pub fn initWithScratch(store: *const LirStore, body: CFStmtId, scratch: *AnalysisScratch) Allocator.Error!ReachableStmts {
         const lease = try scratch.walks.acquire();
         var walk: ReachableStmts = .{
             .store = store,
@@ -1866,6 +1866,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                             .capture = try self.mapMaybeLocal(s.capture),
                             .capture_layout = s.capture_layout,
                             .on_drop = s.on_drop,
+                            .on_copy = s.on_copy,
+                            .frozen_capture_layout = s.frozen_capture_layout,
                             .reuse = try self.mapMaybeLocal(s.reuse),
                             .reuse_unique = s.reuse_unique,
                         }),

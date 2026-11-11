@@ -215,7 +215,21 @@ const ExpectError = BuildError ||
     std.Io.Dir.RealPathFileAllocError ||
     error{ SkipZigTest, TestExpectedEqual };
 
-fn expectColdEqualsWarm(app_source: []const u8) ExpectError!void {
+/// Which program a cold build's runtime consumer continues (design.md
+/// "Compile-Time Evaluation Under `.lss`").
+const ColdProgram = enum {
+    /// Every compile-time root reads no function value, so the `.boxy`
+    /// evaluator completes them all before the Solved program is
+    /// specialized, and that program restores their stored values exactly
+    /// as a warm build's does: it is specialized once.
+    specialized_once,
+    /// The Solved program evaluates a root holding a function value, so
+    /// the runtime consumer continues a program specialized again from the
+    /// stored values.
+    respecialized,
+};
+
+fn expectColdEqualsWarm(cold_program: ColdProgram, app_source: []const u8) ExpectError!void {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -235,11 +249,10 @@ fn expectColdEqualsWarm(app_source: []const u8) ExpectError!void {
     defer gpa.free(cold.program);
     const warm = try buildWithCache(gpa, cache_dir, app_path);
     defer gpa.free(warm.program);
-    // The cold build evaluated compile-time roots, so its runtime program
-    // was specialized again from their stored values; the warm one found
-    // them in the cache and evaluated none.
+    // The warm build found every value in the cache and evaluated none, so
+    // it specialized its program once.
     try std.testing.expectEqualStrings(cold.program, warm.program);
-    try std.testing.expect(cold.respecialized);
+    try std.testing.expectEqual(cold_program == .respecialized, cold.respecialized);
     try std.testing.expect(!warm.respecialized);
     try std.testing.expect(warm.cache_hits > 0);
 }
@@ -322,7 +335,7 @@ test "issue 12930: a program's expects stay out of its runtime program whether e
 }
 
 test "a hoisted string a body computes lowers the same whether evaluated or read from the cache" {
-    try expectColdEqualsWarm(
+    try expectColdEqualsWarm(.specialized_once,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\main! = |_args| {
@@ -335,7 +348,7 @@ test "a hoisted string a body computes lowers the same whether evaluated or read
 }
 
 test "top-level constants of every shape lower the same whether evaluated or read from the cache" {
-    try expectColdEqualsWarm(
+    try expectColdEqualsWarm(.specialized_once,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\small = "ab".concat("c")
@@ -357,7 +370,7 @@ test "top-level constants of every shape lower the same whether evaluated or rea
 }
 
 test "a function value a constant holds lowers the same whether evaluated or read from the cache" {
-    try expectColdEqualsWarm(
+    try expectColdEqualsWarm(.specialized_once,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\offset = 3.U64
@@ -449,7 +462,7 @@ test "strategy root readiness preserves nested callable representations across a
 }
 
 test "issue 12595 shared row callables lower identically from fresh and stored values" {
-    try expectColdEqualsWarm(
+    try expectColdEqualsWarm(.respecialized,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\Payload : { call : (U64 -> U64), offset : U64 }

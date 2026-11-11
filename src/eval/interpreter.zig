@@ -363,9 +363,11 @@ pub const Interpreter = struct {
     /// Frame storage: each procedure activation's locals and `ptr_alloca`
     /// cells, released when the activation ends.
     frame_stack: ValueStack,
-    /// Owned copy of the values `pending_erased` reads, which outlive the
-    /// statement and frame that deferred the call.
-    pending_erased_storage: std.ArrayListAlignedUnmanaged(u8, .@"16") = .empty,
+    /// Owned copy of what the pending call (`pending_erased` or
+    /// `pending_dyn`) reads, which outlives the statement and frame that
+    /// deferred the call. Driving the call copies it out first, so the call
+    /// it leaves pending can replace it.
+    pending_storage: std.ArrayListAlignedUnmanaged(u8, .@"16") = .empty,
     /// The arguments of a frame-replacing call, between the frame that makes
     /// it ending and the callee's frame beginning.
     tail_call_storage: std.ArrayListAlignedUnmanaged(u8, .@"16") = .empty,
@@ -403,7 +405,7 @@ pub const Interpreter = struct {
     pending_erased: ?PendingErasedCall = null,
     /// A dynamic erased call a deferred tail call left pending, as the
     /// native runtime records one: its closure, one reference to which it
-    /// owns, and an owned copy of its argument record.
+    /// owns, and a copy of its argument record in `pending_storage`.
     pending_dyn: ?PendingDynCall = null,
     /// Set while an erased call is entering its callee, so that callee can
     /// tell this caller, which makes pending calls, from any other.
@@ -458,7 +460,7 @@ pub const Interpreter = struct {
     /// Runs the static erased callables of one interpreter static-data image.
     /// A caller of the erased-callable ABI supplies only its own RocOps and the
     /// capture pointer, so each callable reaches its owner through the
-    /// `StaticCallableHeader` stored before its allocation, never through the
+    /// `StaticCallableHeader` stored in its capture, never through the
     /// caller's RocOps.
     pub const StaticCallableOwner = struct {
         context: ?*anyopaque,
@@ -525,8 +527,7 @@ pub const Interpreter = struct {
         }
     };
 
-    /// Interpreter-private header stored immediately before the allocation of
-    /// each static erased callable in an interpreter static-data image.
+    /// Interpreter-private ownership trailer inside a static callable's capture.
     pub const StaticCallableHeader = extern struct {
         owner: *const StaticCallableOwner,
         proc_id: u32,
@@ -539,8 +540,8 @@ pub const Interpreter = struct {
         std.mem.alignForward(usize, @sizeOf(usize), builtins.erased_callable.payload_alignment);
 
     pub fn staticCallableHeader(capture_ptr: [*]u8) *const StaticCallableHeader {
-        const payload = @intFromPtr(capture_ptr) - builtins.erased_callable.capture_offset;
-        return @ptrFromInt(payload - static_callable_payload_offset - @sizeOf(StaticCallableHeader));
+        const payload = builtins.erased_callable.payloadPtr(capture_ptr - builtins.erased_callable.capture_offset);
+        return @ptrCast(@alignCast(capture_ptr + payload.capture_size - @sizeOf(StaticCallableHeader)));
     }
 
     /// Native stack overflow is not caught here: see `max_call_depth`.
@@ -915,10 +916,7 @@ pub const Interpreter = struct {
     pub fn deinit(self: *LirInterpreter) void {
         self.failed_call_stack.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
-        self.pending_erased_storage.deinit(self.allocator);
-        if (self.pending_dyn) |pending| {
-            if (pending.args) |args| self.allocator.free(args);
-        }
+        self.pending_storage.deinit(self.allocator);
         self.tail_call_storage.deinit(self.allocator);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
@@ -960,6 +958,13 @@ pub const Interpreter = struct {
     }
 
     fn staticErasedCallableOnDrop(_: ?[*]u8, _: *RocOps) callconv(.c) void {}
+
+    /// Frozen captures name immortal allocations, so retaining them is a no-op.
+    pub fn staticErasedCallableOnCopyAddress() usize {
+        return @intFromPtr(&staticErasedCallableOnCopy);
+    }
+
+    fn staticErasedCallableOnCopy(_: ?[*]u8, _: isize) callconv(.c) void {}
 
     fn evalAllocator(self: *LirInterpreter) Allocator {
         return self.scratch.allocator();
@@ -2982,7 +2987,7 @@ pub const Interpreter = struct {
     /// A dynamic erased call left pending (`pending_dyn`).
     const PendingDynCall = struct {
         closure: [*]u8,
-        args: ?[]align(16) u8,
+        args: ?[]const u8,
         /// The driven call passes the reference this record owns on to the
         /// callee as its reuse input (an owned deferred call).
         transfer: bool,
@@ -3025,8 +3030,14 @@ pub const Interpreter = struct {
             self.scratch.restore(chain_mark);
             if (self.pending_dyn) |pending| {
                 self.pending_dyn = null;
-                defer if (pending.args) |args| self.allocator.free(args);
-                try self.invokeErasedInto(pending.closure, if (ret_size == 0) null else ret, if (pending.args) |args| args.ptr else null, if (pending.transfer) pending.closure else null);
+                // The call may leave another pending, which replaces the
+                // owned copy, so it reads its arguments from scratch.
+                const args: ?[*]const u8 = if (pending.args) |owned| copy: {
+                    const copy = try self.evalAllocator().alignedAlloc(u8, .@"16", owned.len);
+                    @memcpy(copy, owned);
+                    break :copy copy.ptr;
+                } else null;
+                try self.invokeErasedInto(pending.closure, if (ret_size == 0) null else ret, args, if (pending.transfer) pending.closure else null);
                 // ARC explicitly transferred this reference to the pending
                 // call: an owned call's callee consumed it, and every other
                 // is released here.
@@ -3065,6 +3076,8 @@ pub const Interpreter = struct {
         builtins.erased_callable.payloadPtr(data_ptr).* = .{
             .callable_fn_ptr = &interpreterErasedCallableTrampoline,
             .on_drop = &interpreterErasedCallableOnDrop,
+            .on_copy = &interpreterErasedCallableOnCopy,
+            .capture_size = capture_size,
         };
         if (self.retained_owner) |owner| owner.retain();
         erasedCallableInterpreterContextFromPayload(data_ptr).* = .{
@@ -3097,12 +3110,12 @@ pub const Interpreter = struct {
     /// Copy the values a deferred erased call reads into storage that
     /// outlives the statement and frame deferring it.
     fn ownPendingErasedCall(self: *LirInterpreter, call: PendingErasedCall) Error!PendingErasedCall {
-        self.pending_erased_storage.clearRetainingCapacity();
+        self.pending_storage.clearRetainingCapacity();
         return try self.copyPendingErasedCall(call, null);
     }
 
     /// Copy a pending erased call's values into `allocator`, or into
-    /// `pending_erased_storage` when `allocator` is null.
+    /// `pending_storage` when `allocator` is null.
     fn copyPendingErasedCall(self: *LirInterpreter, call: PendingErasedCall, allocator: ?Allocator) Error!PendingErasedCall {
         const layouts_offset = call.args.len * @sizeOf(Value);
         const closure_sa = self.helper.sizeAlignOf(call.closure_layout);
@@ -3123,8 +3136,8 @@ pub const Interpreter = struct {
         const bytes: [*]align(16) u8 = if (allocator) |a|
             (try a.alignedAlloc(u8, .@"16", @max(end, 1))).ptr
         else blk: {
-            try self.pending_erased_storage.resize(self.allocator, end);
-            break :blk self.pending_erased_storage.items.ptr;
+            try self.pending_storage.resize(self.allocator, end);
+            break :blk self.pending_storage.items.ptr;
         };
         const args: [*]Value = @ptrCast(bytes);
         const layouts: [*]layout_mod.Idx = @ptrCast(@alignCast(bytes + layouts_offset));
@@ -3456,6 +3469,26 @@ pub const Interpreter = struct {
 
         context.interpreter.dropInterpreterErasedCallableCapture(context, capture) catch |err| context.interpreter.crashErasedCallable(owner, roc_ops, err, .drop);
         leaveAndReleaseErasedCallableOwner(owner);
+    }
+
+    fn interpreterErasedCallableOnCopy(capture: ?[*]u8, amount: isize) callconv(.c) void {
+        const context = erasedCallableInterpreterContextFromCapture(capture);
+        if (context.owner) |owner| {
+            owner.enter();
+            for (0..@intCast(amount)) |_| owner.retain();
+        }
+        defer if (context.owner) |owner| owner.leave();
+        const ptr = capture.? + context.capture_value_offset;
+        switch (@as(ErasedCallableCaptureDrop, @fromBackingInt(@intCast(context.drop_kind)))) {
+            .none => {},
+            .desc => boxy.walk.captureIncref(ptr, amount, &context.interpreter.roc_ops),
+            .rc_helper => context.interpreter.performRcHelperRequired(
+                .{ .op = .incref, .layout_idx = @fromBackingInt(@intCast(context.drop_layout_plus_one - 1)) },
+                .{ .ptr = ptr },
+                @intCast(amount),
+                .atomic,
+            ),
+        }
     }
 
     fn dropInterpreterErasedCallableCapture(
@@ -3792,7 +3825,9 @@ pub const Interpreter = struct {
         const data_ptr = if (assign.reuse) |reuse_local| blk: {
             const reuse_value = try self.getLocalChecked(frame, reuse_local);
             if (self.readBoxedDataPointer(reuse_value)) |reuse_ptr| {
-                if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
+                if (builtins.erased_callable.payloadPtr(reuse_ptr).capture_size >= capture_size and
+                    (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)))
+                {
                     self.layoutRuntime().performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
                     break :blk reuse_ptr;
                 }
@@ -3833,6 +3868,8 @@ pub const Interpreter = struct {
         payload.* = .{
             .callable_fn_ptr = &interpreterErasedCallableTrampoline,
             .on_drop = on_drop,
+            .on_copy = &interpreterErasedCallableOnCopy,
+            .capture_size = capture_size,
         };
 
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
@@ -5041,6 +5078,18 @@ pub const Interpreter = struct {
         const list_elems = listElemSource(ll, arg_layout);
 
         return switch (ll.op) {
+            .boxed_sequence_pack => blk: {
+                const result = try self.alloc(ll.ret_layout);
+                const handle = builtins.boxed_sequence.pack(args[0].ptr, self.helper.sizeOf(ll.arg_layouts[0]), args[1].read(u32), &self.roc_ops);
+                self.writeBoxedDataPointer(result, handle);
+                break :blk result;
+            },
+            .boxed_sequence_unpack => blk: {
+                const step = self.readBoxedDataPointer(args[0]) orelse self.invariantFailed("boxed sequence has a null step", .{});
+                const result = try self.alloc(ll.ret_layout);
+                builtins.boxed_sequence.unpack(result.ptr, step, self.helper.sizeOf(ll.ret_layout));
+                break :blk result;
+            },
             .num_plus, .num_minus, .num_times => unreachable, // lowering resolves source-policy arithmetic to a family member, and verifyArithmeticBoundary rejects it in LIR
             .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             // ── String ops ──
@@ -5084,7 +5133,7 @@ pub const Interpreter = struct {
                 val.write(u8, if (result) 1 else 0);
                 break :blk val;
             },
-            .str_concat => self.callBuiltinStr2Mode(builtins.str.strConcatC, valueToRocStr(args[0]), valueToRocStr(args[1]), updateModeForArg0(ll.unique_args), ll.ret_layout),
+            .str_concat, .str_append => self.callBuiltinStr2Mode(builtins.str.strConcatC, valueToRocStr(args[0]), valueToRocStr(args[1]), updateModeForArg0(ll.unique_args), ll.ret_layout),
             .str_contains => blk: {
                 const result = builtins.str.strContains(valueToRocStr(args[0]), valueToRocStr(args[1]));
                 const val = try self.alloc(ll.ret_layout);
@@ -8482,16 +8531,7 @@ pub const Interpreter = struct {
             },
             .box_payload_addr => |b| {
                 const payload = try self.descAt(frame, b.desc);
-                // A box of a function is the callable itself.
-                if (payload.kind == .erased_callable) {
-                    try self.setComponentTarget(frame, stmt_id, target, try self.localBytes(frame, b.box));
-                    return;
-                }
-                // The box word lives in the box local's bytes, which a dynamic local
-                // holds by address.
-                const word = @as(*const usize, @ptrCast(@alignCast(try self.localBytes(frame, b.box)))).* & ~builtins.utils.DATA_PTR_TAG_MASK;
-                // A box of a zero-sized payload holds no allocation.
-                const address: [*]u8 = if (payload.size == 0 or word == 0) boxy.walk.zeroSizedPtr() else @ptrFromInt(word);
+                const address = boxy.compiled.boxPayloadAddr(payload, @ptrCast(@alignCast(try self.localBytes(frame, b.box))));
                 try self.setComponentTarget(frame, stmt_id, target, address);
             },
             .tag_discriminant => |t| {
@@ -8587,17 +8627,8 @@ pub const Interpreter = struct {
             },
             .box => |b| {
                 const payload = try self.descAt(frame, b.desc);
-                // A box of a function is the callable itself, which the box
-                // takes over.
-                const word: usize = if (payload.kind == .erased_callable)
-                    @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, b.payload))).*
-                else if (payload.size == 0) 0 else blk: {
-                    const data = try self.allocRocDataWithRc(payload.size, payload.alignment, payload.containsRefcounted());
-                    @memcpy(data[0..payload.size], (try self.localBytes(frame, b.payload))[0..payload.size]);
-                    break :blk @intFromPtr(data);
-                };
                 const dst = try self.targetStorage(frame, target);
-                @as(*align(1) usize, @ptrCast(dst)).* = word;
+                boxy.compiled.buildBox(payload, @ptrCast(@alignCast(dst)), try self.localBytes(frame, b.payload), &self.roc_ops);
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
             .eq => |e| {
@@ -8687,11 +8718,11 @@ pub const Interpreter = struct {
                     if (self.hasPendingCall()) {
                         return self.invariantFailedError("LIR/interpreter invariant violated: deferred an erased call while another was pending", .{});
                     }
-                    const owned_args: ?[]align(16) u8 = if (c.args) |args_local| owned: {
+                    const owned_args: ?[]const u8 = if (c.args) |args_local| owned: {
                         const size = try self.targetSize(frame, args_local);
-                        const copy = try self.allocator.alignedAlloc(u8, .@"16", @max(size, 1));
-                        @memcpy(copy[0..size], args.?[0..size]);
-                        break :owned copy;
+                        try self.pending_storage.resize(self.allocator, size);
+                        @memcpy(self.pending_storage.items, args.?[0..size]);
+                        break :owned self.pending_storage.items;
                     } else null;
                     self.pending_dyn = .{ .closure = closure, .args = owned_args, .transfer = c.reuse_closure };
                     // The target holds no value until whoever makes the

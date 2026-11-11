@@ -93,6 +93,7 @@ pub const Problem = union(enum) {
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     polymorphic_recursion: PolymorphicRecursion,
+    local_type_escape: LocalTypeEscape,
     row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
@@ -197,9 +198,11 @@ pub const PolymorphicRecursion = struct {
     region: base.Region,
 };
 
-/// Hosted functions cannot accept or return unboxed functions.
+/// Host-visible callable values must be directly boxed.
 pub const HostedUnboxedFunction = struct {
     region: base.Region,
+    path: ExtraStringIdx,
+    kind: enum { function, iter, stream },
 };
 
 /// Every function the host provides is effectful, so a hosted declaration
@@ -450,6 +453,26 @@ pub const VarWithSnapshot = struct {
     def_name: ?Ident.Idx,
 };
 
+/// A binding whose type contains a type declared in a function body that
+/// depends on a type variable of a function whose body the binding is not
+/// inside, so values of that type would leave the only place its
+/// instantiations can be told apart (design.md "Body-Local
+/// Types Stay In Their Context").
+pub const LocalTypeEscape = struct {
+    /// The binding's name.
+    region: base.Region,
+    def_name: ?Ident.Idx,
+    /// The binding's type.
+    def_snapshot: SnapshotContentIdx,
+    /// The body-local type and its declaration's header.
+    type_name: Ident.Idx,
+    type_region: base.Region,
+    /// The type variable the body-local type depends on, and the binding
+    /// that introduces it.
+    var_name: Ident.Idx,
+    owner_name: ?Ident.Idx,
+};
+
 /// One label repeated along a row's extension chain, whose occurrences cannot
 /// be the same tag or field (design.md "Row Union Normalization").
 pub const RowLabelConflict = struct {
@@ -626,6 +649,20 @@ pub const UnusedValue = struct {
 
 // type mismatch //
 
+/// Why a failed relation follows from a body-local type leaving the
+/// functions its identity depends on.
+pub const LocalTypeEscapeCause = union(enum) {
+    /// Two applications of the declaration disagreed at a context argument:
+    /// values of two instantiations of its functions met.
+    context_argument: types_mod.NominalDecl.Idx,
+    /// A root operand, a side of the failed leaf pair, or a failed
+    /// requirement's dispatcher was this context variable (its annotation's
+    /// variable) in a relation checked after the binding owning it, which
+    /// only a value of the type that left that binding's body could carry
+    /// there.
+    context_variable: Var,
+};
+
 /// These two variables mismatch. This should usually be cast into a more
 /// specific error depending on context.
 pub const TypeMismatch = struct {
@@ -652,6 +689,10 @@ pub const TypeMismatch = struct {
     /// Set when the relation failed because it required one type to have two
     /// different methods of the same name.
     method_conflict: ?MethodConflict = null,
+    /// The body-local type whose escape this failure follows from, withdrawn
+    /// once the escape rule reports that type (design.md "Body-Local Types
+    /// Stay In Their Context").
+    local_type_escape: ?LocalTypeEscapeCause = null,
     /// How the report suggests turning the actual value into the expected
     /// builtin `Str`.
     str_conversion: StrConversion = .none,
@@ -932,6 +973,9 @@ pub const DispatcherNotNominal = struct {
     /// Set when the obligation is a copy a use made out of another
     /// definition's type.
     copied: ?CopiedRequirement = null,
+    /// Set when the dispatcher is a context variable of a body-local type
+    /// (`TypeMismatch.local_type_escape`).
+    local_type_escape: ?LocalTypeEscapeCause = null,
 };
 
 /// Error when you try to static dispatch but the dispatcher does not have that method
@@ -962,6 +1006,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// Set when the obligation is a copy a use made out of another
     /// definition's type.
     copied: ?CopiedRequirement = null,
+    /// Set when the dispatcher is a context variable of a body-local type
+    /// (`TypeMismatch.local_type_escape`).
+    local_type_escape: ?LocalTypeEscapeCause = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };

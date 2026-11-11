@@ -44,6 +44,7 @@ pub const BuiltinFn = enum {
     crypto_blake3_hasher_finish,
     str_to_utf8,
     str_concat,
+    str_append,
     str_contains,
     str_starts_with,
     str_ends_with,
@@ -125,6 +126,8 @@ pub const BuiltinFn = enum {
     erased_callable_decref,
     erased_callable_decref_single_thread,
     erased_callable_repack,
+    boxed_sequence_pack,
+    boxed_sequence_unpack,
     native_callable_call,
     native_callable_defer,
     native_callable_drive,
@@ -134,6 +137,7 @@ pub const BuiltinFn = enum {
     hot_reload_leave,
     hot_reload_retain_current,
     hot_reload_erased_callable_drop,
+    hot_reload_erased_callable_copy,
     allocate_with_refcount,
     incref_data_ptr,
     incref_data_ptr_single_thread,
@@ -250,6 +254,7 @@ pub const BuiltinFn = enum {
         .hot_reload_leave,
         .hot_reload_retain_current,
         .hot_reload_erased_callable_drop,
+        .hot_reload_erased_callable_copy,
     };
 
     /// The linker symbol this builtin is exported and resolved under.
@@ -357,6 +362,7 @@ pub const BuiltinFn = enum {
             .roc_expect_failed,
             .str_caseless_ascii_equals,
             .str_concat,
+            .str_append,
             .str_contains,
             .str_count_utf8_bytes,
             .str_drop_prefix,
@@ -428,6 +434,7 @@ pub const BuiltinFn = enum {
             .crypto_blake3_hasher_finish,
             .str_to_utf8,
             .str_concat,
+            .str_append,
             .str_substring_unsafe,
             .str_repeat,
             .str_trim,

@@ -13,3 +13,7 @@ Inhabitedness uses a greatest fixed point to preserve conservative recursive
 payload semantics without enumerating shared paths. Row-only cycles provide no
 constructor witness. General, constructor-payload, and known-absent queries retain
 distinct leaf and open-row policies; only settled answers are memoized.
+
+Host-boundary validation uses the same scoped read-only views so generic user
+types cannot hide an unboxed callable or lose a parameter's boxing position.
+Only directly boxed functions and opaque iterator handles cross that boundary.

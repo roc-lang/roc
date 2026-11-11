@@ -1530,6 +1530,31 @@ test "fromAST rejects an unknown output kind" {
     , .expected_output_kind, .x64linux, "output");
 }
 
+test "fromAST accepts executable targets without a relocation declaration" {
+    const allocator = testing.allocator;
+    const source = try allocator.dupe(u8, platformSourceWithTargets(
+        \\        x64musl: { inputs: ["rcrt1.o", app] },
+        \\        x64glibc: { inputs: ["Scrt1.o", app] },
+        \\        arm64mac: { inputs: ["host.o", app] },
+        \\        x64win: { inputs: ["host.lib", app] },
+        \\        arm64musl: { inputs: [app], output: Archive },
+        \\
+    ));
+    defer allocator.free(source);
+    var env = try base.CommonEnv.init(allocator, source);
+    defer env.deinit(allocator);
+    const ast = try parse.file(allocator, &env);
+    defer ast.deinit();
+    try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+    var diagnostic: TargetsConfigDiagnostic = undefined;
+    const config = (try TargetsConfig.fromAST(allocator, ast, &diagnostic)).?;
+    defer config.deinit(allocator);
+    for ([_]RocTarget{ .x64musl, .x64glibc, .arm64mac, .x64win }) |target| {
+        try testing.expectEqual(OutputKind.exe, config.getLinkSpec(target).?.output);
+    }
+    try testing.expectEqual(OutputKind.archive, config.getLinkSpec(.arm64musl).?.output);
+}
+
 test "fromAST rejects an export that is not a string" {
     try expectInvalidTargetEntry(
         \\        wasm32: { inputs: ["host.wasm", app], exports: ["start", 7] },

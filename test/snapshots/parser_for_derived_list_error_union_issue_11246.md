@@ -540,7 +540,7 @@ expect {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 648)
+										(e-call (constraint-fn-var 650)
 											(e-lookup-local
 												(p-assign (ident "parser_for_derived_list_error_union_issue_11246.Rvn.parse")))
 											(e-empty_list)))

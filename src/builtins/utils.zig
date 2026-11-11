@@ -81,6 +81,8 @@ pub const TestEnv = struct {
     allocation_map: AllocationMap,
     allocator: std.mem.Allocator,
     ops: ?RocOps,
+    /// Every allocation made through `roc_alloc`, freed or not.
+    total_allocations: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) TestEnv {
         return TestEnv{
@@ -154,6 +156,7 @@ pub const TestEnv = struct {
 
         // Cast the pointer to *anyopaque
         const result: *anyopaque = @ptrCast(ptr.ptr);
+        self.total_allocations += 1;
 
         // Save the allocation in the map
         self.allocation_map.put(result, AllocationInfo{

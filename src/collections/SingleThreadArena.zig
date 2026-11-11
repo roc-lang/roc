@@ -101,6 +101,31 @@ pub fn queryCapacity(arena: SingleThreadArena) usize {
     return size;
 }
 
+/// A position in the arena, for `restore` to return to.
+pub const Mark = State;
+
+/// The arena's current position. Everything allocated after it is released
+/// together by `restore`.
+pub fn mark(arena: *const SingleThreadArena) Mark {
+    return arena.state;
+}
+
+/// Release every allocation made since `position`, which must be a mark of
+/// this arena not yet released by an earlier `restore` to an older mark.
+/// Memory allocated before the mark stays valid, so the caller must not have
+/// grown such an allocation since the mark: the restore hands its growth back
+/// to the arena.
+pub fn restore(arena: *SingleThreadArena, position: Mark) void {
+    if (pass_through) return;
+    var it = arena.state.first;
+    while (it != position.first) {
+        const node = it orelse unreachable; // a mark of this arena names a chunk still on its list
+        it = node.next;
+        arena.child_allocator.rawFree(fullSlice(node), buf_node_align, @returnAddress());
+    }
+    arena.state = position;
+}
+
 /// How `reset` should treat the arena's existing chunks.
 pub const ResetMode = union(enum) {
     /// Releases all allocated memory in the arena.
@@ -297,6 +322,35 @@ test "retain_capacity preheats a single chunk" {
     }
     // After preheating, everything fits in one retained chunk.
     try std.testing.expect(arena.queryCapacity() >= 8192);
+}
+
+test "restore releases what was allocated after the mark" {
+    var arena = SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const kept = try a.alloc(u8, 32);
+    @memset(kept, 7);
+    const position = arena.mark();
+
+    // Grow well past the current chunk so later chunks are chained.
+    for (0..64) |_| _ = try a.alloc(u8, 4096);
+    const grown = arena.queryCapacity();
+
+    arena.restore(position);
+    try std.testing.expect(arena.queryCapacity() < grown);
+    try std.testing.expectEqual(position.end_index, arena.state.end_index);
+    for (kept) |byte| try std.testing.expectEqual(@as(u8, 7), byte);
+    // The arena bumps on from the mark.
+    _ = try a.alloc(u8, 8);
+
+    // A restore to a mark taken on an empty arena releases every chunk.
+    var empty = SingleThreadArena.init(std.testing.allocator);
+    defer empty.deinit();
+    const start = empty.mark();
+    _ = try empty.allocator().alloc(u8, 100);
+    empty.restore(start);
+    try std.testing.expectEqual(@as(usize, 0), empty.queryCapacity());
 }
 
 test "free reclaims only the most recent allocation" {
