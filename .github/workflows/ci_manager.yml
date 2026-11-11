@@ -29,6 +29,12 @@ name: CI Manager
 # scarce runners, so their lanes also wait for `static-checks` to pass and are
 # skipped on draft PRs.
 #
+# `perf` (ci_perf.yml) compares the PR's release roc with its base's on Linux,
+# macOS and Windows and fails on a confirmed slowdown. `perf-build`
+# (ci_perf_build.yml) builds the binaries alongside `bsd-build-hello-world`,
+# whose Linux release build is the head binary. Like the macOS and Windows
+# lanes, both are skipped on draft PRs.
+#
 # Which MiniCI jobs each shard runs is defined in src/build/minici.zig
 # (`shards`); `static-checks` verifies that this file names every shard exactly
 # once through the `minici_shard:` matrix keys.
@@ -96,8 +102,8 @@ jobs:
               .github/workflows/alwayscheck.yml | .github/workflows/markdown_link_check.yml | \
               .github/workflows/nightly_gate.yml | .github/workflows/ci_zig.yml | \
               .github/workflows/ci_zig_nix.yml | .github/workflows/ci_cross_compile.yml | \
-              .github/workflows/ci_zig_benchmarks.yml | .github/workflows/stale.yml | \
-              .github/workflows/zulip_bot_high_p_issues.yml | .github/dependabot.yml | \
+              .github/workflows/stale.yml | .github/workflows/zulip_bot_high_p_issues.yml | \
+              .github/dependabot.yml | \
               .github/FUNDING.yml | .github/actionlint.yaml) return 0 ;;
               *) return 1 ;;
             esac
@@ -788,10 +794,12 @@ jobs:
   # them), so the BSD smoke test cross-compiles the builtin platform's hello
   # world on Linux and runs the executables inside BSD VMs below. OpenBSD is
   # absent because the builtin platform cannot cross-link it.
+  #
+  # The release roc it builds is also the Linux head binary of `perf`.
   bsd-build-hello-world:
     needs: check-changes
     if: needs.check-changes.outputs.heavy == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -835,6 +843,29 @@ jobs:
           path: bsd-hello-world
           if-no-files-found: error
           retention-days: 1
+
+      - name: Upload release roc for perf
+        uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
+        with:
+          name: roc-head-linux
+          path: zig-out/bin/roc
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # Builds the release roc binaries `perf` compares, except the Linux head one
+  # from `bsd-build-hello-world`. See ci_perf_build.yml.
+  perf-build:
+    needs: check-changes
+    if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
+    uses: ./.github/workflows/ci_perf_build.yml
+
+  # Fails on a slowdown of the PR's release roc that a second runner confirms.
+  # See ci_perf.yml.
+  perf:
+    needs: [check-changes, bsd-build-hello-world, perf-build]
+    if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
+    uses: ./.github/workflows/ci_perf.yml
 
   # Runs on a Linux runner, where bsd-action boots the VM under QEMU. The
   # `cpa.sh` shell runs a step inside the VM.
@@ -893,13 +924,15 @@ jobs:
       - arm64-linux-hello-world
       - bsd-build-hello-world
       - bsd-hello-world
+      - perf-build
+      - perf
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: always()
     steps:
       # Every needed job must end with exactly the expected result, so a
       # cancelled or unexpectedly skipped job fails this check. The macOS and
-      # Windows lanes may be skipped only on a draft PR.
+      # Windows lanes and the perf jobs may be skipped only on a draft PR.
       - name: Check workflow results
         shell: bash
         env:
@@ -917,6 +950,8 @@ jobs:
           ARM64_HELLO_WORLD: ${{ needs.arm64-linux-hello-world.result }}
           BSD_BUILD_HELLO_WORLD: ${{ needs.bsd-build-hello-world.result }}
           BSD_HELLO_WORLD: ${{ needs.bsd-hello-world.result }}
+          PERF_BUILD: ${{ needs.perf-build.result }}
+          PERF: ${{ needs.perf.result }}
         run: |
           set -euo pipefail
           failed=0
@@ -950,6 +985,8 @@ jobs:
             expect minici-macos "$MINICI_MACOS" "$scarce"
             expect minici-build-windows "$BUILD_WINDOWS" "$scarce"
             expect minici-windows "$MINICI_WINDOWS" "$scarce"
+            expect perf-build "$PERF_BUILD" "$scarce"
+            expect perf "$PERF" "$scarce"
           elif [ "$CHECK_CHANGES" = success ]; then
             echo "Docs-only change: the MiniCI lanes are not required."
           fi

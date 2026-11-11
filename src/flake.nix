@@ -72,7 +72,6 @@
           pkgs.zls
           pkgs.git # for use in ci/zig_lints.sh
           pkgs.typos # used in CI, helpful to run before committing to catch typos
-          pkgs.jq # see ci/benchmarks_zig.sh
           (pkgs.writeShellScriptBin "zon2nix" "nix run github:Cloudef/zig2nix -- zon2nix")
         ]
         ++ kcovBuildDeps
