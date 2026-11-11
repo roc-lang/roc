@@ -14,8 +14,9 @@
 //! whose edges are the explicit references between them:
 //!
 //! - a template reaches the templates its resolved value references and its
-//!   direct dispatch plans (with their nested evidence) select, and the
-//!   types of its signature, references, and plans;
+//!   direct dispatch plans (with their nested evidence) select, the entry
+//!   templates of the constants it reads whose computations lower in place,
+//!   and the types of its signature, references, and plans;
 //! - a type reaches its component types and the nominals it names;
 //! - a nominal, and the builtin types, reach the procedures of their methods
 //!   whose names dispatch can select by type (a where-clause requirement, an
@@ -25,16 +26,29 @@
 //!
 //! Each node carries flags for what it can contribute to a literal root:
 //!
-//! - *strict*: a custom interpolation, or a literal whose conversion root no
-//!   evaluation of this compilation requests and whose payload is not stored,
-//!   each of which registers a literal root whatever the instance; or a body
-//!   no checked data bounds, such as a read of a constant whose computation
-//!   lowers in place;
+//! - *strict*: a custom interpolation no checked instantiation validates, or
+//!   a literal whose conversion root no evaluation of this compilation
+//!   requests and whose payload is not stored, each of which registers a
+//!   literal root whatever the instance; or a body no checked data bounds;
 //! - *dependent numeral* (*quote*): a numeral (quote) whose conversion depends
-//!   on its instance, which registers a literal root only at a custom numeral
-//!   (quote) type;
+//!   on its instance and which no checked instantiation converts, which
+//!   registers a literal root only at a custom numeral (quote) type;
 //! - *custom numeral* (*quote*): a nominal with a `from_numeral`
 //!   (`from_quote`) method of its own.
+//!
+//! A literal whose conversion depends on its instance is a literal
+//! requirement of its own scheme (its template's, or a generalized local
+//! function's). Every instantiation checking records
+//! (a procedure use or a dispatch edge, which are this graph's edges between
+//! templates) converts it in a `literal_argument` root, which compile-time
+//! evaluation evaluates in every compilation, or forwards it as a literal
+//! requirement of the instantiating scheme. Such a literal contributes
+//! nothing through those edges. An instantiation checking records no edge
+//! for converts the template's literal requirements in the specialization:
+//! a program root's, a platform requirement's use of the app's procedure,
+//! and a method dispatch selects by type. Each of those contributes the
+//! dependent kinds of the instantiated template's literal requirements
+//! (design.md "Literal Arguments").
 //!
 //! A node's reach flags are its own flags and those of every node it reaches.
 //! A specialization can register a literal root only when the reach flags of
@@ -114,6 +128,11 @@ const TemplateKey = struct {
     template: u32,
 };
 
+const LiteralKey = struct {
+    module: [32]u8,
+    node: u32,
+};
+
 const TypeKey = struct {
     module: [32]u8,
     ty: u32,
@@ -142,10 +161,15 @@ pub const LiteralDemand = struct {
     builtin: NodeId = 0,
     /// Reach flags, by node.
     flags: std.ArrayListUnmanaged(Flags) = .empty,
+    /// The flags an instantiation checking records no edge for contributes
+    /// (`requirementFlagsOf`), for each template whose scheme has literal
+    /// requirements.
+    requirements: std.AutoHashMapUnmanaged(TemplateKey, Flags) = .empty,
     counters: Counters = .{},
 
     pub fn deinit(self: *LiteralDemand) void {
         self.templates.deinit(self.allocator);
+        self.requirements.deinit(self.allocator);
         self.nominals.deinit(self.allocator);
         self.flags.deinit(self.allocator);
         self.* = undefined;
@@ -156,6 +180,16 @@ pub const LiteralDemand = struct {
     pub fn templateFlags(self: *const LiteralDemand, template: checked_names.ProcedureTemplateRef) Flags {
         const node = self.templates.get(.{ .module = template.artifact.bytes, .template = @backingInt(template.template) }) orelse return Flags.all;
         return self.flags.items[node];
+    }
+
+    /// The flags an instantiation of `template` that checking records no
+    /// edge for contributes: the dependent kinds of its literal
+    /// requirements. A template the analysis never saw has no checked data
+    /// to bound it.
+    pub fn requirementFlags(self: *const LiteralDemand, template: checked_names.ProcedureTemplateRef) Flags {
+        const key: TemplateKey = .{ .module = template.artifact.bytes, .template = @backingInt(template.template) };
+        if (!self.templates.contains(key)) return Flags.all;
+        return self.requirements.get(key) orelse .{};
     }
 
     /// The reach flags of a nominal, named by its declaring module's content
@@ -277,11 +311,17 @@ const Builder = struct {
     /// iterator loop dispatches by, and `to_inspect`, which inspection
     /// selects by type.
     implicit_methods: std.StringHashMapUnmanaged(void) = .empty,
+    /// The literals that are literal requirements of their own schemes (a
+    /// template's or a generalized local function's): every instantiation
+    /// checking records converts each in a `literal_argument` root or
+    /// forwards it to the instantiating scheme.
+    converted_literals: std.AutoHashMapUnmanaged(LiteralKey, void) = .empty,
     /// Type nodes whose components are still to be added.
     pending_types: std.ArrayListUnmanaged(struct { node: NodeId, view: checked.ImportedModuleView, ty: checked.CheckedTypeId }) = .empty,
 
     fn deinit(self: *Builder) void {
         self.views.deinit(self.allocator);
+        self.converted_literals.deinit(self.allocator);
         self.implicit_methods.deinit(self.allocator);
         self.types.deinit(self.allocator);
         self.own.deinit(self.allocator);
@@ -426,20 +466,55 @@ const Builder = struct {
         };
     }
 
-    /// Whether reading a constant can lower its computation in place: its
-    /// value is neither stored nor evaluated by this compilation.
-    fn constReadLowersBody(self: *Builder, use: checked.ConstUseTemplate) bool {
+    /// What reading a constant lowers: nothing when its value is stored or
+    /// evaluated by this compilation, and otherwise its computation, in
+    /// place: the computation's entry template.
+    fn constReadBody(self: *Builder, use: checked.ConstUseTemplate) ?TemplateOrUnbounded {
         const const_ref = use.const_ref;
-        const view = self.views.get(const_ref.artifact.bytes) orelse return true;
-        switch (view.const_templates.get(const_ref).state) {
-            .stored_const, .unimplemented => return false,
-            .reserved, .eval_template => {},
-        }
+        const view = self.views.get(const_ref.artifact.bytes) orelse return .unbounded;
+        const body: TemplateOrUnbounded = switch (view.const_templates.get(const_ref).state) {
+            .stored_const, .unimplemented => return null,
+            .reserved => .unbounded,
+            .eval_template => |eval| .{ .template = eval.entry_template },
+        };
         const root_id = switch (const_ref.owner) {
             .top_level_binding => |top_level| view.compile_time_roots.lookupIdByPattern(top_level.pattern),
             .hoisted_root => |hoisted| hoisted.root,
-        } orelse return true;
-        return !self.declared.contains(.{ .module = view.key.digest(), .root = root_id });
+        } orelse return body;
+        if (self.declared.contains(.{ .module = view.key.digest(), .root = root_id })) return null;
+        return body;
+    }
+
+    /// A read of a constant whose computation lowers in place reaches the
+    /// computation's entry template, whose body the read lowers.
+    fn addConstRead(self: *Builder, from: NodeId, use: checked.ConstUseTemplate) Allocator.Error!void {
+        switch (self.constReadBody(use) orelse return) {
+            .template => |template| try self.addEdge(from, try self.templateNode(template)),
+            .unbounded => self.markUnbounded(from, "const read"),
+        }
+    }
+
+    /// A use reaches the template it names. A use of the app's procedure
+    /// that a platform requires is an instantiation checking records no edge
+    /// for.
+    fn addProcedureUse(self: *Builder, from: NodeId, use: checked.ProcedureUseTemplate) Allocator.Error!void {
+        const target = self.procedureUseTarget(use);
+        try self.addTemplateTarget(from, target);
+        if (use.binding != .platform_required) return;
+        switch (target orelse return) {
+            .template => |template| self.markOwn(from, self.requirementFlags(template)),
+            .unbounded => {},
+        }
+    }
+
+    /// The flags an instantiation of `template` that checking records no
+    /// edge for contributes (`requirementFlagsOf`).
+    fn requirementFlags(self: *Builder, template: checked_names.ProcedureTemplateRef) Flags {
+        const view = self.views.get(template.artifact.bytes) orelse return Flags.all;
+        const table = view.checked_procedure_templates;
+        const raw = @backingInt(template.template);
+        if (raw >= table.templates.items.len) return Flags.all;
+        return requirementFlagsOf(view, table.templates.items[raw]);
     }
 
     fn addTemplateTarget(self: *Builder, from: NodeId, target: ?TemplateOrUnbounded) Allocator.Error!void {
@@ -459,11 +534,11 @@ const Builder = struct {
             const record = refs.records[@backingInt(ref_id)];
             try self.addTypeEdge(node, view, record.checked_ty);
             switch (record.ref) {
-                .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.addTemplateTarget(node, self.procedureUseTarget(use)),
-                .platform_required_proc => |required| try self.addTemplateTarget(node, self.procedureUseTarget(required.procedure)),
-                .top_level_const, .imported_const => |use| if (self.constReadLowersBody(use)) self.markUnbounded(node, "const read"),
-                .selected_hoisted_const => |selected| if (self.constReadLowersBody(selected.const_use)) self.markUnbounded(node, "hoisted const read"),
-                .platform_required_const => |required| if (self.constReadLowersBody(required.const_use)) self.markUnbounded(node, "required const read"),
+                .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.addProcedureUse(node, use),
+                .platform_required_proc => |required| try self.addProcedureUse(node, required.procedure),
+                .top_level_const, .imported_const => |use| try self.addConstRead(node, use),
+                .selected_hoisted_const => |selected| try self.addConstRead(node, selected.const_use),
+                .platform_required_const => |required| try self.addConstRead(node, required.const_use),
                 .local_param,
                 .local_value,
                 .local_mutable_version,
@@ -529,7 +604,12 @@ const Builder = struct {
         }
     }
 
-    /// A plan's own contribution when it is a literal conversion.
+    /// A plan's own contribution when it is a literal conversion. A literal
+    /// whose conversion depends on its instance contributes nothing when it
+    /// is a literal requirement of its own scheme (`converted_literals`):
+    /// every instantiation checking records converts it in a
+    /// `literal_argument` root or forwards it, and every other one
+    /// contributes it through `requirementFlagsOf`.
     fn literalFlags(self: *Builder, view: checked.ImportedModuleView, plan_id: static_dispatch.StaticDispatchPlanId, plan: static_dispatch.StaticDispatchCallPlan) Flags {
         if (plan.resolution == .checked_error) return .{};
         const bodies = view.checked_bodies;
@@ -548,7 +628,13 @@ const Builder = struct {
             .expr => switch (bodies.exprData(@fromBackingInt(plan.node))) {
                 .numeral => .{ bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
                 .str => if (bodies.quoteIsCustom(plan.node)) .{ bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } } else return .{},
+                // An interpolation whose conversion depends on its instance
+                // is validated by the `literal_argument` roots of the
+                // instantiations checking records, as a numeral or a quote
+                // is converted by them; any other registers a literal root
+                // whatever the instance.
                 .interpolation => {
+                    if (self.converted_literals.contains(.{ .module = view.key.bytes, .node = plan.node })) return .{};
                     if (traceEnabled()) std.debug.print("ctfe-demand unbounded interpolation {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
                     return .{ .strict = true };
                 },
@@ -597,7 +683,7 @@ const Builder = struct {
             .statement, .unreached => Common.invariant("a dispatch plan's node is neither a reached expression nor a reached pattern"),
         };
         // A conversion with no root of its own depends on its instance.
-        const root_id = conversion_root orelse return dependent;
+        const root_id = conversion_root orelse return if (self.converted_literals.contains(.{ .module = view.key.bytes, .node = plan.node })) .{} else dependent;
         return switch (view.compile_time_roots.root(root_id).payload) {
             .pending => if (self.declared.contains(.{ .module = view.key.digest(), .root = root_id })) .{} else unrequested: {
                 if (traceEnabled()) std.debug.print("ctfe-demand unbounded unrequested-root {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
@@ -608,6 +694,23 @@ const Builder = struct {
             .unevaluated => .{ .strict = true },
             .const_node, .fn_value, .discarded, .expect, .runtime => .{},
         };
+    }
+
+    /// Record the literals of this module that are literal requirements of
+    /// their own schemes.
+    fn addConvertedLiterals(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
+        const table = view.checked_procedure_templates;
+        for (table.templates.items) |*template| {
+            for (table.templateLiteralRequirements(template)) |requirement| try self.addConvertedLiteral(view, requirement);
+        }
+        for (table.dispatch_scopes) |*scope| {
+            for (table.scopeLiteralRequirements(scope)) |requirement| try self.addConvertedLiteral(view, requirement);
+        }
+    }
+
+    fn addConvertedLiteral(self: *Builder, view: checked.ImportedModuleView, requirement: checked.LiteralRequirement) Allocator.Error!void {
+        if (requirement.edge != .literal) return;
+        try self.converted_literals.put(self.allocator, .{ .module = view.key.bytes, .node = requirement.site.node }, {});
     }
 
     /// Record every method name dispatch can select by type in this module.
@@ -651,7 +754,12 @@ const Builder = struct {
             };
             if (!implicit) continue;
             switch (target.kind) {
-                .procedure => |procedure| try self.addEdge(owner, try self.templateNode(procedure.template)),
+                .procedure => |procedure| {
+                    try self.addEdge(owner, try self.templateNode(procedure.template));
+                    // A method dispatch selects by type is an instantiation
+                    // checking records no edge for.
+                    self.markOwn(owner, self.requirementFlags(procedure.template));
+                },
                 .local_proc => self.markUnbounded(owner, "local procedure method"),
                 .callable_binding => self.markUnbounded(owner, "computed callable method"),
                 .structural => {},
@@ -724,6 +832,8 @@ pub fn compute(
         }
     }
     views = builder.views.valueIterator();
+    while (views.next()) |view| try builder.addConvertedLiterals(view.*);
+    views = builder.views.valueIterator();
     while (views.next()) |view| try builder.addImplicitMethods(view.*);
     views = builder.views.valueIterator();
     while (views.next()) |view| try builder.addMethods(view.*);
@@ -732,6 +842,8 @@ pub fn compute(
         for (view.checked_procedure_templates.templates.items, 0..) |template, index| {
             const node = demand.templates.get(.{ .module = view.key.bytes, .template = @intCast(index) }).?;
             try builder.addTemplate(view.*, node, template);
+            const requirement = requirementFlagsOf(view.*, template);
+            if (!requirement.eql(.{})) try demand.requirements.put(allocator, .{ .module = view.key.bytes, .template = @intCast(index) }, requirement);
             if (!builder.own.items[node].eql(.{})) demand.counters.source_templates += 1;
         }
     }
@@ -775,6 +887,23 @@ pub fn compute(
     return demand;
 }
 
+/// The flags an instantiation of `template` that checking records no edge
+/// for contributes: such an instantiation converts each of the template's
+/// literal requirements in the specialization, so each contributes its
+/// dependent kind, and an interpolation, which a specialization always
+/// hoists, is strict.
+fn requirementFlagsOf(view: checked.ImportedModuleView, template: checked.CheckedProcedureTemplate) Flags {
+    var flags: Flags = .{};
+    for (view.checked_procedure_templates.templateLiteralRequirements(&template)) |requirement| {
+        flags = flags.merge(switch (requirement.site.kind) {
+            .numeral => .{ .dependent_numeral = true },
+            .quote => .{ .dependent_quote = true },
+            .interpolation => .{ .strict = true },
+        });
+    }
+    return flags;
+}
+
 fn addView(builder: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
     const entry = try builder.views.getOrPut(builder.allocator, view.key.bytes);
     if (!entry.found_existing) entry.value_ptr.* = view;
@@ -794,7 +923,7 @@ pub fn selectDiscoveryRoots(
 ) Allocator.Error!void {
     for (requests, 0..) |request, index| {
         const owner = if (source_modules.len == 0) modules.root.module.key.digest() else source_modules[index];
-        const view = findView(modules, owner) orelse Common.invariant("discovery root named a checked module outside its lowering set");
+        const view = modules.moduleByKey(owner) orelse Common.invariant("discovery root named a checked module outside its lowering set");
         const flags = try rootFlags(allocator, demand, modules, view, request);
         const reaches = flags.reachesLiteralRoot();
         if (traceEnabled()) std.debug.print("ctfe-demand root {d} {s} {s}\n", .{
@@ -814,11 +943,12 @@ fn rootFlags(
     request: checked.RootRequest,
 ) Allocator.Error!Flags {
     const template = request.procedure_template orelse return Flags.all;
-    const template_flags = demand.templateFlags(template);
+    // A program root is an instantiation checking records no edge for.
+    const template_flags = demand.templateFlags(template).merge(demand.requirementFlags(template));
     const type_flags = try demand.checkedTypeFlags(allocator, view.canonical_names, view.checked_types, request.checked_type);
     var evidence_flags: Flags = .{};
     if (request.root_evidence) |evidence| {
-        const evidence_view = findView(modules, evidence.checked_module) orelse
+        const evidence_view = modules.moduleByKey(evidence.checked_module) orelse
             Common.invariant("discovery root evidence named a checked module outside its lowering set");
         const plans = evidence_view.static_dispatch_plans;
         evidence_flags = try demand.checkedEvidenceFlags(allocator, plans, plans.evidence_refs[evidence.span.start..][0..evidence.span.len]);
@@ -829,11 +959,4 @@ fn rootFlags(
         @as(u8, @bitCast(evidence_flags)),
     });
     return template_flags.merge(type_flags).merge(evidence_flags);
-}
-
-fn findView(modules: Common.CheckedModules, key: checked.ModuleId) ?checked.ImportedModuleView {
-    if (modules.root.module.key.digest().eql(key)) return checked.importedView(modules.root.module);
-    for (modules.root.relation_modules) |view| if (view.key.digest().eql(key)) return view;
-    for (modules.imports) |view| if (view.key.digest().eql(key)) return view;
-    return null;
 }

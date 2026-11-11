@@ -1038,6 +1038,9 @@ pub const TailGroupId = enum(u32) { _ };
 pub const TailCalls = struct {
     head: CFStmtId,
     loop: JoinPointId,
+    /// The statement the loop begins at, when it is not the body's first:
+    /// the statements before it run once per call.
+    entry: ?CFStmtId = null,
 };
 
 /// Which tail-recursion rewrite the TRMC pass (src/lir/trmc.zig) applied to a
