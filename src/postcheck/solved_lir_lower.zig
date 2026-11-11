@@ -39,73 +39,12 @@ const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 const PatternRefutability = can.PatternRefutability;
 
-/// Runtime field order for a named record field.
-pub const RuntimeRecordFieldSchema = struct {
-    name: []const u8,
-    logical_index: u32,
-};
-
-/// Runtime field order for a named record.
-pub const RuntimeRecordSchema = struct {
-    type_name: []const u8,
-    fields: []const RuntimeRecordFieldSchema,
-
-    pub fn fieldLogicalIndex(self: RuntimeRecordSchema, field_name: []const u8) ?u32 {
-        for (self.fields) |field| {
-            if (std.mem.eql(u8, field.name, field_name)) return field.logical_index;
-        }
-        return null;
-    }
-};
-
-/// Runtime discriminant for a named tag.
-pub const RuntimeTagSchema = struct {
-    name: []const u8,
-    discriminant: u32,
-};
-
-/// Runtime tag order for a named tag union.
-pub const RuntimeTagUnionSchema = struct {
-    type_name: []const u8,
-    tags: []const RuntimeTagSchema,
-
-    pub fn tagDiscriminant(self: RuntimeTagUnionSchema, tag_name: []const u8) ?u32 {
-        for (self.tags) |tag| {
-            if (std.mem.eql(u8, tag.name, tag_name)) return tag.discriminant;
-        }
-        return null;
-    }
-};
-
-/// Runtime schemas emitted while lowering Lambda Solved to LIR.
-pub const RuntimeSchemaStore = struct {
-    allocator: std.mem.Allocator,
-    records: std.ArrayList(RuntimeRecordSchema),
-    tag_unions: std.ArrayList(RuntimeTagUnionSchema),
-
-    pub fn init(allocator: std.mem.Allocator) RuntimeSchemaStore {
-        return .{
-            .allocator = allocator,
-            .records = .empty,
-            .tag_unions = .empty,
-        };
-    }
-
-    pub fn deinit(self: *RuntimeSchemaStore) void {
-        for (self.records.items) |schema| {
-            for (schema.fields) |field| self.allocator.free(field.name);
-            self.allocator.free(schema.fields);
-            self.allocator.free(schema.type_name);
-        }
-        for (self.tag_unions.items) |schema| {
-            for (schema.tags) |tag| self.allocator.free(tag.name);
-            self.allocator.free(schema.tags);
-            self.allocator.free(schema.type_name);
-        }
-        self.tag_unions.deinit(self.allocator);
-        self.records.deinit(self.allocator);
-    }
-};
+const runtime_schemas = @import("runtime_schemas.zig");
+pub const RuntimeRecordFieldSchema = runtime_schemas.RuntimeRecordFieldSchema;
+pub const RuntimeRecordSchema = runtime_schemas.RuntimeRecordSchema;
+pub const RuntimeTagSchema = runtime_schemas.RuntimeTagSchema;
+pub const RuntimeTagUnionSchema = runtime_schemas.RuntimeTagUnionSchema;
+pub const RuntimeSchemaStore = runtime_schemas.RuntimeSchemaStore;
 
 /// LIR result plus runtime schemas emitted by direct LIR lowering.
 pub const Output = struct {
