@@ -1,4 +1,4 @@
-//! Freestanding Linux runtime for the build-only default app platform.
+//! Libc-free Linux runtime for compiler-owned platforms.
 //!
 //! This provides raw syscall-based stdout/stderr, allocation, crash reporting,
 //! and fatal-signal reporting without linking libc.
@@ -17,6 +17,7 @@ const RocStr = @import("roc_str_view").RocStr;
 const roc_args = @import("roc_args");
 const RocList = @import("roc_str_view").RocList;
 const shim_symbols = @import("shim_symbols");
+const linux_static_pie = @import("linux_static_pie");
 const runtime_shared = @import("runtime_shared.zig");
 const SourceFrame = runtime_shared.SourceFrame;
 const normalizedAlignment = runtime_shared.normalizedAlignment;
@@ -72,6 +73,7 @@ comptime {
     @export(&defaultMemset, .{ .name = "memset", .linkage = .weak });
     @export(&defaultTrunc, .{ .name = "trunc", .linkage = .weak });
 
+    @export(&linuxRelocate, .{ .name = shim_symbols.roc_default_linux_relocate, .visibility = .hidden });
     @export(&runtimeInit, .{ .name = shim_symbols.roc_default_runtime_init });
     @export(&rocDbg, .{ .name = shim_symbols.roc_dbg });
     @export(&rocExpectFailed, .{ .name = shim_symbols.roc_expect_failed });
@@ -171,7 +173,14 @@ const linux_arch: LinuxArch = switch (builtin.cpu.arch) {
     => .unsupported,
 };
 
+fn linuxRelocate(argc: usize, argv: [*][*:0]u8) callconv(.c) void {
+    @disableInstrumentation();
+    linux_static_pie.relocate(argc, argv);
+}
+
 fn linuxStartMain(argc: usize, argv: [*][*:0]u8) callconv(.c) noreturn {
+    @disableInstrumentation();
+    linuxRelocate(argc, argv);
     runtimeInit();
     const args = roc_args.fromPosixArgv(argc, argv, &rocAlloc) orelse {
         writeLiteral(stderr_fd, "Unable to allocate command-line arguments\n");

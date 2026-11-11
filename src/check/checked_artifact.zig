@@ -23146,11 +23146,10 @@ pub fn pairCheckedPlatform(
     result.root_requests.runtime_requests = try collectRuntimeRootRequests(session, result.root_requests.requests);
     var schedule = std.ArrayList(RootRequest).empty;
     for (result.root_requests.requests) |request| {
-        if (request.evaluation_order == null) continue;
         // A paired platform may inherit a semantically completed value but
         // still need the other strategy's function representation. Keep its
         // declared request so that strategy can run the producer later.
-        if (!request.evaluation_complete) try schedule.append(session, request);
+        if (request.evaluation_order != null and !request.evaluation_complete) try schedule.append(session, request);
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {

@@ -13296,7 +13296,7 @@ test "issue 11291 boxy imported nominal forwarding executes with exact backing d
     try std.testing.expectEqualStrings("[120, 121, 122]", output);
 }
 
-test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
+test "issue 11376: mixed-width products survive Boxy boundaries and copy-on-write" {
     const allocator = std.testing.allocator;
     const source =
         \\Pair := { a: U8, z: U64 }
@@ -13376,13 +13376,17 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
             );
             defer interpreter.deinit();
             static_data.install(&interpreter);
-            var index: u64 = 1;
-            const evaluated = try interpreter.eval(.{
-                .proc_id = try rootProc(&lowered.lowered),
-                .arg_layouts = &.{.u64},
-                .arg_ptr = @ptrCast(&index),
-            });
-            try std.testing.expectEqual(@as(u64, 131), evaluated.value.read(u64));
+            // Cover both elements and the bounds failure without depending
+            // on whether the constant list is a literal or frozen data.
+            for ([_]u64{ 131, 131, 0 }, 0..) |expected, position| {
+                var index: u64 = @intCast(position);
+                const evaluated = try interpreter.eval(.{
+                    .proc_id = try rootProc(&lowered.lowered),
+                    .arg_layouts = &.{.u64},
+                    .arg_ptr = @ptrCast(&index),
+                });
+                try std.testing.expectEqual(expected, evaluated.value.read(u64));
+            }
         }
         try runtime_env.checkForLeaks();
     }
@@ -13598,6 +13602,7 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     // an enclosing codec contract must not split those ordinary helpers.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
+    // Pin specialization, not expression/local bookkeeping within a worker.
     try std.testing.expectEqual(@as(usize, 23), stats.functions);
     try std.testing.expectEqual(@as(usize, 16), stats.definitions);
     // Each of the two restored Values keeps its source static-data candidate,
