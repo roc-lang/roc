@@ -15497,7 +15497,7 @@ test "standalone LLVM modules define cyclic frozen data and procedure pointers" 
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(0),
         .args = .empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u64,
         .frame_locals = try store.addLocalSpan(&.{result}),
     }, .none);
@@ -15524,7 +15524,7 @@ test "standalone LLVM modules define cyclic frozen data and procedure pointers" 
             .symbol_name = "callable",
             .bytes = &(@as([8]u8, @splat(0))),
             .alignment = 8,
-            .relocations = &.{.{ .offset = 0, .target_symbol_name = "unused_symbol_spelling", .kind = .function_pointer, .procedure = proc }},
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "unused_symbol_spelling", .kind = .function_pointer, .procedure = .some(proc) }},
         },
     };
     try codegen.setStaticDataExports(&exports);
