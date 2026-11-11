@@ -97,7 +97,7 @@ test "a template's stored sealed slots match the independent scalar oracle" {
                     tails += 1;
                     if (std.mem.findScalar(u32, sealed_slots, @intCast(slot)) != null) sealed_tails += 1;
                 },
-                else => {},
+                .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
             }
         }
         try std.testing.expectEqual(@as(usize, 1), tails);
@@ -111,7 +111,7 @@ test "a template's stored sealed slots match the independent scalar oracle" {
         for (templates.templateSchemeVars(template)) |variable| {
             switch (artifact.checked_types.view().payload(variable)) {
                 .flex => |flex| try std.testing.expect(!flex.uncommitted_record_tail),
-                else => {},
+                .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
             }
         }
     }

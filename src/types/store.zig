@@ -196,12 +196,6 @@ pub const StaticDispatchRelationMerge = struct {
     retained_fn_var: Var,
 };
 
-/// The store of all type variables and their descriptors.
-///
-/// Each type variable (`Var`) points to a Slot.
-/// A Slot either redirects to a different slot or contains type `Content`.
-///
-/// Var maps to a SlotStore.Idx internally.
 /// An empty tag union a relation can no longer lift: written by an
 /// annotation, or committed after inference closed it. The empty tag union
 /// an opening of a nominal declaration's backing minted is the declaration's
@@ -211,6 +205,12 @@ fn committedEmptyTagUnion(desc: types.Descriptor) bool {
         !desc.flags.uncommitted_tag_tail and !desc.flags.nominal_backing_structure;
 }
 
+/// The store of all type variables and their descriptors.
+///
+/// Each type variable (`Var`) points to a Slot.
+/// A Slot either redirects to a different slot or contains type `Content`.
+///
+/// Var maps to a SlotStore.Idx internally.
 pub const Store = struct {
     const Self = @This();
 

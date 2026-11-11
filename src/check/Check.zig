@@ -6015,9 +6015,9 @@ fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!voi
                     try pending.append(self.gpa, .{ .var_ = func.ret, .position = top.functionResult() });
                     continue;
                 },
-                else => {},
+                .record, .tag_union, .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
             },
-            else => {},
+            .flex, .rigid, .alias, .field_presence, .err => {},
         }
         // A binding that is not a function quantifies no record tail.
         try pending.append(self.gpa, .{ .var_ = root, .position = TailPosition.unreachable_position });
@@ -6059,7 +6059,7 @@ fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!voi
                     // carries a conversion through its arguments.
                     const data_args = if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
                         .list, .box, .try_type => true,
-                        else => false,
+                        .dict, .set, .fields, .field, .numeral, .num => false,
                     } else false;
                     const arg_position: TailPosition = if (data_args) position.data() else TailPosition.unreachable_position;
                     for (self.types.sliceNominalArgs(nominal)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = arg_position });

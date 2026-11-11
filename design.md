@@ -5100,7 +5100,7 @@ exactly as it is for a closed record. With `U` an uncommitted tail:
 | an erroneous type | the error |
 | anything else | type mismatch |
 
-A committed record never changes after the fact. The empty record relates
+A committed record never changes once it is committed. The empty record relates
 to a row only when that row holds no field, so a closed row absorbs no field
 a relation offers it, and relating it to a nominal type is a type mismatch.
 
