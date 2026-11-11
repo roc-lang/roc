@@ -7203,7 +7203,7 @@ fn hotReloadPlatformSource(allocator: Allocator, target: NativeMuslTarget) CliRu
         \\    }}
         \\    targets: {{
         \\        inputs_dir: "targets/",
-        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
+        \\        {s}: {{ inputs: ["rcrt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
         \\import Host
@@ -7428,7 +7428,7 @@ const hot_reload_host_c_source =
     \\"        \"roc_host_stored_boxed_call\": Host.stored_boxed_call!,\n"
     \\"    }\n"
     \\"    targets: {\n"
-    \\"        " ROC_TARGET_NAME ": { inputs: [\"crt1.o\", \"libhost.a\", app, \"libc.a\"] },\n"
+    \\"        " ROC_TARGET_NAME ": { inputs: [\"rcrt1.o\", \"libhost.a\", app, \"libc.a\"] },\n"
     \\"    }\n"
     \\"\n"
     \\"import Host\n"
@@ -7715,6 +7715,7 @@ fn buildNativeMuslCompilerRtObject(
         "build-obj",
         "-target",
         target.zig_target,
+        "-fPIC",
         "-fcompiler-rt",
         root_path,
         emit_arg,
@@ -7768,8 +7769,8 @@ fn customHotReloadDevShim(
 
     std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to create platform target dir: {}", .{err});
-    copyNativeMuslTargetFile(io, allocator, target, "crt1.o", target_dir) catch |err|
-        return customInfraFailure(allocator, timer, "failed to copy crt1.o: {}", .{err});
+    copyNativeMuslTargetFile(io, allocator, target, "rcrt1.o", target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to copy rcrt1.o: {}", .{err});
     copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to copy libc.a: {}", .{err});
     if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
@@ -7796,6 +7797,7 @@ fn customHotReloadDevShim(
         target.zig_target,
         target_define_arg,
         "-O2",
+        "-fPIC",
         "-c",
         host_c_path,
         "-o",
@@ -7808,6 +7810,7 @@ fn customHotReloadDevShim(
         "-target",
         target.zig_target,
         "-OReleaseFast",
+        "-fPIC",
         "-fno-compiler-rt",
         "--dep",
         "erased_callable",
@@ -7954,7 +7957,7 @@ fn hotReloadModelPlatformSource(allocator: Allocator, target: NativeMuslTarget) 
         \\    }}
         \\    targets: {{
         \\        inputs_dir: "targets/",
-        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
+        \\        {s}: {{ inputs: ["rcrt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
         \\init_model_for_host : U64 -> Box(Model)
@@ -8176,8 +8179,8 @@ fn customHotReloadModelBoundary(
 
     std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to create model platform target dir: {}", .{err});
-    copyNativeMuslTargetFile(io, allocator, target, "crt1.o", target_dir) catch |err|
-        return customInfraFailure(allocator, timer, "failed to copy model crt1.o: {}", .{err});
+    copyNativeMuslTargetFile(io, allocator, target, "rcrt1.o", target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to copy model rcrt1.o: {}", .{err});
     copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to copy model libc.a: {}", .{err});
     if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
@@ -8197,6 +8200,7 @@ fn customHotReloadModelBoundary(
         "-target",
         target.zig_target,
         "-O2",
+        "-fPIC",
         "-c",
         host_c_path,
         "-o",
@@ -8287,7 +8291,7 @@ fn hotReloadStaticStrPlatformSource(allocator: Allocator, target: NativeMuslTarg
         \\    provides {{ "roc_init": init_for_host, "roc_label": label_for_host }}
         \\    targets: {{
         \\        inputs_dir: "targets/",
-        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
+        \\        {s}: {{ inputs: ["rcrt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
         \\init_for_host : U64 -> Box(Model)
@@ -8491,8 +8495,8 @@ fn runHotReloadStaticDataCase(
 
     std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to create platform target dir: {}", .{err});
-    copyNativeMuslTargetFile(io, allocator, target, "crt1.o", target_dir) catch |err|
-        return customInfraFailure(allocator, timer, "failed to copy crt1.o: {}", .{err});
+    copyNativeMuslTargetFile(io, allocator, target, "rcrt1.o", target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to copy rcrt1.o: {}", .{err});
     copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to copy libc.a: {}", .{err});
     if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
@@ -8512,6 +8516,7 @@ fn runHotReloadStaticDataCase(
         "-target",
         target.zig_target,
         "-O2",
+        "-fPIC",
         "-c",
         host_c_path,
         "-o",
@@ -8603,7 +8608,7 @@ fn hotReloadStaticDataPlatformSource(allocator: Allocator, target: NativeMuslTar
         \\    }}
         \\    targets: {{
         \\        inputs_dir: "targets/",
-        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
+        \\        {s}: {{ inputs: ["rcrt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
         \\init_for_host : U64 -> Box(Model)
@@ -8850,7 +8855,7 @@ fn issue12633PlatformSource(allocator: Allocator, target: NativeMuslTarget) CliR
         \\    provides {{ "roc_capture": capture_for_host, "roc_read": read_for_host }}
         \\    targets: {{
         \\        inputs_dir: "targets/",
-        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
+        \\        {s}: {{ inputs: ["rcrt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
         \\capture_for_host : U64 -> Box((Box((State -> U64)) -> U64))
@@ -9041,8 +9046,8 @@ fn customIssue12633HotReloadErasedCallableState(
 
     std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to create platform target dir: {}", .{err});
-    copyNativeMuslTargetFile(io, allocator, target, "crt1.o", target_dir) catch |err|
-        return customInfraFailure(allocator, timer, "failed to copy crt1.o: {}", .{err});
+    copyNativeMuslTargetFile(io, allocator, target, "rcrt1.o", target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to copy rcrt1.o: {}", .{err});
     copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to copy libc.a: {}", .{err});
     if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
@@ -9064,6 +9069,7 @@ fn customIssue12633HotReloadErasedCallableState(
         "-target",
         target.zig_target,
         "-O2",
+        "-fPIC",
         "-c",
         host_c_path,
         "-o",
@@ -9190,10 +9196,10 @@ const platform_requires_checker_platform_source =
     \\        inputs_dir: "targets/",
     \\        x64mac: { inputs: ["libhost.a", app] },
     \\        arm64mac: { inputs: ["libhost.a", app] },
-    \\        x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
-    \\        x64v1musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
-    \\        arm64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
-    \\        arm64v1musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
+    \\        x64musl: { inputs: ["rcrt1.o", "libhost.a", app, "libc.a"] },
+    \\        x64v1musl: { inputs: ["rcrt1.o", "libhost.a", app, "libc.a"] },
+    \\        arm64musl: { inputs: ["rcrt1.o", "libhost.a", app, "libc.a"] },
+    \\        arm64v1musl: { inputs: ["rcrt1.o", "libhost.a", app, "libc.a"] },
     \\        x64win: { inputs: ["host.lib", app] },
     \\        arm64win: { inputs: ["host.lib", app] },
     \\    }
@@ -9218,10 +9224,10 @@ const PlatformRequiresTargetPlaceholder = struct {
 const platform_requires_target_placeholders = [_]PlatformRequiresTargetPlaceholder{
     .{ .dir_name = "x64mac", .files = &.{"libhost.a"} },
     .{ .dir_name = "arm64mac", .files = &.{"libhost.a"} },
-    .{ .dir_name = "x64musl", .files = &.{ "crt1.o", "libhost.a", "libc.a" } },
-    .{ .dir_name = "x64v1musl", .files = &.{ "crt1.o", "libhost.a", "libc.a" } },
-    .{ .dir_name = "arm64musl", .files = &.{ "crt1.o", "libhost.a", "libc.a" } },
-    .{ .dir_name = "arm64v1musl", .files = &.{ "crt1.o", "libhost.a", "libc.a" } },
+    .{ .dir_name = "x64musl", .files = &.{ "rcrt1.o", "libhost.a", "libc.a" } },
+    .{ .dir_name = "x64v1musl", .files = &.{ "rcrt1.o", "libhost.a", "libc.a" } },
+    .{ .dir_name = "arm64musl", .files = &.{ "rcrt1.o", "libhost.a", "libc.a" } },
+    .{ .dir_name = "arm64v1musl", .files = &.{ "rcrt1.o", "libhost.a", "libc.a" } },
     .{ .dir_name = "x64win", .files = &.{"host.lib"} },
     .{ .dir_name = "arm64win", .files = &.{"host.lib"} },
 };
@@ -18154,8 +18160,8 @@ fn runGlueRuntimeCase(
                     .rust_target = target.rust_target,
                     .c_host_needs_compiler_rt = target.c_host_needs_compiler_rt,
                 };
-                copyNativeMuslTargetFile(io, allocator, musl_target, "crt1.o", target_dir) catch |err|
-                    return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime crt1.o: {}", .{err}), env.dirs.work_dir);
+                copyNativeMuslTargetFile(io, allocator, musl_target, "rcrt1.o", target_dir) catch |err|
+                    return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime rcrt1.o: {}", .{err}), env.dirs.work_dir);
                 copyNativeMuslTargetFile(io, allocator, musl_target, "libc.a", target_dir) catch |err|
                     return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime libc.a: {}", .{err}), env.dirs.work_dir);
             }
@@ -18295,22 +18301,26 @@ fn compileGlueRuntimeCHost(
 ) ?TestResult {
     const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{include_dir}) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate glue runtime C include flag: {}", .{err});
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "zig",
-        "cc",
-        "-target",
-        target.zig_target,
-        "-O2",
-        "-std=c11",
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-        include_flag,
-        "-c",
-        host_path,
-        "-o",
-        host_o_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    const cc_command = std.mem.concat(allocator, []const u8, &.{
+        &.{ "zig", "cc" },
+        if (target.kind == .musl) &.{"-fPIC"} else &.{},
+        &.{
+            "-target",
+            target.zig_target,
+            "-O2",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            include_flag,
+            "-c",
+            host_path,
+            "-o",
+            host_o_path,
+        },
+    }) catch |err| return customInfraFailure(allocator, timer, "failed to allocate glue host C command: {}", .{err});
+    defer allocator.free(cc_command);
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, cc_command, project_root_path, .{ .args = &.{} })) |failure| return failure;
 
     // `zig cc -c` emits only the host translation unit; unlike the Zig host
     // (`zig build-obj -fcompiler-rt`) and the Rust host (`rustc --crate-type
@@ -18362,6 +18372,7 @@ fn compileGlueRuntimeCHost(
         "build-obj",
         "-target",
         target.zig_target,
+        "-fPIC",
         "-fcompiler-rt",
         compiler_rt_root_path,
         compiler_rt_emit_flag,
@@ -18455,6 +18466,7 @@ fn compileGlueRuntimeZigHost(
         "build-obj",
         "-target",
         target.zig_target,
+        "-fPIC",
         "-fcompiler-rt",
         "-lc",
         "--dep",

@@ -1018,6 +1018,9 @@ pub const MonoLlvmCodeGen = struct {
                 \\_start:
                 \\    mov %rsp, %rbx
                 \\    and $-16, %rsp
+                \\    mov (%rbx), %rdi
+                \\    lea 8(%rbx), %rsi
+                \\    call {s}
                 \\    call {s}
                 \\    mov (%rbx), %rdi
                 \\    lea 8(%rbx), %rsi
@@ -1028,7 +1031,7 @@ pub const MonoLlvmCodeGen = struct {
                 \\    ud2
                 \\.size _start, .-_start
                 \\
-            , .{ shim_symbols.roc_default_runtime_init, shim_symbols.roc_shim_default_main }) catch return error.OutOfMemory;
+            , .{ shim_symbols.roc_default_linux_relocate, shim_symbols.roc_default_runtime_init, shim_symbols.roc_shim_default_main }) catch return error.OutOfMemory;
         } else if (self.target.cpu.arch == .aarch64) {
             w.print(
                 \\.text
@@ -1036,6 +1039,9 @@ pub const MonoLlvmCodeGen = struct {
                 \\.type _start,%function
                 \\_start:
                 \\    mov x19, sp
+                \\    ldr x0, [x19]
+                \\    add x1, x19, #8
+                \\    bl {s}
                 \\    bl {s}
                 \\    ldr x0, [x19]
                 \\    add x1, x19, #8
@@ -1045,7 +1051,7 @@ pub const MonoLlvmCodeGen = struct {
                 \\    brk #0
                 \\.size _start, .-_start
                 \\
-            , .{ shim_symbols.roc_default_runtime_init, shim_symbols.roc_shim_default_main }) catch return error.OutOfMemory;
+            , .{ shim_symbols.roc_default_linux_relocate, shim_symbols.roc_default_runtime_init, shim_symbols.roc_shim_default_main }) catch return error.OutOfMemory;
         } else {
             return error.CompilationFailed;
         }

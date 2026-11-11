@@ -354,6 +354,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: compiled Dict operations call the hasher builtins",
     },
     .{
+        .roc_file = "test/fx/boxy_procedure_aliases.roc",
+        .io_spec = "1>direct|1>passed|1>42|1>computed!",
+        .description = "Exact procedure aliases forward across modules while computed callables retain their evaluated values",
+    },
+    .{
         .roc_file = "test/fx/issue_10038_top_level_dict.roc",
         .io_spec = "0<a|1>b",
         .description = "Regression test: runtime lookup honors a comptime Dict's deterministic seed",
