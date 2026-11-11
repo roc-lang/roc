@@ -13,17 +13,18 @@ S := { y : U64, _ : U8, s : Str }
 
 Only := { _ : U64 }
 
-row_param : { x : U8, y : U64 } -> U64
+# These bodies read a record by its row, so each padded nominal reaches them
+# at its own layout.
 row_param = |r| r.x.to_u64() + r.y
 
-list_param : List({ x : U8, y : U64 }) -> U64
 list_param = |xs| List.fold(xs, 0, |n, r| n + r.y)
 
-box_param : Box({ x : U8, y : U64 }) -> U64
 box_param = |b| Box.unbox(b).y
 
-keep : { x : U8, y : U64 } -> { x : U8, y : U64 }
-keep = |r| r
+keep = |r| {
+	_ = r.y
+	r
+}
 
 make = |x, y| { x, y }
 
@@ -67,26 +68,26 @@ main! = |_args| {
 	echo!("${Str.inspect(kept_a.y)} ${Str.inspect(kept_b.y)}\n")
 
 	stored_a : List(A)
-	stored_a = Stored.rows
+	stored_a = Stored.rows({})
 	stored_b : List(B)
-	stored_b = Stored.rows
+	stored_b = Stored.rows({})
 	stored_p : List(P(Str))
-	stored_p = Stored.rows
-	echo!("${Str.inspect(ys(stored_a))} ${Str.inspect(ys(stored_b))} ${Str.inspect(ys(stored_p))} ${Str.inspect(ys(Stored.rows))}\n")
+	stored_p = Stored.rows({})
+	echo!("${Str.inspect(ys(stored_a))} ${Str.inspect(ys(stored_b))} ${Str.inspect(ys(stored_p))} ${Str.inspect(ys(Stored.rows({})))}\n")
 	nested : List(List(B))
-	nested = Stored.nested
+	nested = Stored.nested({})
 	empty : List(A)
-	empty = Stored.empty_rows
+	empty = Stored.empty_rows({})
 	echo!("${Str.inspect(List.map(nested, ys))} ${Str.inspect(ys(empty))}\n")
 	long : List(S)
-	long = Stored.long
+	long = Stored.long({})
 	units : List(Only)
-	units = Stored.units
+	units = Stored.units({})
 	echo!("${Str.inspect(List.map(long, |r| r.s))} ${Str.inspect(ys(long))} ${Str.inspect(List.len(units))}\n")
 	tagged : List([Has(A), No])
-	tagged = Stored.tagged
+	tagged = Stored.tagged({})
 	tupled : (List(B), U8)
-	tupled = Stored.tupled
+	tupled = Stored.tupled({})
 	to_rows : U8 -> List(A)
 	to_rows = Stored.to_rows
 	tagged_ys = List.map(tagged, |v| match v {
@@ -95,9 +96,9 @@ main! = |_args| {
 	})
 	echo!("${Str.inspect(tagged_ys)} ${Str.inspect(ys(tupled.0))} ${Str.inspect(tupled.1)} ${Str.inspect(ys(to_rows(1)))}\n")
 	boxed : Box(A)
-	boxed = Stored.boxed
+	boxed = Stored.boxed({})
 	boxes : List(Box(A))
-	boxes = Stored.boxes
+	boxes = Stored.boxes({})
 	echo!("${Str.inspect(Box.unbox(boxed).y)} ${Str.inspect(List.map(boxes, |e| Box.unbox(e).y))}\n")
 	Ok({})
 }
