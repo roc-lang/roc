@@ -277,7 +277,7 @@ pub const CanonicalNameStore = struct {
             const destination = &@field(result, field);
             destination.* = try source.clone(allocator);
         }
-        for (self.proc_bases.items.items, 0..) |key, index| {
+        for (self.proc_bases.items(), 0..) |key, index| {
             const id = try result.internProcBase(key);
             std.debug.assert(@backingInt(id) == index);
         }
@@ -369,7 +369,7 @@ pub const CanonicalNameStore = struct {
             .tag_labels = self.tag_labels.epochBoundary(),
             .export_names = self.export_names.epochBoundary(),
             .external_symbol_names = self.external_symbol_names.epochBoundary(),
-            .proc_bases = @intCast(self.proc_bases.items.items.len),
+            .proc_bases = @intCast(self.proc_bases.items().len),
         };
     }
 
@@ -381,13 +381,13 @@ pub const CanonicalNameStore = struct {
         pub const empty: InternerPrefix = .{ .bytes = &.{}, .ends = &.{} };
 
         fn capture(interner: *const NameInterner) InternerPrefix {
-            return .{ .bytes = interner.bytes.items.items, .ends = interner.ends.items.items };
+            return .{ .bytes = interner.bytes.items(), .ends = interner.ends.items() };
         }
 
         fn borrow(self: InternerPrefix) NameInterner {
             return .{
-                .bytes = .{ .items = std.ArrayList(u8).fromOwnedSlice(@constCast(self.bytes)) },
-                .ends = .{ .items = std.ArrayList(u32).fromOwnedSlice(@constCast(self.ends)) },
+                .bytes = .fromBorrowedSlice(@constCast(self.bytes)),
+                .ends = .fromBorrowedSlice(@constCast(self.ends)),
                 .supports_inserts = false,
             };
         }
@@ -435,7 +435,7 @@ pub const CanonicalNameStore = struct {
     pub fn capturePrefix(self: *const CanonicalNameStore) PrefixView {
         var result: PrefixView = undefined;
         inline for (interner_fields) |field| @field(result, field) = InternerPrefix.capture(&@field(self, field));
-        result.proc_bases = self.proc_bases.items.items;
+        result.proc_bases = self.proc_bases.items();
         return result;
     }
 
@@ -444,7 +444,7 @@ pub const CanonicalNameStore = struct {
     pub fn borrowPrefix(allocator: Allocator, prefix: PrefixView) CanonicalNameStore {
         var result = CanonicalNameStore.init(allocator);
         inline for (interner_fields) |field| @field(result, field) = @field(prefix, field).borrow();
-        result.proc_bases.items = std.ArrayList(ProcBaseKey).fromOwnedSlice(@constCast(prefix.proc_bases));
+        result.proc_bases = .fromBorrowedSlice(@constCast(prefix.proc_bases));
         result.serialized = true;
         result.borrowed_read_only = true;
         return result;
@@ -472,8 +472,8 @@ pub const CanonicalNameStore = struct {
     /// the insert never moves interned names a prefix view may be reading.
     fn insertName(self: *CanonicalNameStore, interner: *NameInterner, text: []const u8) Allocator.Error!u32 {
         if (self.superseded) |superseded| {
-            _ = try superseded.ensureUnusedCapacity(u8, &interner.bytes.items, self.allocator, text.len);
-            _ = try superseded.ensureUnusedCapacity(u32, &interner.ends.items, self.allocator, 1);
+            _ = try superseded.ensureUnusedSafeListCapacity(u8, &interner.bytes, self.allocator, text.len);
+            _ = try superseded.ensureUnusedSafeListCapacity(u32, &interner.ends, self.allocator, 1);
         }
         return interner.insert(self.allocator, text);
     }
@@ -627,18 +627,18 @@ pub const CanonicalNameStore = struct {
 
         if (self.proc_base_by_key.get(self.scratch_key.items)) |existing| return existing;
 
-        const id: ProcBaseKeyRef = @fromBackingInt(@intCast(@as(u32, @intCast(self.proc_bases.items.items.len))));
+        const id: ProcBaseKeyRef = @fromBackingInt(@intCast(@as(u32, @intCast(self.proc_bases.items().len))));
         const owned_key = try self.allocator.dupe(u8, self.scratch_key.items);
         errdefer self.allocator.free(owned_key);
 
-        if (self.superseded) |superseded| _ = try superseded.ensureUnusedCapacity(ProcBaseKey, &self.proc_bases.items, self.allocator, 1);
+        if (self.superseded) |superseded| _ = try superseded.ensureUnusedSafeListCapacity(ProcBaseKey, &self.proc_bases, self.allocator, 1);
         _ = try self.proc_bases.append(self.allocator, key);
         try self.proc_base_by_key.put(owned_key, id);
         return id;
     }
 
     pub fn procBase(self: *const CanonicalNameStore, id: ProcBaseKeyRef) ProcBaseKey {
-        return self.proc_bases.items.items[@backingInt(id)];
+        return self.proc_bases.items()[@backingInt(id)];
     }
 
     pub fn exportNameText(self: *const CanonicalNameStore, id: ExportNameId) []const u8 {

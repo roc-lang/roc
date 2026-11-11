@@ -106,21 +106,21 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try std.testing.expectEqual(original.common.line_starts.len(), env.common.line_starts.len());
-    for (original.common.line_starts.items.items, env.common.line_starts.items.items) |expected, actual| {
+    for (original.common.line_starts.items(), env.common.line_starts.items()) |expected, actual| {
         try std.testing.expectEqual(expected, actual);
     }
     try std.testing.expectEqualStrings("TestModule", env.module_name);
 
     try std.testing.expectEqual(@as(usize, 2), env.imports.imports.len());
-    try std.testing.expectEqualStrings("json.Json", env.common.strings.get(env.imports.imports.items.items[0]));
-    try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items.items[1]));
+    try std.testing.expectEqualStrings("json.Json", env.common.strings.get(env.imports.imports.items()[0]));
+    try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items()[1]));
     try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
     try std.testing.expectEqual(@as(usize, 1), env.rejectedStaticDispatches().len);
     try std.testing.expectEqual(@as(types.Var, @fromBackingInt(@intCast(1234))), env.rejectedStaticDispatches()[0].fnVar());
     try std.testing.expect(env.nodeIsBindingScheme(@fromBackingInt(@intCast(7))));
     try std.testing.expect(env.nodeIsBindingScheme(@fromBackingInt(@intCast(42))));
     try std.testing.expect(!env.nodeIsBindingScheme(@fromBackingInt(@intCast(41))));
-    try std.testing.expectEqual(@as(usize, 2), env.binding_schemes.items.items.len);
+    try std.testing.expectEqual(@as(usize, 2), env.binding_schemes.items().len);
     const codec_requirements_7 = env.bindingSchemeCodecRequirementsForNode(@fromBackingInt(@intCast(7)));
     try std.testing.expectEqual(@as(usize, 1), codec_requirements_7.len);
     try std.testing.expectEqual(@as(u32, 91), codec_requirements_7[0].scheme_root);
@@ -187,9 +187,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try testing.expectEqual(@as(usize, 3), env.common.line_starts.len());
-    try testing.expectEqual(@as(u32, 0), env.common.line_starts.items.items[0]);
-    try testing.expectEqual(@as(u32, 12), env.common.line_starts.items.items[1]);
-    try testing.expectEqual(@as(u32, 24), env.common.line_starts.items.items[2]);
+    try testing.expectEqual(@as(u32, 0), env.common.line_starts.items()[0]);
+    try testing.expectEqual(@as(u32, 12), env.common.line_starts.items()[1]);
+    try testing.expectEqual(@as(u32, 24), env.common.line_starts.items()[2]);
 
     try testing.expectEqualStrings(source, env.common.source);
     try testing.expectEqualStrings("TestModule", env.module_name);
@@ -198,8 +198,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
 
     // Verify the import strings are correct (they reference string indices in the string store)
-    const import_str1 = env.common.strings.get(env.imports.imports.items.items[0]);
-    const import_str2 = env.common.strings.get(env.imports.imports.items.items[1]);
+    const import_str1 = env.common.strings.get(env.imports.imports.items()[0]);
+    const import_str2 = env.common.strings.get(env.imports.imports.items()[1]);
 
     try testing.expectEqualStrings("json.Json", import_str1);
     try testing.expectEqualStrings("core.List", import_str2);
@@ -209,7 +209,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // The deserialized StringLiteral.Store is immutable, so cached import lookup
     // uses the serialized string index rather than reinterning its bytes.
-    const json_string_idx = env.imports.imports.items.items[0];
+    const json_string_idx = env.imports.imports.items()[0];
     const import_json_cached = env.imports.map.get(json_string_idx).?;
     try testing.expectEqual(@as(u32, 0), @backingInt(import_json_cached));
 }
@@ -301,7 +301,7 @@ test "ModuleEnv.Serialized roundtrip preserves file dependency states" {
         gpa.destroy(env);
     }
 
-    const deps = env.file_dependencies.items.items;
+    const deps = env.file_dependencies.items();
     try testing.expectEqual(@as(usize, 3), deps.len);
 
     try testing.expectEqual(ModuleEnv.FileDependencyState.present, deps[0].state);

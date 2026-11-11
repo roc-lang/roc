@@ -105,8 +105,8 @@ pub fn SafeRange(comptime Idx: type) type {
     };
 }
 
-/// Wraps a `std.ArrayList` to provide a list that's safer to access
-/// with arbitrary indices.
+/// A growable list addressed by typed indices, stored as a pointer, a `u32`
+/// length and a `u32` capacity.
 ///
 /// Use this for values that aren't structs with more than one field.
 /// Those values would likely be better stored in a SafeMultiList.
@@ -121,9 +121,26 @@ pub fn SafeRange(comptime Idx: type) type {
 /// (barring manual usage of macros). An Idx can only be used for lists
 /// that hold T's, giving type safety. Also, out-of-bounds errors are
 /// less likely since indices are only created for valid list entries.
+///
+/// A list owns its memory exactly when `capacity != 0`. A list with
+/// `capacity == 0` and a nonzero length is borrowed: its items live in memory
+/// the list does not own, such as a mapped cache entry. Reads and in-place
+/// writes go straight to that memory. The first growth copies the items into
+/// fresh owned memory and leaves the borrowed memory alone, and `deinit` frees
+/// nothing. An empty list also has `capacity == 0` and owns nothing.
 pub fn SafeList(comptime T: type) type {
     return struct {
-        items: std.ArrayList(T) = .empty,
+        const Self = @This();
+
+        ptr: [*]T = empty_ptr,
+        length: u32 = 0,
+        capacity: u32 = 0,
+
+        const empty_ptr: [*]T = @ptrFromInt(@alignOf(T));
+
+        /// Items allocated by the first growth of an empty list, so small lists
+        /// start at about one cache line.
+        const init_capacity: usize = @max(1, std.atomic.cache_line / @max(1, @sizeOf(T)));
 
         /// An index for an item in the list.
         pub const Idx = enum(u32) {
@@ -143,7 +160,7 @@ pub fn SafeList(comptime T: type) type {
         };
 
         /// A non-type-safe slice of the list.
-        pub const Slice = std.ArrayList(T).Slice;
+        pub const Slice = []T;
 
         /// A type-safe range of the list.
         pub const Range = SafeRange(Idx);
@@ -173,6 +190,7 @@ pub fn SafeList(comptime T: type) type {
             /// L-10: reject an `(offset, len)` whose `len` elements reach outside the
             /// `backing_len`-byte buffer before `deserializeInto` dereferences it.
             pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
+                if (self.len > max_len) return error.CorruptArtifact;
                 const span_bytes = std.math.mul(u64, self.len, @sizeOf(T)) catch return error.CorruptArtifact;
                 try validateRelocatedSpan(@alignOf(T), self.offset, span_bytes, backing_len);
             }
@@ -184,107 +202,162 @@ pub fn SafeList(comptime T: type) type {
                 allocator: Allocator,
                 writer: *CompactWriter,
             ) Allocator.Error!void {
-                const items = safe_list.items.items;
+                const list_items = safe_list.items();
                 // An integer offset, so a store whose items legitimately begin at byte
                 // zero records zero rather than an unrepresentable null pointer.
-                const data_offset = try writer.appendSlicePodZeroedOffset(allocator, @as([]const T, items));
+                const data_offset = try writer.appendSlicePodZeroedOffset(allocator, @as([]const T, list_items));
 
                 self.offset = @intCast(data_offset);
-                self.len = items.len;
-                self.capacity = items.len;
+                self.len = list_items.len;
+                self.capacity = list_items.len;
             }
 
-            /// Deserialize into a SafeList value (no in-place modification of cache buffer).
-            /// The base parameter is the base address of the serialized buffer in memory.
-            /// WARNING: The returned SafeList points into the cache buffer and CANNOT be grown.
-            /// Use deserializeWithCopy() if the list needs to be mutable.
+            /// A borrowed list (`capacity == 0`) whose items are the serialized items
+            /// in the buffer at `base`. The list reads and writes those items in
+            /// place, copies them on its first growth, and never frees them.
             pub fn deserializeInto(self: *const Serialized, base: usize) SafeList(T) {
-                // Handle empty list case
-                if (self.len == 0) {
-                    return SafeList(T){ .items = .empty };
-                }
-
-                // Apply the base address to convert from serialized offset to actual pointer
-                const items_ptr: [*]T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
-
-                return SafeList(T){
-                    .items = .{
-                        .items = items_ptr[0..@intCast(self.len)],
-                        .capacity = @intCast(self.capacity),
-                        .pointer_stability = .{},
-                    },
+                if (self.len == 0) return .{};
+                return .{
+                    .ptr = @ptrFromInt(base +% @as(usize, @intCast(self.offset))),
+                    .length = @intCast(self.len),
+                    .capacity = 0,
                 };
             }
 
             /// Deserialize into a SafeList value with fresh memory allocation.
-            /// The returned SafeList owns its memory and can be safely grown/mutated.
+            /// The returned SafeList owns its memory.
             pub fn deserializeWithCopy(self: *const Serialized, base: usize, gpa: Allocator) Allocator.Error!SafeList(T) {
-                // Handle empty list case
-                if (self.len == 0) {
-                    return SafeList(T){ .items = .empty };
-                }
-
-                // Get pointer to source data in cache buffer
-                const src_ptr: [*]const T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
-                const item_len: usize = @intCast(self.len);
-                const item_capacity: usize = @intCast(self.capacity);
-                const src_slice = src_ptr[0..item_len];
-
-                // Allocate fresh memory with full capacity
-                const fresh_items = try gpa.alloc(T, item_capacity);
-                @memcpy(fresh_items[0..item_len], src_slice);
-
-                return SafeList(T){
-                    .items = .{
-                        .items = fresh_items[0..item_len],
-                        .capacity = item_capacity,
-                        .pointer_stability = .{},
-                    },
-                };
+                const borrowed = self.deserializeInto(base);
+                return borrowed.clone(gpa);
             }
         };
 
-        /// Initialize the `SafeList` with the specified capacity.
-        pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!SafeList(T) {
-            try checkLen(capacity);
-            return .{
-                .items = try std.ArrayList(T).initCapacity(gpa, capacity),
-            };
+        /// A list that owns a copy of `source`.
+        pub fn fromSlice(gpa: Allocator, source: []const T) Allocator.Error!SafeList(T) {
+            var list = try SafeList(T).initCapacity(gpa, source.len);
+            _ = list.appendSliceAssumeCapacity(source);
+            return list;
         }
 
-        /// Deinitialize the memory of this `SafeList`.
+        /// A list that takes ownership of `owned`, which `gpa` allocated with
+        /// exactly `owned.len` items.
+        pub fn fromOwnedSlice(owned: []T) SafeList(T) {
+            std.debug.assert(owned.len <= max_len);
+            if (owned.len == 0) return .{};
+            return .{ .ptr = owned.ptr, .length = @intCast(owned.len), .capacity = @intCast(owned.len) };
+        }
+
+        /// A borrowed list over `borrowed`, which outlives the list. The list reads
+        /// and writes `borrowed` in place, copies it on its first growth, and
+        /// never frees it.
+        pub fn fromBorrowedSlice(borrowed: []T) SafeList(T) {
+            std.debug.assert(borrowed.len <= max_len);
+            if (borrowed.len == 0) return .{};
+            return .{ .ptr = borrowed.ptr, .length = @intCast(borrowed.len), .capacity = 0 };
+        }
+
+        /// Initialize the `SafeList` with the specified capacity.
+        pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SafeList(T) {
+            var list = SafeList(T){};
+            try list.ensureTotalCapacityPrecise(gpa, capacity);
+            return list;
+        }
+
+        /// Free the memory this list owns. A borrowed or empty list owns none.
         pub fn deinit(self: *SafeList(T), gpa: Allocator) void {
-            self.items.deinit(gpa);
+            if (self.capacity != 0) gpa.free(self.ptr[0..self.capacity]);
+            self.* = undefined;
         }
 
         /// Clone this list into fresh owned memory.
         pub fn clone(self: *const SafeList(T), gpa: Allocator) Allocator.Error!SafeList(T) {
-            var cloned = try SafeList(T).initCapacity(gpa, self.items.capacity);
-            errdefer cloned.deinit(gpa);
-            try cloned.items.appendSlice(gpa, self.items.items);
+            var cloned = try SafeList(T).initCapacity(gpa, @max(self.capacity, self.length));
+            _ = cloned.appendSliceAssumeCapacity(self.items());
             return cloned;
         }
 
         /// Get the length of this list.
         pub fn len(self: *const SafeList(T)) u64 {
-            return @intCast(self.items.items.len);
+            return self.length;
+        }
+
+        /// All the items in this list, as a non-type-safe slice.
+        pub fn items(self: *const SafeList(T)) []T {
+            return self.ptr[0..self.length];
+        }
+
+        /// Ensure the list holds at least `new_capacity` items without further
+        /// allocation, growing super-linearly so repeated appends stay amortized
+        /// constant time. A request no larger than the length or the capacity
+        /// changes nothing, so a borrowed list stays borrowed.
+        pub fn ensureTotalCapacity(self: *SafeList(T), gpa: Allocator, new_capacity: usize) Allocator.Error!void {
+            if (new_capacity <= self.length or new_capacity <= self.capacity) return;
+            try checkLen(new_capacity);
+            try self.ensureTotalCapacityPrecise(gpa, growCapacity(@max(self.capacity, self.length), new_capacity));
+        }
+
+        /// Ensure the list holds at least `new_capacity` items without further
+        /// allocation, allocating exactly `new_capacity` when it must grow. A
+        /// request no larger than the length or the capacity changes nothing.
+        pub fn ensureTotalCapacityPrecise(self: *SafeList(T), gpa: Allocator, new_capacity: usize) Allocator.Error!void {
+            if (new_capacity <= self.length or new_capacity <= self.capacity) return;
+            try checkLen(new_capacity);
+            if (self.capacity != 0) {
+                const old_memory = self.ptr[0..self.capacity];
+                if (gpa.remap(old_memory, new_capacity)) |new_memory| {
+                    self.ptr = new_memory.ptr;
+                    self.capacity = @intCast(new_capacity);
+                    return;
+                }
+            }
+            const new_memory = try gpa.alloc(T, new_capacity);
+            @memcpy(new_memory[0..self.length], self.items());
+            if (self.capacity != 0) gpa.free(self.ptr[0..self.capacity]);
+            self.ptr = new_memory.ptr;
+            self.capacity = @intCast(new_capacity);
+        }
+
+        /// Ensure the list holds at least `additional` more items without further
+        /// allocation.
+        pub fn ensureUnusedCapacity(self: *SafeList(T), gpa: Allocator, additional: usize) Allocator.Error!void {
+            const new_len = std.math.add(usize, self.length, additional) catch return error.OutOfMemory;
+            try self.ensureTotalCapacity(gpa, new_len);
         }
 
         /// Add an item to the end of this list.
-        pub fn append(self: *SafeList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
-            const length = self.len();
-            try checkLen(self.items.items.len + 1);
-            try self.items.append(gpa, item);
-
-            return @fromBackingInt(@intCast(@as(u32, @intCast(length))));
+        pub fn append(self: *SafeList(T), gpa: Allocator, item: T) Allocator.Error!Idx {
+            try self.ensureUnusedCapacity(gpa, 1);
+            return self.appendAssumeCapacity(item);
         }
 
         /// Add a new item to the end of this list assuming capacity is sufficient to hold an additional item.
         pub fn appendAssumeCapacity(self: *SafeList(T), item: T) Idx {
-            const length = self.len();
-            self.items.appendAssumeCapacity(item);
+            std.debug.assert(self.length < self.capacity);
+            const idx = self.length;
+            self.ptr[idx] = item;
+            self.length += 1;
+            return @fromBackingInt(idx);
+        }
 
-            return @fromBackingInt(@intCast(@as(u32, @intCast(length))));
+        /// Add `count` copies of `item` to the end of this list.
+        pub fn appendNTimes(self: *SafeList(T), gpa: Allocator, item: T, count: usize) Allocator.Error!void {
+            try self.ensureUnusedCapacity(gpa, count);
+            self.appendNTimesAssumeCapacity(item, count);
+        }
+
+        /// Add `count` copies of `item` to the end of this list assuming capacity is sufficient.
+        pub fn appendNTimesAssumeCapacity(self: *SafeList(T), item: T, count: usize) void {
+            std.debug.assert(self.length + count <= self.capacity);
+            @memset(self.ptr[self.length..][0..count], item);
+            self.length += @intCast(count);
+        }
+
+        /// Add one uninitialized item to the end of this list and return a pointer to it.
+        pub fn addOne(self: *SafeList(T), gpa: Allocator) Allocator.Error!*T {
+            try self.ensureUnusedCapacity(gpa, 1);
+            const idx = self.length;
+            self.length += 1;
+            return &self.ptr[idx];
         }
 
         /// Create a range from the provided idx to the end of the list
@@ -295,12 +368,90 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Add all the items in a slice to the end of this list.
-        pub fn appendSlice(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
-            const start_length = self.len();
-            try checkLen(self.items.items.len + items.len);
-            try self.items.appendSlice(gpa, items);
-            const end_length = self.len();
-            return Range{ .start = @fromBackingInt(@intCast(start_length)), .count = @intCast(end_length - start_length) };
+        pub fn appendSlice(self: *SafeList(T), gpa: Allocator, new_items: []const T) Allocator.Error!Range {
+            try self.ensureUnusedCapacity(gpa, new_items.len);
+            return self.appendSliceAssumeCapacity(new_items);
+        }
+
+        /// Add all the items in a slice to the end of this list assuming capacity is sufficient.
+        pub fn appendSliceAssumeCapacity(self: *SafeList(T), new_items: []const T) Range {
+            const start = self.length;
+            std.debug.assert(@as(usize, start) + new_items.len <= self.capacity);
+            @memcpy(self.ptr[start..][0..new_items.len], new_items);
+            self.length += @intCast(new_items.len);
+            return Range{ .start = @fromBackingInt(start), .count = @intCast(new_items.len) };
+        }
+
+        /// Insert `item` at index `i`, moving every later item up by one.
+        pub fn insert(self: *SafeList(T), gpa: Allocator, i: usize, item: T) Allocator.Error!void {
+            try self.insertSlice(gpa, i, &.{item});
+        }
+
+        /// Insert `new_items` at index `i`, moving every later item up.
+        pub fn insertSlice(self: *SafeList(T), gpa: Allocator, i: usize, new_items: []const T) Allocator.Error!void {
+            std.debug.assert(i <= self.length);
+            try self.ensureUnusedCapacity(gpa, new_items.len);
+            const old_len: usize = self.length;
+            self.length += @intCast(new_items.len);
+            const all = self.items();
+            std.mem.copyBackwards(T, all[i + new_items.len ..], all[i..old_len]);
+            @memcpy(all[i..][0..new_items.len], new_items);
+        }
+
+        /// Remove and return the item at index `i`, moving every later item down by one.
+        pub fn orderedRemove(self: *SafeList(T), i: usize) T {
+            const all = self.items();
+            const removed = all[i];
+            std.mem.copyForwards(T, all[i .. all.len - 1], all[i + 1 ..]);
+            self.length -= 1;
+            return removed;
+        }
+
+        /// Remove and return the last item, or `null` when the list is empty.
+        pub fn pop(self: *SafeList(T)) ?T {
+            if (self.length == 0) return null;
+            self.length -= 1;
+            return self.ptr[self.length];
+        }
+
+        /// Set the length to `new_len`, which must not exceed the length. The
+        /// capacity, and so the list's ownership, is unchanged.
+        pub fn shrinkRetainingCapacity(self: *SafeList(T), new_len: usize) void {
+            std.debug.assert(new_len <= self.length);
+            self.length = @intCast(new_len);
+        }
+
+        /// Remove every item, keeping the capacity and so the list's ownership.
+        pub fn clearRetainingCapacity(self: *SafeList(T)) void {
+            self.length = 0;
+        }
+
+        /// Set the length to `new_len`, growing first when needed. Items past the
+        /// old length are undefined.
+        pub fn resize(self: *SafeList(T), gpa: Allocator, new_len: usize) Allocator.Error!void {
+            try self.ensureTotalCapacity(gpa, new_len);
+            self.length = @intCast(new_len);
+        }
+
+        /// The items as a slice of exactly the length that the caller owns and
+        /// frees with `gpa`. A borrowed list's items are copied. The list is left
+        /// empty.
+        pub fn toOwnedSlice(self: *SafeList(T), gpa: Allocator) Allocator.Error![]T {
+            const length: usize = self.length;
+            if (self.capacity == 0) {
+                const owned = try gpa.dupe(T, self.items());
+                self.* = .{};
+                return owned;
+            }
+            const old_memory = self.ptr[0..self.capacity];
+            if (gpa.remap(old_memory, length)) |new_memory| {
+                self.* = .{};
+                return new_memory;
+            }
+            const owned = try gpa.dupe(T, self.items());
+            gpa.free(old_memory);
+            self.* = .{};
+            return owned;
         }
 
         /// Convert a range to a slice
@@ -314,19 +465,21 @@ pub fn SafeList(comptime T: type) type {
             const end: usize = start + range.count;
 
             std.debug.assert(start <= end);
-            std.debug.assert(end <= self.items.items.len);
+            std.debug.assert(end <= self.length);
 
-            return self.items.items[start..end];
+            return self.ptr[start..end];
         }
 
         /// Get an item from this list without worrying about out-of-bounds errors.
         pub fn get(self: *const SafeList(T), id: Idx) *T {
-            return &self.items.items[@as(usize, @backingInt(id))];
+            const i: usize = @backingInt(id);
+            std.debug.assert(i < self.length);
+            return &self.ptr[i];
         }
 
         /// Set the value of an item in this list without worrying about out-of-bounds errors.
         pub fn set(self: *const SafeList(T), id: Idx, value: T) void {
-            self.items.items[@as(usize, @backingInt(id))] = value;
+            self.get(id).* = value;
         }
 
         /// Iterate over all the indices of the items in this list.
@@ -368,9 +521,19 @@ pub fn SafeList(comptime T: type) type {
         pub fn iter(self: *const SafeList(T)) Iterator {
             return Iterator{
                 .array = self,
-                .len = self.len(),
+                .len = @intCast(self.len()),
                 .current = .first,
             };
+        }
+
+        /// The capacity to grow to from `current` so it holds at least `minimum`
+        /// items: super-linear, and capped at the 32-bit length limit.
+        fn growCapacity(current: usize, minimum: usize) usize {
+            var new_capacity = current;
+            while (true) {
+                new_capacity +|= new_capacity / 2 + init_capacity;
+                if (new_capacity >= minimum) return @min(new_capacity, max_len);
+            }
         }
     };
 }
@@ -654,6 +817,11 @@ pub fn SafeMultiList(comptime T: type) type {
         // TODO: consider removing this, or at least renaming to imply this is not a zero-cost operation
         pub fn get(self: *const SafeMultiList(T), idx: Idx) T {
             return self.items.get(@backingInt(idx));
+        }
+
+        /// Remove every element, keeping the capacity.
+        pub fn clearRetainingCapacity(self: *SafeMultiList(T)) void {
+            self.items.clearRetainingCapacity();
         }
 
         /// Make sure that the backing array has at least capacity for the specified number of elements.
@@ -2332,4 +2500,179 @@ test "SafeMultiList serialization records a byte-zero offset as zero" {
         try written.header.validateRelocations(written.bytes.len);
         try testing.expectEqual(@as(u32, 0), written.header.deserializeInto(@intFromPtr(written.bytes.ptr)).len());
     }
+}
+
+test "SafeList is a pointer, a u32 length and a u32 capacity" {
+    try testing.expectEqual(@as(usize, 16), @sizeOf(SafeList(u64)));
+    try testing.expectEqual(@as(usize, 16), @sizeOf(SafeList(u8)));
+}
+
+test "SafeList borrowed: reads and in-place writes use the borrowed memory" {
+    var backing = [_]u32{ 1, 2, 3 };
+    var list = SafeList(u32).fromBorrowedSlice(&backing);
+    // A never-grown borrowed list frees nothing; the testing allocator would
+    // report an invalid free of memory it does not own.
+    defer list.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 0), list.capacity);
+    try testing.expectEqualSlices(u32, &.{ 1, 2, 3 }, list.items());
+    list.set(@fromBackingInt(1), 20);
+    try testing.expectEqual(@as(u32, 20), backing[1]);
+    try testing.expectEqual(@as(*u32, &backing[2]), list.get(@fromBackingInt(2)));
+}
+
+test "SafeList borrowed: append copies into owned memory and leaves the borrowed bytes alone" {
+    const gpa = testing.allocator;
+    var backing = [_]u32{ 1, 2, 3 };
+    var list = SafeList(u32).fromBorrowedSlice(&backing);
+    defer list.deinit(gpa);
+
+    const idx = try list.append(gpa, 4);
+    try testing.expectEqual(@as(u32, 3), @backingInt(idx));
+    try testing.expect(list.capacity >= 4);
+    try testing.expect(list.ptr != @as([*]u32, &backing));
+    try testing.expectEqualSlices(u32, &.{ 1, 2, 3, 4 }, list.items());
+
+    // Writes after the growth land in the owned copy.
+    list.set(.first, 100);
+    try testing.expectEqualSlices(u32, &.{ 1, 2, 3 }, &backing);
+}
+
+test "SafeList borrowed: ensureTotalCapacity below, at and above the length" {
+    const gpa = testing.allocator;
+    var backing = [_]u32{ 1, 2, 3, 4 };
+    var list = SafeList(u32).fromBorrowedSlice(&backing);
+    defer list.deinit(gpa);
+
+    try list.ensureTotalCapacity(gpa, 2);
+    try testing.expectEqual(@as(u32, 0), list.capacity);
+    try testing.expectEqual(@as([*]u32, &backing), list.ptr);
+
+    try list.ensureTotalCapacity(gpa, 4);
+    try testing.expectEqual(@as(u32, 0), list.capacity);
+    try testing.expectEqual(@as([*]u32, &backing), list.ptr);
+
+    try list.ensureTotalCapacityPrecise(gpa, 4);
+    try testing.expectEqual(@as(u32, 0), list.capacity);
+
+    try list.ensureTotalCapacity(gpa, 5);
+    try testing.expect(list.capacity >= 5);
+    try testing.expect(list.ptr != @as([*]u32, &backing));
+    try testing.expectEqualSlices(u32, &.{ 1, 2, 3, 4 }, list.items());
+    try testing.expectEqualSlices(u32, &.{ 1, 2, 3, 4 }, &backing);
+}
+
+test "SafeList borrowed: clear then append grows into owned memory" {
+    const gpa = testing.allocator;
+    var backing = [_]u32{ 1, 2, 3 };
+    var list = SafeList(u32).fromBorrowedSlice(&backing);
+    defer list.deinit(gpa);
+
+    list.clearRetainingCapacity();
+    try testing.expectEqual(@as(u64, 0), list.len());
+    try testing.expectEqual(@as(u32, 0), list.capacity);
+
+    _ = try list.append(gpa, 9);
+    try testing.expect(list.capacity >= 1);
+    try testing.expectEqualSlices(u32, &.{9}, list.items());
+    try testing.expectEqualSlices(u32, &.{ 1, 2, 3 }, &backing);
+}
+
+test "SafeList borrowed: shrink keeps the list borrowed" {
+    const gpa = testing.allocator;
+    var backing = [_]u32{ 1, 2, 3 };
+    var list = SafeList(u32).fromBorrowedSlice(&backing);
+    defer list.deinit(gpa);
+
+    list.shrinkRetainingCapacity(1);
+    try testing.expectEqual(@as(u32, 0), list.capacity);
+    try testing.expectEqual(@as([*]u32, &backing), list.ptr);
+    try testing.expectEqual(@as(?u32, 1), list.pop());
+    try testing.expectEqual(@as(?u32, null), list.pop());
+}
+
+test "SafeList borrowed: clone owns a copy" {
+    const gpa = testing.allocator;
+    var backing = [_]u32{ 5, 6 };
+    const list = SafeList(u32).fromBorrowedSlice(&backing);
+
+    var cloned = try list.clone(gpa);
+    defer cloned.deinit(gpa);
+    try testing.expect(cloned.capacity >= 2);
+    try testing.expect(cloned.ptr != @as([*]u32, &backing));
+    cloned.set(.first, 50);
+    try testing.expectEqualSlices(u32, &.{ 50, 6 }, cloned.items());
+    try testing.expectEqualSlices(u32, &.{ 5, 6 }, &backing);
+}
+
+test "SafeList borrowed: toOwnedSlice copies" {
+    const gpa = testing.allocator;
+    var backing = [_]u32{ 7, 8 };
+    var list = SafeList(u32).fromBorrowedSlice(&backing);
+    const owned = try list.toOwnedSlice(gpa);
+    defer gpa.free(owned);
+    try testing.expect(owned.ptr != @as([*]u32, &backing));
+    try testing.expectEqualSlices(u32, &.{ 7, 8 }, owned);
+    try testing.expectEqual(@as(u64, 0), list.len());
+}
+
+test "SafeList borrowed: insert and orderedRemove" {
+    const gpa = testing.allocator;
+    var backing = [_]u32{ 1, 3 };
+    var list = SafeList(u32).fromBorrowedSlice(&backing);
+    defer list.deinit(gpa);
+
+    // orderedRemove writes in place without growing.
+    try testing.expectEqual(@as(u32, 1), list.orderedRemove(0));
+    try testing.expectEqual(@as(u32, 0), list.capacity);
+    try testing.expectEqualSlices(u32, &.{3}, list.items());
+
+    try list.insert(gpa, 0, 2);
+    try testing.expectEqualSlices(u32, &.{ 2, 3 }, list.items());
+}
+
+test "SafeList deserializeInto produces a borrowed list" {
+    const gpa = testing.allocator;
+
+    var original = SafeList(u32){};
+    defer original.deinit(gpa);
+    _ = try original.appendSlice(gpa, &.{ 10, 20, 30 });
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, SafeList(u32).Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+
+    const buffer = try gpa.alignedAlloc(u8, .of(SafeList(u32).Serialized), writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    const serialized_ptr: *const SafeList(u32).Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var loaded = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
+    defer loaded.deinit(gpa);
+
+    try testing.expectEqual(@as(u32, 0), loaded.capacity);
+    try testing.expectEqualSlices(u32, &.{ 10, 20, 30 }, loaded.items());
+
+    _ = try loaded.append(gpa, 40);
+    try testing.expectEqualSlices(u32, &.{ 10, 20, 30, 40 }, loaded.items());
+    const in_buffer: [*]const u32 = @ptrFromInt(@intFromPtr(buffer.ptr) + @as(usize, @intCast(serialized_ptr.offset)));
+    try testing.expectEqualSlices(u32, &.{ 10, 20, 30 }, in_buffer[0..3]);
+}
+
+test "SafeList growth is amortized" {
+    const gpa = testing.allocator;
+    var list = SafeList(u32){};
+    defer list.deinit(gpa);
+    var reallocations: usize = 0;
+    var last_ptr = list.ptr;
+    for (0..10_000) |i| {
+        _ = try list.append(gpa, @intCast(i));
+        if (list.ptr != last_ptr) {
+            reallocations += 1;
+            last_ptr = list.ptr;
+        }
+    }
+    try testing.expect(reallocations < 40);
+    for (list.items(), 0..) |item, i| try testing.expectEqual(@as(u32, @intCast(i)), item);
 }

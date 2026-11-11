@@ -897,7 +897,7 @@ pub const Import = struct {
             };
             errdefer result.deinit(allocator);
 
-            for (result.imports.items.items, 0..) |string_idx, i| {
+            for (result.imports.items(), 0..) |string_idx, i| {
                 const import_idx = @as(Import.Idx, @fromBackingInt(@intCast(i)));
                 try result.map.put(allocator, string_idx, import_idx);
             }
@@ -927,8 +927,8 @@ pub const Import = struct {
             if (self.map.get(string_idx)) |idx| {
                 if (ident_idx) |ident| {
                     const i = @backingInt(idx);
-                    if (i < self.import_idents.len() and self.import_idents.items.items[i].isNone()) {
-                        self.import_idents.items.items[i] = ident;
+                    if (i < self.import_idents.len() and self.import_idents.items()[i].isNone()) {
+                        self.import_idents.items()[i] = ident;
                     }
                 }
 
@@ -953,7 +953,7 @@ pub const Import = struct {
         pub fn getIdentIdx(self: *const Store, import_idx: Import.Idx) ?base.Ident.Idx {
             const idx = @backingInt(import_idx);
             if (idx >= self.import_idents.len()) return null;
-            const ident = self.import_idents.items.items[idx];
+            const ident = self.import_idents.items()[idx];
             if (ident.isNone()) return null;
             return ident;
         }
@@ -962,7 +962,7 @@ pub const Import = struct {
         pub fn getResolvedModule(self: *const Store, import_idx: Import.Idx) ?u32 {
             const idx = @backingInt(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
-            const resolved = self.resolved_modules.items.items[idx];
+            const resolved = self.resolved_modules.items()[idx];
             if (!resolved.isResolved()) return null;
             return @backingInt(resolved);
         }
@@ -973,14 +973,14 @@ pub const Import = struct {
         pub fn importFailedBeforeChecking(self: *const Store, import_idx: Import.Idx) bool {
             const idx = @backingInt(import_idx);
             if (idx >= self.resolved_modules.len()) return false;
-            return self.resolved_modules.items.items[idx].isFailedBeforeChecking();
+            return self.resolved_modules.items()[idx].isFailedBeforeChecking();
         }
 
         /// Set the resolved module index for an import
         pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
             const idx = @backingInt(import_idx);
             if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = @fromBackingInt(@intCast(module_idx));
+                self.resolved_modules.items()[idx] = @fromBackingInt(@intCast(module_idx));
             }
         }
 
@@ -988,14 +988,14 @@ pub const Import = struct {
         /// imports have been reported. This makes that state explicit instead of
         /// leaving imports in the pre-resolution state.
         pub fn markUnresolvedImportsFailedBeforeChecking(self: *Store) void {
-            for (self.resolved_modules.items.items) |*resolved| {
+            for (self.resolved_modules.items()) |*resolved| {
                 if (resolved.isNone()) resolved.* = .failed_before_checking;
             }
         }
 
         /// Clear all resolved module indices.
         pub fn clearResolvedModules(self: *Store) void {
-            for (self.resolved_modules.items.items) |*resolved| {
+            for (self.resolved_modules.items()) |*resolved| {
                 resolved.* = .none;
             }
         }
@@ -1036,9 +1036,9 @@ pub const Import = struct {
 
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @fromBackingInt(@intCast(i));
-                const current = self.resolved_modules.items.items[i];
+                const current = self.resolved_modules.items()[i];
                 if (!current.isNone()) continue;
-                const str_idx = self.imports.items.items[i];
+                const str_idx = self.imports.items()[i];
                 const import_name = env.common.getString(str_idx);
 
                 if (Import.isCompilerBuiltinImportName(import_name)) {
@@ -1095,12 +1095,12 @@ pub const Import = struct {
                 };
 
                 // Pre-allocate the exact capacity needed for the map
-                const import_count = store.imports.items.items.len;
+                const import_count = store.imports.items().len;
                 try store.map.ensureTotalCapacity(allocator, @intCast(import_count));
 
                 // Repopulate the map - we know there's enough capacity since we
                 // are deserializing from a Serialized struct
-                for (store.imports.items.items, 0..) |string_idx, i| {
+                for (store.imports.items(), 0..) |string_idx, i| {
                     const import_idx = @as(Import.Idx, @fromBackingInt(@intCast(i)));
                     store.map.putAssumeCapacityNoClobber(string_idx, import_idx);
                 }

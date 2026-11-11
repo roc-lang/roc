@@ -280,7 +280,7 @@ pub fn setTypeNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx:
 pub fn getRegionInfo(self: *const CommonEnv, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }!RegionInfo {
     return RegionInfo.position(
         self.source,
-        self.line_starts.items.items,
+        self.line_starts.items(),
         region.start.offset,
         region.end.offset,
     );
@@ -303,7 +303,7 @@ pub fn calcRegionInfo(self: *const CommonEnv, region: Region) RegionInfo {
 
     const info = RegionInfo.position(
         source,
-        self.line_starts.items.items,
+        self.line_starts.items(),
         region.start.offset,
         region.end.offset,
     ) catch {
@@ -323,8 +323,8 @@ pub fn getSourceAll(self: *const CommonEnv) []const u8 {
 pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!void {
     // Reuse the existing storage so this cannot leave `line_starts` freed
     // if a fresh allocation were to fail.
-    self.line_starts.items.clearRetainingCapacity();
-    try self.line_starts.items.ensureTotalCapacity(gpa, 256);
+    self.line_starts.clearRetainingCapacity();
+    try self.line_starts.ensureTotalCapacity(gpa, 256);
 
     // if the source is empty, we're done
     if (self.getSourceAll().len == 0) {
@@ -333,7 +333,7 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
 
     // the first line starts at offset 0
     {
-        const expected_idx = self.line_starts.items.items.len;
+        const expected_idx = self.line_starts.items().len;
         const idx = try self.line_starts.append(gpa, 0);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
@@ -342,7 +342,7 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
     const source = self.getSourceAll();
     var search_from: usize = 0;
     while (std.mem.findScalarPos(u8, source, search_from, '\n')) |newline| {
-        const expected_idx = self.line_starts.items.items.len;
+        const expected_idx = self.line_starts.items().len;
         const idx = try self.line_starts.append(gpa, @intCast(newline + 1));
         std.debug.assert(@backingInt(idx) == expected_idx);
         search_from = newline + 1;
@@ -351,7 +351,7 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
 
 /// Returns all line start positions for source code position mapping.
 pub fn getLineStartsAll(self: *const CommonEnv) []const u32 {
-    return self.line_starts.items.items;
+    return self.line_starts.items();
 }
 
 /// Get the source text for a given region
@@ -362,9 +362,9 @@ pub fn getSource(self: *const CommonEnv, region: Region) []const u8 {
 /// Get the source line for a given region
 pub fn getSourceLine(self: *const CommonEnv, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }![]const u8 {
     const region_info = try self.getRegionInfo(region);
-    const line_start = self.line_starts.items.items[region_info.start_line_idx];
-    const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items.items.len)
-        self.line_starts.items.items[region_info.start_line_idx + 1]
+    const line_start = self.line_starts.items()[region_info.start_line_idx];
+    const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items().len)
+        self.line_starts.items()[region_info.start_line_idx + 1]
     else
         self.source.len;
 
@@ -401,17 +401,17 @@ test "CommonEnv.Serialized roundtrip" {
     try original.addExposedById(gpa, hello_idx);
 
     {
-        const expected_idx = original.line_starts.items.items.len;
+        const expected_idx = original.line_starts.items().len;
         const idx = try original.line_starts.append(gpa, 0);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = original.line_starts.items.items.len;
+        const expected_idx = original.line_starts.items().len;
         const idx = try original.line_starts.append(gpa, 10);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = original.line_starts.items.items.len;
+        const expected_idx = original.line_starts.items().len;
         const idx = try original.line_starts.append(gpa, 20);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
@@ -450,9 +450,9 @@ test "CommonEnv.Serialized roundtrip" {
 
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 3), env.line_starts.len());
-    try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);
-    try testing.expectEqual(@as(u32, 10), env.line_starts.items.items[1]);
-    try testing.expectEqual(@as(u32, 20), env.line_starts.items.items[2]);
+    try testing.expectEqual(@as(u32, 0), env.line_starts.items()[0]);
+    try testing.expectEqual(@as(u32, 10), env.line_starts.items()[1]);
+    try testing.expectEqual(@as(u32, 20), env.line_starts.items()[2]);
 
     try testing.expectEqualStrings(source, env.source);
 }
@@ -654,11 +654,11 @@ test "CommonEnv.Serialized roundtrip with large data" {
     try testing.expectEqualStrings("string_literal_24", env.getString(string_indices.items[24]));
 
     // Verify line starts
-    try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);
+    try testing.expectEqual(@as(u32, 0), env.line_starts.items()[0]);
     // Calculate the actual expected value for the second line start
     const first_line = "Line 0: This is a test line with some content\n";
     const expected_second_line_start = first_line.len;
-    try testing.expectEqual(@as(u32, expected_second_line_start), env.line_starts.items.items[1]);
+    try testing.expectEqual(@as(u32, expected_second_line_start), env.line_starts.items()[1]);
 }
 
 test "CommonEnv.Serialized roundtrip with special characters" {

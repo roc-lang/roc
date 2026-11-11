@@ -62,9 +62,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SerialStrin
     self.bytes = try SafeList(u8).initCapacity(gpa, capacity * 4);
     self.ends = try SafeList(u32).initCapacity(gpa, capacity);
     self.index = try SafeList(u32).initCapacity(gpa, index_cap);
-    try self.index.items.ensureTotalCapacityPrecise(gpa, index_cap);
-    self.index.items.items.len = index_cap;
-    @memset(self.index.items.items, 0);
+    self.index.appendNTimesAssumeCapacity(0, index_cap);
     return self;
 }
 
@@ -79,7 +77,7 @@ pub fn deinit(self: *SerialStringInterner, gpa: Allocator) void {
 
 /// Number of interned strings.
 pub fn count(self: *const SerialStringInterner) u32 {
-    return @intCast(self.ends.items.items.len);
+    return @intCast(self.ends.items().len);
 }
 
 /// Immutable append boundary for the durable id and byte arrays.
@@ -91,15 +89,15 @@ pub const EpochBoundary = struct {
 /// Capture the current durable boundary without exposing growable storage.
 pub fn epochBoundary(self: *const SerialStringInterner) EpochBoundary {
     return .{
-        .ids = @intCast(self.ends.items.items.len),
-        .bytes = @intCast(self.bytes.items.items.len),
+        .ids = @intCast(self.ends.items().len),
+        .bytes = @intCast(self.bytes.items().len),
     };
 }
 
 fn textAt(self: *const SerialStringInterner, id: u32) []const u8 {
-    const ends = self.ends.items.items;
+    const ends = self.ends.items();
     const start = if (id == 0) 0 else ends[id - 1];
-    return self.bytes.items.items[start..ends[id]];
+    return self.bytes.items()[start..ends[id]];
 }
 
 /// Text for a serial id.
@@ -117,7 +115,7 @@ const Policy = struct {
     pub const initial_index_capacity: usize = SerialStringInterner.initial_index_capacity;
 
     pub fn count(self: *const SerialStringInterner) u32 {
-        return @intCast(self.ends.items.items.len);
+        return @intCast(self.ends.items().len);
     }
     pub fn cellForId(id: Id) Cell {
         return id + 1;
@@ -133,12 +131,12 @@ const Policy = struct {
         // Ids, byte offsets, and lengths are 32-bit, and index cells store
         // `id + 1`; an interner past that range has exhausted the
         // representable memory.
-        const id = std.math.cast(u32, self.ends.items.items.len) orelse return error.OutOfMemory;
+        const id = std.math.cast(u32, self.ends.items().len) orelse return error.OutOfMemory;
         if (id == std.math.maxInt(u32)) return error.OutOfMemory;
-        const start = std.math.cast(u32, self.bytes.items.items.len) orelse return error.OutOfMemory;
+        const start = std.math.cast(u32, self.bytes.items().len) orelse return error.OutOfMemory;
         const len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
         const end = std.math.add(u32, start, len) catch return error.OutOfMemory;
-        try self.ends.items.ensureUnusedCapacity(gpa, 1);
+        try self.ends.ensureUnusedCapacity(gpa, 1);
         _ = try self.bytes.appendSlice(gpa, string);
         _ = try self.ends.append(gpa, end);
         return id;
@@ -180,17 +178,14 @@ pub fn enableRuntimeInserts(self: *SerialStringInterner, gpa: Allocator) Allocat
 
 /// Preserve serial IDs and the lookup index while taking independent ownership.
 pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!SerialStringInterner {
-    var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items.items.len);
+    var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items().len);
     errdefer new_bytes.deinit(gpa);
-    _ = try new_bytes.appendSlice(gpa, self.bytes.items.items);
-    var new_ends = try SafeList(u32).initCapacity(gpa, self.ends.items.items.len);
+    _ = try new_bytes.appendSlice(gpa, self.bytes.items());
+    var new_ends = try SafeList(u32).initCapacity(gpa, self.ends.items().len);
     errdefer new_ends.deinit(gpa);
-    _ = try new_ends.appendSlice(gpa, self.ends.items.items);
-    var new_index = try SafeList(u32).initCapacity(gpa, self.index.items.items.len);
+    _ = try new_ends.appendSlice(gpa, self.ends.items());
+    var new_index = try SafeList(u32).fromSlice(gpa, self.index.items());
     errdefer new_index.deinit(gpa);
-    try new_index.items.ensureTotalCapacityPrecise(gpa, self.index.items.items.len);
-    new_index.items.items.len = self.index.items.items.len;
-    @memcpy(new_index.items.items, self.index.items.items);
 
     return .{
         .bytes = new_bytes,
@@ -349,9 +344,9 @@ test "SerialStringInterner: enableRuntimeInserts copies frozen data and permits 
 
 fn nonEmptyBasePointers(it: *const SerialStringInterner) usize {
     var n: usize = 0;
-    if (it.bytes.items.capacity != 0) n += 1;
-    if (it.ends.items.capacity != 0) n += 1;
-    if (it.index.items.capacity != 0) n += 1;
+    if (it.bytes.len() != 0) n += 1;
+    if (it.ends.len() != 0) n += 1;
+    if (it.index.len() != 0) n += 1;
     return n;
 }
 

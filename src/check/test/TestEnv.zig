@@ -189,8 +189,8 @@ fn initWithImportLeaving(
     try imported_envs.append(gpa, other_test_env.builtin_module.env);
 
     // Process explicit imports
-    const import_count = module_env.imports.imports.items.items.len;
-    for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
+    const import_count = module_env.imports.imports.items().len;
+    for (module_env.imports.imports.items()[0..import_count]) |str_idx| {
         const import_name = module_env.getString(str_idx);
         if (std.mem.eql(u8, import_name, other_module_name)) {
             // Cross-module import - append the other test module's env
@@ -1255,7 +1255,7 @@ pub fn methodTypeNode(self: *const TestEnv, name: []const u8) ?CIR.Node.Idx {
 /// This module's import of `module_name`, for tests that reach an import by
 /// the name its source spells.
 pub fn importIndex(self: *const TestEnv, module_name: []const u8) ?CIR.Import.Idx {
-    for (self.module_env.imports.imports.items.items, 0..) |str_idx, i| {
+    for (self.module_env.imports.imports.items(), 0..) |str_idx, i| {
         if (std.mem.eql(u8, self.module_env.getString(str_idx), module_name)) return @fromBackingInt(@intCast(i));
     }
     return null;

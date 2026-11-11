@@ -60,13 +60,11 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
     var index = try collections.SafeList(Idx).initCapacity(gpa, hash_table_capacity);
     errdefer index.deinit(gpa);
-    index.items.items.len = hash_table_capacity;
-    @memset(index.items.items, .unused);
+    index.appendNTimesAssumeCapacity(.unused, hash_table_capacity);
 
     var fingerprints = try collections.SafeList(u8).initCapacity(gpa, hash_table_capacity);
     errdefer fingerprints.deinit(gpa);
-    fingerprints.items.items.len = hash_table_capacity;
-    @memset(fingerprints.items.items, 0);
+    fingerprints.appendNTimesAssumeCapacity(0, hash_table_capacity);
 
     return .{
         .bytes = bytes,
@@ -108,14 +106,14 @@ const Policy = struct {
         assertSupportsInserts(self.supports_inserts);
         // Every offset in `ends` is a u32, so the text past that range has
         // exhausted the representable memory.
-        const start = self.bytes.items.items.len;
+        const start = self.bytes.items().len;
         const end = std.math.cast(u32, start + string.len) orelse return error.OutOfMemory;
-        const new_idx: Idx = @fromBackingInt(std.math.cast(u32, self.ends.items.items.len) orelse return error.OutOfMemory);
+        const new_idx: Idx = @fromBackingInt(std.math.cast(u32, self.ends.items().len) orelse return error.OutOfMemory);
         // Reserve both columns first, so a failed allocation leaves no text
         // that the next entry's span would absorb.
-        try self.bytes.items.ensureUnusedCapacity(gpa, string.len);
-        try self.ends.items.ensureUnusedCapacity(gpa, 1);
-        self.bytes.items.appendSliceAssumeCapacity(string);
+        try self.bytes.ensureUnusedCapacity(gpa, string.len);
+        try self.ends.ensureUnusedCapacity(gpa, 1);
+        _ = self.bytes.appendSliceAssumeCapacity(string);
         _ = self.ends.appendAssumeCapacity(end);
         self.entry_count += 1;
         return new_idx;
@@ -159,8 +157,8 @@ pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
 }
 
 fn cloneColumn(comptime T: type, gpa: std.mem.Allocator, column: *const collections.SafeList(T)) std.mem.Allocator.Error!collections.SafeList(T) {
-    var copy = try collections.SafeList(T).initCapacity(gpa, column.items.items.len);
-    copy.items.appendSliceAssumeCapacity(column.items.items);
+    var copy = try collections.SafeList(T).initCapacity(gpa, column.items().len);
+    _ = copy.appendSliceAssumeCapacity(column.items());
     return copy;
 }
 
@@ -228,8 +226,8 @@ pub fn isInBounds(self: *const SmallStringInterner, idx: Idx) bool {
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
     const serial: usize = @backingInt(idx);
-    const ends = self.ends.items.items;
-    return self.bytes.items.items[ends[serial - 1]..ends[serial]];
+    const ends = self.ends.items();
+    return self.bytes.items()[ends[serial - 1]..ends[serial]];
 }
 
 /// Serialized representation of a SmallStringInterner

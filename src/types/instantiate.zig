@@ -734,7 +734,7 @@ pub const Instantiator = struct {
                     arg_span.dropFirstElem();
                     var i: u32 = 0;
                     while (i < arg_span.count) : (i += 1) {
-                        try self.visitReachChild(parent, self.store.vars.items.items[@backingInt(arg_span.start) + i]);
+                        try self.visitReachChild(parent, self.store.vars.items()[@backingInt(arg_span.start) + i]);
                     }
                     try self.visitReachChild(parent, self.store.getAliasBackingVar(alias));
                 },
@@ -800,7 +800,7 @@ pub const Instantiator = struct {
     fn visitReachVars(self: *Self, parent: Var, vars: Var.SafeList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < vars.count) : (i += 1) {
-            try self.visitReachChild(parent, self.store.vars.items.items[@backingInt(vars.start) + i]);
+            try self.visitReachChild(parent, self.store.vars.items()[@backingInt(vars.start) + i]);
         }
     }
 
@@ -818,7 +818,7 @@ pub const Instantiator = struct {
     fn visitReachConstraints(self: *Self, parent: Var, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < constraints.len()) : (i += 1) {
-            const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
+            const constraint = self.store.static_dispatch_constraints.items()[@backingInt(constraints.start) + i];
             try self.visitReachChild(parent, constraint.fn_var);
             if (constraint.interpolation.isPresent()) {
                 const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
@@ -1000,7 +1000,7 @@ pub const Instantiator = struct {
         const allocator = self.store.gpa;
         var i: u32 = 0;
         while (i < constraints.len()) : (i += 1) {
-            const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
+            const constraint = self.store.static_dispatch_constraints.items()[@backingInt(constraints.start) + i];
             // A method signature is its own annotation root, generated at the
             // output polarity whatever position its dispatcher occupies.
             try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = .pos, .reach = .nested });
@@ -1500,20 +1500,20 @@ pub const Instantiator = struct {
     /// Append a copy of the constraint run `source` for a flex-like frame to
     /// rewrite in place, returning its raw base index.
     fn appendConstraintRunCopy(self: *Self, source: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!u32 {
-        const constraints = &self.store.static_dispatch_constraints.items;
-        const fresh_start = std.math.cast(u32, constraints.items.len) orelse return error.OutOfMemory;
+        const constraints = &self.store.static_dispatch_constraints;
+        const fresh_start = std.math.cast(u32, constraints.items().len) orelse return error.OutOfMemory;
         try constraints.ensureUnusedCapacity(self.store.gpa, source.count);
         // The source run lives in the same list, so it is sliced only once
         // the list can no longer move.
         const source_start: usize = @backingInt(source.start);
-        constraints.appendSliceAssumeCapacity(constraints.items[source_start..][0..source.count]);
+        _ = constraints.appendSliceAssumeCapacity(constraints.items()[source_start..][0..source.count]);
         return fresh_start;
     }
 
     /// The fresh copy of the frame's current constraint. Re-fetched on every
     /// use, since child copies append to the same list.
     fn freshConstraint(self: *Self, frame: *const FlexLikeFrame) *StaticDispatchConstraint {
-        return &self.store.static_dispatch_constraints.items.items[frame.fresh_start + frame.cons_idx];
+        return &self.store.static_dispatch_constraints.items()[frame.fresh_start + frame.cons_idx];
     }
 
     fn stepFlexLike(self: *Self, frame: *FlexLikeFrame) std.mem.Allocator.Error!bool {
@@ -1534,7 +1534,7 @@ pub const Instantiator = struct {
                         try self.finishFrame(frame.common, fresh_content);
                         return true;
                     }
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    const constraint = self.store.static_dispatch_constraints.items()[frame.cons_start + frame.cons_idx];
                     frame.stage = .await_fn;
                     if (self.deferredCallable(constraint)) |source| {
                         frame.has_deferred = true;
@@ -1549,7 +1549,7 @@ pub const Instantiator = struct {
                 },
                 .await_fn => {
                     frame.fresh_fn_var = machine.value_stack.pop().?;
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    const constraint = self.store.static_dispatch_constraints.items()[frame.cons_start + frame.cons_idx];
                     try self.carryDerivedMapPlan(constraint.fn_var, frame.fresh_fn_var);
                     if (!constraint.interpolation.isPresent()) {
                         self.freshConstraint(frame).fn_var = frame.fresh_fn_var;
@@ -1562,7 +1562,7 @@ pub const Instantiator = struct {
                     }
                 },
                 .dispatch_part_or_item => {
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    const constraint = self.store.static_dispatch_constraints.items()[frame.cons_start + frame.cons_idx];
                     const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                     self.current_reach = .nested;
                     if (frame.part_idx == metadata.interpolated_parts.len()) {
@@ -1576,7 +1576,7 @@ pub const Instantiator = struct {
                 },
                 .await_part => {
                     const fresh_part_var = machine.value_stack.pop().?;
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    const constraint = self.store.static_dispatch_constraints.items()[frame.cons_start + frame.cons_idx];
                     const part = self.store.getInterpolationPartAt(self.store.getInterpolationMetadata(constraint.interpolation).interpolated_parts, frame.part_idx);
                     try machine.pending_parts.append(self.store.gpa, .{
                         .var_ = fresh_part_var,
@@ -1642,7 +1642,7 @@ pub const Instantiator = struct {
                 continue;
             }
             if (arrived <= frame.args_count) {
-                const arg_var = self.store.vars.items.items[frame.args_start + arrived - 1];
+                const arg_var = self.store.vars.items()[frame.args_start + arrived - 1];
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
@@ -1670,7 +1670,7 @@ pub const Instantiator = struct {
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.elems_count) {
-                const elem_var = self.store.vars.items.items[frame.elems_start + arrived];
+                const elem_var = self.store.vars.items()[frame.elems_start + arrived];
                 self.current_reach = .nested;
                 if (!try self.requestVar(elem_var, false)) return false;
                 continue;
@@ -1689,7 +1689,7 @@ pub const Instantiator = struct {
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.args_count) {
-                const arg_var = self.store.vars.items.items[frame.args_start + arrived];
+                const arg_var = self.store.vars.items()[frame.args_start + arrived];
                 const position: NominalArgumentPosition = if (self.nominal_argument_position) |provider|
                     (try provider.resolve(provider.context, frame.nominal, arrived, frame.saved_polarity)) orelse {
                         machine.value_stack.items.len = frame.vars_base;
@@ -1733,7 +1733,7 @@ pub const Instantiator = struct {
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
-                const arg_var = self.store.vars.items.items[@backingInt(frame.func.args.start) + arrived];
+                const arg_var = self.store.vars.items()[@backingInt(frame.func.args.start) + arrived];
                 // Argument positions flip the surrounding polarity, and no
                 // row inside an argument is one a use may widen: a use widens
                 // the result, never a row inside a function that result
@@ -1751,7 +1751,7 @@ pub const Instantiator = struct {
                 continue;
             }
             if (arrived < args_count + 1 + deps_count) {
-                const dep_var = self.store.vars.items.items[@backingInt(frame.func.effect_deps.start) + (arrived - args_count - 1)];
+                const dep_var = self.store.vars.items()[@backingInt(frame.func.effect_deps.start) + (arrived - args_count - 1)];
                 self.current_polarity = frame.saved_polarity;
                 self.current_reach = .nested;
                 if (!try self.requestVar(dep_var, false)) return false;
@@ -1896,7 +1896,7 @@ pub const Instantiator = struct {
                     if (arrived < tag.args.count) {
                         // Indexing through tag.args.start only happens when the
                         // tag has payloads; an empty run's start addresses no row.
-                        const arg_var = self.store.vars.items.items[@backingInt(tag.args.start) + arrived];
+                        const arg_var = self.store.vars.items()[@backingInt(tag.args.start) + arrived];
                         self.current_reach = .nested;
                         if (!try self.requestVar(arg_var, false)) return false;
                         continue;

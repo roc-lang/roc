@@ -274,7 +274,7 @@ pub const Module = struct {
     }
 
     pub fn requiresTypes(self: @This()) []const ModuleEnv.RequiredType {
-        return self.env().requires_types.items.items;
+        return self.env().requires_types.items();
     }
 
     pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {

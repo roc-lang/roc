@@ -11,6 +11,7 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
+const SafeList = @import("safe_list.zig").SafeList;
 
 const SupersededBackings = @This();
 
@@ -73,6 +74,34 @@ pub fn ensureUnusedCapacity(
     });
     list.items = memory[0..list.items.len];
     list.capacity = capacity;
+    return true;
+}
+
+/// Ensure `list` can hold `additional` more items. When it must grow, its
+/// items move to a new backing; an owned old backing is held here instead of
+/// being freed, and a borrowed one is left to its owner. Returns whether the
+/// items moved.
+pub fn ensureUnusedSafeListCapacity(
+    self: *SupersededBackings,
+    comptime T: type,
+    list: *SafeList(T),
+    allocator: Allocator,
+    additional: usize,
+) Allocator.Error!bool {
+    const needed = std.math.add(usize, list.length, additional) catch return error.OutOfMemory;
+    if (needed <= @max(list.capacity, list.length)) return false;
+    if (needed > std.math.maxInt(u32)) return error.OutOfMemory;
+    try self.backings.ensureUnusedCapacity(allocator, 1);
+    const capacity = @min(std.ArrayList(T).growCapacity(needed), std.math.maxInt(u32));
+    const memory = try allocator.alloc(T, capacity);
+    @memcpy(memory[0..list.length], list.items());
+    if (list.capacity != 0) self.backings.appendAssumeCapacity(.{
+        .bytes = std.mem.sliceAsBytes(list.ptr[0..list.capacity]),
+        .alignment = .of(T),
+        .generation = self.generation,
+    });
+    list.ptr = memory.ptr;
+    list.capacity = @intCast(capacity);
     return true;
 }
 

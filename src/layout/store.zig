@@ -232,7 +232,7 @@ pub const Store = struct {
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = tag_union_data.items.items.len;
+            const expected_idx = tag_union_data.items().len;
             const idx = try tag_union_data.append(allocator, .{
                 .size = layout_mod.WidthValues(u32).both(1, 1),
                 .discriminant_offset = layout_mod.WidthValues(u32).both(0, 0),
@@ -251,92 +251,92 @@ pub const Store = struct {
         // Pre-populate primitive type layouts in order matching the Idx enum.
         // Changing the order of these can break things!
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.boolType());
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.str());
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u8));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i8));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u16));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i16));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u32));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i32));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u64));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i64));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u128));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i128));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.frac(.f32));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.frac(.f64));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.frac(.dec));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.opaquePtr());
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.zst());
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         inline for (std.enums.values(layout_mod.Vector)) |vector| {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.vector(vector));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
@@ -598,7 +598,7 @@ pub const Store = struct {
         const contains_refcounted = self.computeStructContainsRefcounted(fields);
         const slots = self.computeStructOwnershipSlots(fields, contains_refcounted);
         const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
-        const expected_idx = self.struct_data.items.items.len;
+        const expected_idx = self.struct_data.items().len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = metrics.sizes,
             .fields = .{
@@ -644,7 +644,7 @@ pub const Store = struct {
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
         const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
-            const expected_idx = self.tag_union_data.items.items.len;
+            const expected_idx = self.tag_union_data.items().len;
             const idx = try self.tag_union_data.append(self.allocator, .{
                 .size = sizes,
                 .discriminant_offset = discriminant_offsets,
@@ -900,7 +900,7 @@ pub const Store = struct {
         const contains_refcounted = self.computeStructContainsRefcounted(temp_fields.items);
         const slots = self.computeStructOwnershipSlots(temp_fields.items, contains_refcounted);
         const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
-        const expected_idx = self.struct_data.items.items.len;
+        const expected_idx = self.struct_data.items().len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = metrics.sizes,
             .fields = .{
@@ -941,7 +941,7 @@ pub const Store = struct {
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
         const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
-            const expected_idx = self.tag_union_data.items.items.len;
+            const expected_idx = self.tag_union_data.items().len;
             const idx = try self.tag_union_data.append(self.allocator, .{
                 .size = sizes,
                 .discriminant_offset = discriminant_offsets,
@@ -1001,7 +1001,7 @@ pub const Store = struct {
 
     /// The committed layout of a recursive-graph key, if any.
     fn recursiveGraphLayout(self: *const Self, key: RecursiveGraphAnalysis.RecursiveKey) ?Idx {
-        const entries = self.recursive_layout_keys.items.items;
+        const entries = self.recursive_layout_keys.items();
         const position = self.interned_recursive_graphs.getKeyAdapted(key, RecursiveKeyAdapter{ .entries = entries }) orelse return null;
         return entries[position].layout;
     }
@@ -1009,14 +1009,14 @@ pub const Store = struct {
     /// Record the layout a new recursive-graph key committed to.
     fn recordRecursiveLayoutKey(self: *Self, key: RecursiveGraphAnalysis.RecursiveKey, layout_idx: Idx) std.mem.Allocator.Error!void {
         const position: u32 = @intCast(self.recursive_layout_keys.len());
-        try self.interned_recursive_graphs.ensureUnusedCapacityContext(self.allocator, 1, .{ .entries = self.recursive_layout_keys.items.items });
+        try self.interned_recursive_graphs.ensureUnusedCapacityContext(self.allocator, 1, .{ .entries = self.recursive_layout_keys.items() });
         _ = try self.recursive_layout_keys.append(self.allocator, .{ .key = key, .layout = layout_idx });
-        self.interned_recursive_graphs.putAssumeCapacityNoClobberContext(position, {}, .{ .entries = self.recursive_layout_keys.items.items });
+        self.interned_recursive_graphs.putAssumeCapacityNoClobberContext(position, {}, .{ .entries = self.recursive_layout_keys.items() });
     }
 
     /// Every recursive-graph key with its layout, in commit order.
     pub fn recursiveLayoutKeys(self: *const Self) []const RecursiveLayoutKey {
-        return self.recursive_layout_keys.items.items;
+        return self.recursive_layout_keys.items();
     }
     /// Digest domain of recursive layout keys.
     pub const recursive_digest_domain = "roc.layout.recursive-graph.v3";
@@ -2566,7 +2566,7 @@ pub const Store = struct {
 
         const order_start: usize = @intCast(self.struct_field_original_order.len());
         for (0..fields.len) |position| _ = try self.struct_field_original_order.append(self.allocator, @intCast(position));
-        const order = self.struct_field_original_order.items.items[order_start..];
+        const order = self.struct_field_original_order.items()[order_start..];
         std.mem.sort(u32, order, fields, struct {
             fn lessThan(sorted_fields: []const StructField, a: u32, b: u32) bool {
                 return sorted_fields[a].index < sorted_fields[b].index;
@@ -2594,7 +2594,7 @@ pub const Store = struct {
         const fields = self.getStructData(struct_idx).getFields();
         std.debug.assert(field_index_in_sorted_fields < fields.count);
         const absolute_index: u32 = @backingInt(fields.start) + field_index_in_sorted_fields;
-        return self.struct_field_offsets.items.items[absolute_index].get(target_usize);
+        return self.struct_field_offsets.items()[absolute_index].get(target_usize);
     }
 
     pub fn getStructFieldOffset(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) u32 {
@@ -2632,7 +2632,7 @@ pub const Store = struct {
         // binary search.
         const fields = self.getStructData(struct_idx).getFields();
         const start: usize = @backingInt(fields.start);
-        const order = self.struct_field_original_order.items.items[start .. start + fields.count];
+        const order = self.struct_field_original_order.items()[start .. start + fields.count];
         var low: usize = 0;
         var high: usize = order.len;
         while (low < high) {

@@ -1915,7 +1915,7 @@ test "write occurrences preserve binding identity and token regions across CIR c
     const gpa = testing.allocator;
     var original = try NodeStore.init(gpa);
     defer original.deinit();
-    try testing.expectEqual(@as(usize, 0), original.write_occurrences.items.capacity);
+    try testing.expectEqual(@as(usize, 0), original.write_occurrences.capacity);
     try testing.expectEqual(@as(usize, 12), @sizeOf(NodeStore.WriteOccurrence));
 
     const declaration = from_raw_offsets(4, 6);
@@ -1925,7 +1925,7 @@ test "write occurrences preserve binding identity and token regions across CIR c
 
     var cloned = try original.clone(gpa);
     defer cloned.deinit();
-    try testing.expectEqualDeep(original.write_occurrences.items.items, cloned.write_occurrences.items.items);
+    try testing.expectEqualDeep(original.write_occurrences.items(), cloned.write_occurrences.items());
     try testing.expectEqualDeep(declaration, cloned.getPatternRegion(pattern));
 
     var writer = @import("collections").CompactWriter.init();
@@ -1937,9 +1937,9 @@ test "write occurrences preserve binding identity and token regions across CIR c
     _ = try writer.writeToBuffer(buffer);
     const stored: *const NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
     const restored = stored.deserializeInto(@intFromPtr(buffer.ptr), gpa);
-    try testing.expectEqualDeep(original.write_occurrences.items.items, restored.write_occurrences.items.items);
+    try testing.expectEqualDeep(original.write_occurrences.items(), restored.write_occurrences.items());
     try testing.expectEqualDeep(declaration, restored.getPatternRegion(pattern));
-    for (restored.write_occurrences.items.items) |write| {
+    for (restored.write_occurrences.items()) |write| {
         try testing.expectEqual(pattern, write.pattern_idx);
         try testing.expectEqualDeep(from_raw_offsets(write.start, write.end), write.region());
     }
@@ -1948,5 +1948,5 @@ test "write occurrences preserve binding identity and token regions across CIR c
     // metadata from the cache just like their other canonical data.
     var mutable = try stored.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
     defer mutable.regions.deinit(gpa);
-    try testing.expectEqualDeep(original.write_occurrences.items.items, mutable.write_occurrences.items.items);
+    try testing.expectEqualDeep(original.write_occurrences.items(), mutable.write_occurrences.items());
 }

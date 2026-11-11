@@ -19,7 +19,7 @@ const Slot = ModuleEnv.SchemeUseRecord.Slot;
 
 fn recordsWithSlot(env: *const ModuleEnv, slot: Slot) usize {
     var count: usize = 0;
-    for (env.scheme_uses.items.items) |record| {
+    for (env.scheme_uses.items()) |record| {
         if (record.slot_kind == @backingInt(slot)) count += 1;
     }
     return count;
@@ -53,7 +53,7 @@ test "issue 11311: forwarding evidence belongs to the value and not its annotati
     try std.testing.expect(forward_node != null);
 
     var count: usize = 0;
-    for (env.scheme_uses.items.items) |record| {
+    for (env.scheme_uses.items()) |record| {
         if (record.node_idx != forward_node.? or record.slot_kind != @backingInt(Slot.value_use)) continue;
         count += 1;
         try std.testing.expectEqual(
@@ -115,7 +115,7 @@ test "concrete recursive dispatch records a shared method instance without copyi
 
     const env = test_env.module_env;
     try std.testing.expect(recordsWithSlot(env, .recursive_dispatch_target) > 0);
-    for (env.scheme_uses.items.items) |record| {
+    for (env.scheme_uses.items()) |record| {
         if (record.slot_kind != @backingInt(Slot.recursive_dispatch_target)) continue;
         try std.testing.expectEqual(@as(u32, 0), record.pairs_len);
         var found_ancestor_instance = false;
@@ -154,9 +154,9 @@ fn assertBuiltinIterExtremum(
         const plan_root = env.types.resolveVar(expr.e_dispatch_call.constraint_fn_var).var_;
 
         var plan_signature: ?types.Var = null;
-        for (env.scheme_uses.items.items) |record| {
+        for (env.scheme_uses.items()) |record| {
             if (record.slot_kind != @backingInt(Slot.where_method_use)) continue;
-            const pairs = env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+            const pairs = env.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
             for (pairs) |pair| {
                 if (env.types.resolveVar(@as(types.Var, @fromBackingInt(@intCast(pair.fresh_var)))).var_ == plan_root) {
                     try std.testing.expect(plan_signature == null);
@@ -168,7 +168,7 @@ fn assertBuiltinIterExtremum(
         const signature = plan_signature orelse return error.TestUnexpectedResult;
 
         var body_use_count: usize = 0;
-        for (env.scheme_uses.items.items) |record| {
+        for (env.scheme_uses.items()) |record| {
             if (record.slot_kind != @backingInt(Slot.where_method_use)) continue;
             if (env.types.resolveVar(@fromBackingInt(@intCast(record.scheme_root))).var_ == signature) body_use_count += 1;
         }
@@ -251,10 +251,10 @@ test "value use of a where-clause generic records instantiation evidence" {
     // scheme's constrained receiver var with a fresh var that, once checking
     // settled, resolved to the concrete `Thing` nominal.
     var found_resolved_pair = false;
-    for (env.scheme_uses.items.items) |record| {
+    for (env.scheme_uses.items()) |record| {
         if (record.slot_kind != @backingInt(Slot.value_use)) continue;
         try std.testing.expect(record.pairs_len >= 1);
-        const pairs = env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        const pairs = env.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
         for (pairs) |pair| {
             const resolved = env.types.resolveVar(@fromBackingInt(@intCast(pair.fresh_var)));
             if (resolved.desc.content == .structure) found_resolved_pair = true;
@@ -296,7 +296,7 @@ test "source-forward annotated recursive use records the complete body scheme" {
     try std.testing.expect(f_expr_var != null);
 
     var found_complete_forward_use = false;
-    for (env.scheme_uses.items.items) |record| {
+    for (env.scheme_uses.items()) |record| {
         if (record.slot_kind != @backingInt(Slot.value_use)) continue;
         if (record.scheme_root != f_expr_var.?) continue;
         try std.testing.expect(record.pairs_len > 0);
@@ -341,7 +341,7 @@ test "annotated recursive self use whose body forwards a closed row records the 
 
     const self_use_offset = std.mem.find(u8, source, "walk(Close)") orelse return error.TestUnexpectedResult;
     var walk_self_use_records: usize = 0;
-    for (env.scheme_uses.items.items) |record| {
+    for (env.scheme_uses.items()) |record| {
         if (record.slot_kind != @backingInt(Slot.value_use)) continue;
         const region = env.store.getNodeRegion(@fromBackingInt(@intCast(record.node_idx)));
         if (region.start.offset != self_use_offset) continue;
@@ -371,7 +371,7 @@ test "recursive reference provenance marks the annotated self use but not an ext
     const self_use_offset = std.mem.find(u8, source, "grow(n - 1)") orelse return error.TestUnexpectedResult;
     const env = test_env.module_env;
     var recursive_records: usize = 0;
-    for (env.scheme_uses.items.items) |record| {
+    for (env.scheme_uses.items()) |record| {
         if (record.slot_kind != @backingInt(Slot.recursive_reference)) continue;
         recursive_records += 1;
         const region = env.store.getNodeRegion(@fromBackingInt(@intCast(record.node_idx)));
@@ -406,11 +406,11 @@ test "discharging a dispatch constraint onto a constrained method target records
     // constraint's fn var and pairs `a` with a fresh var that resolved to the
     // concrete `Thing` nominal.
     var found_resolved_pair = false;
-    for (env.scheme_uses.items.items) |record| {
+    for (env.scheme_uses.items()) |record| {
         if (record.slot_kind != @backingInt(Slot.dispatch_target)) continue;
         if (record.pairs_len == 0) continue;
         try std.testing.expect(record.slot_data != 0);
-        const pairs = env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        const pairs = env.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
         for (pairs) |pair| {
             const resolved = env.types.resolveVar(@fromBackingInt(@intCast(pair.fresh_var)));
             if (resolved.desc.content == .structure) found_resolved_pair = true;
@@ -445,7 +445,7 @@ test "block-local attached procedures record their dispatch target edges" {
 
     const env = test_env.module_env;
     var zero_pair_targets: usize = 0;
-    for (env.scheme_uses.items.items) |record| {
+    for (env.scheme_uses.items()) |record| {
         if (record.slot_kind != @backingInt(Slot.dispatch_target)) continue;
         if (record.pairs_len == 0) zero_pair_targets += 1;
     }

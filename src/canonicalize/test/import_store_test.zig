@@ -10,7 +10,7 @@ const CommonEnv = base.CommonEnv;
 const CompactWriter = collections.CompactWriter;
 
 fn storeContainsModule(store: *const Import.Store, common: *const CommonEnv, module_name: []const u8) bool {
-    for (store.imports.items.items) |string_idx| {
+    for (store.imports.items()) |string_idx| {
         if (std.mem.eql(u8, common.getString(string_idx), module_name)) {
             return true;
         }
@@ -67,7 +67,7 @@ test "Import.Store deduplicates through interned string indices" {
     const duplicate_idx = try store.getOrPutWithIdent(gpa, &common, "test.Module", ident_idx);
 
     try testing.expectEqual(import_idx, duplicate_idx);
-    try testing.expectEqual(string_idx, store.imports.items.items[@backingInt(import_idx)]);
+    try testing.expectEqual(string_idx, store.imports.items()[@backingInt(import_idx)]);
     try testing.expectEqual(import_idx, store.map.get(string_idx).?);
     try testing.expectEqual(ident_idx, store.getIdentIdx(import_idx).?);
 }

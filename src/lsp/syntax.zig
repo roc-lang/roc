@@ -1724,7 +1724,7 @@ pub const SyntaxChecker = struct {
             }
         }
 
-        const file_deps = module_env.file_dependencies.items.items;
+        const file_deps = module_env.file_dependencies.items();
         for (file_deps) |dep| {
             if (cir_queries.regionContainsOffset(dep.region(), target_offset)) {
                 const path_text = module_env.getString(dep.relative_path);
@@ -1969,7 +1969,7 @@ pub const SyntaxChecker = struct {
 
     /// The checked environment `module_env`'s import `import_idx` resolved to.
     fn importedEnvForImport(env: *BuildEnv, module_env: *ModuleEnv, doc_path: []const u8, import_idx: CIR.Import.Idx) ?*ModuleEnv {
-        const import_name = module_env.common.getString(module_env.imports.imports.items.items[@backingInt(import_idx)]);
+        const import_name = module_env.common.getString(module_env.imports.imports.items()[@backingInt(import_idx)]);
         return env.importedModuleEnv(doc_path, import_name);
     }
 
@@ -2101,7 +2101,7 @@ pub const SyntaxChecker = struct {
         if (tag_ref.nominal_external) |nom_ext| {
             const import_idx_int = @backingInt(nom_ext.module_idx);
             if (import_idx_int < module_env.imports.imports.len()) {
-                const string_idx = module_env.imports.imports.items.items[import_idx_int];
+                const string_idx = module_env.imports.imports.items()[import_idx_int];
                 const module_name = module_env.common.getString(string_idx);
                 const env = build_env;
                 const importing_pkg = env.findPackageForModulePath(doc_path);

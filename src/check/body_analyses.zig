@@ -659,7 +659,7 @@ pub const ModuleIndex = struct {
 
             var recursively_referenced = collections.DenseMap(u32, void).init(self.allocator);
             defer recursively_referenced.deinit();
-            for (env.scheme_uses.items.items) |record| {
+            for (env.scheme_uses.items()) |record| {
                 if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_value_reference)) continue;
                 const node: CIR.Node.Idx = @fromBackingInt(@intCast(record.node_idx));
                 if (store.nodes.get(node).tag != .expr_var) continue;
@@ -2025,7 +2025,7 @@ pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: Diagn
     defer allocator.free(states);
     var erroneous = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     defer erroneous.deinit(allocator);
-    for (bodies.env.erroneous_nodes.items.items) |entry| erroneous.set(entry.node_idx);
+    for (bodies.env.erroneous_nodes.items()) |entry| erroneous.set(entry.node_idx);
     var scan = DiagnosticScan{
         .allocator = allocator,
         .bodies = bodies,

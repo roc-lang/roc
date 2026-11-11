@@ -1704,7 +1704,7 @@ pub fn setInvokingDefs(self: *Self, defs: []const CIR.Def.Idx) std.mem.Allocator
 /// Whether calling top-level `def_idx` can invoke a function value it does
 /// not name.
 pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
-    const defs = self.invoking_defs.items.items;
+    const defs = self.invoking_defs.items();
     const wanted: u32 = @backingInt(def_idx);
     var low: usize = 0;
     var high: usize = defs.len;
@@ -1726,7 +1726,7 @@ pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
 /// method binding's definition has a producer row, including rejected
 /// definitions; absence is a compiler bug.
 pub fn callableAllowsStoredConst(self: *const Self, def_idx: CIR.Def.Idx) bool {
-    const facts = self.callable_checking_facts.items.items;
+    const facts = self.callable_checking_facts.items();
     var low: usize = 0;
     var high = facts.len;
     while (low < high) {
@@ -1744,7 +1744,7 @@ pub fn callableAllowsStoredConst(self: *const Self, def_idx: CIR.Def.Idx) bool {
 
 /// Return the producer-authored low-level implementation for `def_idx`.
 pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.LowLevel {
-    const entries = self.provided_low_level_defs.items.items;
+    const entries = self.provided_low_level_defs.items();
     const wanted: u32 = @backingInt(def_idx);
     var low: usize = 0;
     var high: usize = entries.len;
@@ -1765,7 +1765,7 @@ pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.Low
 /// Return the current producer-authored exact strict-demand relation.
 pub fn topLevelDemandDependencies(self: *const Self) []const DependencyGraph.Dependency {
     std.debug.assert(self.top_level_demand_dependencies_ready);
-    return self.top_level_demand_dependencies.items.items;
+    return self.top_level_demand_dependencies.items();
 }
 
 /// Whether a compiler stage has produced the exact strict-demand relation.
@@ -1853,7 +1853,7 @@ pub fn deinitCachedModule(self: *Self) void {
 /// module's source inputs complete. The canonicalize task reads them, before
 /// the module's source-input identity keys the checked-module cache.
 pub fn fileDependenciesSettled(self: *const Self) bool {
-    for (self.file_dependencies.items.items) |dep| {
+    for (self.file_dependencies.items()) |dep| {
         if (dep.state == .pending) return false;
     }
     return true;
@@ -1861,7 +1861,7 @@ pub fn fileDependenciesSettled(self: *const Self) bool {
 
 /// Whether one recorded file import has been read.
 pub fn fileDependencySettled(self: *const Self, idx: FileDependency.SafeList.Idx) bool {
-    return self.file_dependencies.items.items[@backingInt(idx)].state != .pending;
+    return self.file_dependencies.items()[@backingInt(idx)].state != .pending;
 }
 
 /// Record a relative file dependency before its final read state is known.
@@ -1879,21 +1879,21 @@ pub fn recordFileDependency(self: *Self, relative_path: []const u8, start_offset
 
 /// Mark a previously recorded file dependency as missing.
 pub fn setFileDependencyMissing(self: *Self, idx: FileDependency.SafeList.Idx) void {
-    const dep = &self.file_dependencies.items.items[@backingInt(idx)];
+    const dep = &self.file_dependencies.items()[@backingInt(idx)];
     dep.state = .missing;
     dep.content_hash = @as([32]u8, @splat(0));
 }
 
 /// Mark a previously recorded file dependency as unreadable.
 pub fn setFileDependencyUnreadable(self: *Self, idx: FileDependency.SafeList.Idx) void {
-    const dep = &self.file_dependencies.items.items[@backingInt(idx)];
+    const dep = &self.file_dependencies.items()[@backingInt(idx)];
     dep.state = .unreadable;
     dep.content_hash = @as([32]u8, @splat(0));
 }
 
 /// Set the content hash for a previously recorded file dependency.
 pub fn setFileDependencyContentHash(self: *Self, idx: FileDependency.SafeList.Idx, content_hash: [32]u8) void {
-    const dep = &self.file_dependencies.items.items[@backingInt(idx)];
+    const dep = &self.file_dependencies.items()[@backingInt(idx)];
     dep.state = .present;
     dep.content_hash = content_hash;
 }
@@ -2021,7 +2021,7 @@ pub fn publishScratchDiagnosticsFrom(self: *Self, start: u32) std.mem.Allocator.
     // Reserve before borrowing existing diagnostics. The diagnostic span is a
     // view into index_data, so growing index_data while iterating that view
     // would invalidate it if the backing allocation moved.
-    try self.store.index_data.items.ensureUnusedCapacity(self.gpa, additional_capacity);
+    try self.store.index_data.ensureUnusedCapacity(self.gpa, additional_capacity);
 
     if (!existing_at_tail) {
         const existing = self.store.sliceDiagnostics(self.diagnostics);
@@ -4594,7 +4594,7 @@ pub fn recordForLoopDispatchPlan(
     const raw_node: u32 = @backingInt(node_idx);
     const raw_pattern: u32 = @backingInt(pattern_idx);
     const raw_iterable: u32 = @backingInt(iterable_idx);
-    for (self.for_loop_dispatch_plans.items.items) |*plan| {
+    for (self.for_loop_dispatch_plans.items()) |*plan| {
         if (plan.node_idx != raw_node) continue;
         plan.* = .{
             .node_idx = raw_node,
@@ -4662,7 +4662,7 @@ pub fn recordNumeralLiteral(
 
 /// Return exact base-256 digits for a numeric source node.
 pub fn numeralLiteralForNode(self: *const Self, node_idx: Node.Idx) ?NumeralLiteral {
-    return findSortedByNode(NumeralLiteral, self.numeral_literals.items.items, @backingInt(node_idx));
+    return findSortedByNode(NumeralLiteral, self.numeral_literals.items(), @backingInt(node_idx));
 }
 
 /// First index whose `node_idx` is >= `raw_node` in a node-sorted table.
@@ -4701,7 +4701,7 @@ fn sortedNodeEndSlot(comptime T: type, entries: []const T, raw_node: u32) usize 
 /// entries arrive in increasing node order (the common case—recording
 /// follows node allocation); out-of-order inserts shift the tail.
 fn upsertSortedByNode(comptime T: type, list: *collections.SafeList(T), gpa: std.mem.Allocator, entry: T) std.mem.Allocator.Error!void {
-    const entries = list.items.items;
+    const entries = list.items();
     if (entries.len == 0 or entries[entries.len - 1].node_idx < entry.node_idx) {
         _ = try list.append(gpa, entry);
         return;
@@ -4712,7 +4712,7 @@ fn upsertSortedByNode(comptime T: type, list: *collections.SafeList(T), gpa: std
         return;
     }
     _ = try list.append(gpa, entry);
-    const grown = list.items.items;
+    const grown = list.items();
     std.mem.copyBackwards(T, grown[slot + 1 ..], grown[slot .. grown.len - 1]);
     grown[slot] = entry;
 }
@@ -4742,7 +4742,7 @@ pub fn recordBindingScheme(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Er
 pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
     return findSortedByNode(
         BindingScheme,
-        self.binding_schemes.items.items,
+        self.binding_schemes.items(),
         @backingInt(node_idx),
     ) != null;
 }
@@ -4762,10 +4762,10 @@ pub fn recordRowCoercedResult(self: *Self, node_idx: Node.Idx, wide_var: types_m
 /// Drop the row-coerced result record for the expression at `node_idx`: its
 /// widening copy gained nothing, so the expression is read at its own type.
 pub fn removeRowCoercedResult(self: *Self, node_idx: Node.Idx) void {
-    const entries = self.row_coerced_results.items.items;
+    const entries = self.row_coerced_results.items();
     const slot = sortedNodeSlot(RowCoercedResult, entries, @backingInt(node_idx));
     if (slot >= entries.len or entries[slot].node_idx != @backingInt(node_idx)) return;
-    _ = self.row_coerced_results.items.orderedRemove(slot);
+    _ = self.row_coerced_results.orderedRemove(slot);
 }
 
 /// The widening copy the expression at `node_idx` flows into its function's
@@ -4773,7 +4773,7 @@ pub fn removeRowCoercedResult(self: *Self, node_idx: Node.Idx) void {
 pub fn rowCoercedResultWideVar(self: *const Self, node_idx: Node.Idx) ?types_mod.Var {
     const entry = findSortedByNode(
         RowCoercedResult,
-        self.row_coerced_results.items.items,
+        self.row_coerced_results.items(),
         @backingInt(node_idx),
     ) orelse return null;
     return @fromBackingInt(entry.wide_var);
@@ -4782,24 +4782,24 @@ pub fn rowCoercedResultWideVar(self: *const Self, node_idx: Node.Idx) ?types_mod
 /// The identity variables of a platform requirement solution, in canonical
 /// identity-slot order.
 pub fn platformRequirementIdentityVars(self: *const Self, solution: PlatformRequirementSolution) []const types_mod.Var {
-    return self.platform_requirement_identity_vars.items.items[solution.identities_start..][0..solution.identities_len];
+    return self.platform_requirement_identity_vars.items()[solution.identities_start..][0..solution.identities_len];
 }
 
 /// Record the nodes whose own checked state is erroneous, in increasing node
 /// order (`erroneous_nodes`).
 pub fn recordErroneousNodes(self: *Self, nodes: []const u32) std.mem.Allocator.Error!void {
-    self.erroneous_nodes.items.clearRetainingCapacity();
-    try self.erroneous_nodes.items.ensureTotalCapacity(self.gpa, nodes.len);
+    self.erroneous_nodes.clearRetainingCapacity();
+    try self.erroneous_nodes.ensureTotalCapacity(self.gpa, nodes.len);
     for (nodes, 0..) |node, index| {
         std.debug.assert(index == 0 or nodes[index - 1] < node);
-        self.erroneous_nodes.items.appendAssumeCapacity(.{ .node_idx = node });
+        _ = self.erroneous_nodes.appendAssumeCapacity(.{ .node_idx = node });
     }
 }
 
 /// Whether checking recorded the node at `node_idx` as erroneous in its own
 /// right (`erroneous_nodes`).
 pub fn nodeIsErroneous(self: *const Self, node_idx: Node.Idx) bool {
-    return findSortedByNode(ErroneousNode, self.erroneous_nodes.items.items, @backingInt(node_idx)) != null;
+    return findSortedByNode(ErroneousNode, self.erroneous_nodes.items(), @backingInt(node_idx)) != null;
 }
 
 /// Record one exact generated-codec relation owned by a source binding scheme.
@@ -4822,7 +4822,7 @@ pub fn recordBindingSchemeCodecRequirement(
         .requires_instantiation = @intFromBool(requires_instantiation),
         .is_synthetic = @intFromBool(is_synthetic),
     };
-    const entries = self.binding_scheme_codec_requirements.items.items;
+    const entries = self.binding_scheme_codec_requirements.items();
     const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
     const end = sortedNodeEndSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
     for (entries[start..end]) |existing| {
@@ -4840,7 +4840,7 @@ pub fn recordBindingSchemeCodecRequirement(
         return;
     }
     _ = try self.binding_scheme_codec_requirements.append(self.gpa, entry);
-    const grown = self.binding_scheme_codec_requirements.items.items;
+    const grown = self.binding_scheme_codec_requirements.items();
     std.mem.copyBackwards(
         BindingSchemeCodecRequirement,
         grown[end + 1 ..],
@@ -4855,7 +4855,7 @@ pub fn bindingSchemeCodecRequirementsForNode(
     self: *const Self,
     node_idx: Node.Idx,
 ) []const BindingSchemeCodecRequirement {
-    const entries = self.binding_scheme_codec_requirements.items.items;
+    const entries = self.binding_scheme_codec_requirements.items();
     const raw_node = @backingInt(node_idx);
     const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, raw_node);
     const end = sortedNodeEndSlot(BindingSchemeCodecRequirement, entries, raw_node);
@@ -4864,13 +4864,13 @@ pub fn bindingSchemeCodecRequirementsForNode(
 
 /// Return the digits before the decimal point for a recorded numeral.
 pub fn numeralDigitsBefore(self: *const Self, literal: NumeralLiteral) []const u8 {
-    return self.numeral_digit_bytes.items.items[literal.digits_start..][0..literal.before_len];
+    return self.numeral_digit_bytes.items()[literal.digits_start..][0..literal.before_len];
 }
 
 /// Return the digits after the decimal point for a recorded numeral.
 pub fn numeralDigitsAfter(self: *const Self, literal: NumeralLiteral) []const u8 {
     const start = literal.digits_start + literal.before_len;
-    return self.numeral_digit_bytes.items.items[start..][0..literal.after_len];
+    return self.numeral_digit_bytes.items()[start..][0..literal.after_len];
 }
 
 /// The exact-digit view of a recorded numeral—the input every literal fit
@@ -4951,7 +4951,7 @@ pub fn recordSchemeUse(
     scheme_root: TypeVar,
     pairs: []const SchemeUsePair,
 ) std.mem.Allocator.Error!void {
-    const pairs_start: u32 = @intCast(self.scheme_use_pairs.items.items.len);
+    const pairs_start: u32 = @intCast(self.scheme_use_pairs.items().len);
     for (pairs) |pair| {
         _ = try self.scheme_use_pairs.append(self.gpa, pair);
     }
@@ -4989,7 +4989,7 @@ pub fn recordGeneratedCodecDerivation(
     renamings: []const GeneratedCodecRenaming,
 ) std.mem.Allocator.Error!void {
     var existing_index: ?usize = null;
-    for (self.generated_codec_derivations.items.items, 0..) |existing, index| {
+    for (self.generated_codec_derivations.items(), 0..) |existing, index| {
         if (existing.kind == @backingInt(kind) and
             existing.source_constraint_fn_var == @backingInt(source_constraint_fn_var))
         {
@@ -4998,18 +4998,18 @@ pub fn recordGeneratedCodecDerivation(
         }
     }
     if (existing_index) |index| {
-        const existing = self.generated_codec_derivations.items.items[index];
-        if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items.items.len) {
-            self.generated_codec_calls.items.shrinkRetainingCapacity(existing.calls_start);
+        const existing = self.generated_codec_derivations.items()[index];
+        if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items().len) {
+            self.generated_codec_calls.shrinkRetainingCapacity(existing.calls_start);
         }
-        if (existing.renamings_start + existing.renamings_len == self.generated_codec_renamings.items.items.len) {
-            self.generated_codec_renamings.items.shrinkRetainingCapacity(existing.renamings_start);
+        if (existing.renamings_start + existing.renamings_len == self.generated_codec_renamings.items().len) {
+            self.generated_codec_renamings.shrinkRetainingCapacity(existing.renamings_start);
         }
     }
 
-    const calls_start: u32 = @intCast(self.generated_codec_calls.items.items.len);
+    const calls_start: u32 = @intCast(self.generated_codec_calls.items().len);
     _ = try self.generated_codec_calls.appendSlice(self.gpa, calls);
-    const renamings_start: u32 = @intCast(self.generated_codec_renamings.items.items.len);
+    const renamings_start: u32 = @intCast(self.generated_codec_renamings.items().len);
     _ = try self.generated_codec_renamings.appendSlice(self.gpa, renamings);
     const derivation = GeneratedCodecDerivation{
         .kind = @backingInt(kind),
@@ -5034,7 +5034,7 @@ pub fn recordGeneratedCodecDerivation(
         .renamings_len = @intCast(renamings.len),
     };
     if (existing_index) |index| {
-        self.generated_codec_derivations.items.items[index] = derivation;
+        self.generated_codec_derivations.items()[index] = derivation;
         return;
     }
     _ = try self.generated_codec_derivations.append(self.gpa, derivation);
@@ -5061,7 +5061,7 @@ pub fn recordRejectedStaticDispatch(self: *Self, constraint_fn_var: TypeVar) std
 
 /// Checker-rejected static-dispatch obligations in production order.
 pub fn rejectedStaticDispatches(self: *const Self) []const RejectedStaticDispatch {
-    return self.rejected_static_dispatches.items.items;
+    return self.rejected_static_dispatches.items();
 }
 
 /// Persist the use inspection makes of one `to_inspect` method.
@@ -5075,7 +5075,7 @@ pub fn recordInspectOverrideInstance(self: *Self, def_idx: CIR.Def.Idx, callable
 /// The use inspection makes of the `to_inspect` method `def_idx`, or null
 /// when its type has no instance whose result is `Str`.
 pub fn inspectOverrideInstance(self: *const Self, def_idx: CIR.Def.Idx) ?TypeVar {
-    for (self.inspect_override_instances.items.items) |instance| {
+    for (self.inspect_override_instances.items()) |instance| {
         if (instance.def() == def_idx) return instance.callableVar();
     }
     return null;
@@ -5120,7 +5120,7 @@ pub fn recordNumericSuffixTarget(
             .data2 = external.target_node_idx,
         },
         .pending => |ref| blk: {
-            self.deferred_import_refs.items.items[@backingInt(ref)].node_idx = raw_node;
+            self.deferred_import_refs.items()[@backingInt(ref)].node_idx = raw_node;
             break :blk NumericSuffixTarget{
                 .node_idx = raw_node,
                 .kind = @backingInt(NumericSuffixTarget.Kind.pending),
@@ -5141,7 +5141,7 @@ pub fn recordNumericSuffixTarget(
 
 /// Return the scope-resolved type target for an explicit numeric suffix.
 pub fn numericSuffixTargetForNode(self: *const Self, node_idx: Node.Idx) ?NumericSuffixTarget {
-    return findSortedByNode(NumericSuffixTarget, self.numeric_suffix_targets.items.items, @backingInt(node_idx));
+    return findSortedByNode(NumericSuffixTarget, self.numeric_suffix_targets.items(), @backingInt(node_idx));
 }
 
 /// Adds an identifier to the list of exposed items by its identifier index.
@@ -5730,7 +5730,7 @@ pub fn internModuleIdentity(
 pub fn importIdentity(self: *const Self, import_idx: CIR.Import.Idx) ?base.ModuleIdentity.Idx {
     const idx: usize = @backingInt(import_idx);
     if (idx >= self.import_identities.len()) return null;
-    const identity = self.import_identities.items.items[idx];
+    const identity = self.import_identities.items()[idx];
     if (identity.isNone()) return null;
     return identity;
 }
@@ -5747,7 +5747,7 @@ pub fn setImportIdentity(
     while (self.import_identities.len() <= idx) {
         _ = try self.import_identities.append(self.gpa, base.ModuleIdentity.Idx.NONE);
     }
-    self.import_identities.items.items[idx] = identity;
+    self.import_identities.items()[idx] = identity;
 }
 
 /// Look up a module content identity in this env's table without inserting.
@@ -5768,7 +5768,7 @@ pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *cons
 /// use for identity decisions.
 pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Idx) Ident.Idx {
     std.debug.assert(!idx.isNone());
-    return self.module_identity_displays.items.items[@backingInt(idx)];
+    return self.module_identity_displays.items()[@backingInt(idx)];
 }
 
 /// Display text for an env-local identity index. Diagnostics only.
@@ -5944,7 +5944,7 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
             // Poison each row, then write its fields one at a time. A whole-struct store
             // may overwrite an undeclared gap with the temporary's own bytes, so putting
             // the stale bytes in deliberately is what makes this test able to fail.
-            for (list.items.items, 0..) |*slot, i| {
+            for (list.items(), 0..) |*slot, i| {
                 @memset(std.mem.asBytes(slot), poison);
                 slot.node_idx = @intCast(i);
                 slot.digits_start = @intCast(i * 4);
@@ -6005,7 +6005,7 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
 pub fn diagnosticHostedReturn(self: *const Self, def: CIR.Def.Idx) ?Ident.Idx {
     const index = @backingInt(def);
     if (index >= self.diagnostic_hosted_returns.len()) return null;
-    const origin = self.diagnostic_hosted_returns.items.items[index];
+    const origin = self.diagnostic_hosted_returns.items()[index];
     return if (origin.isNone()) null else origin;
 }
 
@@ -6015,5 +6015,5 @@ pub fn setDiagnosticHostedReturn(self: *Self, def: CIR.Def.Idx, origin: Ident.Id
     while (self.diagnostic_hosted_returns.len() <= index) {
         _ = try self.diagnostic_hosted_returns.append(self.gpa, Ident.Idx.NONE);
     }
-    self.diagnostic_hosted_returns.items.items[index] = origin;
+    self.diagnostic_hosted_returns.items()[index] = origin;
 }

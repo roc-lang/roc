@@ -347,10 +347,10 @@ pub const Store = struct {
             try rebindSourceReferenceValue(&desc.content, mapper);
             store.descs.backing.items.set(i, desc);
         }
-        for (store.nominal_decls.items.items) |*decl| try rebindSourceReferenceValue(decl, mapper);
-        for (store.nominal_decl_index.items.items) |*entry| entry.statement = try mapper.node(entry.origin_module, entry.statement);
-        const Entry = @TypeOf(store.nominal_decl_index.items.items[0]);
-        std.mem.sort(Entry, store.nominal_decl_index.items.items, {}, struct {
+        for (store.nominal_decls.items()) |*decl| try rebindSourceReferenceValue(decl, mapper);
+        for (store.nominal_decl_index.items()) |*entry| entry.statement = try mapper.node(entry.origin_module, entry.statement);
+        const Entry = @TypeOf(store.nominal_decl_index.items()[0]);
+        std.mem.sort(Entry, store.nominal_decl_index.items(), {}, struct {
             fn lessThan(_: void, a: Entry, b: Entry) bool {
                 return if (a.origin_module == b.origin_module) a.statement < b.statement else @backingInt(a.origin_module) < @backingInt(b.origin_module);
             }
@@ -452,14 +452,14 @@ pub const Store = struct {
             live_descs.set(@backingInt(storage.desc_idx));
         }
 
-        for (self.vars.items.items) |*var_| var_.* = self.representativeVar(var_.*);
+        for (self.vars.items()) |*var_| var_.* = self.representativeVar(var_.*);
         for (0..self.record_fields.items.len) |index| {
             var field = self.record_fields.items.get(index);
             field.presence.var_ = self.representativeVar(field.presence.var_);
             if (field.presence.presenceVar()) |presence| field.presence.presence_var = self.representativeVar(presence);
             self.record_fields.items.set(index, field);
         }
-        for (self.nominal_decls.items.items) |*decl| decl.backing = self.representativeVar(decl.backing);
+        for (self.nominal_decls.items()) |*decl| decl.backing = self.representativeVar(decl.backing);
 
         var live = live_descs.iterator(.{});
         while (live.next()) |index| {
@@ -570,7 +570,7 @@ pub const Store = struct {
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
         try self.slots.ensureTotalCapacity(self.gpa, capacity);
         try self.root_metas.ensureTotalCapacity(self.gpa, capacity);
-        try self.union_ranks.items.ensureTotalCapacity(self.gpa, capacity);
+        try self.union_ranks.ensureTotalCapacity(self.gpa, capacity);
     }
 
     /// Release buffers used only while solving. Sealing calls this after the
@@ -671,7 +671,7 @@ pub const Store = struct {
     /// error state. Descriptors not referenced by a current slot are rollback
     /// history and do not affect checked output.
     pub fn containsErrContent(self: *const Self) bool {
-        for (self.slots.kinds.items.items, self.slots.payloads.items.items) |kind, payload| {
+        for (self.slots.kinds.items(), self.slots.payloads.items()) |kind, payload| {
             switch (kind) {
                 .root => {
                     if (self.descs.get(@fromBackingInt(payload)).content == .err) return true;
@@ -745,9 +745,9 @@ pub const Store = struct {
         var root_metas = try self.root_metas.items.clone(self.gpa);
         errdefer root_metas.deinit(self.gpa);
 
-        const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items.items);
+        const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items());
         errdefer self.gpa.free(union_ranks);
-        const derived_map_plans = try self.gpa.dupe(DerivedMapPlanEntry, self.derived_map_plans.items.items);
+        const derived_map_plans = try self.gpa.dupe(DerivedMapPlanEntry, self.derived_map_plans.items());
         return .{
             .slots = slots,
             .descs = descs,
@@ -787,13 +787,13 @@ pub const Store = struct {
             .desc_trail_len = self.desc_trail.items.len,
             .root_meta_trail_len = self.root_meta_trail.items.len,
             .union_rank_trail_len = self.union_rank_trail.items.len,
-            .vars_len = self.vars.items.items.len,
+            .vars_len = self.vars.items().len,
             .record_fields_len = self.record_fields.items.len,
             .tags_len = self.tags.items.len,
-            .interpolation_parts_len = self.interpolation_parts.items.items.len,
-            .numeral_infos_len = self.numeral_infos.items.items.len,
-            .interpolation_metadata_len = self.interpolation_metadata.items.items.len,
-            .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
+            .interpolation_parts_len = self.interpolation_parts.items().len,
+            .numeral_infos_len = self.numeral_infos.items().len,
+            .interpolation_metadata_len = self.interpolation_metadata.items().len,
+            .static_dispatch_constraints_len = self.static_dispatch_constraints.items().len,
             .static_dispatch_relation_merges_len = self.static_dispatch_relation_merges.items.len,
             .verify_clone = verify_clone,
         };
@@ -900,21 +900,21 @@ pub const Store = struct {
         self.slots.shrinkRetainingCapacity(self.savepoint_baseline_slots);
         self.descs.backing.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
         self.root_metas.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
-        self.union_ranks.items.shrinkRetainingCapacity(self.savepoint_baseline_slots);
-        self.vars.items.shrinkRetainingCapacity(savepoint.vars_len);
+        self.union_ranks.shrinkRetainingCapacity(self.savepoint_baseline_slots);
+        self.vars.shrinkRetainingCapacity(savepoint.vars_len);
         self.record_fields.items.shrinkRetainingCapacity(savepoint.record_fields_len);
         self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
-        self.interpolation_parts.items.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
-        self.numeral_infos.items.shrinkRetainingCapacity(savepoint.numeral_infos_len);
-        self.interpolation_metadata.items.shrinkRetainingCapacity(savepoint.interpolation_metadata_len);
-        self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
+        self.interpolation_parts.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
+        self.numeral_infos.shrinkRetainingCapacity(savepoint.numeral_infos_len);
+        self.interpolation_metadata.shrinkRetainingCapacity(savepoint.interpolation_metadata_len);
+        self.static_dispatch_constraints.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
         self.static_dispatch_relation_merges.shrinkRetainingCapacity(savepoint.static_dispatch_relation_merges_len);
         if (self.derived_map_plans_journaled) {
-            // The plan rows never shrink capacity, so the rows the probe
-            // first changed still fit.
+            // A probe only inserts plan rows, so the journaled rows are no
+            // longer than the current list.
             const restored = self.derived_map_plans_undo.items;
-            self.derived_map_plans.items.items.len = restored.len;
-            @memcpy(self.derived_map_plans.items.items, restored);
+            self.derived_map_plans.shrinkRetainingCapacity(restored.len);
+            @memcpy(self.derived_map_plans.items(), restored);
             self.derived_map_plans_journaled = false;
         }
 
@@ -954,10 +954,10 @@ pub const Store = struct {
             std.debug.assert(std.meta.eql(self.root_metas.items.get(i), vclone.root_metas.get(i)));
         }
 
-        std.debug.assert(std.mem.eql(u8, self.union_ranks.items.items, vclone.union_ranks));
+        std.debug.assert(std.mem.eql(u8, self.union_ranks.items(), vclone.union_ranks));
 
-        std.debug.assert(self.derived_map_plans.items.items.len == vclone.derived_map_plans.len);
-        for (self.derived_map_plans.items.items, vclone.derived_map_plans) |entry, cloned| {
+        std.debug.assert(self.derived_map_plans.items().len == vclone.derived_map_plans.len);
+        for (self.derived_map_plans.items(), vclone.derived_map_plans) |entry, cloned| {
             std.debug.assert(std.meta.eql(entry, cloned));
         }
     }
@@ -1112,7 +1112,7 @@ pub const Store = struct {
         if (index < self.class_watch.watched.bit_length) self.class_watch.watched.unset(index);
         if (self.descs.get(desc_idx).flags.frozen) _ = self.frozen_anchors.remove(desc_idx);
         const plan_slot = self.derivedMapPlanSlot(desc_idx);
-        if (plan_slot.found) _ = self.derived_map_plans.items.orderedRemove(plan_slot.index);
+        if (plan_slot.found) _ = self.derived_map_plans.orderedRemove(plan_slot.index);
         self.free_descs.appendAssumeCapacity(desc_idx);
     }
 
@@ -1122,7 +1122,7 @@ pub const Store = struct {
 
     /// Where `class`'s row in `derived_map_plans` is, or would be inserted.
     fn derivedMapPlanSlot(self: *const Self, class: DescStore.Idx) DerivedMapPlanSlot {
-        const entries = self.derived_map_plans.items.items;
+        const entries = self.derived_map_plans.items();
         const key: u32 = @backingInt(class);
         var lo: usize = 0;
         var hi: usize = entries.len;
@@ -1143,7 +1143,7 @@ pub const Store = struct {
     fn classDerivedMapPlan(self: *const Self, class: DescStore.Idx) ?DerivedMapPlan {
         const slot = self.derivedMapPlanSlot(class);
         if (!slot.found) return null;
-        return self.derived_map_plans.items.items[slot.index].plan;
+        return self.derived_map_plans.items()[slot.index].plan;
     }
 
     /// Before the open probe first changes the plan rows, keep a copy for
@@ -1151,19 +1151,19 @@ pub const Store = struct {
     fn journalDerivedMapPlans(self: *Self) Allocator.Error!void {
         if (!self.savepoint_active or self.derived_map_plans_journaled) return;
         self.derived_map_plans_undo.clearRetainingCapacity();
-        try self.derived_map_plans_undo.appendSlice(self.gpa, self.derived_map_plans.items.items);
+        try self.derived_map_plans_undo.appendSlice(self.gpa, self.derived_map_plans.items());
         self.derived_map_plans_journaled = true;
     }
 
     fn putClassDerivedMapPlan(self: *Self, class: DescStore.Idx, plan: DerivedMapPlan) Allocator.Error!void {
         self.debugAssertUnsealed();
         const slot = self.derivedMapPlanSlot(class);
-        if (slot.found and std.meta.eql(self.derived_map_plans.items.items[slot.index].plan, plan)) return;
+        if (slot.found and std.meta.eql(self.derived_map_plans.items()[slot.index].plan, plan)) return;
         try self.journalDerivedMapPlans();
         if (slot.found) {
-            self.derived_map_plans.items.items[slot.index].plan = plan;
+            self.derived_map_plans.items()[slot.index].plan = plan;
         } else {
-            try self.derived_map_plans.items.insert(self.gpa, slot.index, .{ .class = class, .plan = plan });
+            try self.derived_map_plans.insert(self.gpa, slot.index, .{ .class = class, .plan = plan });
         }
     }
 
@@ -1172,7 +1172,7 @@ pub const Store = struct {
         const slot = self.derivedMapPlanSlot(class);
         if (!slot.found) return;
         try self.journalDerivedMapPlans();
-        _ = self.derived_map_plans.items.orderedRemove(slot.index);
+        _ = self.derived_map_plans.orderedRemove(slot.index);
     }
 
     /// Give the class `to` the plan of the class `from`, when it has one: a
@@ -1196,7 +1196,7 @@ pub const Store = struct {
     /// The payload the accepted derived `map`/`map!` relation whose callable
     /// class holds `fn_var` selects, if checking accepted one.
     pub fn derivedMapPlan(self: *const Self, fn_var: Var) ?DerivedMapPlan {
-        if (self.derived_map_plans.items.items.len == 0) return null;
+        if (self.derived_map_plans.items().len == 0) return null;
         return self.classDerivedMapPlan(self.resolveVar(fn_var).desc_idx);
     }
 
@@ -1246,7 +1246,7 @@ pub const Store = struct {
     pub fn freshRedirect(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
         self.debugAssertUnsealed();
         try self.slots.ensureUnusedCapacity(self.gpa, 1);
-        try self.union_ranks.items.ensureUnusedCapacity(self.gpa, 1);
+        try self.union_ranks.ensureUnusedCapacity(self.gpa, 1);
         const slot_idx = self.slots.appendAssumeCapacity(.{ .redirect = var_ });
         const rank_idx = self.union_ranks.appendAssumeCapacity(0);
         std.debug.assert(@backingInt(rank_idx) == @backingInt(slot_idx));
@@ -1257,7 +1257,7 @@ pub const Store = struct {
     pub fn register(self: *Self, desc: Desc) std.mem.Allocator.Error!Var {
         self.debugAssertUnsealed();
         try self.slots.ensureUnusedCapacity(self.gpa, 1);
-        try self.union_ranks.items.ensureUnusedCapacity(self.gpa, 1);
+        try self.union_ranks.ensureUnusedCapacity(self.gpa, 1);
         const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
         const checked_var = Self.slotIdxToVar(slot_idx);
         const desc_idx = try self.appendClass(desc, checked_var);
@@ -1896,7 +1896,7 @@ pub const Store = struct {
 
     fn sliceAliasesVars(self: *const Self, s: []const Var) bool {
         if (s.len == 0) return false;
-        const items = self.vars.items.items;
+        const items = self.vars.items();
         const items_start = @intFromPtr(items.ptr);
         const items_end = items_start + items.len * @sizeOf(Var);
         const source_start = @intFromPtr(s.ptr);
@@ -1933,14 +1933,14 @@ pub const Store = struct {
         suffix: []const StaticDispatchConstraint,
     ) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
         self.debugAssertUnsealed();
-        const list = &self.static_dispatch_constraints.items;
+        const list = &self.static_dispatch_constraints;
         const start: u32 = @backingInt(prefix.start);
         const end: u32 = start + @as(u32, @intCast(prefix.count));
         if (!self.savepoint_active) {
             if (self.static_dispatch_constraint_room.get(end)) |room_end| {
                 if (room_end - end >= suffix.len) {
-                    std.debug.assert(room_end <= list.items.len);
-                    @memcpy(list.items[end..][0..suffix.len], suffix);
+                    std.debug.assert(room_end <= list.items().len);
+                    @memcpy(list.items()[end..][0..suffix.len], suffix);
                     std.debug.assert(self.static_dispatch_constraint_room.remove(end));
                     const new_end: u32 = end + @as(u32, @intCast(suffix.len));
                     if (new_end < room_end) try self.static_dispatch_constraint_room.put(self.gpa, new_end, room_end);
@@ -1952,13 +1952,13 @@ pub const Store = struct {
         const room = if (!self.savepoint_active and total >= min_constraint_room) total else 0;
         try list.ensureUnusedCapacity(self.gpa, total + room);
         if (room != 0) try self.static_dispatch_constraint_room.ensureUnusedCapacity(self.gpa, 1);
-        const new_start: u32 = @intCast(list.items.len);
-        list.appendSliceAssumeCapacity(list.items[start..end]);
-        list.appendSliceAssumeCapacity(suffix);
+        const new_start: u32 = @intCast(list.items().len);
+        _ = list.appendSliceAssumeCapacity(list.items()[start..end]);
+        _ = list.appendSliceAssumeCapacity(suffix);
         if (room != 0) {
             // The room holds copies of the last constraint until a later
             // append overwrites them; no range covers them.
-            const last = list.items[list.items.len - 1];
+            const last = list.items()[list.items().len - 1];
             list.appendNTimesAssumeCapacity(last, room);
             const new_end: u32 = new_start + @as(u32, @intCast(total));
             self.static_dispatch_constraint_room.putAssumeCapacity(new_end, new_end + @as(u32, @intCast(room)));
@@ -2080,7 +2080,7 @@ pub const Store = struct {
     }
 
     pub fn getStaticDispatchConstraintAt(self: *const Self, idx: usize) StaticDispatchConstraint {
-        return self.static_dispatch_constraints.items.items[idx];
+        return self.static_dispatch_constraints.items()[idx];
     }
 
     // helpers - alias types //
@@ -2165,7 +2165,7 @@ pub const Store = struct {
         std.debug.assert(decl.source.sourceDecl().present);
 
         const statement = decl.statement();
-        const entries = self.nominal_decl_index.items.items;
+        const entries = self.nominal_decl_index.items();
         var lo: usize = 0;
         var hi: usize = entries.len;
         while (lo < hi) {
@@ -2184,7 +2184,7 @@ pub const Store = struct {
 
         self.noteNominalDeclWrite(decl);
         const decl_idx = try self.nominal_decls.append(self.gpa, decl);
-        try self.nominal_decl_index.items.insert(self.gpa, lo, .{
+        try self.nominal_decl_index.insert(self.gpa, lo, .{
             .origin_module = decl.origin_module,
             .statement = statement,
             .decl = decl_idx,
@@ -2199,7 +2199,7 @@ pub const Store = struct {
         origin_module: base.ModuleIdentity.Idx,
         statement: u32,
     ) ?NominalDecl.Idx {
-        const entries = self.nominal_decl_index.items.items;
+        const entries = self.nominal_decl_index.items();
         var lo: usize = 0;
         var hi: usize = entries.len;
         while (lo < hi) {
@@ -2457,7 +2457,7 @@ pub const Store = struct {
         else
             self.getUnionRank(parent.storage_var);
 
-        if (self.derived_map_plans.items.items.len != 0) {
+        if (self.derived_map_plans.items().len != 0) {
             try self.mergeClassDerivedMapPlans(a.desc_idx, b.desc_idx, destination_desc_idx);
         }
         try self.setRootMeta(destination_desc_idx, .{
@@ -2857,7 +2857,7 @@ pub const Store = struct {
                 .derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa),
             };
             store.invalid_nominal_decl_written = false;
-            for (store.nominal_decls.items.items) |decl| store.noteNominalDeclWrite(decl);
+            for (store.nominal_decls.items()) |decl| store.noteNominalDeclWrite(decl);
             return store;
         }
     };
@@ -2900,18 +2900,18 @@ const SlotStore = struct {
     }
 
     fn ensureTotalCapacity(self: *Self, gpa: Allocator, capacity: usize) Allocator.Error!void {
-        try self.payloads.items.ensureTotalCapacity(gpa, capacity);
-        try self.kinds.items.ensureTotalCapacity(gpa, capacity);
+        try self.payloads.ensureTotalCapacity(gpa, capacity);
+        try self.kinds.ensureTotalCapacity(gpa, capacity);
     }
 
     fn ensureUnusedCapacity(self: *Self, gpa: Allocator, additional: usize) Allocator.Error!void {
-        try self.payloads.items.ensureUnusedCapacity(gpa, additional);
-        try self.kinds.items.ensureUnusedCapacity(gpa, additional);
+        try self.payloads.ensureUnusedCapacity(gpa, additional);
+        try self.kinds.ensureUnusedCapacity(gpa, additional);
     }
 
     fn shrinkRetainingCapacity(self: *Self, new_len: usize) void {
-        self.payloads.items.shrinkRetainingCapacity(new_len);
-        self.kinds.items.shrinkRetainingCapacity(new_len);
+        self.payloads.shrinkRetainingCapacity(new_len);
+        self.kinds.shrinkRetainingCapacity(new_len);
     }
 
     /// Serialized representation of SlotStore
@@ -2968,15 +2968,15 @@ const SlotStore = struct {
     /// Set a value in the store
     pub fn set(self: *Self, idx: Idx, val: Slot) void {
         const i: usize = @backingInt(idx);
-        self.payloads.items.items[i] = payloadOf(val);
-        self.kinds.items.items[i] = val;
+        self.payloads.items()[i] = payloadOf(val);
+        self.kinds.items()[i] = val;
     }
 
     /// Get a value from the store
     fn get(self: *const Self, idx: Idx) Slot {
         const i: usize = @backingInt(idx);
-        const payload = self.payloads.items.items[i];
-        return switch (self.kinds.items.items[i]) {
+        const payload = self.payloads.items()[i];
+        return switch (self.kinds.items()[i]) {
             .root => .{ .root = @fromBackingInt(payload) },
             .redirect => .{ .redirect = @fromBackingInt(payload) },
         };
@@ -2984,7 +2984,7 @@ const SlotStore = struct {
 
     /// Every slot, in order, as an owned slice.
     fn toOwnedSlots(self: *const Self, gpa: Allocator) Allocator.Error![]Slot {
-        const slots = try gpa.alloc(Slot, self.payloads.items.items.len);
+        const slots = try gpa.alloc(Slot, self.payloads.items().len);
         for (slots, 0..) |*slot, i| slot.* = self.get(@fromBackingInt(@intCast(i)));
         return slots;
     }
@@ -3569,7 +3569,7 @@ fn storageDescIdx(store: *const Store, var_: Var) DescStore.Idx {
 
 /// Whether some slot names `desc_idx`.
 fn descIsNamed(store: *const Store, desc_idx: DescStore.Idx) bool {
-    for (store.slots.kinds.items.items, store.slots.payloads.items.items) |kind, payload| {
+    for (store.slots.kinds.items(), store.slots.payloads.items()) |kind, payload| {
         switch (kind) {
             .root => if (payload == @backingInt(desc_idx)) return true,
             .redirect => {},
@@ -3947,9 +3947,9 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         defer before_descs.deinit(gpa);
         var before_root_metas = try store.root_metas.items.clone(gpa);
         defer before_root_metas.deinit(gpa);
-        const before_union_ranks = try gpa.dupe(u8, store.union_ranks.items.items);
+        const before_union_ranks = try gpa.dupe(u8, store.union_ranks.items());
         defer gpa.free(before_union_ranks);
-        const before_vars_len = store.vars.items.items.len;
+        const before_vars_len = store.vars.items().len;
 
         // Verifying savepoint: copies the whole store up front; rollback asserts
         // the trail restored it byte-for-byte (same behavior as restoring a copy).
@@ -3985,8 +3985,8 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         while (i < before_root_metas.len) : (i += 1) {
             try std.testing.expect(std.meta.eql(before_root_metas.get(i), store.root_metas.items.get(i)));
         }
-        try std.testing.expectEqualSlices(u8, before_union_ranks, store.union_ranks.items.items);
-        try std.testing.expectEqual(before_vars_len, store.vars.items.items.len);
+        try std.testing.expectEqualSlices(u8, before_union_ranks, store.union_ranks.items());
+        try std.testing.expectEqual(before_vars_len, store.vars.items().len);
     }
 }
 
@@ -4267,7 +4267,7 @@ test "a derived map plan follows its callable's class through merges and detache
     for ([_]Var{ callable, joined_first, joined_second }) |member| {
         try std.testing.expectEqual(plan, store.derivedMapPlan(member).?);
     }
-    try std.testing.expectEqual(@as(usize, 1), store.derived_map_plans.items.items.len);
+    try std.testing.expectEqual(@as(usize, 1), store.derived_map_plans.items().len);
 
     // A merge of two planned classes keeps the second operand's plan.
     const other_plan = testDerivedMapPlan(9, 0);
@@ -4276,7 +4276,7 @@ test "a derived map plan follows its callable's class through merges and detache
     try store.union_(other_callable, unrelated, flex_desc);
     try store.union_(callable, other_callable, flex_desc);
     try std.testing.expectEqual(other_plan, store.derivedMapPlan(joined_first).?);
-    try std.testing.expectEqual(@as(usize, 1), store.derived_map_plans.items.items.len);
+    try std.testing.expectEqual(@as(usize, 1), store.derived_map_plans.items().len);
 
     // An occurrence poisoned alone stays in the relation it joined.
     try std.testing.expect(store.resolveVar(joined_first).var_ != joined_first);
@@ -4284,7 +4284,7 @@ test "a derived map plan follows its callable's class through merges and detache
     try std.testing.expectEqual(Content.err, store.resolveVar(joined_first).desc.content);
     try std.testing.expectEqual(other_plan, store.derivedMapPlan(joined_first).?);
     try std.testing.expectEqual(other_plan, store.derivedMapPlan(callable).?);
-    try std.testing.expectEqual(@as(usize, 2), store.derived_map_plans.items.items.len);
+    try std.testing.expectEqual(@as(usize, 2), store.derived_map_plans.items().len);
 }
 
 test "a rolled-back probe restores the derived map plans and a freed class forgets its plan" {
@@ -4307,13 +4307,13 @@ test "a rolled-back probe restores the derived map plans and a freed class forge
     }
     try std.testing.expectEqual(plan, store.derivedMapPlan(callable).?);
     try std.testing.expectEqual(@as(?DerivedMapPlan, null), store.derivedMapPlan(other));
-    try std.testing.expectEqual(@as(usize, 1), store.derived_map_plans.items.items.len);
+    try std.testing.expectEqual(@as(usize, 1), store.derived_map_plans.items().len);
 
     // Resetting the class's storage root frees its descriptor, and the class
     // that takes the descriptor next has no plan.
     try store.resetVarToUnbound(callable, Rank.outermost);
     try std.testing.expectEqual(@as(?DerivedMapPlan, null), store.derivedMapPlan(callable));
-    try std.testing.expectEqual(@as(usize, 0), store.derived_map_plans.items.items.len);
+    try std.testing.expectEqual(@as(usize, 0), store.derived_map_plans.items().len);
     const reuser = try store.fresh();
     try std.testing.expectEqual(@as(?DerivedMapPlan, null), store.derivedMapPlan(reuser));
 }

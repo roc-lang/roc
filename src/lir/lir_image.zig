@@ -317,15 +317,15 @@ pub const LayoutStoreImage = extern struct {
 
     fn fromStore(encoder: anytype, store: *const layout_mod.Store) @TypeOf(encoder).Error!LayoutStoreImage {
         return .{
-            .layouts = try encoder.ref(store.layouts.items.items),
+            .layouts = try encoder.ref(store.layouts.items()),
             .resolved_list_layouts = try encoder.ref(store.resolved_list_layouts.items),
-            .tuple_elems = try encoder.ref(store.tuple_elems.items.items),
+            .tuple_elems = try encoder.ref(store.tuple_elems.items()),
             .struct_fields = try StructFieldsImage.fromStore(encoder, &store.struct_fields),
-            .struct_field_offsets = try encoder.ref(store.struct_field_offsets.items.items),
-            .struct_field_original_order = try encoder.ref(store.struct_field_original_order.items.items),
-            .struct_data = try encoder.ref(store.struct_data.items.items),
+            .struct_field_offsets = try encoder.ref(store.struct_field_offsets.items()),
+            .struct_field_original_order = try encoder.ref(store.struct_field_original_order.items()),
+            .struct_data = try encoder.ref(store.struct_data.items()),
             .tag_union_variants = try TagUnionVariantsImage.fromStore(encoder, &store.tag_union_variants),
-            .tag_union_data = try encoder.ref(store.tag_union_data.items.items),
+            .tag_union_data = try encoder.ref(store.tag_union_data.items()),
         };
     }
 
@@ -741,9 +741,8 @@ fn guardedListFromRef(
 
 fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!collections.SafeList(T) {
     const list = try arrayListFromRef(T, base_ptr, image_size, ref);
-    return .{
-        .items = list,
-    };
+    if (list.items.len > std.math.maxInt(u32)) return error.InvalidLirImage;
+    return .fromBorrowedSlice(list.items);
 }
 
 fn stringLiteralBufferFromRef(base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!base.StringLiteral.Store.Buffer {
@@ -987,7 +986,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     try std.testing.expectEqualSlices(u8, store.strings.buffer.items.items, view.store.strings.buffer.items.items);
     try std.testing.expectEqual(store.next_synthetic_symbol, view.store.next_synthetic_symbol);
     try std.testing.expectEqual(lowered.layouts.layoutCount(), view.layouts.layoutCount());
-    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(lowered.layouts.layouts.items.items), std.mem.sliceAsBytes(view.layouts.layouts.items.items));
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(lowered.layouts.layouts.items()), std.mem.sliceAsBytes(view.layouts.layouts.items()));
     for (roots, [_][]const u8{ "first", "second" }) |root, name| {
         const assign = view.store.getCFStmtImmediate(root).assign_ref;
         try std.testing.expectEqual(pointer_layout, view.store.getLocal(assign.target).layout_idx);
@@ -1035,7 +1034,7 @@ test "LIR image copies and round-trips every populated store field" {
         /// Build a populated `SafeList(T)` backed by the fixed buffer.
         fn safeList(comptime T: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!collections.SafeList(T) {
             const slice = try distinct(T, alloc, count, seed);
-            return .{ .items = .{ .items = slice, .capacity = count, .pointer_stability = .{} } };
+            return .fromOwnedSlice(slice);
         }
         /// A per-field-and-index distinctive *value* of `T`. Filling raw bytes
         /// instead would write bit patterns no value of the type can hold—an
@@ -1158,32 +1157,32 @@ test "LIR image copies and round-trips every populated store field" {
 
     // Layout store: seven serialized lists plus the view-supplied target width.
     try h.expectBytesEq(
-        std.mem.sliceAsBytes(layouts.layouts.items.items),
-        std.mem.sliceAsBytes(view.layouts.layouts.items.items),
+        std.mem.sliceAsBytes(layouts.layouts.items()),
+        std.mem.sliceAsBytes(view.layouts.layouts.items()),
     );
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.resolved_list_layouts.items),
         std.mem.sliceAsBytes(view.layouts.resolved_list_layouts.items),
     );
     try h.expectBytesEq(
-        std.mem.sliceAsBytes(layouts.tuple_elems.items.items),
-        std.mem.sliceAsBytes(view.layouts.tuple_elems.items.items),
+        std.mem.sliceAsBytes(layouts.tuple_elems.items()),
+        std.mem.sliceAsBytes(view.layouts.tuple_elems.items()),
     );
     try h.expectBytesEq(
-        std.mem.sliceAsBytes(layouts.struct_data.items.items),
-        std.mem.sliceAsBytes(view.layouts.struct_data.items.items),
+        std.mem.sliceAsBytes(layouts.struct_data.items()),
+        std.mem.sliceAsBytes(view.layouts.struct_data.items()),
     );
     try h.expectBytesEq(
-        std.mem.sliceAsBytes(layouts.struct_field_offsets.items.items),
-        std.mem.sliceAsBytes(view.layouts.struct_field_offsets.items.items),
+        std.mem.sliceAsBytes(layouts.struct_field_offsets.items()),
+        std.mem.sliceAsBytes(view.layouts.struct_field_offsets.items()),
     );
     try h.expectBytesEq(
-        std.mem.sliceAsBytes(layouts.struct_field_original_order.items.items),
-        std.mem.sliceAsBytes(view.layouts.struct_field_original_order.items.items),
+        std.mem.sliceAsBytes(layouts.struct_field_original_order.items()),
+        std.mem.sliceAsBytes(view.layouts.struct_field_original_order.items()),
     );
     try h.expectBytesEq(
-        std.mem.sliceAsBytes(layouts.tag_union_data.items.items),
-        std.mem.sliceAsBytes(view.layouts.tag_union_data.items.items),
+        std.mem.sliceAsBytes(layouts.tag_union_data.items()),
+        std.mem.sliceAsBytes(view.layouts.tag_union_data.items()),
     );
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.struct_fields.field(.index)),

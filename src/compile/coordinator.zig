@@ -4813,7 +4813,7 @@ pub const Coordinator = struct {
         env: *const ModuleEnv,
         checked_imports: []const check.CheckedArtifact.PublishImportArtifact,
     ) bool {
-        for (env.imports.imports.items.items, 0..) |_, i| {
+        for (env.imports.imports.items(), 0..) |_, i| {
             const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             const resolved_module_idx = env.imports.getResolvedModule(import_idx) orelse continue;
 
@@ -5487,7 +5487,7 @@ pub const Coordinator = struct {
     fn installPlatformRequirementSurface(mod: *ModuleState) Allocator.Error!void {
         const env = mod.moduleEnv() orelse return;
         if (moduleKindTag(env.module_kind) != .platform) return;
-        if (env.requires_types.items.items.len == 0) return;
+        if (env.requires_types.items().len == 0) return;
         const artifact = mod.checkedArtifact() orelse return;
         const context = try artifact.platformRequirementContextKey();
         mod.platform_requirement_surface = .{
@@ -6603,7 +6603,7 @@ pub const Coordinator = struct {
         try env_indices.put(allocator, self.builtin_modules.builtin_module.env, 0);
         module_env.imports.clearResolvedModules();
 
-        const direct_imports = module_env.imports.imports.items.items;
+        const direct_imports = module_env.imports.imports.items();
         for (direct_imports, 0..) |str_idx, i| {
             const import_idx: can.CIR.Import.Idx = @fromBackingInt(@intCast(i));
             const import_name = module_env.getString(str_idx);
@@ -6677,7 +6677,7 @@ pub const Coordinator = struct {
         });
 
         const module_env = mod.moduleEnv().?;
-        const direct_imports = module_env.imports.imports.items.items;
+        const direct_imports = module_env.imports.imports.items();
         for (direct_imports, 0..) |str_idx, i| {
             const import_idx: can.CIR.Import.Idx = @fromBackingInt(@intCast(i));
             const import_name = module_env.getString(str_idx);
@@ -8353,7 +8353,7 @@ fn compileAppRootIdentityExpecting(
     const stderr_bytes = try stderr_capture.bytes.toOwnedSlice(allocator);
     errdefer allocator.free(stderr_bytes);
     var where_method_scheme_use_count: usize = 0;
-    for (root.moduleEnvConst().scheme_uses.items.items) |record| {
+    for (root.moduleEnvConst().scheme_uses.items()) |record| {
         if (record.slot_kind == @backingInt(can.ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
             where_method_scheme_use_count += 1;
         }

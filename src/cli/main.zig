@@ -7755,7 +7755,7 @@ fn discoverAndAddBundleInputs(
                 // on both fresh builds and cache hits. Preserve their logical
                 // paths so extraction keeps each import relative to its module.
                 const env = mod_state.moduleEnv().?;
-                for (env.file_dependencies.items.items) |dep| {
+                for (env.file_dependencies.items()) |dep| {
                     const dep_path = try std.fs.path.resolve(ctx.arena, &.{
                         mod_state.canonicalSourceDir(),
                         env.fileDependencyRelativePath(dep),

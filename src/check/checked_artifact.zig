@@ -198,7 +198,7 @@ pub fn forEachCheckedSourceTypeRoot(
     // A row-coerced result's coercion node has its widening copy's type;
     // the expression's own node keeps its own type
     // (`ModuleEnv.RowCoercedResult`).
-    for (module_env.row_coerced_results.items.items) |result| {
+    for (module_env.row_coerced_results.items()) |result| {
         try visitor.visit(@fromBackingInt(result.wide_var));
     }
 
@@ -408,7 +408,7 @@ fn hashByteSlice(hasher: anytype, bytes: []const u8) void {
 }
 
 fn hashModuleSourceInputs(module_env: *const ModuleEnv) [32]u8 {
-    const deps = module_env.file_dependencies.items.items;
+    const deps = module_env.file_dependencies.items();
     if (deps.len == 0) {
         return hashBytes(module_env.getSourceAll());
     }
@@ -592,7 +592,7 @@ pub const CheckingContextIdentity = struct {
         explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
-        const imported_names = module_env.imports.imports.items.items;
+        const imported_names = module_env.imports.imports.items();
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
         errdefer allocator.free(imports);
         const roots = try allocator.dupe(ExplicitRootRequestInput, explicit_roots);
@@ -753,7 +753,7 @@ fn selectHoistedRoots(
     module_env: *const ModuleEnv,
     selection: HoistedRootSelection,
 ) Allocator.Error![]hoist_roots.SelectedHoistedRoot {
-    const selected = module_env.selected_hoisted_roots.items.items;
+    const selected = module_env.selected_hoisted_roots.items();
     var kept = try std.ArrayList(hoist_roots.SelectedHoistedRoot).initCapacity(allocator, selected.len);
     errdefer kept.deinit(allocator);
     for (selected) |root| {
@@ -2498,13 +2498,13 @@ fn checkedTypeIdForRootSource(
         .literal => checkedArtifactInvariant("internal literal conversion root source reached external root source type lookup", .{}),
         .required_binding => |binding_idx| blk: {
             const module_env = module.moduleEnvConst();
-            if (binding_idx >= module_env.requires_types.items.items.len) {
+            if (binding_idx >= module_env.requires_types.items().len) {
                 base.invariant(
                     "checked artifact invariant violated: explicit required-binding root {d} is out of range",
                     .{binding_idx},
                 );
             }
-            break :blk ModuleEnv.varFrom(module_env.requires_types.items.items[binding_idx].type_anno);
+            break :blk ModuleEnv.varFrom(module_env.requires_types.items()[binding_idx].type_anno);
         },
     };
     return checkedTypeIdForVar(allocator, module, checked_types, var_);
@@ -8416,7 +8416,7 @@ fn forEachStaticDispatchTypeRoot(
         try output_type_roots.forEachStaticDispatchTypeRoot(module.moduleEnvConst(), expr_idx, visitor);
     }
 
-    for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
+    for (module.moduleEnvConst().for_loop_dispatch_plans.items()) |plan| {
         if (!module_index.reachesLoop(plan.node_idx)) continue;
         try output_type_roots.forEachForLoopDispatchTypeRoot(plan, visitor);
     }
@@ -11763,7 +11763,7 @@ pub const ResolvedValueRefTable = struct {
 
         var recursive_reference_nodes = collections.DenseMap(u32, void).init(allocator);
         defer recursive_reference_nodes.deinit();
-        for (module.moduleEnvConst().scheme_uses.items.items) |record| {
+        for (module.moduleEnvConst().scheme_uses.items()) |record| {
             if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_reference)) continue;
             try recursive_reference_nodes.put(record.node_idx, {});
         }
@@ -13034,7 +13034,7 @@ fn sealCheckedProcedureTemplateRefs(
         // that rank settles at `.outermost`.
         var instantiated_scheme_roots = collections.DenseMap(Var, void).init(allocator);
         defer instantiated_scheme_roots.deinit();
-        for (module.moduleEnvConst().scheme_uses.items.items) |record| {
+        for (module.moduleEnvConst().scheme_uses.items()) |record| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))) {
                 .value_use, .shared_value_use => try instantiated_scheme_roots.put(
                     @fromBackingInt(@intCast(record.scheme_root)),
@@ -13068,7 +13068,7 @@ fn sealCheckedProcedureTemplateRefs(
             try local_schemes.put(@backingInt(decl.expr), pattern_var);
         }
 
-        for (module.moduleEnvConst().scheme_uses.items.items, 0..) |record, record_idx| {
+        for (module.moduleEnvConst().scheme_uses.items(), 0..) |record, record_idx| {
             if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.nested_function_use)) continue;
             if (bodies.index().nodeKind(record.node_idx) != .expr) continue;
             try local_schemes.put(record.node_idx, @fromBackingInt(@intCast(record.scheme_root)));
@@ -14189,7 +14189,7 @@ const EvidencePass = struct {
 
     fn buildIndexes(self: *EvidencePass) Allocator.Error!void {
         const module_env = self.module.moduleEnvConst();
-        for (module_env.generated_codec_derivations.items.items, 0..) |derivation, index| {
+        for (module_env.generated_codec_derivations.items(), 0..) |derivation, index| {
             const kind: static_dispatch.GeneratedCodecDerivationKind = switch (@as(ModuleEnv.GeneratedCodecDerivation.Kind, @fromBackingInt(@intCast(derivation.kind)))) {
                 .parser => .parser,
                 .encoder => .encoder,
@@ -14207,7 +14207,7 @@ const EvidencePass = struct {
             }
         }
         // A relation that recurs a derivation resolves to that derivation.
-        for (module_env.generated_codec_recurrences.items.items) |recurrence| {
+        for (module_env.generated_codec_recurrences.items()) |recurrence| {
             const source: Var = @fromBackingInt(@intCast(recurrence.derivation_source_fn_var));
             const derivations = self.generated_codec_by_source.get(source) orelse
                 checkedArtifactInvariant("a recurring generated codec relation named no derivation", .{});
@@ -14221,8 +14221,8 @@ const EvidencePass = struct {
         // whose pairs are indexed once.
         var indexed_ranges = std.AutoHashMap(struct { start: u32, len: u32 }, void).init(self.allocator);
         defer indexed_ranges.deinit();
-        for (module_env.scheme_uses.items.items, 0..) |record, i| {
-            const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        for (module_env.scheme_uses.items(), 0..) |record, i| {
+            const pairs = module_env.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
             const range_seen = (try indexed_ranges.getOrPut(.{ .start = record.pairs_start, .len = record.pairs_len })).found_existing;
             if (!range_seen) for (pairs) |pair| {
                 const entry = try self.fresh_by_pair_root.getOrPut(self.allocator, .{
@@ -14239,7 +14239,7 @@ const EvidencePass = struct {
                     // another candidate from which publication may choose.
                     const entry = try self.value_use_by_node.getOrPut(record.node_idx);
                     if (entry.found_existing) {
-                        const previous = module_env.scheme_uses.items.items[entry.value_ptr.*];
+                        const previous = module_env.scheme_uses.items()[entry.value_ptr.*];
                         std.debug.assert(self.types.resolveVar(@fromBackingInt(@intCast(previous.scheme_root))).var_ ==
                             self.types.resolveVar(@fromBackingInt(@intCast(record.scheme_root))).var_);
                     } else {
@@ -14277,7 +14277,7 @@ const EvidencePass = struct {
         }
         // A relation checking folded into a retained same-name relation
         // dispatches through that relation's target instantiation.
-        for (module_env.dispatch_relation_merges.items.items) |merge| {
+        for (module_env.dispatch_relation_merges.items()) |merge| {
             const record_idx = self.target_by_fn_var.get(merge.retained_fn_var) orelse continue;
             const entry = try self.target_by_fn_var.getOrPut(merge.dropped_fn_var);
             if (entry.found_existing) {
@@ -14290,7 +14290,7 @@ const EvidencePass = struct {
 
         // Generalized local VALUE decls and one representative use record per
         // looked-up pattern (see `local_value_scheme_by_var`).
-        for (module_env.scheme_uses.items.items, 0..) |record, i| {
+        for (module_env.scheme_uses.items(), 0..) |record, i| {
             if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.value_use)) continue;
             if (self.module.nodeTag(@fromBackingInt(@intCast(record.node_idx))) != .expr_var) continue;
             const lookup = self.module.expr(@fromBackingInt(@intCast(record.node_idx))).data.e_lookup_local;
@@ -14321,12 +14321,12 @@ const EvidencePass = struct {
 
     fn linkGeneratedCodecCalls(self: *EvidencePass) Allocator.Error!void {
         const module_env = self.module.moduleEnvConst();
-        const source_derivations = module_env.generated_codec_derivations.items.items;
+        const source_derivations = module_env.generated_codec_derivations.items();
         if (source_derivations.len != self.plan_table.generated_codec_derivations.len) {
             checkedArtifactInvariant("generated codec source and artifact derivation counts differed", .{});
         }
         for (source_derivations, self.plan_table.generated_codec_derivations) |source_derivation, derivation| {
-            const source_calls = module_env.generated_codec_calls.items.items[source_derivation.calls_start..][0..source_derivation.calls_len];
+            const source_calls = module_env.generated_codec_calls.items()[source_derivation.calls_start..][0..source_derivation.calls_len];
             const artifact_calls = self.plan_table.generated_codec_calls[derivation.calls.start..][0..derivation.calls.len];
             if (source_calls.len != artifact_calls.len) {
                 checkedArtifactInvariant("generated codec source and artifact derivation call counts differed", .{});
@@ -14357,7 +14357,7 @@ const EvidencePass = struct {
                             evidence_var,
                             .{
                                 .callable_ty = call.callable_ty,
-                                .renamings = module_env.generated_codec_renamings.items.items[source_derivation.renamings_start..][0..source_derivation.renamings_len],
+                                .renamings = module_env.generated_codec_renamings.items()[source_derivation.renamings_start..][0..source_derivation.renamings_len],
                             },
                             .derivation,
                             .commit,
@@ -14880,14 +14880,14 @@ const EvidencePass = struct {
             self.where_method_use_by_fn_root.get(fn_root) orelse
             return .independent_per_use;
         const module_env = self.module.moduleEnvConst();
-        const record = module_env.scheme_uses.items.items[record_idx];
+        const record = module_env.scheme_uses.items()[record_idx];
         if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
             self.types.resolveVar(@as(Var, @fromBackingInt(@intCast(record.slot_data)))).var_ != fn_root)
         {
             checkedArtifactInvariant("where-method-use index named the wrong scheme-use record", .{});
         }
         const signature_root = self.types.resolveVar(@as(Var, @fromBackingInt(@intCast(record.scheme_root)))).var_;
-        const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        const pairs = module_env.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
         const copied_callable = self.pairForResolved(pairs, signature_root) orelse
             checkedArtifactInvariant("where-method-use record omitted its signature callable copy", .{});
         // Either callable may be written through a transparent alias, whose
@@ -15143,8 +15143,8 @@ const EvidencePass = struct {
             if (self.local_value_scheme_by_var.get(@backingInt(resolved.var_))) |pattern_raw| {
                 if (self.value_use_record_by_pattern.get(pattern_raw)) |record_idx| {
                     const module_env = self.module.moduleEnvConst();
-                    const record = module_env.scheme_uses.items.items[record_idx];
-                    const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+                    const record = module_env.scheme_uses.items()[record_idx];
+                    const pairs = module_env.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
                     if (self.pairForResolved(pairs, resolved.var_)) |fresh| {
                         if (self.types.resolveVar(fresh).var_ != resolved.var_) {
                             const fresh_fn: ?Var = if (constraint_fn_var) |fn_var| self.pairForResolved(pairs, self.types.resolveVar(fn_var).var_) else null;
@@ -15720,7 +15720,7 @@ const EvidencePass = struct {
             }
         }
         if (record_idx) |idx| {
-            const record = self.module.moduleEnvConst().scheme_uses.items.items[idx];
+            const record = self.module.moduleEnvConst().scheme_uses.items()[idx];
             if (target.alias == null and record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target)) {
                 // The checker closed an exact concrete backedge and proved
                 // every requirement is determined by the target's callable,
@@ -15774,7 +15774,7 @@ const EvidencePass = struct {
                 .callable_ty = callable_ty.?,
                 .procedure_schema = procedure_schema,
                 .scheme_root = @fromBackingInt(@intCast(record.scheme_root)),
-                .pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len],
+                .pairs = module_env.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len],
                 .renamings = renamings,
             };
             errdefer frame.deinit(self.allocator);
@@ -15981,11 +15981,11 @@ const EvidencePass = struct {
     /// substitution the instantiation applied to the scheme.
     fn evidenceRefsForRecord(self: *EvidencePass, record_idx: u32, unpinned: UnpinnedRecordEvidence) Allocator.Error!?RecordSiteSpans {
         const module_env = self.module.moduleEnvConst();
-        const record = module_env.scheme_uses.items.items[record_idx];
+        const record = module_env.scheme_uses.items()[record_idx];
         if (record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
             checkedArtifactInvariant("where-method callable relation reached scheme-use evidence emission", .{});
         }
-        const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        const pairs = module_env.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
         // Resolution against an enclosing evidence chain depends on that
         // chain, so only chain-free resolutions are shared.
         const key: ?RecordSubstitutionKey = if (evidenceChainIsEmpty(self.current_chain)) .{
@@ -16444,7 +16444,7 @@ const EvidencePass = struct {
     ) Allocator.Error!void {
         if (self.site_seen.contains(site_key)) return;
 
-        const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        const record = self.module.moduleEnvConst().scheme_uses.items()[record_idx];
         if (record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
             checkedArtifactInvariant("where-method callable relation reached a scheme-use evidence site", .{});
         }
@@ -16484,7 +16484,7 @@ const EvidencePass = struct {
     /// The instance a stored nested-function use places into its containing
     /// value, as a `SiteEvidenceEntry.instance_ty`.
     fn siteInstanceType(self: *EvidencePass, record_idx: u32) u32 {
-        const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        const record = self.module.moduleEnvConst().scheme_uses.items()[record_idx];
         if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.nested_function_use)) {
             return static_dispatch.SiteEvidenceEntry.no_site_instance;
         }
@@ -16567,7 +16567,7 @@ const EvidencePass = struct {
     /// range of `scheme_use_pairs`.
     fn pairForResolved(self: *EvidencePass, pairs: []const ModuleEnv.SchemeUsePair, old_root: Var) ?Var {
         if (pairs.len == 0) return null;
-        const all_pairs = self.module.moduleEnvConst().scheme_use_pairs.items.items;
+        const all_pairs = self.module.moduleEnvConst().scheme_use_pairs.items();
         const offset = @intFromPtr(pairs.ptr) - @intFromPtr(all_pairs.ptr);
         std.debug.assert(offset % @sizeOf(ModuleEnv.SchemeUsePair) == 0);
         const pairs_start: u32 = @intCast(offset / @sizeOf(ModuleEnv.SchemeUsePair));
@@ -19121,7 +19121,7 @@ pub const HostedBindingTable = struct {
             }
         }
 
-        for (module.moduleEnvConst().hosted_entries.items.items) |entry| {
+        for (module.moduleEnvConst().hosted_entries.items()) |entry| {
             if (entry.target_status != .resolved) continue;
             const target_def = entry.target_def orelse continue;
 
@@ -19221,7 +19221,7 @@ pub const PlatformRequiredDeclarationTable = struct {
         names: *canonical.CanonicalNameStore,
         module_idx: u32,
     ) Allocator.Error!PlatformRequiredDeclarationTable {
-        const required_types = module_env.requires_types.items.items;
+        const required_types = module_env.requires_types.items();
         const declarations = try allocator.alloc(PlatformRequiredDeclaration, required_types.len);
         errdefer allocator.free(declarations);
         for (required_types, 0..) |required_type, i| {
@@ -19453,7 +19453,7 @@ pub const PlatformTypeInputs = struct {
             const identity_start: u32 = @intCast(identities.items.len);
             try identities.appendSlice(allocator, formals);
             const alias_start: u32 = @intCast(aliases.items.len);
-            const required_type = env.requires_types.items.items[declaration.requires_idx];
+            const required_type = env.requires_types.items()[declaration.requires_idx];
             for (env.for_clause_aliases.sliceRange(required_type.type_aliases)) |alias| {
                 const anno = env.store.getStatement(alias.alias_stmt_idx).s_alias_decl.anno;
                 const identity = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(anno)) orelse
@@ -20158,13 +20158,13 @@ fn platformRequiredPayloadForDeclaration(
     declaration: PlatformRequiredDeclaration,
 ) CheckedTypeId {
     const module_env = module.moduleEnvConst();
-    if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
+    if (declaration.requires_idx >= module_env.requires_types.items().len) {
         base.invariant(
             "checked artifact invariant violated: platform requirement declaration {d} has out-of-range required index {d}",
             .{ @backingInt(declaration.id), declaration.requires_idx },
         );
     }
-    const required_type = module_env.requires_types.items.items[declaration.requires_idx];
+    const required_type = module_env.requires_types.items()[declaration.requires_idx];
     return checked_types.rootForSourceVar(module, ModuleEnv.varFrom(required_type.type_anno)) orelse {
         base.invariant(
             "checked artifact invariant violated: platform requirement declaration {d} has no platform-owned checked payload",
@@ -23407,7 +23407,7 @@ fn publishProvidesMetadata(
     names: *canonical.CanonicalNameStore,
 ) Allocator.Error![]ProvidesEntry {
     const module_env = module.moduleEnvConst();
-    const source = module_env.provides_entries.items.items;
+    const source = module_env.provides_entries.items();
     var provides = std.ArrayList(ProvidesEntry).empty;
     errdefer provides.deinit(allocator);
 
@@ -26436,7 +26436,7 @@ fn publishCheckedExhaustivenessSites(
     root_requests: *const RootRequestTable,
     reachability: *const ExhaustivenessTemplateReachability,
 ) Allocator.Error!CheckedExhaustivenessSiteTable {
-    const obligations = bodies.env.exhaustiveness_obligations.items.items;
+    const obligations = bodies.env.exhaustiveness_obligations.items();
     const sites = try allocator.alloc(CheckedExhaustivenessSite, obligations.len);
     errdefer allocator.free(sites);
 
@@ -27886,7 +27886,7 @@ fn collectPublicApiDependencies(
     // 11839), so its owner must be reachable through this artifact's
     // type-owner dependencies.
     const module_env = module.moduleEnvConst();
-    for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
+    for (module_env.binding_scheme_codec_requirements.items()) |requirement| {
         const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
         for ([_]Var{ @fromBackingInt(@intCast(requirement.receiver_var)), constraint.fn_var }) |requirement_var| {
             const root = checked_type_publication.rootForSourceVar(module, requirement_var) orelse {
@@ -33213,7 +33213,7 @@ fn directImportArtifactKeysFromModule(
     module_env: *const ModuleEnv,
     imports: []const PublishImportArtifact,
 ) Allocator.Error![]CheckedModuleArtifactKey {
-    const imported_names = module_env.imports.imports.items.items;
+    const imported_names = module_env.imports.imports.items();
     var keys = std.ArrayList(CheckedModuleArtifactKey).empty;
     errdefer keys.deinit(allocator);
 
@@ -33887,7 +33887,7 @@ fn publicationDefaultExprs(
         if (default_origin != self_origin) continue;
         try defaults.append(allocator, @fromBackingInt(@intCast(default.expr_node)));
     }
-    for (module_env.record_omitted_defaults.items.items) |omitted| {
+    for (module_env.record_omitted_defaults.items()) |omitted| {
         const origin_module = try names.internModuleIdentity(module_env.moduleIdentityHash(omitted.origin_module));
         if (origin_module != self_origin) continue;
         try defaults.append(allocator, @fromBackingInt(@intCast(omitted.default_expr_node)));
@@ -34190,8 +34190,8 @@ pub fn publishFromTypedModule(
 
     const owner_artifact = artifact_key.digest();
 
-    const promoted_local_procedures = module_env.promoted_local_procedures.items.items;
-    const requirement_solutions = module_env.platform_requirement_solutions.items.items;
+    const promoted_local_procedures = module_env.promoted_local_procedures.items();
+    const requirement_solutions = module_env.platform_requirement_solutions.items();
     const selected_hoisted_roots = try selectHoistedRoots(allocator, module_env, inputs.hoisted_roots);
     defer allocator.free(selected_hoisted_roots);
     const analyses = try BodyAnalyses.create(allocator, inputs.io, module_env, promoted_local_procedures);
@@ -34201,7 +34201,7 @@ pub fn publishFromTypedModule(
 
     // Omitted defaults name their fields and origin modules through the
     // module's names.
-    for (module_env.record_omitted_defaults.items.items) |omitted| {
+    for (module_env.record_omitted_defaults.items()) |omitted| {
         _ = try canonical_names.internRecordFieldIdent(idents, omitted.field_name);
         _ = try canonical_names.internModuleIdentity(module_env.moduleIdentityHash(omitted.origin_module));
     }
@@ -36487,7 +36487,7 @@ test "module source input hash uses explicit file dependency state" {
     missing_env.setFileDependencyMissing(missing_idx);
     const missing_hash = hashModuleSourceInputs(&missing_env);
 
-    missing_env.file_dependencies.items.items[@backingInt(missing_idx)].content_hash = @as([32]u8, @splat(0xFE));
+    missing_env.file_dependencies.items()[@backingInt(missing_idx)].content_hash = @as([32]u8, @splat(0xFE));
     const missing_hash_after_payload_change = hashModuleSourceInputs(&missing_env);
     try std.testing.expectEqualSlices(u8, &missing_hash, &missing_hash_after_payload_change);
 

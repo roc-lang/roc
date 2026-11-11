@@ -13641,7 +13641,7 @@ fn lowerRowCoercion(allocator: Allocator, source: []const u8, strategy: base.Spe
         .specialization_strategy = strategy,
     });
     errdefer lowered.deinit(allocator);
-    try std.testing.expect(lowered.resources.checked_artifact.moduleEnvConst().row_coerced_results.items.items.len != 0);
+    try std.testing.expect(lowered.resources.checked_artifact.moduleEnvConst().row_coerced_results.items().len != 0);
     return lowered;
 }
 

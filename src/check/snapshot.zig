@@ -431,11 +431,11 @@ pub const Store = struct {
             _ = self.formatted_strings.remove(@fromBackingInt(@intCast(content_idx)));
         }
 
-        self.contents.items.shrinkRetainingCapacity(m.contents_len);
-        self.content_indexes.items.shrinkRetainingCapacity(m.content_indexes_len);
+        self.contents.shrinkRetainingCapacity(m.contents_len);
+        self.content_indexes.shrinkRetainingCapacity(m.content_indexes_len);
         self.record_fields.items.shrinkRetainingCapacity(m.record_fields_len);
         self.tags.items.shrinkRetainingCapacity(m.tags_len);
-        self.static_dispatch_constraints.items.shrinkRetainingCapacity(m.static_dispatch_constraints_len);
+        self.static_dispatch_constraints.shrinkRetainingCapacity(m.static_dispatch_constraints_len);
         self.formatted_strings_backing.shrinkRetainingCapacity(m.formatted_strings_backing_len);
     }
 

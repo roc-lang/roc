@@ -1521,13 +1521,13 @@ pub fn literalDispatchPlanForNode(store: *const NodeStore, node_idx: Node.Idx) ?
 /// node named in `node_idx`; node replacement removes its record immediately.
 pub fn literalDispatchPlans(store: *const NodeStore) []const LiteralDispatchPlan {
     if (@import("builtin").mode == .debug) {
-        for (store.literal_dispatch_plans.items.items, 0..) |plan, plan_index| {
+        for (store.literal_dispatch_plans.items(), 0..) |plan, plan_index| {
             const owner = store.nodes.get(@fromBackingInt(@intCast(plan.node_idx)));
             std.debug.assert(literalDispatchPlanPlusOne(owner) == @as(u32, @intCast(plan_index + 1)));
             std.debug.assert(literalDispatchKindForTag(owner.tag).? == plan.dispatchKind());
         }
     }
-    return store.literal_dispatch_plans.items.items;
+    return store.literal_dispatch_plans.items();
 }
 
 /// Retire and return the literal plan owned by `node_idx`, if any. Error
@@ -1539,14 +1539,14 @@ pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) ?Literal
     if (plan_plus_one == 0) return null;
 
     const plan_index: usize = plan_plus_one - 1;
-    const plans = &store.literal_dispatch_plans.items;
-    std.debug.assert(plans.items[plan_index].node_idx == @backingInt(node_idx));
-    const retired = plans.items[plan_index];
-    const last_index = plans.items.len - 1;
+    const plans = &store.literal_dispatch_plans;
+    std.debug.assert(plans.items()[plan_index].node_idx == @backingInt(node_idx));
+    const retired = plans.items()[plan_index];
+    const last_index = plans.items().len - 1;
     setLiteralDispatchPlanPlusOne(store, node_idx, 0);
     if (plan_index != last_index) {
-        const moved = plans.items[last_index];
-        plans.items[plan_index] = moved;
+        const moved = plans.items()[last_index];
+        plans.items()[plan_index] = moved;
         setLiteralDispatchPlanPlusOne(store, @fromBackingInt(@intCast(moved.node_idx)), @intCast(plan_index + 1));
     }
     _ = plans.pop();
@@ -1640,11 +1640,11 @@ pub fn decodeSurfaceOrigin(encoded: u32) CIR.Expr.SurfaceOrigin {
 }
 
 fn getMethodCallSurfaceOrigin(store: *const NodeStore, data_idx: u32) CIR.Expr.SurfaceOrigin {
-    return decodeSurfaceOrigin(store.method_call_data.items.items[data_idx].surface_origin);
+    return decodeSurfaceOrigin(store.method_call_data.items()[data_idx].surface_origin);
 }
 
 fn getMethodCallArgs(store: *const NodeStore, data_idx: u32) CIR.Expr.Span {
-    const data = store.method_call_data.items.items[data_idx];
+    const data = store.method_call_data.items()[data_idx];
     return .{ .span = .{
         .start = data.args_start,
         .len = data.args_len,
@@ -1652,7 +1652,7 @@ fn getMethodCallArgs(store: *const NodeStore, data_idx: u32) CIR.Expr.Span {
 }
 
 fn getMethodNameRegion(store: *const NodeStore, data_idx: u32) Region {
-    const data = store.method_call_data.items.items[data_idx];
+    const data = store.method_call_data.items()[data_idx];
     return .{
         .start = .{ .offset = data.method_region_start },
         .end = .{ .offset = data.method_region_end },
@@ -1684,7 +1684,7 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
                 .pattern = @fromBackingInt(@intCast(p.pattern)),
                 .expr = @fromBackingInt(@intCast(p.expr)),
                 .anno = blk: {
-                    const anno_data = store.span2_data.items.items[p.anno_span2_idx];
+                    const anno_data = store.span2_data.items()[p.anno_span2_idx];
                     if (anno_data.start != 0) {
                         break :blk @as(CIR.Annotation.Idx, @fromBackingInt(@intCast(anno_data.len)));
                     } else {
@@ -1699,7 +1699,7 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
                 .pattern_idx = @fromBackingInt(@intCast(p.pattern_idx)),
                 .expr = @fromBackingInt(@intCast(p.expr)),
                 .anno = blk: {
-                    const anno_data = store.span2_data.items.items[p.anno_span2_idx];
+                    const anno_data = store.span2_data.items()[p.anno_span2_idx];
                     if (anno_data.start != 0) {
                         break :blk @fromBackingInt(@intCast(anno_data.len));
                     } else {
@@ -1713,7 +1713,7 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
             return CIR.Statement{ .s_var_uninitialized = .{
                 .pattern_idx = @fromBackingInt(@intCast(p.pattern_idx)),
                 .anno = blk: {
-                    const anno_data = store.span2_data.items.items[p.anno_span2_idx];
+                    const anno_data = store.span2_data.items()[p.anno_span2_idx];
                     if (anno_data.start != 0) {
                         break :blk @fromBackingInt(@intCast(anno_data.len));
                     } else {
@@ -1730,7 +1730,7 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
         },
         .statement_import => {
             const p = payload.statement_import;
-            const import = store.import_data.items.items[p.import_data_idx];
+            const import = store.import_data.items()[p.import_data_idx];
 
             const alias_tok = if (import.flags & 1 != 0) @as(?Ident.Idx, @bitCast(import.alias_tok)) else null;
             const qualifier_tok = if (import.flags & 2 != 0) @as(?Ident.Idx, @bitCast(import.qualifier_tok)) else null;
@@ -1826,7 +1826,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         },
         .expr_deferred_nominal_external => {
             const p = payload.expr_deferred_nominal_external;
-            const backing = store.span2_data.items.items[p.backing_span2_idx];
+            const backing = store.span2_data.items()[p.backing_span2_idx];
             return CIR.Expr{ .e_deferred_import_ref = .{
                 .ref = @fromBackingInt(@intCast(p.ref)),
                 .backing = .{
@@ -1839,7 +1839,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
             const p = payload.expr_num;
             const kind: CIR.NumKind = @fromBackingInt(@intCast(p.kind));
             const val_kind: CIR.IntValue.IntKind = @fromBackingInt(@intCast(p.val_kind));
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items()[p.int128_idx];
 
             return CIR.Expr{
                 .e_num = .{
@@ -1851,7 +1851,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .expr_call => {
             const p = payload.expr_call;
             // Retrieve args span from span2_data
-            const args_span = store.span2_data.items.items[p.args_span2_idx];
+            const args_span = store.span2_data.items()[p.args_span2_idx];
 
             return CIR.Expr{
                 .e_call = .{
@@ -1876,7 +1876,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         },
         .expr_dec => {
             const p = payload.expr_dec;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items()[p.int128_idx];
 
             return CIR.Expr{
                 .e_dec = .{
@@ -1903,7 +1903,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         },
         .expr_typed_int => {
             const p = payload.expr_typed_int;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items()[p.int128_idx];
             return CIR.Expr{
                 .e_typed_int = .{
                     .value = .{
@@ -1916,7 +1916,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         },
         .expr_typed_frac => {
             const p = payload.expr_typed_frac;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items()[p.int128_idx];
             return CIR.Expr{
                 .e_typed_frac = .{
                     .value = .{
@@ -1942,7 +1942,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .expr_nominal_external => {
             const p = payload.expr_nominal_external;
             // Retrieve backing data from span2_data
-            const backing = store.span2_data.items.items[p.backing_span2_idx];
+            const backing = store.span2_data.items()[p.backing_span2_idx];
 
             return CIR.Expr{
                 .e_nominal_external = .{
@@ -1956,7 +1956,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .expr_closure => {
             const p = payload.expr_closure;
             // Retrieve closure data from closure_data list
-            const cd = store.closure_data.items.items[p.closure_data_idx];
+            const cd = store.closure_data.items()[p.closure_data_idx];
 
             return CIR.Expr{
                 .e_closure = .{
@@ -1969,9 +1969,9 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .expr_record => {
             const p = payload.expr_record;
             // Retrieve fields span and ext from span_with_node_data
-            const fields_ext = store.span_with_node_data.items.items[p.fields_ext_idx];
+            const fields_ext = store.span_with_node_data.items()[p.fields_ext_idx];
             const ext = if (fields_ext.node == 0) null else @as(CIR.Expr.Idx, @fromBackingInt(@intCast(fields_ext.node)));
-            const unsets = store.span2_data.items.items[p.unsets_span2_idx];
+            const unsets = store.span2_data.items()[p.unsets_span2_idx];
 
             return CIR.Expr{
                 .e_record = .{
@@ -1984,7 +1984,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .expr_match => {
             const p = payload.expr_match;
             // Retrieve match data from match_data list
-            const md = store.match_data.items.items[p.match_data_idx];
+            const md = store.match_data.items()[p.match_data_idx];
 
             return CIR.Expr{
                 .e_match = CIR.Expr.Match{
@@ -1999,7 +1999,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .expr_zero_argument_tag => {
             const p = payload.expr_zero_argument_tag;
             // Retrieve zero-arg tag data from zero_arg_tag_data list
-            const zat = store.zero_arg_tag_data.items.items[p.zero_arg_tag_idx];
+            const zat = store.zero_arg_tag_data.items()[p.zero_arg_tag_idx];
 
             return CIR.Expr{
                 .e_zero_argument_tag = .{
@@ -2012,7 +2012,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         },
         .expr_hosted_lambda => {
             const p = payload.expr_hosted_lambda;
-            const args_span = store.span2_data.items.items[p.args_span2_idx];
+            const args_span = store.span2_data.items()[p.args_span2_idx];
 
             return CIR.Expr{ .e_hosted_lambda = .{
                 .symbol_name = @bitCast(p.symbol_name),
@@ -2021,7 +2021,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         },
         .expr_run_low_level => {
             const p = payload.expr_run_low_level;
-            const args_span = store.span2_data.items.items[p.args_span2_idx];
+            const args_span = store.span2_data.items()[p.args_span2_idx];
 
             return CIR.Expr{ .e_run_low_level = .{
                 .op = @fromBackingInt(@intCast(p.op)),
@@ -2030,7 +2030,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         },
         .expr_if_then_else => {
             const p = payload.expr_if_then_else;
-            const if_data = store.if_data.items.items[p.branches_else_idx];
+            const if_data = store.if_data.items()[p.branches_else_idx];
 
             return CIR.Expr{ .e_if = .{
                 .branches = .{ .span = .{ .start = if_data.branches_start, .len = if_data.branches_len } },
@@ -2070,7 +2070,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         },
         .expr_interpolation => {
             const p = payload.expr_interpolation;
-            const data = store.interpolation_data.items.items[p.interpolation_data_idx];
+            const data = store.interpolation_data.items()[p.interpolation_data_idx];
             return CIR.Expr{ .e_interpolation = .{
                 .first = @fromBackingInt(@intCast(p.first)),
                 .parts = .{ .span = .{
@@ -2318,7 +2318,7 @@ pub fn resolveDeferredTypeAnnoLookupBase(
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     var node = store.nodes.get(node_idx);
     var p = node.getPayload().ty_lookup;
-    store.span2_data.items.items[p.base_span2_idx] = .{
+    store.span2_data.items()[p.base_span2_idx] = .{
         .start = @backingInt(module_idx),
         .len = target_node_idx,
     };
@@ -2338,7 +2338,7 @@ pub fn resolveDeferredTypeAnnoApplyBase(
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     const node = store.nodes.get(node_idx);
     const p = node.getPayload().ty_apply;
-    const apply_data = &store.type_apply_data.items.items[p.type_apply_data_idx];
+    const apply_data = &store.type_apply_data.items()[p.type_apply_data_idx];
     apply_data.base_tag = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.external);
     apply_data.value1 = @backingInt(module_idx);
     apply_data.value2 = target_node_idx;
@@ -2355,7 +2355,7 @@ pub fn resolveDeferredTypeAnnoLookupBaseIdentity(
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     var node = store.nodes.get(node_idx);
     var p = node.getPayload().ty_lookup;
-    store.span2_data.items.items[p.base_span2_idx] = .{
+    store.span2_data.items()[p.base_span2_idx] = .{
         .start = @backingInt(module_identity),
         .len = target_node_idx,
     };
@@ -2376,7 +2376,7 @@ pub fn resolveDeferredTypeAnnoApplyBaseIdentity(
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(anno_idx)));
     const node = store.nodes.get(node_idx);
     const p = node.getPayload().ty_apply;
-    const apply_data = &store.type_apply_data.items.items[p.type_apply_data_idx];
+    const apply_data = &store.type_apply_data.items()[p.type_apply_data_idx];
     apply_data.base_tag = @backingInt(CIR.TypeAnno.LocalOrExternal.Tag.external_identity);
     apply_data.value1 = @backingInt(module_identity);
     apply_data.value2 = target_node_idx;
@@ -2777,7 +2777,7 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx
 
     // Retrieve match branch data from match_branch_data list
     const p = payload.match_branch;
-    const mbd = store.match_branch_data.items.items[p.match_branch_idx];
+    const mbd = store.match_branch_data.items()[p.match_branch_idx];
 
     return CIR.Expr.Match.Branch{
         .patterns = .{ .span = .{ .start = mbd.patterns_start, .len = mbd.patterns_len } },
@@ -2804,7 +2804,7 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match
 
 /// Returns a slice of match branches from the given span.
 pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Span) []CIR.Expr.Match.Branch.Idx {
-    const slice = store.index_data.items.items[span.span.start..(span.span.start + span.span.len)];
+    const slice = store.index_data.items()[span.span.start..(span.span.start + span.span.len)];
     const result: []CIR.Expr.Match.Branch.Idx = @ptrCast(@alignCast(slice));
     return result;
 }
@@ -2880,7 +2880,7 @@ fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
         .pattern_nominal_external => {
             const p = payload.pattern_nominal_external;
             // Retrieve backing data from span2_data
-            const backing = store.span2_data.items.items[p.backing_span2_idx];
+            const backing = store.span2_data.items()[p.backing_span2_idx];
 
             return CIR.Pattern{
                 .nominal_external = .{
@@ -2893,7 +2893,7 @@ fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
         },
         .pattern_deferred_import_ref => {
             const p = payload.pattern_deferred_import_ref;
-            const backing = store.span2_data.items.items[p.backing_span2_idx];
+            const backing = store.span2_data.items()[p.backing_span2_idx];
             return CIR.Pattern{ .deferred_import_ref = .{
                 .ref = @fromBackingInt(@intCast(p.ref)),
                 .backing_pattern = @fromBackingInt(@intCast(backing.start)),
@@ -2902,7 +2902,7 @@ fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
         },
         .pattern_list => {
             const p = payload.pattern_list;
-            const list_data = store.pattern_list_data.items.items[p.pattern_list_data_idx];
+            const list_data = store.pattern_list_data.items()[p.pattern_list_data_idx];
 
             const rest_info = if (list_data.has_rest != 0) blk: {
                 const rest_pattern = if (list_data.has_pattern != 0)
@@ -2924,7 +2924,7 @@ fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
         },
         .pattern_num_literal => {
             const p = payload.pattern_num_literal;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items()[p.int128_idx];
 
             return CIR.Pattern{
                 .num_literal = .{
@@ -2943,7 +2943,7 @@ fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
         },
         .pattern_dec_literal => {
             const p = payload.pattern_dec_literal;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items()[p.int128_idx];
 
             return CIR.Pattern{
                 .dec_literal = .{
@@ -2970,7 +2970,7 @@ fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
         },
         .pattern_str_interpolation => {
             const p = payload.pattern_str_interpolation;
-            const data = store.pattern_str_interpolation_data.items.items[p.data_idx];
+            const data = store.pattern_str_interpolation_data.items()[p.data_idx];
             return CIR.Pattern{ .str_interpolation = .{
                 .prefix = @fromBackingInt(@intCast(data.prefix)),
                 .steps = .{ .span = .{ .start = data.steps_start, .len = data.steps_len } },
@@ -3004,7 +3004,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
     switch (tag) {
         .ty_apply => {
             const p = payload.ty_apply;
-            const apply_data = store.type_apply_data.items.items[p.type_apply_data_idx];
+            const apply_data = store.type_apply_data.items()[p.type_apply_data_idx];
             const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @fromBackingInt(@intCast(apply_data.base_tag));
             const type_base: CIR.TypeAnno.LocalOrExternal = switch (base_enum) {
                 .builtin => .{ .builtin = @fromBackingInt(@intCast(apply_data.value1)) },
@@ -3031,7 +3031,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_lookup => {
             const p = payload.ty_lookup;
-            const base_data = store.span2_data.items.items[p.base_span2_idx];
+            const base_data = store.span2_data.items()[p.base_span2_idx];
             const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @fromBackingInt(@intCast(p.base));
             const type_base: CIR.TypeAnno.LocalOrExternal = switch (base_enum) {
                 .builtin => .{ .builtin = @fromBackingInt(@intCast(base_data.start)) },
@@ -3057,7 +3057,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_fn => {
             const p = payload.ty_fn;
-            const fn_info = store.span2_data.items.items[p.fn_info_span2_idx];
+            const fn_info = store.span2_data.items()[p.fn_info_span2_idx];
             return CIR.TypeAnno{ .@"fn" = .{
                 .args = .{ .span = .{ .start = p.args_start, .len = p.args_len } },
                 .ret = @fromBackingInt(@intCast(fn_info.len)),
@@ -3145,7 +3145,7 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
         null;
 
     const name_region: ?base.Region = if (p.flags.has_name_region) blk: {
-        const span = store.span2_data.items.items[p.name_region_span2_idx];
+        const span = store.span2_data.items()[p.name_region_span2_idx];
         break :blk base.Region.from_raw_offsets(span.start, span.start + span.len);
     } else null;
 
@@ -4216,8 +4216,8 @@ fn storeWhereClauseSpan(store: *NodeStore, where: CIR.WhereClause.Span) Allocato
 }
 
 fn loadWhereClauseSpan(store: *const NodeStore, idx: u32) CIR.WhereClause.Span {
-    const where = store.span_with_node_data.items.items[idx];
-    const owners = store.span2_data.items.items[where.node];
+    const where = store.span_with_node_data.items()[idx];
+    const owners = store.span2_data.items()[where.node];
     return .{
         .span = DataSpan.init(where.start, where.len),
         .owners = .{ .span = DataSpan.init(owners.start, owners.len) },
@@ -4385,7 +4385,7 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
 
     const payload = node.getPayload();
     // Retrieve def data from def_data list
-    const dd = store.def_data.items.items[payload.def.def_data_idx];
+    const dd = store.def_data.items()[payload.def.def_data_idx];
 
     const kind = CIR.Def.Kind.decode(.{ dd.kind_0, dd.kind_1 });
     const annotation = if (dd.anno_idx == 0) null else @as(CIR.Annotation.Idx, @fromBackingInt(@intCast(dd.anno_idx)));
@@ -4408,7 +4408,7 @@ pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Id
 
     const payload = node.getPayload();
     // Update expr field in def_data list
-    store.def_data.items.items[payload.def.def_data_idx].expr = @backingInt(new_expr);
+    store.def_data.items()[payload.def.def_data_idx].expr = @backingInt(new_expr);
 }
 
 /// Retrieves one segment of a flattened field-access path.
@@ -4468,7 +4468,7 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
 
     const payload = node.getPayload();
     // Retrieve kind from span2_data
-    const kind_data = store.span2_data.items.items[payload.record_destruct.kind_span2_idx];
+    const kind_data = store.span2_data.items()[payload.record_destruct.kind_span2_idx];
 
     const kind = switch (kind_data.start) {
         0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @fromBackingInt(@intCast(kind_data.len)) },
@@ -4579,7 +4579,7 @@ pub fn startFieldAccessPath(store: *NodeStore, segment_count: u32) Allocator.Err
     const total = std.math.add(u32, after_segments, 1) catch return error.OutOfMemory;
 
     try store.nodes.ensureTotalCapacity(store.gpa, total);
-    try store.regions.items.ensureUnusedCapacity(store.gpa, @as(usize, segment_count) + 1);
+    try store.regions.ensureUnusedCapacity(store.gpa, @as(usize, segment_count) + 1);
 
     return .{
         .start = @fromBackingInt(@intCast(start)),
@@ -4627,9 +4627,9 @@ pub fn rollbackFieldAccessPath(store: *NodeStore, builder: FieldAccessPathBuilde
     const end = start + builder.segment_count;
     std.debug.assert(store.nodes.items.len >= start);
     std.debug.assert(store.nodes.items.len <= end);
-    std.debug.assert(store.regions.items.items.len == store.nodes.items.len);
+    std.debug.assert(store.regions.items().len == store.nodes.items.len);
     store.nodes.items.shrinkRetainingCapacity(start);
-    store.regions.items.shrinkRetainingCapacity(start);
+    store.regions.shrinkRetainingCapacity(start);
 }
 
 /// Appends a persistent expression span directly to index storage.
@@ -5073,13 +5073,13 @@ pub fn strPatternStepSpanFromSlice(store: *NodeStore, steps: []const CIR.Pattern
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
     if (span.len == 0) return &.{};
-    return @ptrCast(store.index_data.items.items[span.start..][0..span.len]);
+    return @ptrCast(store.index_data.items()[span.start..][0..span.len]);
 }
 
 /// Retrieve one item from a span without borrowing the backing index storage.
 pub fn getFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan, offset: usize) T {
     std.debug.assert(offset < span.len);
-    return @as(T, @fromBackingInt(@intCast(store.index_data.items.items[span.start + offset])));
+    return @as(T, @fromBackingInt(@intCast(store.index_data.items()[span.start + offset])));
 }
 
 /// Returns a slice of definitions from the store.
@@ -5205,7 +5205,7 @@ fn sliceWhereClauseIndices(store: *const NodeStore, span: CIR.WhereClause.IdxSpa
 pub fn sliceWhereClauseOwners(store: *const NodeStore, span: CIR.WhereClause.Span) []const WhereClauseOwnerData {
     const start: usize = span.owners.span.start;
     const end = start + span.owners.span.len;
-    return store.where_clause_owners.items.items[start..end];
+    return store.where_clause_owners.items()[start..end];
 }
 
 /// Returns the method clauses canonically assigned to one rigid owner.
@@ -5229,7 +5229,7 @@ pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDes
 /// Retrieves one string interpolation pattern step.
 pub fn getStrPatternStep(store: *const NodeStore, span: CIR.Pattern.StrPatternStep.Span, offset: u32) CIR.Pattern.StrPatternStep {
     std.debug.assert(offset < span.span.len);
-    const item = store.pattern_str_interpolation_steps.items.items[span.span.start + offset];
+    const item = store.pattern_str_interpolation_steps.items()[span.span.start + offset];
     return .{
         .capture = if (item.capture_plus_one == 0)
             null
@@ -5438,7 +5438,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
     switch (tag) {
         .diag_redundant_exposed => {
             const p = payload.diag_single_ident_extra;
-            const region_data = store.span2_data.items.items[p.region_span2_idx];
+            const region_data = store.span2_data.items()[p.region_span2_idx];
             return CIR.Diagnostic{ .redundant_exposed = .{
                 .ident = @bitCast(p.ident),
                 .region = store.getRegionAt(node_idx),
@@ -5450,7 +5450,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         },
         .diag_type_parameter_conflict => {
             const p = payload.diag_two_idents_extra;
-            const region_data = store.span2_data.items.items[p.region_span2_idx];
+            const region_data = store.span2_data.items()[p.region_span2_idx];
             return CIR.Diagnostic{ .type_parameter_conflict = .{
                 .name = @bitCast(p.ident1),
                 .parameter_name = @bitCast(p.ident2),
@@ -5463,7 +5463,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         },
         .diag_mutually_recursive_type_aliases => {
             const p = payload.diag_two_idents_extra;
-            const region_data = store.span2_data.items.items[p.region_span2_idx];
+            const region_data = store.span2_data.items()[p.region_span2_idx];
             return CIR.Diagnostic{ .mutually_recursive_type_aliases = .{
                 .name = @bitCast(p.ident1),
                 .other_name = @bitCast(p.ident2),
@@ -5851,7 +5851,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify int128_values
     try testing.expectEqual(@as(usize, 1), deserialized.int128_values.len());
-    const retrieved_value = deserialized.int128_values.items.items[0];
+    const retrieved_value = deserialized.int128_values.items()[0];
     try testing.expectEqual(@as(i128, 42), retrieved_value);
     const literal_plan = deserialized.literalDispatchPlanForNode(node1_idx).?;
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, literal_plan.dispatchKind());
