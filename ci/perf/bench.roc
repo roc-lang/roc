@@ -47,8 +47,12 @@ screen_pairs = 30
 batch_pairs : U64
 batch_pairs = 20
 
+## Screening adds `batch_pairs` at a time, so this must be `screen_pairs` plus
+## a whole number of batches for escalation to stop exactly here.
 max_pairs : U64
-max_pairs = 100
+max_pairs = 110
+
+expect (max_pairs - screen_pairs) % batch_pairs == 0
 
 ## Every editable fixture file holds this line; benchmarks rewrite the number.
 edit_marker : Str
@@ -316,7 +320,7 @@ needs_more_pairs = |verdict, pairs| {
 }
 
 expect needs_more_pairs(Regressed, 30)
-expect !needs_more_pairs(Regressed, 100)
+expect !needs_more_pairs(Regressed, 110)
 expect needs_more_pairs(Inconclusive, 50)
 expect !needs_more_pairs(Unchanged, 30)
 
@@ -796,7 +800,7 @@ sample_row = {
 	os: "linux",
 	name: "all_syntax_test/cold-no-cache/check",
 	verdict: "regressed",
-	pairs: 100,
+	pairs: 110,
 	ratio: 1.25,
 	low: 1.125,
 	high: 1.5,
