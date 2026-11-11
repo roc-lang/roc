@@ -40,6 +40,9 @@ pub const BodyAnalyses = @import("body_analyses.zig");
 /// Import-facing checking identities and explicit binding to current owners.
 pub const CheckingDependencies = @import("checking_dependencies.zig");
 pub const CheckingInterface = @import("checking_interface.zig");
+/// The reports a checked module's checking and evaluation produced, stored
+/// with its checked cache entry.
+pub const CheckedReports = @import("checked_reports.zig");
 /// Pre-evaluation inputs stored in the combined checking entry.
 pub const CheckingReuse = @import("checking_reuse.zig");
 /// Comptime layout fingerprint for a registered serialization root (recurses into
@@ -60,6 +63,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("callable_checking.zig"));
     std.testing.refAllDecls(@import("checking_dependencies.zig"));
     std.testing.refAllDecls(@import("checking_interface.zig"));
+    std.testing.refAllDecls(@import("checked_reports.zig"));
     std.testing.refAllDecls(@import("checking_reuse.zig"));
     std.testing.refAllDecls(@import("Check.zig"));
     std.testing.refAllDecls(@import("exhaustive.zig"));

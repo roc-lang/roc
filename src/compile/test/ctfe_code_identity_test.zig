@@ -203,6 +203,7 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
             .unit = .{ .module = .{ .imports = &interfaces, .root = false, .names = &names } },
         });
         defer output.lir_result.deinit();
+        defer output.runtime_schemas.deinit();
         defer static_data_exports.deinitStaticData(allocator, output.static_data);
         defer if (output.retained) |retained| retained.deinit();
         try std.testing.expect(lazy_library.body_analyses.?.indexed.peek() != null);
