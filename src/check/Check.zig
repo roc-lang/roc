@@ -2779,10 +2779,10 @@ comptime {
     std.debug.assert(@sizeOf(AmbiguityCandidate) == 16);
     std.debug.assert(@sizeOf(AmbiguityCandidateKey) == 12);
     std.debug.assert(@sizeOf(AmbiguityVerdict) == 12);
-    std.debug.assert(@sizeOf(DispatchTargetInstantiation) == 88);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DispatchTargetInstantiation) == 88);
     std.debug.assert(@sizeOf(DispatchReplaySource) == 44);
     std.debug.assert(@sizeOf(UseInstance) == 72);
-    std.debug.assert(@sizeOf(DeferredLinkContext) == 64);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DeferredLinkContext) == 64);
     std.debug.assert(@sizeOf(UseReplaySource) == 40);
 }
 
