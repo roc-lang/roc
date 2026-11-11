@@ -36,7 +36,7 @@ pub const Store = struct {
     /// sizes, encoded in reverse where for example,
     /// the first 7 bit would signal the length, the last bit would signal that the length
     /// continues to the previous byte
-    buffer: Buffer = .{},
+    buffer: collections.SafeList(u8) = .{},
 
     const len_size = @sizeOf(u32);
     const alignment_size = @sizeOf(u32);
@@ -54,7 +54,7 @@ pub const Store = struct {
         pos: usize = 0,
 
         pub fn next(self: *Iterator) ?Entry {
-            const buffer_items = self.store.buffer.items.items;
+            const buffer_items = self.store.buffer.items();
 
             while (true) {
                 if (self.pos + entry_header_size > buffer_items.len) return null;
@@ -76,119 +76,12 @@ pub const Store = struct {
         }
     };
 
-    pub const Buffer = struct {
-        items: std.ArrayList(u8) = .empty,
-
-        const SerializedDataRef = struct {
-            offset: usize,
-            len: usize,
-            capacity: usize,
-        };
-
-        pub const Serialized = extern struct {
-            offset: i64,
-            len: u64,
-            capacity: u64,
-
-            pub fn serialize(
-                self: *@This(),
-                buffer: *const Buffer,
-                allocator: std.mem.Allocator,
-                writer: *CompactWriter,
-            ) std.mem.Allocator.Error!void {
-                const data_ref = try buffer.writeData(allocator, writer);
-
-                self.offset = @intCast(data_ref.offset);
-                self.len = @intCast(data_ref.len);
-                self.capacity = @intCast(data_ref.capacity);
-            }
-
-            pub fn deserializeInto(self: *const @This(), base: usize) Buffer {
-                if (self.capacity == 0) {
-                    return Buffer{};
-                }
-
-                const items_ptr: [*]u8 = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
-
-                return Buffer{
-                    .items = .{
-                        .items = items_ptr[0..@intCast(self.len)],
-                        .capacity = @intCast(self.capacity),
-                        .pointer_stability = .{},
-                    },
-                };
-            }
-        };
-
-        pub fn initCapacity(gpa: std.mem.Allocator, bytes: usize) std.mem.Allocator.Error!Buffer {
-            return .{
-                .items = try std.ArrayList(u8).initCapacity(gpa, bytes),
-            };
-        }
-
-        pub fn deinit(self: *Buffer, gpa: std.mem.Allocator) void {
-            self.items.deinit(gpa);
-        }
-
-        pub fn clone(self: *const Buffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Buffer {
-            return .{
-                .items = try self.items.clone(gpa),
-            };
-        }
-
-        pub fn len(self: *const Buffer) usize {
-            return self.items.items.len;
-        }
-
-        pub fn append(self: *Buffer, gpa: std.mem.Allocator, byte: u8) std.mem.Allocator.Error!usize {
-            const start = self.items.items.len;
-            try self.items.append(gpa, byte);
-            return start;
-        }
-
-        pub fn appendSlice(self: *Buffer, gpa: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error!usize {
-            const start = self.items.items.len;
-            try self.items.appendSlice(gpa, bytes);
-            return start;
-        }
-
-        pub fn fromMappedSlice(items: []u8, capacity: usize) Buffer {
-            return .{
-                .items = .{
-                    .items = items,
-                    .capacity = capacity,
-                    .pointer_stability = .{},
-                },
-            };
-        }
-
-        fn writeData(
-            self: *const Buffer,
-            allocator: std.mem.Allocator,
-            writer: *CompactWriter,
-        ) std.mem.Allocator.Error!SerializedDataRef {
-            if (self.items.items.len == 0) {
-                return .{ .offset = 0, .len = 0, .capacity = 0 };
-            }
-
-            const data_offset = writer.total_bytes;
-            const bytes: []const u8 = self.items.items;
-            _ = try writer.appendSlice(allocator, bytes);
-
-            return .{
-                .offset = data_offset,
-                .len = self.items.items.len,
-                .capacity = self.items.items.len,
-            };
-        }
-    };
-
     /// Intiizalizes a `Store` with capacity `bytes` of space.
     /// Note this specifically is the number of bytes for storing strings.
     /// The string `hello, world!` will use 14 bytes including the null terminator.
     pub fn initCapacityBytes(gpa: std.mem.Allocator, bytes: usize) std.mem.Allocator.Error!Store {
         return .{
-            .buffer = try Buffer.initCapacity(gpa, bytes),
+            .buffer = try collections.SafeList(u8).initCapacity(gpa, bytes),
         };
     }
 
@@ -198,7 +91,7 @@ pub const Store = struct {
 
     /// Number of bytes in the encoded entry buffer.
     pub fn byteCount(self: *const Store) u32 {
-        return checkedU32(self.buffer.len(), "string literal store byte count");
+        return checkedU32(self.buffer.items().len, "string literal store byte count");
     }
 
     /// Whether `offset` is between complete encoded entries.
@@ -215,7 +108,7 @@ pub const Store = struct {
     /// Encoded entries beginning at a previously captured boundary.
     pub fn encodedBytesFrom(self: *const Store, offset: u32) []const u8 {
         std.debug.assert(self.isEntryBoundary(offset));
-        return self.buffer.items.items[offset..];
+        return self.buffer.items()[offset..];
     }
 
     /// Reserve encoded storage without changing the logical store.
@@ -224,12 +117,12 @@ pub const Store = struct {
         gpa: std.mem.Allocator,
         additional: usize,
     ) std.mem.Allocator.Error!void {
-        try self.buffer.items.ensureUnusedCapacity(gpa, additional);
+        try self.buffer.ensureUnusedCapacity(gpa, additional);
     }
 
     /// Append complete encoded entries after capacity has been reserved.
     pub fn appendEncodedAssumeCapacity(self: *Store, bytes: []const u8) void {
-        self.buffer.items.appendSliceAssumeCapacity(bytes);
+        _ = self.buffer.appendSliceAssumeCapacity(bytes);
     }
 
     /// Deinitialize a `Store`'s memory.
@@ -249,20 +142,20 @@ pub const Store = struct {
         // exhausted the representable memory.
         const str_len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
         const entry_len = std.math.add(usize, entry_header_size, string.len) catch return error.OutOfMemory;
-        const entry_end = std.math.add(usize, self.buffer.len(), entry_len) catch return error.OutOfMemory;
+        const entry_end = std.math.add(usize, self.buffer.items().len, entry_len) catch return error.OutOfMemory;
         if (entry_end > std.math.maxInt(u32)) return error.OutOfMemory;
 
         // One reservation covers the header and the text, so the entry is
         // appended whole or not at all.
-        try self.buffer.items.ensureUnusedCapacity(gpa, entry_len);
+        try self.buffer.ensureUnusedCapacity(gpa, entry_len);
 
         var header: [entry_header_size]u8 = undefined;
         std.mem.writeInt(u32, header[0..len_size], str_len, .little);
         std.mem.writeInt(u32, header[len_size..][0..alignment_size], 1, .little);
-        self.buffer.items.appendSliceAssumeCapacity(&header);
+        _ = self.buffer.appendSliceAssumeCapacity(&header);
 
-        const idx: u32 = @intCast(self.buffer.len());
-        self.buffer.items.appendSliceAssumeCapacity(string);
+        const idx: u32 = @intCast(self.buffer.items().len);
+        _ = self.buffer.appendSliceAssumeCapacity(string);
 
         return @fromBackingInt(idx);
     }
@@ -271,14 +164,14 @@ pub const Store = struct {
     pub fn get(self: *const Store, idx: Idx) []u8 {
         const idx_usize: usize = @backingInt(idx);
         const len_start = idx_usize - entry_header_size;
-        const str_len = std.mem.readInt(u32, self.buffer.items.items[len_start..][0..len_size], .little);
-        return self.buffer.items.items[idx_usize .. idx_usize + str_len];
+        const str_len = std.mem.readInt(u32, self.buffer.items()[len_start..][0..len_size], .little);
+        return self.buffer.items()[idx_usize .. idx_usize + str_len];
     }
 
     pub fn alignment(self: *const Store, idx: Idx) u32 {
         const idx_usize: usize = @backingInt(idx);
         const alignment_start = idx_usize - alignment_size;
-        return std.mem.readInt(u32, self.buffer.items.items[alignment_start..][0..alignment_size], .little);
+        return std.mem.readInt(u32, self.buffer.items()[alignment_start..][0..alignment_size], .little);
     }
 
     fn requireAlignment(self: *Store, idx: Idx, required: u32) void {
@@ -287,7 +180,7 @@ pub const Store = struct {
         }
         const idx_usize: usize = @backingInt(idx);
         const alignment_start = idx_usize - alignment_size;
-        const slot = self.buffer.items.items[alignment_start..][0..alignment_size];
+        const slot = self.buffer.items()[alignment_start..][0..alignment_size];
         const current = std.mem.readInt(u32, slot, .little);
         if (required > current) std.mem.writeInt(u32, slot, required, .little);
     }
@@ -295,7 +188,7 @@ pub const Store = struct {
     /// Serialized representation of a Store
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
-        buffer: Buffer.Serialized,
+        buffer: collections.SafeList(u8).Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -318,9 +211,43 @@ pub const Store = struct {
     };
 };
 
-/// Transient dedup state for constructing a `StringLiteral.Store`.
+/// The dedup table of a `StringLiteral.Store`: an open-addressed index from
+/// string bytes to the entry holding them. It is serialized beside the store,
+/// so a loaded store keeps deduplicating exactly as the store it was written
+/// from would.
 pub const BuilderState = struct {
     index: InternedBytes.Index(StringLiteralPolicy) = .{},
+
+    /// Serialized form: the table's cell and fingerprint columns and its
+    /// entry count, loaded in place.
+    pub const Serialized = extern struct {
+        cells: collections.SafeList(Idx).Serialized,
+        fingerprints: collections.SafeList(u8).Serialized,
+        len: u32,
+        _padding: u32 = 0,
+
+        /// Serialize `builder` into this struct, appending its columns to `writer`.
+        pub fn serialize(
+            self: *Serialized,
+            builder: *const BuilderState,
+            allocator: std.mem.Allocator,
+            writer: *CompactWriter,
+        ) std.mem.Allocator.Error!void {
+            try self.cells.serialize(&builder.index.cells, allocator, writer);
+            try self.fingerprints.serialize(&builder.index.fingerprints, allocator, writer);
+            self.len = builder.index.len;
+            self._padding = 0;
+        }
+
+        /// A table whose columns borrow the serialized columns at `base`.
+        pub fn deserializeInto(self: *const Serialized, base: usize) BuilderState {
+            return .{ .index = .{
+                .cells = self.cells.deserializeInto(base),
+                .fingerprints = self.fingerprints.deserializeInto(base),
+                .len = self.len,
+            } };
+        }
+    };
 
     pub fn deinit(self: *BuilderState, gpa: std.mem.Allocator) void {
         self.index.deinit(gpa);
@@ -482,7 +409,7 @@ test "store uses exact portable length-prefixed bytes" {
         'a',  'b',  'c',  0x05, 0x00, 0x00, 0x00, 0x01,
         0x00, 0x00, 0x00, 0x00, 0x01, 'a',  'b',  'c',
     };
-    try testing.expectEqualSlices(u8, &expected, store.buffer.items.items);
+    try testing.expectEqualSlices(u8, &expected, store.buffer.items());
 }
 
 test "deduplicated literal backing keeps maximum requested alignment" {
@@ -841,4 +768,44 @@ test "Store edge case indices CompactWriter roundtrip" {
     try std.testing.expectEqualStrings("second", deserialized.get(idx2));
     try std.testing.expectEqualStrings("", deserialized.get(idx3));
     try std.testing.expectEqualStrings(&long_str, deserialized.get(idx4));
+}
+
+test "a loaded dedup table deduplicates and appends exactly like the table it was written from" {
+    const gpa = std.testing.allocator;
+
+    var store = Store{};
+    defer store.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
+    var names: [40][16]u8 = undefined;
+    for (&names, 0..) |*buf, i| _ = try builder.insert(&store, gpa, try std.fmt.bufPrint(buf, "literal {d}", .{i}));
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const Header = extern struct { store: Store.Serialized, builder: BuilderState.Serialized };
+    const header = try writer.appendAlloc(gpa, Header);
+    try header.store.serialize(&store, gpa, &writer);
+    try header.builder.serialize(&builder, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    const loaded_header: *const Header = @ptrCast(@alignCast(buffer.ptr));
+    var loaded_store = loaded_header.store.deserializeInto(@intFromPtr(buffer.ptr));
+    defer loaded_store.deinit(gpa);
+    var loaded_builder = loaded_header.builder.deserializeInto(@intFromPtr(buffer.ptr));
+    defer loaded_builder.deinit(gpa);
+
+    // Existing strings come back with their original index, with no rehash.
+    for (&names, 0..) |*buf, i| {
+        const text = try std.fmt.bufPrint(buf, "literal {d}", .{i});
+        try std.testing.expectEqual(try builder.insert(&store, gpa, text), try loaded_builder.insert(&loaded_store, gpa, text));
+    }
+    // New strings get the index the original store would give them.
+    for (0..40) |i| {
+        var buf: [16]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buf, "fresh {d}", .{i});
+        try std.testing.expectEqual(try builder.insert(&store, gpa, text), try loaded_builder.insert(&loaded_store, gpa, text));
+    }
+    try std.testing.expectEqualSlices(u8, store.buffer.items(), loaded_store.buffer.items());
 }

@@ -94,6 +94,7 @@ pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.E
 pub const Serialized = extern struct {
     idents: Ident.Store.Serialized,
     strings: StringLiteral.Store.Serialized,
+    string_builder: StringLiteral.BuilderState.Serialized,
     exposed_items: ExposedItems.Serialized,
     line_starts: SafeList(u32).Serialized,
     source: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
@@ -108,6 +109,10 @@ pub const Serialized = extern struct {
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
         try self.strings.serialize(&env.strings, allocator, writer);
+        if (std.debug.runtime_safety and env.string_builder.index.count() != stringEntryCount(&env.strings)) {
+            invariant("CommonEnv invariant violated: the string literal dedup table does not cover every stored string", .{});
+        }
+        try self.string_builder.serialize(&env.string_builder, allocator, writer);
         try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
         try self.line_starts.serialize(&env.line_starts, allocator, writer);
 
@@ -126,7 +131,7 @@ pub const Serialized = extern struct {
         return CommonEnv{
             .idents = self.idents.deserializeInto(base_addr),
             .strings = self.strings.deserializeInto(base_addr),
-            .string_builder = .{},
+            .string_builder = self.string_builder.deserializeInto(base_addr),
             .strings_insertable = false,
             .exposed_items = self.exposed_items.deserializeInto(base_addr),
             .line_starts = self.line_starts.deserializeInto(base_addr),
@@ -155,7 +160,7 @@ pub const Serialized = extern struct {
         var strings = try frozen.strings.clone(gpa);
         errdefer strings.deinit(gpa);
 
-        var string_builder = try rebuildStringBuilder(&strings, gpa);
+        var string_builder = try frozen.string_builder.clone(gpa);
         errdefer string_builder.deinit(gpa);
 
         var exposed_items = try frozen.exposed_items.clone(gpa);
@@ -175,33 +180,12 @@ pub const Serialized = extern struct {
     }
 };
 
-/// Build the transient dedup state for an owned `StringLiteral.Store` from the
-/// entries that store already holds.
-///
-/// Those entries are themselves the builder's input: each was deduped when it
-/// was appended, so registering them in entry order reproduces the index the
-/// appends built. A later `insertString` therefore returns the same
-/// `StringLiteral.Idx` it returns when the store was never serialized.
-fn rebuildStringBuilder(
-    strings: *StringLiteral.Store,
-    gpa: Allocator,
-) Allocator.Error!StringLiteral.BuilderState {
-    var builder = StringLiteral.BuilderState{};
-    errdefer builder.deinit(gpa);
-
+/// The number of entries in `strings`.
+fn stringEntryCount(strings: *const StringLiteral.Store) usize {
     var count: usize = 0;
-    var counting = strings.iterator();
-    while (counting.next()) |_| count += 1;
-    if (count == 0) return builder;
-
-    try builder.ensureAdditionalCapacity(strings, gpa, count);
-
     var entries = strings.iterator();
-    while (entries.next()) |entry| {
-        builder.registerExistingAssumeCapacity(strings, entry.idx);
-    }
-
-    return builder;
+    while (entries.next()) |_| count += 1;
+    return count;
 }
 
 /// Inserts an identifier into the store and returns its index.

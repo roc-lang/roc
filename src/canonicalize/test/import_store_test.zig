@@ -68,7 +68,7 @@ test "Import.Store deduplicates through interned string indices" {
 
     try testing.expectEqual(import_idx, duplicate_idx);
     try testing.expectEqual(string_idx, store.imports.items()[@backingInt(import_idx)]);
-    try testing.expectEqual(import_idx, store.map.get(string_idx).?);
+    try testing.expectEqual(import_idx, store.find(string_idx).?);
     try testing.expectEqual(ident_idx, store.getIdentIdx(import_idx).?);
 }
 
@@ -97,11 +97,11 @@ test "Import.Store empty CompactWriter roundtrip" {
     _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     const serialized_ptr = @as(*Import.Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = try serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.imports.len());
-    try testing.expectEqual(@as(usize, 0), deserialized.map.count());
+    try testing.expectEqual(@as(u64, 0), deserialized.lookup.len());
 }
 
 test "Import.Store basic CompactWriter roundtrip" {
@@ -139,8 +139,7 @@ test "Import.Store basic CompactWriter roundtrip" {
     _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized = try serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
-    defer deserialized.map.deinit(gpa);
+    var deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify the correct number of imports
     try testing.expectEqual(@as(usize, 3), deserialized.imports.len());
@@ -150,8 +149,10 @@ test "Import.Store basic CompactWriter roundtrip" {
     try testing.expect(storeContainsModule(&deserialized, &common, "core.List"));
     try testing.expect(storeContainsModule(&deserialized, &common, "my.Module"));
 
-    // Verify the map is repopulated correctly
-    try testing.expectEqual(@as(usize, 3), deserialized.map.count());
+    // Every import is found by its interned name.
+    for (deserialized.imports.items(), 0..) |string_idx, i| {
+        try testing.expectEqual(@as(?Import.Idx, @fromBackingInt(@intCast(i))), deserialized.find(string_idx));
+    }
 }
 
 test "Import.Store duplicate imports CompactWriter roundtrip" {
@@ -191,8 +192,7 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized = try serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
-    defer deserialized.map.deinit(gpa);
+    var deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify correct number of imports (duplicates deduplicated)
     try testing.expectEqual(@as(usize, 2), deserialized.imports.len());
@@ -201,6 +201,56 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     try testing.expect(storeContainsModule(&deserialized, &common, "test.Module"));
     try testing.expect(storeContainsModule(&deserialized, &common, "another.Module"));
 
-    // Verify the map was repopulated correctly
-    try testing.expectEqual(@as(usize, 2), deserialized.map.count());
+    // Every import is found by its interned name.
+    for (deserialized.imports.items(), 0..) |string_idx, i| {
+        try testing.expectEqual(@as(?Import.Idx, @fromBackingInt(@intCast(i))), deserialized.find(string_idx));
+    }
+}
+
+test "Import.Store loaded from its serialized form finds and adds imports" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var common = try CommonEnv.init(gpa, "");
+    defer common.deinit(gpa);
+
+    var original = Import.Store.init();
+    defer original.deinit(gpa);
+    var names: [20][16]u8 = undefined;
+    var expected: [20]Import.Idx = undefined;
+    for (&names, &expected, 0..) |*buf, *idx, i| {
+        const name = try std.fmt.bufPrint(buf, "pkg.Mod{d}", .{i});
+        idx.* = try original.getOrPut(gpa, &common, name);
+    }
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, Import.Store.Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(writer.total_bytes));
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var loaded = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
+    defer loaded.deinit(gpa);
+
+    // The lookup table is read where it sits.
+    try testing.expectEqual(@as(u32, 0), loaded.lookup.capacity);
+    for (&names, expected, 0..) |*buf, idx, i| {
+        const name = try std.fmt.bufPrint(buf, "pkg.Mod{d}", .{i});
+        try testing.expectEqual(idx, try loaded.getOrPut(gpa, &common, name));
+    }
+    try testing.expectEqual(@as(u32, 0), loaded.lookup.capacity);
+
+    // A new import grows the borrowed lists into owned memory, takes a cell
+    // of the borrowed lookup table in place, and is found like the rest.
+    const added = try loaded.getOrPut(gpa, &common, "pkg.New");
+    try testing.expectEqual(@as(u32, 20), @backingInt(added));
+    try testing.expect(loaded.imports.capacity != 0);
+    try testing.expectEqual(@as(u32, 0), loaded.lookup.capacity);
+    try testing.expectEqual(added, try loaded.getOrPut(gpa, &common, "pkg.New"));
+    for (loaded.imports.items(), 0..) |string_idx, i| {
+        try testing.expectEqual(@as(?Import.Idx, @fromBackingInt(@intCast(i))), loaded.find(string_idx));
+    }
 }

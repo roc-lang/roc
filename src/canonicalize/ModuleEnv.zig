@@ -1805,9 +1805,9 @@ pub fn deinitCachedModule(self: *Self) void {
     // Free the NodeStore regions (allocated by deserializeWithMutableTypes)
     self.store.regions.deinit(self.gpa);
 
-    // Only free the hash map that was allocated during deserialization
-    // (see CIR.Import.Store.Serialized.deserialize which calls ensureTotalCapacity)
-    self.imports.deinitMapOnly(self.gpa);
+    // The import store's lists, its lookup table included, borrow the cache
+    // buffer until an insert copies them.
+    self.imports.deinit(self.gpa);
 
     // import_mapping is initialized empty during deserialization and may have
     // items added later, so we need to free it
@@ -4392,7 +4392,7 @@ pub const Serialized = extern struct {
             .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
-            .imports = try self.imports.deserializeInto(base_addr, gpa),
+            .imports = self.imports.deserializeInto(base_addr),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
             .deferred_import_refs = self.deferred_import_refs.deserializeInto(base_addr),
             .import_identities = self.import_identities.deserializeInto(base_addr),
@@ -4455,7 +4455,7 @@ pub const Serialized = extern struct {
     /// types to solve, and each of those appends to the env. Every store is
     /// therefore copied into growable memory owned by `gpa`, the identifier
     /// interner and module-identity table are reopened for insertion, the
-    /// string-literal builder is rebuilt from the store's own entries, and the
+    /// string-literal dedup table is copied with the store, and the
     /// node store gets its scratch buffers. The result is released with
     /// `deinit`, exactly like a freshly canonicalized env.
     pub fn deserializeOwned(
@@ -4468,11 +4468,9 @@ pub const Serialized = extern struct {
         const env = try gpa.create(Self);
         errdefer gpa.destroy(env);
 
-        // The frozen store's lists alias the serialized buffer, so only the
-        // lookup map `deserializeInto` allocated is released here; `clone`
-        // copies those lists into memory this env owns.
-        var frozen_imports = try self.imports.deserializeInto(base_addr, gpa);
-        defer frozen_imports.deinitMapOnly(gpa);
+        // The frozen store's lists alias the serialized buffer; `clone`
+        // copies them into memory this env owns.
+        const frozen_imports = self.imports.deserializeInto(base_addr);
 
         var module_identities = self.module_identities.deserialize(base_addr);
         try module_identities.enableRuntimeInserts(gpa);

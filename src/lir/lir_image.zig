@@ -292,7 +292,7 @@ pub const StringLiteralStoreImage = extern struct {
 
     fn fromStore(encoder: anytype, store: *const base.StringLiteral.Store) @TypeOf(encoder).Error!StringLiteralStoreImage {
         return .{
-            .buffer = try encoder.ref(store.buffer.items.items),
+            .buffer = try encoder.ref(store.buffer.items()),
         };
     }
 
@@ -745,12 +745,13 @@ fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize
     return .fromBorrowedSlice(list.items);
 }
 
-fn stringLiteralBufferFromRef(base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!base.StringLiteral.Store.Buffer {
+fn stringLiteralBufferFromRef(base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!collections.SafeList(u8) {
     const len, const capacity = try checkByteListRef(image_size, ref);
     if (capacity == 0) return .{};
+    if (len > std.math.maxInt(u32)) return error.InvalidLirImage;
 
     const ptr: [*]u8 = @ptrCast(base_ptr + try checkedOffset(ref));
-    return base.StringLiteral.Store.Buffer.fromMappedSlice(ptr[0..len], capacity);
+    return .fromBorrowedSlice(ptr[0..len]);
 }
 
 fn checkSliceRef(comptime T: type, image_size: usize, ref: ArrayRef) ImageError!usize {
@@ -983,7 +984,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
         const mapped = @field(view.store, field).unsafeRawItemsForView();
         try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(source), std.mem.sliceAsBytes(mapped));
     }
-    try std.testing.expectEqualSlices(u8, store.strings.buffer.items.items, view.store.strings.buffer.items.items);
+    try std.testing.expectEqualSlices(u8, store.strings.buffer.items(), view.store.strings.buffer.items());
     try std.testing.expectEqual(store.next_synthetic_symbol, view.store.next_synthetic_symbol);
     try std.testing.expectEqual(lowered.layouts.layoutCount(), view.layouts.layoutCount());
     try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(lowered.layouts.layouts.items()), std.mem.sliceAsBytes(view.layouts.layouts.items()));
@@ -1086,7 +1087,7 @@ test "LIR image copies and round-trips every populated store field" {
         store.stmt_rows[column] = try h.guarded(@TypeOf(store.stmt_rows[column]), source_allocator, 2 + column, @intCast(0x60 + column));
     }
     store.next_synthetic_symbol = 0x0123_4567_89ab_cdef;
-    store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, source_allocator, 24, 0x90), .capacity = 24, .pointer_stability = .{} } } };
+    store.strings = .{ .buffer = .fromOwnedSlice(try h.distinct(u8, source_allocator, 24, 0x90)) };
 
     // A layout Store with every serialized list populated distinctively. Only
     // the nine array-backed fields are serialized; the interning caches are not
@@ -1146,7 +1147,7 @@ test "LIR image copies and round-trips every populated store field" {
 
     // Scalar and sub-image fields.
     try std.testing.expectEqual(@as(u64, 0x0123_4567_89ab_cdef), view.store.next_synthetic_symbol);
-    try h.expectBytesEq(store.strings.buffer.items.items, view.store.strings.buffer.items.items);
+    try h.expectBytesEq(store.strings.buffer.items(), view.store.strings.buffer.items());
 
     try std.testing.expectEqual(@as(?*const LirStore, null), view.store.body_coordinator);
     try std.testing.expect(view.store.proc_rewrite == null);

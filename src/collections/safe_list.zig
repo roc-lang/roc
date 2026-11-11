@@ -2815,7 +2815,7 @@ const BorrowRow = struct { wide: u64, narrow: u8, mid: u32 };
 
 /// Serialize `rows` as a SafeMultiList into a fresh aligned buffer and return
 /// the buffer with the serialized header at its start.
-fn serializedMultiListBuffer(gpa: Allocator, rows: []const BorrowRow) ![]align(16) u8 {
+fn serializedMultiListBuffer(gpa: Allocator, rows: []const BorrowRow) (Allocator.Error || error{BufferTooSmall})![]align(16) u8 {
     var original = SafeMultiList(BorrowRow){};
     defer original.deinit(gpa);
     _ = try original.appendSlice(gpa, rows);

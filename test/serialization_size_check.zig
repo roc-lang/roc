@@ -33,12 +33,12 @@ const expected_safelist_u8_size = 24;
 const expected_safelist_u32_size = 24;
 const expected_safemultilist_teststruct_size = 24;
 const expected_safemultilist_node_size = 24;
-const expected_string_literal_buffer_size = 24;
+const expected_string_literal_builder_size = 56;
 const expected_string_literal_store_size = 24;
 const expected_node_payload_size = 16;
 const expected_node_payload_align = 4;
 const expected_node_size = 20;
-const expected_moduleenv_size = 3104; // Includes the serialized invoking-definitions, callable-checking-fact, checking-dependency, hosted-error origin, slot-kind, numeral-fact, interpolation-metadata, derived-map-plan, generated-codec-renaming, generated-codec-recurrence, identifier end and fingerprint, erroneous-node, selected-hoisted-root, promoted-local-procedure, platform-requirement solution and identity-variable, and exhaustiveness columns.
+const expected_moduleenv_size = 3168; // Includes the serialized string-literal dedup table, type-store written flags, invoking-definitions, callable-checking-fact, checking-dependency, hosted-error origin, slot-kind, numeral-fact, interpolation-metadata, derived-map-plan, generated-codec-renaming, generated-codec-recurrence, identifier end and fingerprint, erroneous-node, selected-hoisted-root, promoted-local-procedure, platform-requirement solution and identity-variable, and exhaustiveness columns.
 const expected_nodestore_size = 600; // Platform-independent size
 
 // Compile-time assertions - build will fail if sizes don't match expected values
@@ -79,12 +79,12 @@ comptime {
         ));
     }
 
-    const actual_string_literal_buffer = @sizeOf(StringLiteral.Store.Buffer.Serialized);
-    if (actual_string_literal_buffer != expected_string_literal_buffer_size) {
+    const actual_string_literal_builder = @sizeOf(StringLiteral.BuilderState.Serialized);
+    if (actual_string_literal_builder != expected_string_literal_builder_size) {
         @compileError(std.fmt.comptimePrint(
-            "StringLiteral.Store.Buffer.Serialized size mismatch: expected {d}, got {d}. " ++
-                "String literal checked-cache storage must remain platform-independent.",
-            .{ expected_string_literal_buffer_size, actual_string_literal_buffer },
+            "StringLiteral.BuilderState.Serialized size mismatch: expected {d}, got {d}. " ++
+                "The string literal dedup table's cache storage must remain platform-independent.",
+            .{ expected_string_literal_builder_size, actual_string_literal_builder },
         ));
     }
 

@@ -239,8 +239,8 @@ pub const Store = struct {
     /// sorted on insert; lookups binary-search.
     nominal_decl_index: NominalDeclIndexEntry.SafeList,
     /// False only while no entry of `nominal_decls` has ever been invalid.
-    /// Stores whose history is unknown (zero-copy views of serialized data)
-    /// keep the default.
+    /// Serialized with the store, so a loaded store carries the value of the
+    /// store it was written from.
     invalid_nominal_decl_written: bool = true,
 
     /// The payload each accepted derived `map`/`map!` relation selects, by the
@@ -2780,6 +2780,11 @@ pub const Store = struct {
         nominal_decls: NominalDecl.SafeList.Serialized,
         nominal_decl_index: NominalDeclIndexEntry.SafeList.Serialized,
         derived_map_plans: DerivedMapPlanEntry.SafeList.Serialized,
+        /// `Store.invalid_nominal_decl_written`, as 0 or 1.
+        invalid_nominal_decl_written: u8,
+        /// `DescStore.err_written` of `descs`, as 0 or 1.
+        descs_err_written: u8,
+        _padding: [6]u8 = @splat(0),
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -2803,6 +2808,9 @@ pub const Store = struct {
             try self.nominal_decls.serialize(&store.nominal_decls, allocator, writer);
             try self.nominal_decl_index.serialize(&store.nominal_decl_index, allocator, writer);
             try self.derived_map_plans.serialize(&store.derived_map_plans, allocator, writer);
+            self.invalid_nominal_decl_written = @intFromBool(store.invalid_nominal_decl_written);
+            self.descs_err_written = @intFromBool(store.descs.err_written);
+            self._padding = @splat(0);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -2819,7 +2827,7 @@ pub const Store = struct {
                 .sealed = true,
                 .frozen_anchors = .init(gpa),
                 .slots = self.slots.deserializeInto(base_addr),
-                .descs = self.descs.deserializeInto(base_addr),
+                .descs = self.descs.deserializeInto(base_addr, self.descs_err_written != 0),
                 .root_metas = self.root_metas.deserializeInto(base_addr),
                 .union_ranks = self.union_ranks.deserializeInto(base_addr),
                 .vars = self.vars.deserializeInto(base_addr),
@@ -2832,6 +2840,7 @@ pub const Store = struct {
                 .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
                 .derived_map_plans = self.derived_map_plans.deserializeInto(base_addr),
+                .invalid_nominal_decl_written = self.invalid_nominal_decl_written != 0,
             };
         }
 
@@ -2842,7 +2851,7 @@ pub const Store = struct {
                 .gpa = gpa,
                 .frozen_anchors = .init(gpa),
                 .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
-                .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
+                .descs = .{ .backing = try self.descs.backing.deserializeWithCopy(base_addr, gpa), .err_written = self.descs_err_written != 0 },
                 .root_metas = try self.root_metas.deserializeWithCopy(base_addr, gpa),
                 .union_ranks = try self.union_ranks.deserializeWithCopy(base_addr, gpa),
                 .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
@@ -2856,8 +2865,7 @@ pub const Store = struct {
                 .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
                 .derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa),
             };
-            store.invalid_nominal_decl_written = false;
-            for (store.nominal_decls.items()) |decl| store.noteNominalDeclWrite(decl);
+            store.invalid_nominal_decl_written = self.invalid_nominal_decl_written != 0;
             return store;
         }
     };
@@ -3012,21 +3020,13 @@ const DescStore = struct {
 
     backing: DescSafeMultiList,
     /// False only while no descriptor in `backing` has ever held `.err`.
-    /// Stores whose history is unknown (zero-copy views of serialized data)
-    /// keep the default.
+    /// Serialized with the type store, so a loaded store carries the value of
+    /// the store it was written from.
     err_written: bool = true,
 
     /// Init & allocated memory
     fn init(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{ .backing = try DescSafeMultiList.initCapacity(gpa, capacity), .err_written = false };
-    }
-
-    fn fromContents(backing: DescSafeMultiList) Self {
-        var err_written = false;
-        for (backing.field(.content)) |content| {
-            if (content == .err) err_written = true;
-        }
-        return .{ .backing = backing, .err_written = err_written };
     }
 
     /// Deinit & free allocated memory
@@ -3049,18 +3049,10 @@ const DescStore = struct {
             try self.backing.serialize(&desc_store.backing, allocator, writer);
         }
 
-        /// Deserialize into a DescStore value (no in-place modification of cache buffer).
-        /// The base parameter is the base address of the serialized buffer in memory.
-        pub fn deserializeInto(self: *const Serialized, base_addr: usize) DescStore {
-            return DescStore{
-                .backing = self.backing.deserializeInto(base_addr),
-            };
-        }
-
-        /// Deserialize into a DescStore value with fresh memory allocation.
-        /// The returned DescStore owns its memory and can be safely grown/mutated.
-        pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!DescStore {
-            return DescStore.fromContents(try self.backing.deserializeWithCopy(base_addr, gpa));
+        /// A store whose descriptors borrow the serialized columns at
+        /// `base_addr`; `err_written` is stored beside it in the type store.
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize, err_written: bool) DescStore {
+            return .{ .backing = self.backing.deserializeInto(base_addr), .err_written = err_written };
         }
     };
 
@@ -3246,7 +3238,7 @@ test "sealing releases checker-only buffers without allocating" {
         // Every serialized column keeps its storage and length. The full
         // CompactWriter roundtrip below also checks content across sealing.
         inline for (@typeInfo(Store.Serialized).@"struct".field_names) |field_name| {
-            if (comptime !std.mem.eql(u8, field_name, "gpa")) {
+            if (comptime @hasField(Store, field_name) and !std.mem.eql(u8, field_name, "gpa")) {
                 try std.testing.expectEqualDeep(@field(retained, field_name), @field(store, field_name));
             }
         }
@@ -4638,7 +4630,7 @@ test "DescStore.Serialized roundtrip" {
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*DescStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr), false);
 
     // Verify using captured indices
     try std.testing.expectEqual(@as(usize, 2), deserialized.backing.len());
@@ -5027,5 +5019,38 @@ pub fn rebindSourceReferenceValue(value: anytype, mapper: anytype) @TypeOf(mappe
         .null,
         .spirv,
         => @compileError("source-reference storage needs explicit relocation for " ++ @typeName(T)),
+    }
+}
+
+test "the written flags travel with the serialized store" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = collections.CompactWriter;
+
+    for ([_]bool{ false, true }) |write_err| {
+        var store = try Store.init(gpa);
+        defer store.deinit();
+        _ = try store.fresh();
+        if (write_err) _ = try store.freshFromContent(.err);
+        try std.testing.expectEqual(write_err, store.descs.err_written);
+        try std.testing.expect(!store.invalid_nominal_decl_written);
+
+        var writer = CompactWriter.init();
+        defer writer.deinit(gpa);
+        const serialized = try writer.appendAlloc(gpa, Store.Serialized);
+        try serialized.serialize(&store, gpa, &writer);
+        const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+        defer gpa.free(buffer);
+        _ = try writer.writeToBuffer(buffer);
+
+        const loaded_ptr: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+        var loaded = loaded_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+        defer loaded.deinit();
+        try std.testing.expectEqual(write_err, loaded.descs.err_written);
+        try std.testing.expect(!loaded.invalid_nominal_decl_written);
+        try std.testing.expectEqual(write_err, loaded.mayContainErrorState());
+
+        var copied = try loaded_ptr.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
+        defer copied.deinit();
+        try std.testing.expectEqual(write_err, copied.mayContainErrorState());
     }
 }

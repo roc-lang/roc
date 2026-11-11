@@ -114,7 +114,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqual(@as(usize, 2), env.imports.imports.len());
     try std.testing.expectEqualStrings("json.Json", env.common.strings.get(env.imports.imports.items()[0]));
     try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items()[1]));
-    try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
+    try std.testing.expectEqual(@as(?can.CIR.Import.Idx, @fromBackingInt(1)), env.imports.find(env.imports.imports.items()[1]));
     try std.testing.expectEqual(@as(usize, 1), env.rejectedStaticDispatches().len);
     try std.testing.expectEqual(@as(types.Var, @fromBackingInt(@intCast(1234))), env.rejectedStaticDispatches()[0].fnVar());
     try std.testing.expect(env.nodeIsBindingScheme(@fromBackingInt(@intCast(7))));
@@ -204,13 +204,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqualStrings("json.Json", import_str1);
     try testing.expectEqualStrings("core.List", import_str2);
 
-    // Verify that the map was repopulated correctly
-    try testing.expectEqual(@as(usize, 2), env.imports.map.count());
-
-    // The deserialized StringLiteral.Store is immutable, so cached import lookup
-    // uses the serialized string index rather than reinterning its bytes.
+    // The serialized lookup table finds each import by its interned name.
     const json_string_idx = env.imports.imports.items()[0];
-    const import_json_cached = env.imports.map.get(json_string_idx).?;
+    const import_json_cached = env.imports.find(json_string_idx).?;
     try testing.expectEqual(@as(u32, 0), @backingInt(import_json_cached));
 }
 

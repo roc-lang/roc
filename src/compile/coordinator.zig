@@ -434,6 +434,7 @@ fn decodeCanonicalizedModuleCacheEntry(
 
     if (env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
     if (@intFromPtr(env_body.ptr) % CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits() != 0) return null;
+    if (env_len % CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits() != 0) return null;
     return .{
         .env_body = env_body,
         .parse_record_body = parse_record_body,
@@ -4766,38 +4767,44 @@ pub const Coordinator = struct {
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
+        // The env body is padded to the serialization alignment so the
+        // parse-stage record after it starts aligned and is read in place.
         var env_writer = CompactWriter.init();
         serializeForCache(ModuleEnv, env, &env_writer, arena_alloc) catch {
             manager.recordStoreFailureFor(.canonicalized);
             return;
         };
-
-        const env_len = env_writer.total_bytes;
-        const record_len = canonicalized_cache_entry.encodedLen(parse_record);
-
-        // The env body streams from the writer's borrowed columns; only the
-        // header and the parse-stage record are materialized.
-        var header: [canonicalized_module_cache_header_len]u8 = undefined;
-        writeCanonicalizedModuleCacheHeader(&header, cache_key, env_len, record_len);
-        const record = scratch.alloc(u8, record_len) catch {
+        env_writer.padToAlignment(arena_alloc, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) catch {
             manager.recordStoreFailureFor(.canonicalized);
             return;
         };
-        canonicalized_cache_entry.encode(parse_record, record);
+        var record_writer = CompactWriter.init();
+        canonicalized_cache_entry.write(parse_record, arena_alloc, &record_writer) catch {
+            manager.recordStoreFailureFor(.canonicalized);
+            return;
+        };
+
+        const env_len = env_writer.total_bytes;
+        const record_len = record_writer.total_bytes;
+
+        // Both bodies stream from their writers' borrowed columns; only the
+        // header is materialized.
+        var header: [canonicalized_module_cache_header_len]u8 = undefined;
+        writeCanonicalizedModuleCacheHeader(&header, cache_key, env_len, record_len);
 
         const Entry = struct {
             header: []const u8,
             env: *const CompactWriter,
-            record: []const u8,
+            record: *const CompactWriter,
 
             fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
                 const entry: *const @This() = @ptrCast(@alignCast(raw));
                 try destination.writeAll(entry.header);
                 try entry.env.writeTo(destination);
-                try destination.writeAll(entry.record);
+                try entry.record.writeTo(destination);
             }
         };
-        const entry = Entry{ .header = &header, .env = &env_writer, .record = record };
+        const entry = Entry{ .header = &header, .env = &env_writer, .record = &record_writer };
         manager.storeStreamIn(
             scratch,
             .canonicalized,
@@ -7193,12 +7200,11 @@ pub const Coordinator = struct {
         // A corrupt record is a cache miss, but the environment above was
         // already loaded, so the miss is taken by discarding everything this
         // function produced and letting the caller parse the module.
-        var reader = canonicalized_cache_entry.Reader.init(bodies.parse_record_body);
         const has_source_version_pin = self.readCanonicalizedParseRecord(
             task,
             task_allocs,
             env,
-            &reader,
+            bodies.parse_record_body,
             &parse_reports,
             &discovered_local_imports,
             &discovered_external_imports,
@@ -7248,23 +7254,26 @@ pub const Coordinator = struct {
         task: ParseTask,
         task_allocs: WorkerTaskAllocators,
         env: *const ModuleEnv,
-        reader: *canonicalized_cache_entry.Reader,
+        record_body: []const u8,
         reports: *std.ArrayList(Report),
         discovered_local_imports: *std.ArrayList(DiscoveredLocalImport),
         discovered_external_imports: *std.ArrayList(DiscoveredExternalImport),
     ) (Allocator.Error || canonicalized_cache_entry.DecodeError || error{SourcePinVersionChanged})!bool {
         const worker_alloc = task_allocs.result;
 
-        const diagnostic_count = try reader.readCount();
-        for (0..diagnostic_count) |_| {
-            const resolved = try reader.readDiagnostic();
+        const record = try canonicalized_cache_entry.View.init(record_body);
+        if (!canonicalized_cache_entry.pinValidationMatches(record.pin_validation, self.source_pin_version)) {
+            return error.SourcePinVersionChanged;
+        }
+
+        for (0..record.diagnostics.len) |i| {
+            const resolved = try record.diagnostic(i);
             const rep = try AST.resolvedDiagnosticToReport(resolved, &env.common, worker_alloc, task.path);
             try appendReportOwned(worker_alloc, reports, rep);
         }
 
-        const local_count = try reader.readCount();
-        for (0..local_count) |_| {
-            const local_import = try reader.readLocalImport();
+        for (0..record.local_imports.len) |i| {
+            const local_import = try record.localImport(i);
             try self.appendDiscoveredLocalImport(
                 worker_alloc,
                 task_allocs.scratch,
@@ -7279,21 +7288,14 @@ pub const Coordinator = struct {
             );
         }
 
-        const external_count = try reader.readCount();
-        for (0..external_count) |_| {
-            const import_name = try reader.readExternalImport();
+        for (0..record.external_imports.len) |i| {
+            const import_name = try record.externalImport(i);
             const owned_name = try worker_alloc.dupe(u8, import_name);
             errdefer worker_alloc.free(owned_name);
             try discovered_external_imports.append(worker_alloc, .{ .import_name = owned_name });
         }
 
-        const pin_validation = try reader.readPinValidation();
-        if (!canonicalized_cache_entry.pinValidationMatches(pin_validation, self.source_pin_version)) {
-            return error.SourcePinVersionChanged;
-        }
-
-        if (!reader.atEnd()) return canonicalized_cache_entry.DecodeError.CorruptParseStageRecord;
-        return pin_validation != null;
+        return record.pin_validation != null;
     }
 
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
