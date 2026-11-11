@@ -433,6 +433,32 @@ pub fn SafeList(comptime T: type) type {
             self.length = @intCast(new_len);
         }
 
+        /// Unsupported. A borrowed list has `capacity == 0` with a nonzero
+        /// length, so "the capacity" is not a length the list could be extended
+        /// to: this would truncate a borrowed list to nothing.
+        pub fn expandToCapacity(_: *SafeList(T)) void {
+            @compileError("SafeList does not support expandToCapacity: a borrowed list has capacity 0 below its length. Reserve with ensureUnusedCapacity and append instead.");
+        }
+
+        /// Unsupported. A borrowed list has `capacity == 0` with a nonzero
+        /// length, so the items between the length and the capacity are not a
+        /// well-formed slice for it.
+        pub fn unusedCapacitySlice(_: *SafeList(T)) []T {
+            @compileError("SafeList does not support unusedCapacitySlice: a borrowed list has capacity 0 below its length. Reserve with ensureUnusedCapacity and append instead.");
+        }
+
+        /// Unsupported. A bounded append writes into spare capacity and fails
+        /// when there is none, which would report a borrowed list as full and
+        /// could never grow it out of the memory it borrows.
+        pub fn appendBounded(_: *SafeList(T), _: T) error{OutOfMemory}!void {
+            @compileError("SafeList does not support bounded appends: a borrowed list has no spare capacity and must grow by copying. Use append, or ensureUnusedCapacity with appendAssumeCapacity.");
+        }
+
+        /// Unsupported, for the same reason as `appendBounded`.
+        pub fn appendSliceBounded(_: *SafeList(T), _: []const T) error{OutOfMemory}!void {
+            @compileError("SafeList does not support bounded appends: a borrowed list has no spare capacity and must grow by copying. Use appendSlice, or ensureUnusedCapacity with appendSliceAssumeCapacity.");
+        }
+
         /// The items as a slice of exactly the length that the caller owns and
         /// frees with `gpa`. A borrowed list's items are copied. The list is left
         /// empty.
