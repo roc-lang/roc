@@ -174,11 +174,10 @@ pub const CacheModule = struct {
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(@constCast(serialized_data.ptr))));
         deserialized_ptr.validate(serialized_data.len) catch return error.CorruptSerializedModuleEnv;
 
-        // Calculate the base address of the serialized data
-        const base_addr = @intFromPtr(serialized_data.ptr);
-
-        // Deserialize the ModuleEnv with mutable types so it can be type-checked further
-        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserializeWithMutableTypes(base_addr, allocator, source, module_basename);
+        // The env is relocated in place, so its lists borrow this module's data.
+        const module_env_ptr = try allocator.create(ModuleEnv);
+        errdefer allocator.destroy(module_env_ptr);
+        module_env_ptr.* = try deserialized_ptr.deserializeInPlace(@intFromPtr(serialized_data.ptr), allocator, source, module_basename, .sealed);
 
         return module_env_ptr;
     }
@@ -205,6 +204,25 @@ pub const CacheModule = struct {
                 .mapped => |m| m.unmap(),
                 .allocated => |a| allocator.free(a),
             }
+        }
+
+        /// Hand the data to an environment relocated in place inside it, whose
+        /// `deinit` releases it with the allocator that allocated it (the
+        /// environment's), so it must not be released here as well.
+        pub fn intoLoadedEntry(self: CacheData) ModuleEnv.LoadedEntry {
+            return switch (self) {
+                .mapped => |mapped| .{ .bytes = mapped.region, .release = &releaseMapped },
+                .allocated => |allocated| .{ .bytes = @constCast(allocated), .release = &releaseAllocated },
+            };
+        }
+
+        fn releaseMapped(bytes: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8, _: Allocator) void {
+            const mapped: CoreCtx.MappedFile = .{ .region = @alignCast(bytes), .file_len = bytes.len };
+            mapped.unmap();
+        }
+
+        fn releaseAllocated(bytes: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8, allocator: Allocator) void {
+            allocator.free(bytes);
         }
     };
 

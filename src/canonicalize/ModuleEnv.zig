@@ -1010,7 +1010,22 @@ pub const BindingSchemeCodecRequirement = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A loaded cache entry an environment is relocated in place inside. The
+/// environment's lists read and write its bytes until they grow, so the entry
+/// lives exactly as long as the environment.
+pub const LoadedEntry = struct {
+    bytes: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+    /// Releases `bytes` (an unmapping, or a free with the given allocator).
+    release: *const fn ([]align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, std.mem.Allocator) void,
+};
+
 gpa: std.mem.Allocator,
+
+/// The loaded cache entry this environment's borrowed lists point into, which
+/// `deinit` releases after everything else. Null when the environment's lists
+/// own their memory, or borrow memory that outlives it (such as the compiler's
+/// embedded Builtin bytes).
+loaded_entry: ?LoadedEntry = null,
 
 common: CommonEnv,
 types: TypeStore,
@@ -1678,6 +1693,10 @@ pub fn deinit(self: *Self) void {
     self.checking_dependency.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
+    // Every list above that still borrows the entry freed nothing, so the
+    // entry goes last.
+    if (self.loaded_entry) |entry| entry.release(entry.bytes, self.gpa);
+    self.loaded_entry = null;
 }
 
 /// Replace the module's exact strict-demand relation with freshly produced
@@ -1784,69 +1803,6 @@ pub fn hasTopLevelDemandDependency(
         dependent,
         dependency,
     );
-}
-
-/// Deinitialize a cached module environment.
-/// This frees heap-allocated data from deserialization:
-/// - Hash maps (imports, import_mapping)
-/// - Type store arrays (when using deserializeWithMutableTypes)
-/// - NodeStore regions (when using deserializeWithMutableTypes)
-///
-/// After deserialization with deserializeWithMutableTypes, the type store
-/// arrays and NodeStore regions are heap-allocated and can be mutated.
-/// Other data (common env, nodes, etc.) still points into the cache buffer
-/// and must NOT be freed.
-///
-/// Call this instead of deinit() for modules loaded from cache.
-pub fn deinitCachedModule(self: *Self) void {
-    // Free the type store arrays (allocated by deserializeWithMutableTypes)
-    self.types.deinit();
-
-    // Free the NodeStore regions (allocated by deserializeWithMutableTypes)
-    self.store.regions.deinit(self.gpa);
-
-    // The import store's lists, its lookup table included, borrow the cache
-    // buffer until an insert copies them.
-    self.imports.deinit(self.gpa);
-
-    // import_mapping is initialized empty during deserialization and may have
-    // items added later, so we need to free it
-    self.import_mapping.deinit();
-    self.provided_low_level_defs.deinit(self.gpa);
-    self.for_loop_dispatch_plans.deinit(self.gpa);
-    self.numeral_digit_bytes.deinit(self.gpa);
-    self.numeral_literals.deinit(self.gpa);
-    self.numeric_suffix_targets.deinit(self.gpa);
-    self.scheme_uses.deinit(self.gpa);
-    self.scheme_use_pairs.deinit(self.gpa);
-    self.dispatch_relation_merges.deinit(self.gpa);
-    self.binding_schemes.deinit(self.gpa);
-    self.row_coerced_results.deinit(self.gpa);
-    self.erroneous_nodes.deinit(self.gpa);
-    self.selected_hoisted_roots.deinit(self.gpa);
-    self.promoted_local_procedures.deinit(self.gpa);
-    self.platform_requirement_solutions.deinit(self.gpa);
-    self.platform_requirement_identity_vars.deinit(self.gpa);
-    self.exhaustiveness_obligations.deinit(self.gpa);
-    self.binding_scheme_codec_requirements.deinit(self.gpa);
-    self.generated_codec_derivations.deinit(self.gpa);
-    self.generated_codec_calls.deinit(self.gpa);
-    self.generated_codec_renamings.deinit(self.gpa);
-    self.generated_codec_recurrences.deinit(self.gpa);
-    self.rejected_static_dispatches.deinit(self.gpa);
-    self.record_omitted_defaults.deinit(self.gpa);
-    self.inspect_override_instances.deinit(self.gpa);
-
-    // If enableRuntimeInserts was called on the interner, it allocated new memory
-    // that needs to be freed. The interner.deinit checks supports_inserts internally
-    // and will only free if memory was actually allocated (not for pure cached data).
-    self.common.idents.interner.deinit(self.gpa);
-    self.common.idents.deinitTextRanks();
-
-    // Same pattern for the module identity table: frozen (buffer-aliased) data is
-    // a no-op to deinit; runtime-grown data is freed.
-    self.module_identities.deinit(self.gpa);
-    self.module_identity_displays.deinit(self.gpa);
 }
 
 /// Whether every recorded file import has been read, which is what makes this
@@ -4141,6 +4097,7 @@ pub const Serialized = extern struct {
         .Owner = Self,
         .owner_only_fields = &.{
             "qualified_module_name", // Workspace information, recorded by the coordinator.
+            "loaded_entry", // The process-local mapping or buffer a loaded environment lives in.
         },
         .serialized_only_fields = &.{
             "display_module_name_idx_padding", // Fixed-width padding after the display name slot.
@@ -4268,24 +4225,45 @@ pub const Serialized = extern struct {
         self._reserved_flags = .{ 0, 0 };
     }
 
-    /// Materialize a non-owning view over statically embedded serialized bytes.
-    /// This is for the compiler's baked Builtin module: every list/slice points
-    /// into the executable's aligned static data and no backing bytes are copied.
+    /// A view over the compiler's embedded Builtin bytes, which hold no
+    /// imports. Its lists point into the executable's static data and nothing
+    /// is copied; the bytes are shared by every compilation in the process, so
+    /// nothing may write to the view (see `BuiltinStatic.moduleView`).
     pub fn viewStatic(
         self: *const Serialized,
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_basename: []const u8,
-    ) error{CorruptSerializedModuleEnv}!Self {
+    ) (std.mem.Allocator.Error || error{CorruptSerializedModuleEnv})!Self {
         if (self.imports.imports.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.import_idents.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.resolved_modules.len != 0) return error.CorruptSerializedModuleEnv;
+        return self.deserializeInPlace(base_addr, gpa, source, module_basename, .sealed);
+    }
 
-        const env = Self{
+    /// The environment serialized at `base_addr`, relocated in place: every
+    /// list borrows the serialized bytes, reading and writing them where they
+    /// lie, and copies itself into memory owned by `gpa` the first time it
+    /// grows. Nothing is copied up front, and `deinit` frees only those copies,
+    /// so the bytes must outlive the environment (a cache entry is handed to it
+    /// as `loaded_entry`).
+    ///
+    /// A checked module's types are solved, so `.sealed` loads them read-only.
+    /// A canonicalized module is still to be checked, so `.writable` loads its
+    /// types for solving and gives its node store scratch buffers.
+    pub fn deserializeInPlace(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_basename: []const u8,
+        access: types_mod.LoadedAccess,
+    ) std.mem.Allocator.Error!Self {
+        var env = Self{
             .gpa = gpa,
             .common = self.common.deserializeInto(base_addr, source),
-            .types = self.types.deserializeInto(base_addr, gpa),
+            .types = self.types.deserializeInto(base_addr, gpa, access),
             .module_kind = self.module_kind.decode(),
             .module_role = self.module_role,
             .all_defs = self.all_defs,
@@ -4304,7 +4282,7 @@ pub const Serialized = extern struct {
             .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
-            .imports = CIR.Import.Store.init(),
+            .imports = self.imports.deserializeInto(base_addr),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
             .deferred_import_refs = self.deferred_import_refs.deserializeInto(base_addr),
             .import_identities = self.import_identities.deserializeInto(base_addr),
@@ -4351,202 +4329,9 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
             .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
         };
+        if (access == .writable) try env.store.ensureScratch();
 
         env.debugAssertModuleBasename();
-        return env;
-    }
-
-    /// Deserialize a checked module from the checked-module cache.
-    /// Allocates fresh memory for the type store and node store arrays. The
-    /// type store holds the module's solved types, so it is sealed.
-    pub fn deserializeWithMutableTypes(
-        self: *const Serialized,
-        base_addr: usize,
-        gpa: std.mem.Allocator,
-        source: []const u8,
-        module_basename: []const u8,
-    ) std.mem.Allocator.Error!*Self {
-        // Allocate a fresh ModuleEnv on the heap
-        const env = try gpa.create(Self);
-        errdefer gpa.destroy(env);
-
-        env.* = Self{
-            .gpa = gpa,
-            .common = self.common.deserializeInto(base_addr, source),
-            .types = try self.types.deserializeWithCopy(base_addr, gpa),
-            .module_kind = self.module_kind.decode(),
-            .module_role = self.module_role,
-            .all_defs = self.all_defs,
-            .global_value_defs = self.global_value_defs,
-            .top_level_value_defs = self.top_level_value_defs,
-            .value_binding_defs = self.value_binding_defs,
-            .hosted_defs = self.hosted_defs,
-            .diagnostic_hosted_returns = self.diagnostic_hosted_returns.deserializeInto(base_addr),
-            .all_statements = self.all_statements,
-            .type_decls = self.type_decls,
-            .forward_type_decls = self.forward_type_decls,
-            .exports = self.exports,
-            .requires_types = self.requires_types.deserializeInto(base_addr),
-            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
-            .provides_entries = self.provides_entries.deserializeInto(base_addr),
-            .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
-            .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserializeInto(base_addr),
-            .imports = self.imports.deserializeInto(base_addr),
-            .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .deferred_import_refs = self.deferred_import_refs.deserializeInto(base_addr),
-            .import_identities = self.import_identities.deserializeInto(base_addr),
-            .module_name = module_basename,
-            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_name = "",
-            .module_identities = self.module_identities.deserialize(base_addr),
-            // Copy so the display list can grow if runtime type copies add identities.
-            .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
-            .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
-            .diagnostics = self.diagnostics,
-            // Use deserializeWithCopy for NodeStore so regions can be extended
-            .store = try self.store.deserializeWithCopy(base_addr, gpa),
-            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
-            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
-            .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
-            .callable_checking_facts = self.callable_checking_facts.deserializeInto(base_addr),
-            .checking_dependency = self.checking_dependency.deserializeInto(base_addr),
-            .runtime_prepared = self.runtime_prepared,
-            .idents = self.idents,
-            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserializeInto(base_addr),
-            .method_defs = self.method_defs.deserializeInto(base_addr),
-            .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
-            .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
-            .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
-            .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
-            .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
-            .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
-            .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
-            .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
-            .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
-            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
-            .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
-            .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
-            .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
-            .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
-            .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
-            .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_recurrences = try self.generated_codec_recurrences.deserializeWithCopy(base_addr, gpa),
-            .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
-            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
-            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
-        };
-        env.types.seal();
-
-        env.debugAssertModuleBasename();
-
-        return env;
-    }
-
-    /// Deserialize into a ModuleEnv that owns every byte it holds.
-    ///
-    /// This is what a canonicalized-cache hit loads: the module still has its
-    /// file imports to read, its deferred import worklist to drain, and its
-    /// types to solve, and each of those appends to the env. Every store is
-    /// therefore copied into growable memory owned by `gpa`, the identifier
-    /// interner and module-identity table are reopened for insertion, the
-    /// string-literal dedup table is copied with the store, and the
-    /// node store gets its scratch buffers. The result is released with
-    /// `deinit`, exactly like a freshly canonicalized env.
-    pub fn deserializeOwned(
-        self: *const Serialized,
-        base_addr: usize,
-        gpa: std.mem.Allocator,
-        source: []const u8,
-        module_basename: []const u8,
-    ) std.mem.Allocator.Error!*Self {
-        const env = try gpa.create(Self);
-        errdefer gpa.destroy(env);
-
-        // The frozen store's lists alias the serialized buffer; `clone`
-        // copies them into memory this env owns.
-        const frozen_imports = self.imports.deserializeInto(base_addr);
-
-        var module_identities = self.module_identities.deserialize(base_addr);
-        try module_identities.enableRuntimeInserts(gpa);
-
-        env.* = Self{
-            .gpa = gpa,
-            .common = try self.common.deserializeOwned(base_addr, gpa, source),
-            .types = try self.types.deserializeWithCopy(base_addr, gpa),
-            .module_kind = self.module_kind.decode(),
-            .module_role = self.module_role,
-            .all_defs = self.all_defs,
-            .global_value_defs = self.global_value_defs,
-            .top_level_value_defs = self.top_level_value_defs,
-            .value_binding_defs = self.value_binding_defs,
-            .hosted_defs = self.hosted_defs,
-            .diagnostic_hosted_returns = try self.diagnostic_hosted_returns.deserializeWithCopy(base_addr, gpa),
-            .all_statements = self.all_statements,
-            .type_decls = self.type_decls,
-            .forward_type_decls = self.forward_type_decls,
-            .exports = self.exports,
-            .requires_types = try self.requires_types.deserializeWithCopy(base_addr, gpa),
-            .for_clause_aliases = try self.for_clause_aliases.deserializeWithCopy(base_addr, gpa),
-            .provides_entries = try self.provides_entries.deserializeWithCopy(base_addr, gpa),
-            .hosted_entries = try self.hosted_entries.deserializeWithCopy(base_addr, gpa),
-            .builtin_statements = self.builtin_statements,
-            .external_decls = try self.external_decls.deserializeWithCopy(base_addr, gpa),
-            .imports = try frozen_imports.clone(gpa),
-            .file_dependencies = try self.file_dependencies.deserializeWithCopy(base_addr, gpa),
-            .deferred_import_refs = try self.deferred_import_refs.deserializeWithCopy(base_addr, gpa),
-            .import_identities = try self.import_identities.deserializeWithCopy(base_addr, gpa),
-            .module_name = module_basename,
-            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_name = "",
-            .module_identities = module_identities,
-            .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
-            .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
-            .diagnostics = self.diagnostics,
-            .store = try self.store.deserializeOwned(base_addr, gpa),
-            .top_level_demand_dependencies = try self.top_level_demand_dependencies.deserializeWithCopy(base_addr, gpa),
-            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
-            .invoking_defs = try self.invoking_defs.deserializeWithCopy(base_addr, gpa),
-            .callable_checking_facts = try self.callable_checking_facts.deserializeWithCopy(base_addr, gpa),
-            .checking_dependency = try self.checking_dependency.deserializeWithCopy(base_addr, gpa),
-            .runtime_prepared = self.runtime_prepared,
-            .idents = self.idents,
-            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = try self.method_idents.deserializeWithCopy(base_addr, gpa),
-            .method_defs = try self.method_defs.deserializeWithCopy(base_addr, gpa),
-            .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
-            .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
-            .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
-            .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
-            .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
-            .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
-            .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
-            .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
-            .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
-            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
-            .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
-            .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
-            .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
-            .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
-            .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
-            .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_recurrences = try self.generated_codec_recurrences.deserializeWithCopy(base_addr, gpa),
-            .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
-            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
-            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
-        };
-
-        env.debugAssertModuleBasename();
-
         return env;
     }
 };
@@ -5865,7 +5650,7 @@ pub fn appendMethodForMethodOwner(
     qualified_ident: Ident.Idx,
     binding: MethodBinding,
 ) Allocator.Error!void {
-    std.debug.assert(self.method_idents.entries.items.len == self.method_defs.entries.items.len);
+    std.debug.assert(self.method_idents.entries.items().len == self.method_defs.entries.items().len);
     try self.method_idents.entries.ensureUnusedCapacity(self.gpa, 1);
     try self.method_defs.entries.ensureUnusedCapacity(self.gpa, 1);
     try self.registerMethodIdentForMethodOwner(owner, method_ident, qualified_ident);

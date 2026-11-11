@@ -1245,7 +1245,7 @@ fn assertNoTypeProblems(self: *TestEnv) TestEnvError!void {
 /// The CIR node holding the type of the method this module defines under
 /// `name`, for tests that reach a method by the name its source declares.
 pub fn methodTypeNode(self: *const TestEnv, name: []const u8) ?CIR.Node.Idx {
-    for (self.module_env.method_defs.entries.items) |entry| {
+    for (self.module_env.method_defs.entries.items()) |entry| {
         const text = self.module_env.getIdentStoreConst().getText(entry.key.methodIdent());
         if (std.mem.eql(u8, name, text)) return entry.value.type_node_idx;
     }

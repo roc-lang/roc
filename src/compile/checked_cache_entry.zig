@@ -207,7 +207,9 @@ pub fn decodeCheckedModuleCacheEntry(key: CheckedArtifact.CheckedModuleArtifactK
 }
 
 /// Restore only typing. The finalized artifact body is deliberately untouched.
-pub fn restoreTyping(context: *const Context, env: *ModuleEnv) Allocator.Error!?check.CheckingReuse {
+/// The restored environment is relocated in place inside the cached entry and
+/// solved further by checking, so it takes the entry over from `context`.
+pub fn restoreTyping(context: *Context, env: *ModuleEnv) Allocator.Error!?check.CheckingReuse {
     const data = context.cached orelse return null;
     const bodies = decodeCheckedModuleCacheEntry(context.key, data.data()) orelse return null;
     if (bodies.metadata_body.len < @sizeOf(check.CheckingReuse.Serialized)) return null;
@@ -215,20 +217,24 @@ pub fn restoreTyping(context: *const Context, env: *ModuleEnv) Allocator.Error!?
     const metadata = encoded.deserialize(@intFromPtr(encoded));
     if (!metadata.outcome.sourcesMatch(&context.scope)) return null;
     const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(bodies.env_body.ptr));
-    const cached = try serialized.deserializeOwned(@intFromPtr(serialized), env.gpa, env.common.source, env.module_name);
-    defer env.gpa.destroy(cached);
+    serialized.validate(bodies.env_body.len) catch return null;
+    var cached = try serialized.deserializeInPlace(@intFromPtr(serialized), env.gpa, env.common.source, env.module_name, .writable);
     errdefer cached.deinit();
-    metadata.bindReferences(cached, &context.scope) catch |err| switch (err) {
+    metadata.bindReferences(&cached, &context.scope) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.IncompatibleReferences => {
             cached.deinit();
             return null;
         },
     };
-    try check.CheckingDependencies.bindOwners(cached, &context.scope);
+    try check.CheckingDependencies.bindOwners(&cached, &context.scope);
     cached.qualified_module_name = env.qualified_module_name;
+    // The metadata returned below also reads the entry, which lives as
+    // long as the environment.
+    cached.loaded_entry = data.intoLoadedEntry();
+    context.cached = null;
     env.deinit();
-    env.* = cached.*;
+    env.* = cached;
     return metadata;
 }
 

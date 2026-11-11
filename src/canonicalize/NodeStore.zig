@@ -5655,39 +5655,15 @@ pub const Serialized = extern struct {
         }
     }
 
-    /// Deserialize into a NodeStore value (no in-place modification of cache buffer).
-    /// The base_addr parameter is the base address of the serialized buffer in memory.
-    /// WARNING: The returned NodeStore points into the cache buffer and is read-only,
-    /// so it has no scratch memory.
-    /// Use deserializeWithCopy() if the store needs to be mutable.
+    /// A NodeStore whose lists borrow the serialized lists at `base_addr`.
+    /// It reads and writes them in place, and a list copies itself into owned
+    /// memory the first time it grows. It has no scratch buffers until
+    /// `ensureScratch`, and `deinit` frees only what it allocated.
     pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) NodeStore {
         var store = initEmpty(gpa);
         inline for (comptime backingLists(NodeStore)) |name| {
             @field(store, name) = @field(self, name).deserializeInto(base_addr);
         }
-        return store;
-    }
-
-    /// Deserialize into a NodeStore value with fresh memory allocation for fields that may need to grow.
-    /// Use this for cache modules where regions may need to be extended during type checking.
-    pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
-        var store = self.deserializeInto(base_addr, gpa);
-        // Regions needs to be mutable (grown during type checking)
-        store.regions = try self.regions.deserializeWithCopy(base_addr, gpa);
-        return store;
-    }
-
-    /// Deserialize into a NodeStore that owns every list it holds and carries
-    /// its own scratch buffers, so later compilation stages may append nodes,
-    /// regions, and extra data to it. `deinit` releases it exactly like a
-    /// freshly constructed `NodeStore`.
-    pub fn deserializeOwned(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
-        var store = initEmpty(gpa);
-        errdefer store.deinit();
-        inline for (comptime backingLists(NodeStore)) |name| {
-            @field(store, name) = try @field(self, name).deserializeWithCopy(base_addr, gpa);
-        }
-        try store.ensureScratch();
         return store;
     }
 };
@@ -5719,14 +5695,11 @@ test "NodeStore round-trips every backing list" {
     const loaded: *const Serialized = @ptrCast(@alignCast(buffer.ptr));
     const base_addr = @intFromPtr(buffer.ptr);
 
-    const borrowed = loaded.deserializeInto(base_addr, gpa);
-    var regions_owned = try loaded.deserializeWithCopy(base_addr, gpa);
-    defer regions_owned.regions.deinit(gpa);
-    var owned = try loaded.deserializeOwned(base_addr, gpa);
-    defer owned.deinit();
+    var borrowed = loaded.deserializeInto(base_addr, gpa);
+    defer borrowed.deinit();
 
     inline for (lists, 1..) |name, entry_count| {
-        inline for (.{ &cloned, &borrowed, &regions_owned, &owned }) |store| {
+        inline for (.{ &cloned, &borrowed }) |store| {
             try testing.expectEqual(@as(u64, entry_count), @field(store, name).len());
         }
     }
@@ -5735,7 +5708,7 @@ test "NodeStore round-trips every backing list" {
     var rewriter = CompactWriter.init();
     defer rewriter.deinit(gpa);
     const reserialized = try rewriter.appendAlloc(gpa, Serialized);
-    try reserialized.serialize(&owned, gpa, &rewriter);
+    try reserialized.serialize(&borrowed, gpa, &rewriter);
     const rebuffer = try gpa.alignedAlloc(u8, .@"16", @intCast(rewriter.total_bytes));
     defer gpa.free(rebuffer);
     _ = try rewriter.writeToBuffer(rebuffer);

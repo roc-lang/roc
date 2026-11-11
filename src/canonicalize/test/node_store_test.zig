@@ -1944,9 +1944,12 @@ test "write occurrences preserve binding identity and token regions across CIR c
         try testing.expectEqualDeep(from_raw_offsets(write.start, write.end), write.region());
     }
 
-    // Mutable cached modules own their region column, but borrow source write
-    // metadata from the cache just like their other canonical data.
-    var mutable = try stored.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
-    defer mutable.regions.deinit(gpa);
-    try testing.expectEqualDeep(original.write_occurrences.items(), mutable.write_occurrences.items());
+    // A loaded store grows its region column by copying it, and keeps
+    // reading source write metadata from the serialized bytes.
+    var loaded = stored.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    defer loaded.deinit();
+    _ = try loaded.regions.append(gpa, declaration);
+    try testing.expect(loaded.regions.capacity != 0);
+    try testing.expectEqualDeep(original.write_occurrences.items(), loaded.write_occurrences.items());
+    try testing.expectEqualDeep(declaration, loaded.getPatternRegion(pattern));
 }

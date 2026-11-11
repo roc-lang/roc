@@ -4463,7 +4463,7 @@ pub fn initWithOwnerModules(
 /// Preflight module state required by type-checking.
 /// This is intentionally private so `Check.init` is the only public entry point.
 fn preflightForTypeChecking(cir: *ModuleEnv) std.mem.Allocator.Error!void {
-    try cir.getIdentStore().enableRuntimeInserts(cir.gpa);
+    try cir.getIdentStore().enableTextRanks(cir.gpa);
     // Type checking rewrites some expressions into dispatch calls, which can
     // append argument spans to the CIR index store. Existing CIR spans are valid
     // by index, but many checker paths borrow them as slices while recursively
@@ -5228,7 +5228,7 @@ fn decideLocalTypeContexts(self: *Self) Allocator.Error!void {
             .s_runtime_error,
             => unreachable, // only type declarations were gathered above
         }
-        for (self.cir.method_defs.entries.items) |method_entry| {
+        for (self.cir.method_defs.entries.items()) |method_entry| {
             if (method_entry.key.owner != decl) continue;
             if (self.cir.store.nodes.get(method_entry.value.type_node_idx).tag != .statement_decl) continue;
             const method = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_entry.value.type_node_idx)))).s_decl;
@@ -5851,7 +5851,7 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
 
     // Values of an escaped type exist outside its context, where its methods
     // have no declaration context to run in, so every method is rejected.
-    for (self.cir.method_defs.entries.items) |method_entry| {
+    for (self.cir.method_defs.entries.items()) |method_entry| {
         if (!escaped.contains(method_entry.key.owner)) continue;
         if (self.cir.store.nodes.get(method_entry.value.type_node_idx).tag != .statement_decl) continue;
         const method = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_entry.value.type_node_idx)))).s_decl;
@@ -5943,7 +5943,7 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
 
     var methods: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, LocalMethod) = .empty;
     defer methods.deinit(self.gpa);
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         if (self.cir.store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
         const decl = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)))).s_decl;
         // An associated value that is not a local procedure is no method:
@@ -6618,7 +6618,7 @@ fn receiverLocalProcedureMethod(self: *Self, receiver_var: Var, method_name: Ide
 
 fn moduleDeclaresLocalMethods(self: *Self) Allocator.Error!bool {
     if (self.module_declares_local_methods) |declares| return declares;
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         if (self.cir.store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
         const name = entry.key.methodIdent();
         for (self.local_method_names.items) |existing| {
@@ -15970,7 +15970,7 @@ fn publishCallableCheckingFacts(self: *Self) Allocator.Error!void {
     var ids = collections.DenseMap(CIR.Def.Idx, callable_checking.Id).init(self.gpa);
     defer ids.deinit();
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def| try self.addCallableCheckingVertex(&domain, &ids, def);
-    for (self.cir.method_defs.entries.items) |entry| try self.addCallableCheckingVertex(&domain, &ids, entry.value.def_idx);
+    for (self.cir.method_defs.entries.items()) |entry| try self.addCallableCheckingVertex(&domain, &ids, entry.value.def_idx);
     const defs = domain.items;
     var graph = try callable_checking.Graph.init(self.gpa, defs.len);
     defer graph.deinit();
@@ -35666,7 +35666,7 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
 }
 
 fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         if (self.cir.store.getDef(entry.value.def_idx).expr == expr_idx) return true;
     }
     return false;
@@ -41553,7 +41553,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
 /// own type is never changed: the instance is a fresh copy, related exactly
 /// as a call site at `T -> Str` relates one.
 fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         if (!entry.key.methodIdent().eql(self.cir.idents.to_inspect)) continue;
         if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(entry.key.owner)).tag != .statement_nominal_decl) continue;
         const binding_var = ModuleEnv.varFrom(entry.value.type_node_idx);
@@ -47645,7 +47645,7 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
     var seen = collections.DenseMap(MethodNameId, void).init(self.gpa);
     defer seen.deinit();
 
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         const method_name = try self.method_mint_names.internMethodIdent(self.cir.getIdentStoreConst(), entry.key.methodIdent());
         if (method_name != name) continue;
         const binding = entry.value;
@@ -47657,7 +47657,7 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
     }
 
     for (try self.methodBindingEnvs()) |env| {
-        for (env.method_defs.entries.items) |entry| {
+        for (env.method_defs.entries.items()) |entry| {
             const method_name = try self.method_mint_names.internMethodIdent(env.getIdentStoreConst(), entry.key.methodIdent());
             if (method_name != name) continue;
             const binding = entry.value;
@@ -61807,11 +61807,9 @@ test "issue 11393: imported codec methods instantiate independently and reject u
     _ = try writer.writeToBuffer(bytes);
     const frozen: *ModuleEnv.Serialized = @ptrCast(@alignCast(bytes.ptr));
     try frozen.validate(bytes.len);
-    const cached = try frozen.deserializeWithMutableTypes(@intFromPtr(bytes.ptr), gpa, source.module_env.common.source, "Browser");
-    defer {
-        cached.deinitCachedModule();
-        gpa.destroy(cached);
-    }
+    var cached_env = try frozen.deserializeInPlace(@intFromPtr(bytes.ptr), gpa, source.module_env.common.source, "Browser", .sealed);
+    defer cached_env.deinit();
+    const cached = &cached_env;
 
     for ([_]*ModuleEnv{ source.module_env, cached }) |source_env| {
         // initWithImport only borrows the source environment and its builtins.

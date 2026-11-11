@@ -649,7 +649,7 @@ pub const ModuleIndex = struct {
         fn indexDeclarations(self: *Builder) Allocator.Error!void {
             const env = self.env;
             const store = &env.store;
-            for (env.method_defs.entries.items) |entry| {
+            for (env.method_defs.entries.items()) |entry| {
                 if (store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
                 const statement: StatementId = @fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)));
                 const decl = store.getStatement(statement).s_decl;
@@ -2499,7 +2499,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     var public_defs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
     defer public_defs.deinit();
     for (tables.exported_defs) |def| try public_defs.put(def, {});
-    for (env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
+    for (env.method_defs.entries.items()) |entry| try public_defs.put(entry.value.def_idx, {});
     for (templates.by_def) |entry| {
         const id = local.template(entry.template) orelse continue;
         if (!public_defs.contains(entry.def)) eligible[@backingInt(id)] = true;

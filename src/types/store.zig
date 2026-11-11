@@ -196,6 +196,14 @@ pub const StaticDispatchRelationMerge = struct {
     retained_fn_var: Var,
 };
 
+/// How a store loaded from serialized bytes may be used.
+pub const LoadedAccess = enum {
+    /// A solved module's types, only ever read.
+    sealed,
+    /// A canonicalized module's types, which checking solves further.
+    writable,
+};
+
 /// The store of all type variables and their descriptors.
 ///
 /// Each type variable (`Var`) points to a Slot.
@@ -2817,14 +2825,15 @@ pub const Store = struct {
             self.gpa = .{ 0, 0 };
         }
 
-        /// Deserialize into a Store value (no in-place modification of cache buffer).
-        /// The base parameter is the base address of the serialized buffer in memory.
-        /// The returned Store points into the cache buffer, so it is sealed: it
-        /// holds a solved module's types, which are only ever read.
-        pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) Store {
+        /// A Store whose columns borrow the serialized columns at
+        /// `base_addr`. A `.sealed` store holds a solved module's types, which
+        /// are only ever read. A `.writable` store is solved further: it writes
+        /// its columns in place, and a column copies itself into owned memory
+        /// the first time it grows. `deinit` frees only those copies.
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator, access: LoadedAccess) Store {
             return Store{
                 .gpa = gpa,
-                .sealed = true,
+                .sealed = access == .sealed,
                 .frozen_anchors = .init(gpa),
                 .slots = self.slots.deserializeInto(base_addr),
                 .descs = self.descs.deserializeInto(base_addr, self.descs_err_written != 0),
@@ -2842,31 +2851,6 @@ pub const Store = struct {
                 .derived_map_plans = self.derived_map_plans.deserializeInto(base_addr),
                 .invalid_nominal_decl_written = self.invalid_nominal_decl_written != 0,
             };
-        }
-
-        /// Deserialize into a Store value with fresh memory allocation.
-        /// The returned Store owns its memory and can be safely grown/mutated.
-        pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!Store {
-            var store = Store{
-                .gpa = gpa,
-                .frozen_anchors = .init(gpa),
-                .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
-                .descs = .{ .backing = try self.descs.backing.deserializeWithCopy(base_addr, gpa), .err_written = self.descs_err_written != 0 },
-                .root_metas = try self.root_metas.deserializeWithCopy(base_addr, gpa),
-                .union_ranks = try self.union_ranks.deserializeWithCopy(base_addr, gpa),
-                .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
-                .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
-                .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
-                .interpolation_parts = try self.interpolation_parts.deserializeWithCopy(base_addr, gpa),
-                .numeral_infos = try self.numeral_infos.deserializeWithCopy(base_addr, gpa),
-                .interpolation_metadata = try self.interpolation_metadata.deserializeWithCopy(base_addr, gpa),
-                .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
-                .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
-                .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
-                .derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa),
-            };
-            store.invalid_nominal_decl_written = self.invalid_nominal_decl_written != 0;
-            return store;
         }
     };
 };
@@ -2945,17 +2929,6 @@ const SlotStore = struct {
             return SlotStore{
                 .payloads = self.payloads.deserializeInto(base_addr),
                 .kinds = self.kinds.deserializeInto(base_addr),
-            };
-        }
-
-        /// Deserialize into a SlotStore value with fresh memory allocation.
-        /// The returned SlotStore owns its memory and can be safely grown/mutated.
-        pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!SlotStore {
-            var payloads = try self.payloads.deserializeWithCopy(base_addr, gpa);
-            errdefer payloads.deinit(gpa);
-            return SlotStore{
-                .payloads = payloads,
-                .kinds = try self.kinds.deserializeWithCopy(base_addr, gpa),
             };
         }
     };
@@ -4042,7 +4015,7 @@ test "Store empty CompactWriter roundtrip" {
 
     // Deserialize
     const deserialized_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
     const deserialized = &deserialized_value;
 
     // Verify empty
@@ -4101,7 +4074,7 @@ test "Store basic CompactWriter roundtrip" {
 
     // Deserialize
     const deserialized_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
     const deserialized = &deserialized_value;
 
     // Verify the types are accessible
@@ -4221,7 +4194,7 @@ test "nominal declaration table: CompactWriter roundtrip" {
     _ = try file.readPositionalAll(io, buffer, 0);
 
     const deserialized_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
     const deserialized = &deserialized_value;
 
     try std.testing.expectEqual(@as(u64, 1), deserialized.nominalDeclCount());
@@ -4337,7 +4310,7 @@ test "derived map plans: CompactWriter roundtrip" {
     _ = try file.readPositionalAll(io, buffer, 0);
 
     const serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
     try std.testing.expectEqual(plan, deserialized.derivedMapPlan(callable).?);
     try std.testing.expectEqual(@as(?DerivedMapPlan, null), deserialized.derivedMapPlan(plain));
 }
@@ -4451,7 +4424,7 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     // Deserialize - the serialized Store is at the beginning of the buffer
     const deserialized_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
     const deserialized = &deserialized_value;
 
     // Verify all types
@@ -4695,7 +4668,7 @@ test "Store.Serialized roundtrip" {
 
     // Deserialize - Store.Serialized is at the beginning of the buffer
     const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
 
     // Verify the store was deserialized correctly (flex, str_var, redirect,
     // the undetermined field's presence var, and the three union-rank class
@@ -4724,13 +4697,20 @@ test "Store.Serialized roundtrip" {
     try std.testing.expectEqual(null, deserialized_fields.items(.presence)[0].presenceVar());
     try std.testing.expectEqual(field_presence, deserialized_fields.items(.presence)[1].presenceVar());
 
-    var copied = try deser_ptr.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
-    defer copied.deinit();
+    // A writable load solves further: a new variable grows the borrowed
+    // columns by copying them, and every loaded variable still resolves.
+    var writable = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, .writable);
+    defer writable.deinit();
+    try std.testing.expect(!writable.isSealed());
+    const added = try writable.fresh();
+    try std.testing.expectEqual(@as(usize, 8), writable.len());
+    try std.testing.expect(writable.resolveVar(added).is_root);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, writable.resolveVar(str_var).desc.content);
 
-    const copied_fields = copied.getRecordFieldsSlice(record_fields);
-    try std.testing.expectEqual(@as(usize, 2), copied_fields.len);
-    try std.testing.expectEqual(null, copied_fields.items(.presence)[0].presenceVar());
-    try std.testing.expectEqual(field_presence, copied_fields.items(.presence)[1].presenceVar());
+    const writable_fields = writable.getRecordFieldsSlice(record_fields);
+    try std.testing.expectEqual(@as(usize, 2), writable_fields.len);
+    try std.testing.expectEqual(null, writable_fields.items(.presence)[0].presenceVar());
+    try std.testing.expectEqual(field_presence, writable_fields.items(.presence)[1].presenceVar());
 }
 
 test "Store.Serialized bytes are a function of the stored types" {
@@ -4877,15 +4857,15 @@ test "Store multiple instances CompactWriter roundtrip" {
 
     // Deserialize all three
     const deserialized1_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr + offset1));
-    var deserialized1_value = deserialized1_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    var deserialized1_value = deserialized1_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
     const deserialized1 = &deserialized1_value;
 
     const deserialized2_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr + offset2));
-    var deserialized2_value = deserialized2_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    var deserialized2_value = deserialized2_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
     const deserialized2 = &deserialized2_value;
 
     const deserialized3_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr + offset3));
-    var deserialized3_value = deserialized3_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    var deserialized3_value = deserialized3_serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
     const deserialized3 = &deserialized3_value;
 
     // Verify store 1
@@ -5043,14 +5023,14 @@ test "the written flags travel with the serialized store" {
         _ = try writer.writeToBuffer(buffer);
 
         const loaded_ptr: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-        var loaded = loaded_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+        var loaded = loaded_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, .sealed);
         defer loaded.deinit();
         try std.testing.expectEqual(write_err, loaded.descs.err_written);
         try std.testing.expect(!loaded.invalid_nominal_decl_written);
         try std.testing.expectEqual(write_err, loaded.mayContainErrorState());
 
-        var copied = try loaded_ptr.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
-        defer copied.deinit();
-        try std.testing.expectEqual(write_err, copied.mayContainErrorState());
+        var writable = loaded_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, .writable);
+        defer writable.deinit();
+        try std.testing.expectEqual(write_err, writable.mayContainErrorState());
     }
 }

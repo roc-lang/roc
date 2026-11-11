@@ -1,6 +1,7 @@
 //! Static views and validation for compiler-embedded builtins.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const collections = @import("collections");
 
@@ -13,9 +14,10 @@ pub const BuiltinModuleView = struct {
     env: *ModuleEnv,
     gpa: Allocator,
 
-    /// Destroy the wrapper ModuleEnv without freeing the static builtin backing bytes.
+    /// Destroy the wrapper ModuleEnv. Its lists borrow the static builtin
+    /// bytes, which `deinit` never frees.
     pub fn deinit(self: *BuiltinModuleView) void {
-        self.env.common.idents.deinitTextRanks();
+        self.env.deinit();
         self.gpa.destroy(self.env);
         self.* = undefined;
     }
@@ -48,7 +50,19 @@ pub fn moduleView(
         gpa,
         source,
         module_name,
-    ) catch return error.CorruptEmbeddedBuiltins;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.CorruptSerializedModuleEnv => return error.CorruptEmbeddedBuiltins,
+    };
+    errdefer env.deinit();
+
+    // The view's lists read the embedded bytes in place, and every compilation
+    // in the process shares them, so nothing may write through the view: its
+    // type store is sealed, it has no imports or node scratch, and the baked
+    // module is already prepared for checked-artifact use, so nothing inserts
+    // into its identifier or string-literal tables. Debug builds enforce that
+    // by making the bytes read-only, so a write faults where it happens.
+    if (comptime builtin.mode == .debug) protectReadOnly(backing);
 
     // Checked publication can request many keys from this frozen source view.
     // Share its lazy rank generation across those walks without touching the
@@ -59,6 +73,23 @@ pub fn moduleView(
         .env = env,
         .gpa = gpa,
     };
+}
+
+/// Make the whole pages inside `bytes` read-only, on the targets that can.
+fn protectReadOnly(bytes: []u8) void {
+    const can_protect = builtin.os.tag == .linux or (builtin.os.tag.isDarwin() and builtin.link_libc);
+    if (comptime !can_protect) return;
+
+    const page = std.heap.pageSize();
+    const start = std.mem.alignForward(usize, @intFromPtr(bytes.ptr), page);
+    const end = std.mem.alignBackward(usize, @intFromPtr(bytes.ptr) + bytes.len, page);
+    if (end <= start) return;
+    const failed = if (comptime builtin.os.tag == .linux)
+        std.os.linux.errno(std.os.linux.mprotect(@ptrFromInt(start), end - start, .{ .READ = true })) != .SUCCESS
+    else
+        std.c.mprotect(@ptrFromInt(start), end - start, .{ .READ = true }) != 0;
+    // Changing the protection of the process's own data pages cannot fail.
+    std.debug.assert(!failed);
 }
 
 /// Validate that generated builtin metadata matches the compiler's current builtin registry.

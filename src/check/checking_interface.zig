@@ -425,13 +425,13 @@ const Publication = struct {
             try self.value(env.imports.getResolvedModule(import_id));
         }
 
-        const exposed = env.common.exposed_items.items.entries.items;
+        const exposed = env.common.exposed_items.items.entries.items();
         const order = try env.gpa.alloc(usize, exposed.len);
         defer env.gpa.free(order);
         for (order, 0..) |*position, i| position.* = i;
         std.mem.sort(usize, order, env, struct {
             fn lessThan(module: *const ModuleEnv, a: usize, b: usize) bool {
-                const entries = module.common.exposed_items.items.entries.items;
+                const entries = module.common.exposed_items.items.entries.items();
                 return base.Ident.textLessThan(module.getIdent(@bitCast(entries[a].key)), module.getIdent(@bitCast(entries[b].key)));
             }
         }.lessThan);
@@ -461,16 +461,16 @@ const Publication = struct {
         const declarations = env.store.sliceStatements(env.type_decls);
         try self.section("declarations", declarations.len);
         for (declarations) |declaration_id| try self.declaration(declaration_id);
-        try self.section("method definitions", env.method_defs.entries.items.len);
-        for (env.method_defs.entries.items) |entry| {
+        try self.section("method definitions", env.method_defs.entries.items().len);
+        for (env.method_defs.entries.items()) |entry| {
             const owner = entry.key.ownerIdent();
             dependencies.hashU32(&self.hasher, try self.foreignNode(env.selfModuleIdentity(), @backingInt(owner.owner)));
             try self.value(entry.key.methodIdent());
             try self.scheme(entry.value.type_node_idx);
             try self.definition(entry.value.def_idx, classify);
         }
-        try self.section("method identifiers", env.method_idents.entries.items.len);
-        for (env.method_idents.entries.items) |entry| {
+        try self.section("method identifiers", env.method_idents.entries.items().len);
+        for (env.method_idents.entries.items()) |entry| {
             const owner = entry.key.ownerIdent();
             dependencies.hashU32(&self.hasher, try self.foreignNode(env.selfModuleIdentity(), @backingInt(owner.owner)));
             try self.value(entry.key.methodIdent());

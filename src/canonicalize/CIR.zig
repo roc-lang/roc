@@ -1120,6 +1120,14 @@ pub const Import = struct {
                 try self.resolved_modules.serialize(&store.resolved_modules, allocator, writer);
             }
 
+            /// Reject parallel lists of different lengths, or a lookup table a
+            /// probe could walk forever. Constant time: no cell is read.
+            pub fn validateShape(self: *const Serialized) error{CorruptArtifact}!void {
+                if (self.import_idents.len != self.imports.len) return error.CorruptArtifact;
+                if (self.resolved_modules.len != self.imports.len) return error.CorruptArtifact;
+                if (!collections.serde_validation.probeTableShapeValid(self.lookup.len, self.imports.len)) return error.CorruptArtifact;
+            }
+
             /// A store whose lists, the lookup table included, borrow the
             /// serialized lists at `base_addr`.
             pub fn deserializeInto(self: *const Serialized, base_addr: usize) Store {

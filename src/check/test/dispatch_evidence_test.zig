@@ -32,7 +32,7 @@ fn defVar(env: *const ModuleEnv, name: []const u8) error{TestUnexpectedResult}!V
 /// Find an associated method's def var by method name via the method-defs map.
 fn methodDefVar(env: *ModuleEnv, name: []const u8) error{TestUnexpectedResult}!Var {
     const idents = env.getIdentStoreConst();
-    for (env.method_defs.entries.items) |entry| {
+    for (env.method_defs.entries.items()) |entry| {
         if (std.mem.eql(u8, name, idents.getText(entry.key.methodIdent()))) {
             return ModuleEnv.varFrom(entry.value.def_idx);
         }

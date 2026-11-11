@@ -50,7 +50,6 @@ const NamePrefix = struct {
         return .{
             .bytes = .fromBorrowedSlice(try self.bytes.capture(allocator, source.bytes.items())),
             .ends = .fromBorrowedSlice(try self.ends.capture(allocator, source.ends.items())),
-            .supports_inserts = false,
         };
     }
 

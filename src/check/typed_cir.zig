@@ -3,7 +3,6 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
-const collections = @import("collections");
 const types = @import("types");
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -12,11 +11,6 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
 const CommonIdents = ModuleEnv.CommonIdents;
-const CompactWriter = collections.CompactWriter;
-const CachedModule = struct {
-    env: *ModuleEnv,
-    buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-};
 
 const OwnedCheckedModule = struct {
     env: *ModuleEnv,
@@ -29,7 +23,6 @@ const ModuleData = struct {
     ownership: union(enum) {
         borrowed,
         owned_checked: OwnedCheckedModule,
-        owned_cached: CachedModule,
     },
 
     fn initBorrowed(env: *ModuleEnv) ModuleData {
@@ -49,16 +42,6 @@ const ModuleData = struct {
         };
     }
 
-    fn initOwnedCached(env: *ModuleEnv, buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8) ModuleData {
-        return .{
-            .env = env,
-            .ownership = .{ .owned_cached = .{
-                .env = env,
-                .buffer = buffer,
-            } },
-        };
-    }
-
     fn deinit(self: *ModuleData, allocator: Allocator) void {
         self.top_level_defs_by_ident.deinit(allocator);
         switch (self.ownership) {
@@ -66,11 +49,6 @@ const ModuleData = struct {
             .owned_checked => |owned| {
                 owned.env.deinit();
                 if (owned.owned_source) |source| allocator.free(source);
-                allocator.destroy(owned.env);
-            },
-            .owned_cached => |owned| {
-                owned.env.deinitCachedModule();
-                allocator.free(owned.buffer);
                 allocator.destroy(owned.env);
             },
         }
@@ -88,7 +66,6 @@ pub const Modules = struct {
     pub const SourceModule = union(enum) {
         precompiled: *ModuleEnv,
         owned_checked: OwnedCheckedModule,
-        owned_cached: CachedModule,
 
         fn initModuleData(self: @This(), allocator: Allocator) Allocator.Error!ModuleData {
             return switch (self) {
@@ -99,10 +76,6 @@ pub const Modules = struct {
                 .owned_checked => |owned| blk: {
                     try prepareRuntimeEnv(allocator, owned.env);
                     break :blk ModuleData.initOwnedChecked(owned.env, owned.owned_source);
-                },
-                .owned_cached => |owned| blk: {
-                    try prepareRuntimeEnv(allocator, owned.env);
-                    break :blk ModuleData.initOwnedCached(owned.env, owned.buffer);
                 },
             };
         }
@@ -190,16 +163,15 @@ pub const Modules = struct {
 };
 
 /// Prepare a checked `ModuleEnv` for runtime use so it can pair with a published or
-/// relocated artifact: enable runtime ident inserts, ensure module-name idents, and
-/// finalize method tables. This is the single source of that 3-step prep—used by
+/// relocated artifact: give its identifier store rank scratch, ensure module-name
+/// idents, and finalize method tables. This is the single source of that 3-step prep—used by
 /// `Modules.init`'s `SourceModule` handling and called DIRECTLY (without building a
 /// whole `Modules` graph) by the builtin and cache-hit load paths, which only need
 /// the env prepared.
 pub fn prepareRuntimeEnv(allocator: Allocator, env: *ModuleEnv) Allocator.Error!void {
     if (env.runtime_prepared) return;
 
-    try env.getIdentStore().enableRuntimeInserts(allocator);
-    try env.module_identities.enableRuntimeInserts(allocator);
+    try env.getIdentStore().enableTextRanks(allocator);
     try ensureModuleNameIdents(env);
     env.finalizeMethodTables();
     env.runtime_prepared = true;
@@ -318,7 +290,7 @@ pub const Module = struct {
             std.debug.assert(self.env().method_defs.sorted);
             std.debug.assert(self.env().method_defs.deduplicated);
         }
-        return self.env().method_defs.entries.items;
+        return self.env().method_defs.entries.items();
     }
 
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {

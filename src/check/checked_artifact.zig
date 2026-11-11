@@ -229,20 +229,15 @@ pub const ModuleEnvStorage = union(enum) {
     checked_source: *ModuleEnv,
     static_builtin: *ModuleEnv,
     /// An environment relocated in place inside a loaded cache entry, which
-    /// also backs the module's artifact. The storage owns the entry and the
-    /// source; `release_entry` releases the entry with the env's allocator.
-    cached_entry: struct {
-        env: *ModuleEnv,
-        entry: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-        release_entry: *const fn ([]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, Allocator) void,
-        source: []const u8,
-    },
+    /// also backs the module's artifact. The environment owns the entry (its
+    /// `loaded_entry`); the storage owns the environment and its source.
+    cached_entry: *ModuleEnv,
 
     pub fn env(self: *const ModuleEnvStorage) *ModuleEnv {
         return switch (self.*) {
             .checked_source => |module_env| module_env,
             .static_builtin => |module_env| module_env,
-            .cached_entry => |cached| cached.env,
+            .cached_entry => |module_env| module_env,
         };
     }
 
@@ -252,7 +247,7 @@ pub const ModuleEnvStorage = union(enum) {
 
     pub fn deinit(self: *ModuleEnvStorage) void {
         switch (self.*) {
-            .checked_source => |module_env| {
+            .checked_source, .cached_entry => |module_env| {
                 const env_alloc = module_env.gpa;
                 const source = module_env.common.source;
                 module_env.deinit();
@@ -260,15 +255,10 @@ pub const ModuleEnvStorage = union(enum) {
                 env_alloc.destroy(module_env);
             },
             .static_builtin => |module_env| {
-                module_env.common.idents.deinitTextRanks();
+                // The env's lists borrow the executable's static bytes, which
+                // `deinit` never frees.
+                module_env.deinit();
                 module_env.gpa.destroy(module_env);
-            },
-            .cached_entry => |cached| {
-                const env_alloc = cached.env.gpa;
-                cached.env.deinitCachedModule();
-                if (cached.source.len > 0) env_alloc.free(@constCast(cached.source));
-                env_alloc.destroy(cached.env);
-                cached.release_entry(cached.entry, env_alloc);
             },
         }
         self.* = undefined;
@@ -22673,8 +22663,6 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
                     @field(result, field_name) = allocator;
                 } else if (comptime pairingFieldNameEql(field_name, "serialized")) {
                     @field(result, field_name) = false;
-                } else if (comptime pairingFieldNameEql(field_name, "supports_inserts")) {
-                    @field(result, field_name) = true;
                 } else {
                     @field(result, field_name) = try copyPairingColumns(field_type, @field(source, field_name), allocator);
                 }

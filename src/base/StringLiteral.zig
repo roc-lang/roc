@@ -239,6 +239,13 @@ pub const BuilderState = struct {
             self._padding = 0;
         }
 
+        /// Reject a probe table a lookup could walk forever. Constant time:
+        /// no cell is read.
+        pub fn validateShape(self: *const Serialized) error{CorruptArtifact}!void {
+            if (self.fingerprints.len != self.cells.len) return error.CorruptArtifact;
+            if (!collections.serde_validation.probeTableShapeValid(self.cells.len, self.len)) return error.CorruptArtifact;
+        }
+
         /// A table whose columns borrow the serialized columns at `base`.
         pub fn deserializeInto(self: *const Serialized, base: usize) BuilderState {
             return .{ .index = .{
@@ -808,4 +815,33 @@ test "a loaded dedup table deduplicates and appends exactly like the table it wa
         try std.testing.expectEqual(try builder.insert(&store, gpa, text), try loaded_builder.insert(&loaded_store, gpa, text));
     }
     try std.testing.expectEqualSlices(u8, store.buffer.items(), loaded_store.buffer.items());
+}
+
+test "a dedup table whose probe could not stop fails validation" {
+    const gpa = std.testing.allocator;
+
+    var store = Store{};
+    defer store.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
+    _ = try builder.insert(&store, gpa, "one");
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const header = try writer.appendAlloc(gpa, BuilderState.Serialized);
+    try header.serialize(&builder, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    const loaded: *BuilderState.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try collections.validateSerializedRelocations(BuilderState.Serialized, loaded, buffer.len);
+
+    const intact = loaded.*;
+    loaded.len = @intCast(loaded.cells.len);
+    try std.testing.expectError(error.CorruptArtifact, collections.validateSerializedRelocations(BuilderState.Serialized, loaded, buffer.len));
+
+    loaded.* = intact;
+    loaded.fingerprints.len -= 1;
+    try std.testing.expectError(error.CorruptArtifact, collections.validateSerializedRelocations(BuilderState.Serialized, loaded, buffer.len));
 }

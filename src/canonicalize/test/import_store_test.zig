@@ -253,4 +253,16 @@ test "Import.Store loaded from its serialized form finds and adds imports" {
     for (loaded.imports.items(), 0..) |string_idx, i| {
         try testing.expectEqual(@as(?Import.Idx, @fromBackingInt(@intCast(i))), loaded.find(string_idx));
     }
+
+    // A lookup table with no empty cell, or lists of different lengths, is
+    // a corrupt entry.
+    try collections.validateSerializedRelocations(Import.Store.Serialized, serialized_ptr, buffer.len);
+    const intact = serialized_ptr.*;
+    serialized_ptr.imports.len = serialized_ptr.lookup.len;
+    serialized_ptr.import_idents.len = serialized_ptr.lookup.len;
+    serialized_ptr.resolved_modules.len = serialized_ptr.lookup.len;
+    try testing.expectError(error.CorruptArtifact, serialized_ptr.validateShape());
+    serialized_ptr.* = intact;
+    serialized_ptr.resolved_modules.len -= 1;
+    try testing.expectError(error.CorruptArtifact, serialized_ptr.validateShape());
 }

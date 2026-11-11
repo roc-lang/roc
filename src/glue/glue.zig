@@ -4610,7 +4610,7 @@ fn collectModuleTypeInfo(
     const module_env = artifact.moduleEnvConst();
     var member_by_def = std.AutoHashMap(can.CIR.Def.Idx, can.ModuleEnv.MethodKey).init(gpa);
     defer member_by_def.deinit();
-    for (module_env.method_defs.entries.items) |member_entry| {
+    for (module_env.method_defs.entries.items()) |member_entry| {
         try member_by_def.put(member_entry.value.def_idx, member_entry.key);
     }
 

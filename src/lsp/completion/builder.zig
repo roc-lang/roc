@@ -1170,7 +1170,7 @@ pub const CompletionBuilder = struct {
         const type_name = method_owner.type_name;
 
         // Iterate through method_idents to find all methods for this owner.
-        const entries = module_env.method_idents.entries.items;
+        const entries = module_env.method_idents.entries.items();
         for (entries) |entry| {
             // Check if this method is for our type owner.
             if (entry.key.owner == method_owner.owner) {

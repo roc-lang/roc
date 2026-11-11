@@ -13,6 +13,63 @@ const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 
+/// Counts the releases of a loaded entry, which is a heap buffer here.
+const CountedRelease = struct {
+    var count: usize = 0;
+
+    fn release(bytes: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, allocator: std.mem.Allocator) void {
+        count += 1;
+        allocator.free(bytes);
+    }
+};
+
+test "a ModuleEnv loaded in place grows by copying and releases its entry once" {
+    const gpa = std.testing.allocator;
+    const source = "x = 1\n";
+
+    var original = try ModuleEnv.init(gpa, source);
+    defer original.deinit();
+    try original.initCIRFields("Loaded");
+    const x = try original.insertIdent(Ident.for_text("x"));
+    const literal = try original.insertString("literal");
+    const first_var = try original.types.fresh();
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, ModuleEnv.Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    _ = try writer.writeToBuffer(buffer);
+
+    const loaded: *const ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try loaded.validate(buffer.len);
+    var env = loaded.deserializeInPlace(@intFromPtr(buffer.ptr), gpa, source, "Loaded", .writable) catch |err| {
+        gpa.free(buffer);
+        return err;
+    };
+    env.loaded_entry = .{ .bytes = buffer, .release = &CountedRelease.release };
+    CountedRelease.count = 0;
+
+    // Existing entries come back where they were written.
+    try testing.expectEqual(x, try env.insertIdent(Ident.for_text("x")));
+    try testing.expectEqual(literal, try env.insertString("literal"));
+    try testing.expect(!env.types.isSealed());
+
+    // New entries grow the borrowed lists into owned memory.
+    const y = try env.insertIdent(Ident.for_text("y"));
+    const another = try env.insertString("another");
+    const second_var = try env.types.fresh();
+    try testing.expectEqualStrings("y", env.getIdent(y));
+    try testing.expectEqualStrings("another", env.getString(another));
+    try testing.expect(env.types.resolveVar(second_var).is_root);
+    try testing.expect(env.types.resolveVar(first_var).is_root);
+    try testing.expectEqual(x, try env.insertIdent(Ident.for_text("x")));
+
+    // `deinit` frees the grown copies, then the entry, exactly once.
+    env.deinit();
+    try testing.expectEqual(@as(usize, 1), CountedRelease.count);
+}
+
 test "ModuleEnv.Serialized roundtrip" {
     const gpa = std.testing.allocator;
     const source = "hello world\ntest line 2\n";
@@ -87,11 +144,9 @@ test "ModuleEnv.Serialized roundtrip" {
     corrupt_serialized.common.idents.interner.bytes.len = std.math.maxInt(u64);
     try std.testing.expectError(error.CorruptArtifact, corrupt_serialized.validate(buffer.len));
 
-    const env = try deserialized_ptr.deserializeWithMutableTypes(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
-    defer {
-        env.deinitCachedModule();
-        gpa.destroy(env);
-    }
+    var loaded_env = try deserialized_ptr.deserializeInPlace(@intFromPtr(buffer.ptr), gpa, source, "TestModule", .sealed);
+    defer loaded_env.deinit();
+    const env = &loaded_env;
 
     try std.testing.expectEqual(original.common.idents.interner.entry_count, env.common.idents.interner.entry_count);
     try std.testing.expectEqualStrings("hello", original.getIdent(hello_idx));
@@ -291,11 +346,9 @@ test "ModuleEnv.Serialized roundtrip preserves file dependency states" {
     _ = try writer.writeToBuffer(buffer);
 
     const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const env = try deserialized_ptr.deserializeWithMutableTypes(@intFromPtr(buffer.ptr), gpa, source, "Test");
-    defer {
-        env.deinitCachedModule();
-        gpa.destroy(env);
-    }
+    var loaded_env = try deserialized_ptr.deserializeInPlace(@intFromPtr(buffer.ptr), gpa, source, "Test", .sealed);
+    defer loaded_env.deinit();
+    const env = &loaded_env;
 
     const deps = env.file_dependencies.items();
     try testing.expectEqual(@as(usize, 3), deps.len);

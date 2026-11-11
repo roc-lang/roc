@@ -1961,7 +1961,7 @@ pub const SyntaxChecker = struct {
         if (store.nodes.get(node_idx).tag != .def) return null;
         const def = store.getDef(@fromBackingInt(value_node));
         const ident = module_lookup.extractIdentFromPattern(store, def.pattern) orelse return null;
-        for (module_env.method_idents.entries.items) |entry| {
+        for (module_env.method_idents.entries.items()) |entry| {
             if (entry.value.eql(ident)) return entry.key.owner;
         }
         return null;

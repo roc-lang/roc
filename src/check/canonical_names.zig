@@ -388,7 +388,6 @@ pub const CanonicalNameStore = struct {
             return .{
                 .bytes = .fromBorrowedSlice(@constCast(self.bytes)),
                 .ends = .fromBorrowedSlice(@constCast(self.ends)),
-                .supports_inserts = false,
             };
         }
     };

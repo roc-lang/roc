@@ -22,7 +22,6 @@ const CommonEnv = @This();
 idents: Ident.Store,
 strings: StringLiteral.Store,
 string_builder: StringLiteral.BuilderState = .{},
-strings_insertable: bool = true,
 /// The items (a combination of types and values) that this module exposes
 exposed_items: ExposedItems,
 /// Line starts for error reporting. We retain only start and offset positions in the IR
@@ -42,7 +41,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = idents,
         .strings = strings,
         .string_builder = .{},
-        .strings_insertable = true,
         .exposed_items = ExposedItems.init(),
         .line_starts = line_starts,
         .source = source,
@@ -66,10 +64,7 @@ pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.E
     var strings = try self.strings.clone(gpa);
     errdefer strings.deinit(gpa);
 
-    var string_builder = if (self.strings_insertable)
-        try self.string_builder.clone(gpa)
-    else
-        StringLiteral.BuilderState{};
+    var string_builder = try self.string_builder.clone(gpa);
     errdefer string_builder.deinit(gpa);
 
     var exposed_items = try self.exposed_items.clone(gpa);
@@ -82,7 +77,6 @@ pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.E
         .idents = idents,
         .strings = strings,
         .string_builder = string_builder,
-        .strings_insertable = self.strings_insertable,
         .exposed_items = exposed_items,
         .line_starts = line_starts,
         .source = self.source,
@@ -121,8 +115,9 @@ pub const Serialized = extern struct {
         self.source = .{ 0, 0 };
     }
 
-    /// Deserialize into a CommonEnv value (no in-place modification of cache buffer).
-    /// The base_addr parameter is the base address of the serialized buffer in memory.
+    /// A CommonEnv whose stores borrow the serialized bytes at `base_addr`.
+    /// It reads and writes them in place, each list copies itself into owned
+    /// memory the first time it grows, and `deinit` frees only those copies.
     pub fn deserializeInto(
         self: *const Serialized,
         base_addr: usize,
@@ -132,49 +127,8 @@ pub const Serialized = extern struct {
             .idents = self.idents.deserializeInto(base_addr),
             .strings = self.strings.deserializeInto(base_addr),
             .string_builder = self.string_builder.deserializeInto(base_addr),
-            .strings_insertable = false,
             .exposed_items = self.exposed_items.deserializeInto(base_addr),
             .line_starts = self.line_starts.deserializeInto(base_addr),
-            .source = source,
-        };
-    }
-
-    /// Deserialize into a CommonEnv that owns every byte it holds, so later
-    /// compilation stages may append identifiers, string literals, exposed
-    /// items, and line starts to it. `deinit` releases it exactly like a
-    /// freshly constructed `CommonEnv`.
-    pub fn deserializeOwned(
-        self: *const Serialized,
-        base_addr: usize,
-        gpa: Allocator,
-        source: []const u8,
-    ) Allocator.Error!CommonEnv {
-        const frozen = self.deserializeInto(base_addr, source);
-
-        // `enableRuntimeInserts` copies the interner's columns into owned,
-        // growable memory that `deinit` releases.
-        var idents = frozen.idents;
-        try idents.enableRuntimeInserts(gpa);
-        errdefer idents.deinit(gpa);
-
-        var strings = try frozen.strings.clone(gpa);
-        errdefer strings.deinit(gpa);
-
-        var string_builder = try frozen.string_builder.clone(gpa);
-        errdefer string_builder.deinit(gpa);
-
-        var exposed_items = try frozen.exposed_items.clone(gpa);
-        errdefer exposed_items.deinit(gpa);
-
-        const line_starts = try frozen.line_starts.clone(gpa);
-
-        return CommonEnv{
-            .idents = idents,
-            .strings = strings,
-            .string_builder = string_builder,
-            .strings_insertable = true,
-            .exposed_items = exposed_items,
-            .line_starts = line_starts,
             .source = source,
         };
     }
@@ -216,18 +170,12 @@ pub fn getIdentStore(self: *const CommonEnv) *const Ident.Store {
 
 /// Inserts a string literal into the store and returns its index.
 pub fn insertString(self: *CommonEnv, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!StringLiteral.Idx {
-    self.assertStringsInsertable();
     return try self.string_builder.insert(&self.strings, gpa, string);
 }
 
 /// Retrieves a string literal by its index.
 pub fn getString(self: *const CommonEnv, idx: StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
-}
-
-fn assertStringsInsertable(self: *const CommonEnv) void {
-    if (self.strings_insertable) return;
-    invariant("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
 }
 
 /// Adds an identifier to the exposed items list by its index.
@@ -441,7 +389,7 @@ test "CommonEnv.Serialized roundtrip" {
     try testing.expectEqualStrings(source, env.source);
 }
 
-test "CommonEnv.Serialized deserializeOwned keeps inserting where the original left off" {
+test "CommonEnv.Serialized loaded in place keeps inserting where the original left off" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -473,7 +421,7 @@ test "CommonEnv.Serialized deserializeOwned keeps inserting where the original l
     _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    var env = try deserialized_ptr.deserializeOwned(@intFromPtr(buffer.ptr), gpa, source);
+    var env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
     defer env.deinit(gpa);
 
     try testing.expectEqualStrings("shared literal", env.getString(first));

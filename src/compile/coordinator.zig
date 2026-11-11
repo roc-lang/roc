@@ -5110,9 +5110,9 @@ pub const Coordinator = struct {
 
         // Load the entry as a copy-on-write mmap where the OS supports it, heap-read
         // otherwise. Both bodies start at 16-byte-aligned entry offsets, so they
-        // are relocated in place: the installed env's `.cached_entry` storage
-        // owns the whole entry and releases it when the module is torn down, and
-        // the artifact aliases its body without owning it. Writes made while
+        // are relocated in place: the installed env owns the whole entry (its
+        // `loaded_entry`) and releases it when the module is torn down, and the
+        // artifact aliases its body without owning it. Writes made while
         // relocating stay private to this process.
         const cache_data = manager.loadRawBytesMappedIn(module_alloc, .checked, typing_context.key.bytes, entries_dir) orelse return false;
         var entry_owned = true;
@@ -5154,18 +5154,28 @@ pub const Coordinator = struct {
         defer if (source_owned) module_alloc.free(source);
 
         const serialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(env_buffer.ptr));
-        const cached_env = serialized_ptr.deserializeWithMutableTypes(
+        serialized_ptr.validate(env_buffer.len) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        const cached_env = module_alloc.create(ModuleEnv) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        cached_env.* = serialized_ptr.deserializeInPlace(
             @intFromPtr(env_buffer.ptr),
             module_alloc,
             source,
             current_env.module_name,
+            .sealed,
         ) catch {
+            module_alloc.destroy(cached_env);
             manager.stats.recordInvalidation();
             return false;
         };
         var cached_env_owned = true;
         defer if (cached_env_owned) {
-            cached_env.deinitCachedModule();
+            cached_env.deinit();
             module_alloc.destroy(cached_env);
         };
 
@@ -5244,19 +5254,9 @@ pub const Coordinator = struct {
         artifact_ptr.* = artifact_serialized.deserializeStatic(
             artifact_buffer,
             module_alloc,
-            .{ .cached_entry = .{
-                .env = cached_env,
-                .entry = switch (cache_data) {
-                    .mapped => |mapped| mapped.region,
-                    .allocated => |allocated| @constCast(allocated),
-                },
-                .release_entry = switch (cache_data) {
-                    .mapped => &releaseMappedCacheEntry,
-                    .allocated => &releaseAllocatedCacheEntry,
-                },
-                .source = source,
-            } },
+            .{ .cached_entry = cached_env },
         );
+        cached_env.loaded_entry = cache_data.intoLoadedEntry();
         artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys, synthesized_keys);
         artifact_ptr.body_analyses = body_analyses;
         sealed_keys_owned = false;
@@ -5297,16 +5297,6 @@ pub const Coordinator = struct {
     /// this process owns, and every body starts at an aligned entry offset.
     fn writableCacheBody(body: []const u8) []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
         return @alignCast(@constCast(body));
-    }
-
-    /// Release a mapped entry, whose storage holds the mapping's whole region.
-    fn releaseMappedCacheEntry(entry: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, _: Allocator) void {
-        const mapped: CoreCtx.MappedFile = .{ .region = @alignCast(entry), .file_len = entry.len };
-        mapped.unmap();
-    }
-
-    fn releaseAllocatedCacheEntry(entry: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, allocator: Allocator) void {
-        allocator.free(entry);
     }
 
     /// Complete one module successfully and notify every dependency consumer.
@@ -7127,38 +7117,45 @@ pub const Coordinator = struct {
         const manager = self.cache_manager orelse return null;
         if (!manager.config.enabled) return null;
 
-        const scratch = task_allocs.scratch;
         const entries_dir = self.cache_entry_dirs.canonicalized orelse {
             manager.recordMissFor(.canonicalized);
             return null;
         };
 
-        // The mapping is released before this function returns; the loaded
-        // environment owns every byte it holds, and the parse-stage record is
-        // decoded into owned results below, so nothing outlives the mapping.
-        const cache_data = manager.loadRawBytesMappedIn(scratch, .canonicalized, cache_key, entries_dir) orelse return null;
-        defer cache_data.deinit(scratch);
+        // The environment is relocated in place inside the entry, so the entry
+        // lives as long as the environment: it is loaded with the environment's
+        // allocator, and once the environment exists it owns the entry (its
+        // `loaded_entry`), releasing it in `deinit` on every path below. The
+        // parse-stage record is decoded into owned results.
+        const module_alloc = task_allocs.module;
+        const cache_data = manager.loadRawBytesMappedIn(module_alloc, .canonicalized, cache_key, entries_dir) orelse return null;
+        var entry_owned = true;
+        defer if (entry_owned) cache_data.deinit(module_alloc);
 
         const bodies = decodeCanonicalizedModuleCacheEntry(cache_key, cache_data.data()) orelse {
             manager.recordInvalidationFor(.canonicalized);
             return null;
         };
 
-        const module_alloc = task_allocs.module;
         const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(bodies.env_body.ptr));
         serialized.validate(bodies.env_body.len) catch {
             manager.recordInvalidationFor(.canonicalized);
             return null;
         };
 
-        const env = serialized.deserializeOwned(
+        const env = try module_alloc.create(ModuleEnv);
+        env.* = serialized.deserializeInPlace(
             @intFromPtr(bodies.env_body.ptr),
             module_alloc,
             source_read.source,
             base.module_path.getModuleBasename(task.module_name),
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
+            .writable,
+        ) catch |err| {
+            module_alloc.destroy(env);
+            return err;
         };
+        env.loaded_entry = cache_data.intoLoadedEntry();
+        entry_owned = false;
         var env_owned = true;
         defer if (env_owned) {
             env.deinit();
