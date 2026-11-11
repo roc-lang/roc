@@ -293,8 +293,9 @@ unit_x : Point
 unit_x = { x: 1, y: 0 }
 ```
 
-This works for a record literal, and for the record a function returns when nobody wrote
-the record's type in an annotation, but not for a record type you wrote out in an annotation.
+This works for a record literal, and for a record a function returns or passes to a callback
+when nobody wrote the record's type in an annotation, but not for a record type you wrote out
+in an annotation.
 An annotation means exactly the type it says:
 
 ```roc

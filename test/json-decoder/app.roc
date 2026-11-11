@@ -165,7 +165,7 @@ main! = |json| {
 Token := { raw : Str }.{
 	parser_for = |encoding| |state| {
 		parsed = Json.parse_str(encoding, state)?
-		Ok({ value: Token.{ raw: "custom-token" }, rest: parsed.rest })
+		Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
 	}
 
 	count_utf8_bytes : Token -> U64

@@ -27,7 +27,7 @@ expect {
 Token := { raw : Str }.{
 	parser_for = |encoding| |state| {
 		parsed = Json.parse_str(encoding, state)?
-		Ok({ value: Token.{ raw: parsed.value }, rest: parsed.rest })
+		Ok({ value: { raw: parsed.value }, rest: parsed.rest })
 	}
 }
 

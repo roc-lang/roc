@@ -135,6 +135,23 @@ test "a record nested in a returned list lifts at the call" {
     );
 }
 
+test "a record passed to a callback argument lifts at the call" {
+    try expectOk(counter ++
+        \\apply = |f| f({ count: 1.U64 })
+        \\s = apply(Counter.describe)
+        \\n = apply(|r| r.count)
+    );
+}
+
+test "a record a returned function returns lifts at the call" {
+    try expectOk(counter ++
+        \\reader = |n| |m| { count: n + m }
+        \\c : Counter
+        \\c = reader(1)(2)
+        \\p = reader(3.U64)(4)
+    );
+}
+
 // Argument-side and both-sides record tails commit at the boundary
 
 test "a record pattern parameter of an unannotated function commits closed" {
@@ -158,6 +175,48 @@ test "a tail on both sides of a function commits closed" {
         \\both = |r| if r.count > 0 r else { count: 0 }
         \\c : Counter
         \\c = both({ count: 1 })
+    );
+}
+
+test "a tail both passed to a callback and taken as an argument commits closed" {
+    try expectOneMismatch(counter ++
+        \\pass = |f, r| f(if r.count > 0 r else { count: 0 })
+        \\s = pass(Counter.describe, { count: 1 })
+    );
+}
+
+test "a record pattern in a callback's own callback argument commits closed" {
+    try expectOneMismatch(counter ++
+        \\feed = |f| f(|{ count }| count)
+        \\n = feed(|g| g(Counter.{ count: 1 }))
+    );
+}
+
+test "a record only a static dispatch constraint holds commits closed" {
+    try expectOneMismatch(counter ++
+        \\Sink := {}.{
+        \\    take : Sink, a -> a
+        \\    take = |_, a| a
+        \\}
+        \\make = |sink, n| sink.take({ count: n })
+        \\sink : Sink
+        \\sink = {}
+        \\c : Counter
+        \\c = make(sink, 1)
+    );
+}
+
+test "the same record the function returns itself still lifts" {
+    try expectOk(counter ++
+        \\Sink := {}.{
+        \\    take : Sink, a -> a
+        \\    take = |_, a| a
+        \\}
+        \\make = |_sink, n| { count: n }
+        \\sink : Sink
+        \\sink = {}
+        \\c : Counter
+        \\c = make(sink, 1)
     );
 }
 

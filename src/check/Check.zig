@@ -5950,66 +5950,95 @@ fn rootsIncludeProvidedDef(self: *Self, roots: []const Var) bool {
     return false;
 }
 
-/// Where a walk of a binding's type has reached a var: in a function's own
-/// result through data alone, or anywhere else.
-const TailPosition = enum { result_data, elsewhere };
+/// Where a walk of a binding's type has reached a var (design.md
+/// "Uncommitted Record Tails"): whether a value there leaves the binding
+/// (`positive`) or enters it, and whether the path passed through data on
+/// its way. A function inside data is outside every conversion's reach, so
+/// a tail anywhere under one is `unconvertible`, as is a tail in a
+/// static-dispatch constraint or in the arguments of a nominal type whose
+/// arguments are not plain data. A function's effect dependencies name
+/// functions whose effects it shares, not values it exchanges, so the walk
+/// does not enter them.
+const TailPosition = packed struct(u3) {
+    positive: bool,
+    in_data: bool,
+    unconvertible: bool,
+
+    const unreachable_position: TailPosition = .{ .positive = false, .in_data = false, .unconvertible = true };
+
+    fn mask(self: TailPosition) u8 {
+        return @as(u8, 1) << @as(u3, @bitCast(self));
+    }
+
+    fn data(self: TailPosition) TailPosition {
+        return .{ .positive = self.positive, .in_data = true, .unconvertible = self.unconvertible };
+    }
+
+    fn functionArg(self: TailPosition) TailPosition {
+        return .{ .positive = !self.positive, .in_data = false, .unconvertible = self.unconvertible or self.in_data };
+    }
+
+    fn functionResult(self: TailPosition) TailPosition {
+        return .{ .positive = self.positive, .in_data = false, .unconvertible = self.unconvertible or self.in_data };
+    }
+};
 
 /// Fill `generalizer.quantifiable_tails` with the uncommitted record tails
-/// `roots` hold only in a function's own result, reached through data
-/// (record fields, tuple items, tag payloads, alias and nominal arguments)
-/// and not in a function type inside that result, the constraints of a
-/// variable, or a tail whose own constraints the empty record does not
-/// discharge (design.md "Uncommitted Record Tails").
+/// `roots` hold only where a value leaves the binding: every occurrence is
+/// positive (a function's result, a callback's argument, through data and
+/// further functions by polarity) and convertible, and the tail's own
+/// constraints the empty record discharges (design.md "Uncommitted Record
+/// Tails").
 fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!void {
     const quantifiable = &self.generalizer.quantifiable_tails;
     quantifiable.clearRetainingCapacity();
     // A definition the platform provides to the host has a fixed host ABI, so
     // its record tails commit (design.md "Host Symbol ABI").
-    const host_bound = self.rootsIncludeProvidedDef(roots);
+    if (self.rootsIncludeProvidedDef(roots)) return;
     var disqualified: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer disqualified.deinit(self.gpa);
-    var seen: collections.DenseMapUnmanaged(Var, TailPosition) = .empty;
+    var seen: collections.DenseMapUnmanaged(Var, u8) = .empty;
     defer seen.deinit(self.gpa);
     const Item = struct { var_: Var, position: TailPosition };
     var pending: std.ArrayListUnmanaged(Item) = .empty;
     defer pending.deinit(self.gpa);
 
+    const top: TailPosition = .{ .positive = true, .in_data = false, .unconvertible = false };
     for (roots) |root| {
         const resolved = self.types.resolveVar(root);
         switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     const entry = try seen.getOrPut(self.gpa, resolved.var_);
-                    entry.value_ptr.* = .elsewhere;
-                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = .elsewhere });
-                    for (self.types.sliceVars(func.effect_deps)) |dep| try pending.append(self.gpa, .{ .var_ = dep, .position = .elsewhere });
-                    try pending.append(self.gpa, .{ .var_ = func.ret, .position = .result_data });
+                    entry.value_ptr.* = 0xff;
+                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = top.functionArg() });
+                    try pending.append(self.gpa, .{ .var_ = func.ret, .position = top.functionResult() });
                     continue;
                 },
                 else => {},
             },
             else => {},
         }
-        try pending.append(self.gpa, .{ .var_ = root, .position = .elsewhere });
+        // A binding that is not a function quantifies no record tail.
+        try pending.append(self.gpa, .{ .var_ = root, .position = TailPosition.unreachable_position });
     }
 
     while (pending.pop()) |item| {
         const resolved = self.types.resolveVar(item.var_);
-        const entry = try seen.getOrPut(self.gpa, resolved.var_);
-        if (entry.found_existing) {
-            // A var reached in both positions is walked again elsewhere.
-            if (entry.value_ptr.* == .elsewhere or item.position == .result_data) continue;
-        }
-        entry.value_ptr.* = item.position;
         const position = item.position;
+        const entry = try seen.getOrPut(self.gpa, resolved.var_);
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        if (entry.value_ptr.* & position.mask() != 0) continue;
+        entry.value_ptr.* |= position.mask();
         switch (resolved.desc.content) {
             .err, .field_presence => {},
             .flex => |flex| {
                 for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = .elsewhere });
+                    try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = TailPosition.unreachable_position });
                 }
                 if (resolved.desc.flags.uncommitted_record_tail) {
-                    if (position == .result_data and !host_bound and self.rowDefaultDischargesConstraints(flex.constraints)) {
+                    const keeps = position.positive and !position.unconvertible and self.rowDefaultDischargesConstraints(flex.constraints);
+                    if (keeps) {
                         if (!disqualified.contains(resolved.var_)) try quantifiable.put(resolved.var_, {});
                     } else {
                         try disqualified.put(self.gpa, resolved.var_, {});
@@ -6018,32 +6047,38 @@ fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!voi
                 }
             },
             .rigid => |rigid| for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = .elsewhere });
+                try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = TailPosition.unreachable_position });
             },
-            .alias => |alias| {
-                try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .position = position });
-                for (self.types.sliceAliasArgs(alias)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position });
-            },
+            // An alias is transparent: its backing is the type.
+            .alias => |alias| try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .position = position }),
             .structure => |flat| switch (flat) {
                 .empty_record, .empty_tag_union => {},
-                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try pending.append(self.gpa, .{ .var_ = elem, .position = position }),
-                .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position }),
+                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try pending.append(self.gpa, .{ .var_ = elem, .position = position.data() }),
+                .nominal_type => |nominal| {
+                    // Only a builtin nominal whose arguments are plain data
+                    // carries a conversion through its arguments.
+                    const data_args = if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
+                        .list, .box, .try_type => true,
+                        else => false,
+                    } else false;
+                    const arg_position: TailPosition = if (data_args) position.data() else TailPosition.unreachable_position;
+                    for (self.types.sliceNominalArgs(nominal)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = arg_position });
+                },
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = .elsewhere });
-                    for (self.types.sliceVars(func.effect_deps)) |dep| try pending.append(self.gpa, .{ .var_ = dep, .position = .elsewhere });
-                    try pending.append(self.gpa, .{ .var_ = func.ret, .position = .elsewhere });
+                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position.functionArg() });
+                    try pending.append(self.gpa, .{ .var_ = func.ret, .position = position.functionResult() });
                 },
                 .record => |record| {
                     for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
-                        try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .position = position });
+                        try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .position = position.data() });
                     }
-                    try pending.append(self.gpa, .{ .var_ = record.ext, .position = position });
+                    try pending.append(self.gpa, .{ .var_ = record.ext, .position = position.data() });
                 },
                 .tag_union => |tag_union| {
                     for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
-                        for (self.types.sliceVars(args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position });
+                        for (self.types.sliceVars(args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position.data() });
                     }
-                    try pending.append(self.gpa, .{ .var_ = tag_union.ext, .position = position });
+                    try pending.append(self.gpa, .{ .var_ = tag_union.ext, .position = position.data() });
                 },
             },
         }

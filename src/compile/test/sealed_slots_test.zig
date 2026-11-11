@@ -14,7 +14,7 @@ fn setupFailed(err: anytype) error{TestUnexpectedResult} {
 }
 
 const source =
-    \\module [parse, many, run, make, unit, ok_unit, listed]
+    \\module [parse, many, run, make, unit, ok_unit, listed, apply_one, reader, both_sides, nested_fn]
     \\parse : Str -> Try(U8, [InvalidU8])
     \\parse = |text| if Str.is_empty(text) Err(InvalidU8) else Ok(1)
     \\many : Str -> List([Oops])
@@ -25,6 +25,10 @@ const source =
     \\unit = |_n| {}
     \\ok_unit = |_n| Ok({})
     \\listed = |n| [{ a: n }]
+    \\apply_one = |n, f| f({ a: n })
+    \\reader = |n| |m| { a: n, b: m }
+    \\both_sides = |r, c| if c r else { a: 1.U8 }
+    \\nested_fn = |n| [|m| { a: n, b: m }]
 ;
 
 test "a template's stored sealed slots match the independent scalar oracle" {
@@ -82,7 +86,7 @@ test "a template's stored sealed slots match the independent scalar oracle" {
     // A returned record literal's uncommitted tail is sealed in each of these
     // (design.md "Uncommitted Record Tails"): the worker takes no hidden
     // descriptor for it, whatever else its scheme quantifies.
-    for ([_][]const u8{ "make", "unit", "ok_unit", "listed" }) |name| {
+    for ([_][]const u8{ "make", "unit", "ok_unit", "listed", "apply_one", "reader" }) |name| {
         const template = findTemplate(artifact, name) orelse return error.TestUnexpectedResult;
         var tails: usize = 0;
         var sealed_tails: usize = 0;
@@ -98,6 +102,18 @@ test "a template's stored sealed slots match the independent scalar oracle" {
         }
         try std.testing.expectEqual(@as(usize, 1), tails);
         try std.testing.expectEqual(@as(usize, 1), sealed_tails);
+    }
+
+    // A tail on both sides of a function, or inside a function held in data,
+    // commits at the boundary: no scheme variable is an uncommitted tail.
+    for ([_][]const u8{ "both_sides", "nested_fn" }) |name| {
+        const template = findTemplate(artifact, name) orelse return error.TestUnexpectedResult;
+        for (templates.templateSchemeVars(template)) |variable| {
+            switch (artifact.checked_types.view().payload(variable)) {
+                .flex => |flex| try std.testing.expect(!flex.uncommitted_record_tail),
+                else => {},
+            }
+        }
     }
 }
 

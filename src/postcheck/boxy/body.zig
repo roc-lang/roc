@@ -8005,14 +8005,24 @@ pub const Builder = struct {
     /// `args` of types `arg_types`, where one parameter of `callee` under
     /// `bound` stores a record in another order: a padded nominal passed to
     /// a parameter of its record row (design.md "Nominal Record Field
-    /// Order"), which the callee reads by the structural rule.
+    /// Order"), which the callee reads by the structural rule, or a function
+    /// value whose signature does.
     fn argsAtParams(self: *Builder, args: []LocalId, arg_types: []const TypeId, callee: WorkerId, bound: []const TypeId, adapted_types: ?[]TypeId) Allocator.Error!void {
         const store = &self.program.store;
         for (args, arg_types, self.program.worker(callee).params[0..args.len], 0..) |*arg, arg_ty, param, index| {
             // A variable has the one representation of whatever it binds.
             if (store.get(param) == .variable) continue;
-            const param_ty = if (store.isClosed(param)) param else try self.program.substitute(self.allocator, param, bound);
-            if (try self.recordOrderDiffers(arg_ty, param_ty)) {
+            // A function type's layout is closed whatever its signature holds,
+            // so a parameter is substituted unless it mentions no variable.
+            const param_ty = if (store.isVariableFree(param)) param else try self.program.substitute(self.allocator, param, bound);
+            // A function value whose signature stores a record differently
+            // from the parameter's, such as a callback taking a padded nominal
+            // where the callee hands out its sealed record (design.md "Sealed
+            // Result Rows"), is wrapped in an adapter that converts its
+            // arguments and result.
+            const function_differs = store.get(arg_ty) == .function and
+                try self.storageDifference(arg_ty, param_ty) == .function;
+            if (function_differs or try self.recordOrderDiffers(arg_ty, param_ty)) {
                 arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
                 // A direct primitive consumes these adapted bytes, so its
                 // descriptor operands must describe the adapted type too.
