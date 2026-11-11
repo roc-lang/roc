@@ -9,4 +9,4 @@ platform "glue-record-function-field"
 
 import Value
 
-shape = |_| Value.value
+shape = |{}| Value.value

@@ -1229,6 +1229,34 @@ fn createTestPlatformHostLib(
     return lib;
 }
 
+/// Test platforms own their startup inputs. Build musl's self-relocating
+/// entrypoint from the pinned Zig toolchain rather than vendoring another
+/// architecture-specific binary beside the ordinary crt1 objects.
+fn muslStaticPieStartup(b: *std.Build, target: ResolvedTarget) std.Build.LazyPath {
+    const arch = @tagName(target.result.cpu.arch);
+    const obj = b.addObject(.{
+        .name = b.fmt("rcrt1_{s}", .{arch}),
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = .small,
+            .pic = true,
+            .link_libc = true,
+            .stack_protector = false,
+        }),
+    });
+    obj.root_module.addCSourceFile(.{
+        .file = std.Build.LazyPath.zig_lib.path(b, "libc/musl/crt/rcrt1.c"),
+        .flags = &.{ "-std=c99", "-D_GNU_SOURCE", "-ffreestanding", "-fno-builtin", "-fvisibility=hidden" },
+    });
+    for ([_][]const u8{
+        b.fmt("libc/musl/arch/{s}", .{arch}),
+        "libc/musl/arch/generic",
+        "libc/musl/src/internal",
+        "libc/musl/src/include",
+    }) |path| obj.root_module.addIncludePath(std.Build.LazyPath.zig_lib.path(b, path));
+    return obj.getEmittedBin();
+}
+
 /// Builds a test platform host library and sets up a step to copy it to the target-specific directory.
 /// Returns the final step for dependency wiring.
 fn buildAndCopyTestPlatformHostLib(
@@ -1299,6 +1327,13 @@ fn buildAndCopyTestPlatformHostLib(
     else
         FixArchivePaddingStep.create(b, lib.getEmittedBin());
     test_fixtures.copy(copy_step, host_archive, archive_path);
+    if (target.result.os.tag == .linux and target.result.abi.isMusl()) {
+        const startup = muslStaticPieStartup(b, target);
+        test_fixtures.copy(copy_step, startup, b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, "rcrt1.o" }));
+        if (baseline_target_name) |name| {
+            test_fixtures.copy(copy_step, startup, b.pathJoin(&.{ "test", platform_dir, "platform/targets", name, "rcrt1.o" }));
+        }
+    }
     if (baseline_archive_path) |path| {
         const baseline_archive = if (target.result.os.tag == .windows)
             baseline_lib.?.getEmittedBin()
@@ -1712,8 +1747,8 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "issue_10957_json_camel_long_field_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_10957_json_camel_long_field_static_lib_app.wasm", .run_args = &.{ "--expected", "14" } },
     // A derived parser built for wasm32 runs on `Ok` and `Err` inputs alike,
     // with both strategies, and an `Err` crosses its use's widened row.
-    .{ .app = "issue_12787_derived_parser_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=no" }, .output = "issue_12787_derived_parser_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "ok 14 A 5|ok 14 B text|missing tag|invalid|rejected before parsing: long enough for the heap" } },
-    .{ .app = "issue_12787_derived_parser_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=yes" }, .output = "issue_12787_derived_parser_specialized_static_lib_app.wasm", .run_args = &.{ "--expected", "ok 14 A 5|ok 14 B text|missing tag|invalid|rejected before parsing: long enough for the heap" } },
+    .{ .app = "issue_12787_derived_parser_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=no" }, .output = "issue_12787_derived_parser_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "ok 14 A 5|ok 14 B text|Missing field: tag|Invalid JSON|rejected before parsing: long enough for the heap" } },
+    .{ .app = "issue_12787_derived_parser_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=yes" }, .output = "issue_12787_derived_parser_specialized_static_lib_app.wasm", .run_args = &.{ "--expected", "ok 14 A 5|ok 14 B text|Missing field: tag|Invalid JSON|rejected before parsing: long enough for the heap" } },
     .{ .app = "str_interp_leading_literal_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "str_interp_leading_literal_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "1", "--max-allocs", "2" } },
     .{ .app = "str_concat_unique_reuse_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "str_concat_unique_reuse_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "1", "--max-allocs", "1" } },
     // End-to-end cart gate for the minted-iterator `for`-loop drive. The
@@ -4821,6 +4856,17 @@ pub fn build(b: *std.Build) void {
                 target_path,
             );
         }
+        // The fx platform declares musl's self-relocating startup object as a
+        // link input for its musl targets, beside the host library.
+        if (fx_host_target_dir) |target_dir| {
+            if (fx_host_target.result.os.tag == .linux and fx_host_target.result.abi.isMusl()) {
+                test_fixtures.copy(
+                    copy_test_fx_host,
+                    muslStaticPieStartup(b, fx_host_target),
+                    b.pathJoin(&.{ "test/fx/platform/targets", target_dir, "rcrt1.o" }),
+                );
+            }
+        }
 
         const final_fx_host_step = &copy_test_fx_host.step;
 
@@ -4906,7 +4952,10 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 // util.buildIsolatedTestEnvMap touches std.c (Zig 0.16 requires explicit link_libc).
                 .link_libc = true,
-                .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
+                .imports = &.{
+                    .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
+                    .{ .name = "roc_target", .module = roc_modules.roc_target },
+                },
             }),
             .filters = test_filters,
         });
@@ -6337,6 +6386,9 @@ fn addMainExe(
             default_platform_runtime_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
             default_platform_runtime_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            default_platform_runtime_obj.root_module.addImport("linux_static_pie", b.createModule(.{
+                .root_source_file = b.path("src/builtins/linux_static_pie.zig"),
+            }));
             const default_platform_runtime_options = b.addOptions();
             default_platform_runtime_options.addOption(bool, "include_process_entrypoint", false);
             default_platform_runtime_obj.root_module.addOptions("default_platform_options", default_platform_runtime_options);
@@ -6412,6 +6464,9 @@ fn addMainExe(
             default_platform_executable_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
             default_platform_executable_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_executable_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            default_platform_executable_obj.root_module.addImport("linux_static_pie", b.createModule(.{
+                .root_source_file = b.path("src/builtins/linux_static_pie.zig"),
+            }));
             const default_platform_executable_options = b.addOptions();
             default_platform_executable_options.addOption(bool, "include_process_entrypoint", true);
             default_platform_executable_obj.root_module.addOptions("default_platform_options", default_platform_executable_options);

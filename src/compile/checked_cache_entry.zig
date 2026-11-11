@@ -35,19 +35,19 @@ pub const Context = struct {
 };
 
 /// Byte prefix identifying the checked-module cache envelope format.
-pub const checked_module_cache_magic = "roc-mod-cache-v13";
+pub const checked_module_cache_magic = "roc-mod-cache-v14";
 
 // The envelope identifies the typing-addressed entry and its full finalized
 // snapshot independently. Aligned bodies hold the environment once, publication
-// metadata, then the finalized artifact. Admission checks version, identities,
+// metadata, the finalized artifact, then its reports. Admission checks version, identities,
 // and expected lengths against loaded bytes; never hash or recursively scan the
 // payload for integrity. Atomic replacement leaves readers' mappings intact.
-const checked_module_cache_header_fields_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32 + 32 + 8;
+const checked_module_cache_header_fields_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32 + 32 + 8 + 8;
 
 /// Header size including padding that aligns the first serialized body.
 pub const checked_module_cache_header_len: usize = std.mem.alignForward(usize, checked_module_cache_header_fields_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits());
 
-/// Zero bytes between an env body of `env_len` bytes and the artifact body.
+/// Zero bytes after a body so the following serialized body is aligned.
 pub fn checkedModuleCacheEnvPadding(env_len: usize) usize {
     return std.mem.alignForward(usize, env_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) - env_len;
 }
@@ -74,6 +74,7 @@ pub const CheckedModuleCacheBodies = struct {
     metadata_body: []const u8,
     env_body: []const u8,
     artifact_body: []const u8,
+    reports_body: []const u8,
     pin_validation_hash: [32]u8,
 };
 
@@ -86,9 +87,10 @@ pub fn writeCheckedModuleCacheHeader(
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
     env_len: usize,
     artifact_len: usize,
+    reports_len: usize,
     pin_validation_hash: [32]u8,
 ) void {
-    writeTypedHeader(entry, dest, key, key, env_len, 0, artifact_len, pin_validation_hash);
+    writeTypedHeader(entry, dest, key, key, env_len, 0, artifact_len, reports_len, pin_validation_hash);
 }
 
 /// Write the envelope header with separate storage and completed-module keys.
@@ -102,6 +104,7 @@ pub fn writeTypedHeader(
     env_len: usize,
     metadata_len: usize,
     artifact_len: usize,
+    reports_len: usize,
     pin_validation_hash: [32]u8,
 ) void {
     var offset: usize = 0;
@@ -120,6 +123,8 @@ pub fn writeTypedHeader(
     @memcpy(dest[offset..][0..32], &complete_key.bytes);
     offset += 32;
     std.mem.writeInt(u64, dest[offset..][0..8], metadata_len, .little);
+    offset += 8;
+    std.mem.writeInt(u64, dest[offset..][0..8], reports_len, .little);
     offset += 8;
     @memset(dest[offset..checked_module_cache_header_len], 0);
 }
@@ -155,6 +160,8 @@ pub fn decodeCheckedCacheEnvelope(
     const complete_key: CheckedArtifact.CheckedModuleArtifactKey = .{ .bytes = bytes[offset..][0..32].* };
     offset += 32;
     const metadata_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
+    offset += 8;
+    const reports_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
     offset = checked_module_cache_header_len;
 
     const remaining = bytes.len - offset;
@@ -165,19 +172,26 @@ pub fn decodeCheckedCacheEnvelope(
     if (metadata_len > after_env) return null;
     const metadata_padding = checkedModuleCacheEnvPadding(metadata_len);
     if (metadata_padding > after_env - metadata_len) return null;
-    if (artifact_len != after_env - metadata_len - metadata_padding) return null;
+    const after_metadata = after_env - metadata_len - metadata_padding;
+    if (artifact_len > after_metadata) return null;
+    const artifact_padding = if (reports_len == 0) 0 else checkedModuleCacheEnvPadding(artifact_len);
+    if (artifact_padding > after_metadata - artifact_len) return null;
+    if (reports_len != after_metadata - artifact_len - artifact_padding) return null;
 
     const env_body = bytes[offset..][0..env_len];
     offset += env_len + env_padding;
     const metadata_body = bytes[offset..][0..metadata_len];
     offset += metadata_len + metadata_padding;
     const artifact_body = bytes[offset..][0..artifact_len];
+    offset += artifact_len + artifact_padding;
+    const reports_body = bytes[offset..][0..reports_len];
 
     return .{
         .complete_key = complete_key,
         .metadata_body = metadata_body,
         .env_body = env_body,
         .artifact_body = artifact_body,
+        .reports_body = reports_body,
         .pin_validation_hash = pin_validation_hash,
     };
 }
@@ -188,6 +202,7 @@ pub fn decodeCheckedModuleCacheEntry(key: CheckedArtifact.CheckedModuleArtifactK
     const bodies = decodeCheckedCacheEnvelope(.checked_module, key, bytes) orelse return null;
     if (bodies.env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
     if (bodies.artifact_body.len < @sizeOf(CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
+    if (bodies.reports_body.len != 0 and bodies.reports_body.len < @sizeOf(check.CheckedReports.Serialized)) return null;
     return bodies;
 }
 

@@ -9017,10 +9017,46 @@ test "check type - annotated self recursive function - polymorphic recursion is 
     try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
+test "check type - annotated self recursive function - recursion at a concrete type allowed" {
+    // The recursive use is at `List(U8)`, which mentions none of `depth`'s
+    // variables, so the recursion reaches one further instantiation.
+    const source =
+        \\depth : List(a) -> U64
+        \\depth = |list| match list {
+        \\    [] => 0
+        \\    [_, ..] => 1 + depth([1.U8])
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
+}
+
 test "check type - annotated self recursive function - swapped type variables are rejected" {
     const source =
         \\swap : U64, a, b -> U64
         \\swap = |n, x, y| if n == 0 0 else 1 + swap(n - 1, y, x)
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - annotated self recursive function - a variable passed to another outside any cycle is accepted" {
+    // `b` flows into `a`, but `b` is given a closed type, so nothing flows
+    // back into `b`: the flow lies on no cycle, and the recursion reaches
+    // `(b, U8)` and then `(U8, U8)`, where it stays.
+    const source =
+        \\mixed : a, b, U64 -> U64
+        \\mixed = |_x, y, n| if n == 0 { 0 } else { 1 + mixed(y, 1.U8, n - 1) }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "mixed" } }, "a, b, U64 -> U64");
+}
+
+test "check type - annotated local function - swapped type variables are rejected" {
+    const source =
+        \\swap : U64 -> U64
+        \\swap = |n| {
+        \\    go : a, b, U64 -> U64
+        \\    go = |x, y, k| if k == 0 { 0 } else { 1 + go(y, x, k - 1) }
+        \\    go("s", 1.U8, n)
+        \\}
     ;
     try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
@@ -9053,6 +9089,46 @@ test "check type - annotated mutual recursion - growth around the cycle is rejec
     try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
+test "check type - mutually recursive annotated functions - polymorphic recursion at a growing type rejected" {
+    // Neither use grows on its own, but going around the cycle once wraps
+    // `a` in a tuple.
+    const source =
+        \\ping : a, U64 -> U64
+        \\ping = |x, n| if n == 0 { 0 } else { 1 + pong(x, n - 1) }
+        \\pong : a, U64 -> U64
+        \\pong = |x, n| if n == 0 { 0 } else { 1 + ping((x, 1.U8), n - 1) }
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - mutually recursive annotated functions - polymorphic recursion without growth allowed" {
+    const source =
+        \\ping : a, U64 -> U64
+        \\ping = |x, n| if n == 0 { 0 } else { 1 + pong(x, n - 1) }
+        \\pong : a, U64 -> U64
+        \\pong = |x, n| if n == 0 { 0 } else { 1 + ping(1.U8, n - 1) + ping(x, n - 1) }
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "ping", .expected = "a, U64 -> U64" },
+        .{ .def = "pong", .expected = "a, U64 -> U64" },
+    });
+}
+
+test "check type - annotated mutual recursion - variables that swap across definitions and come back are accepted" {
+    // `ping`'s `a` becomes `pong`'s `b` and comes back as `ping`'s `a`, so
+    // each component of the recursion holds one variable per definition.
+    const source =
+        \\ping : a, b, U64 -> U64
+        \\ping = |x, y, n| if n == 0 { 0 } else { 1 + pong(y, x, n - 1) }
+        \\pong : a, b, U64 -> U64
+        \\pong = |x, y, n| if n == 0 { 0 } else { 1 + ping(y, x, n - 1) }
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "ping", .expected = "a, b, U64 -> U64" },
+        .{ .def = "pong", .expected = "a, b, U64 -> U64" },
+    });
+}
+
 test "check type - annotated mutual recursion - variables that line up are accepted" {
     const source =
         \\Tree(a) := [Leaf(a), Node(List(Tree(a)))]
@@ -9082,6 +9158,60 @@ test "check type - a generic function using another at a larger type without rec
         \\wrap_len = |x| List.len([x])
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "wrap_len" } }, "a -> U64");
+}
+
+test "check type - polymorphic recursion at a growing type through a local helper rejected" {
+    // The growing use is in an unannotated local function that the
+    // annotated definition calls, so the cycle passes through the helper.
+    const source =
+        \\depth : a, U64 -> U64
+        \\depth = |x, n| {
+        \\    wrap = |y| depth([y], n - 1)
+        \\    if n == 0 { 0 } else { 1 + wrap(x) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - polymorphic recursion at a body-local type whose context is the recursion's variable rejected" {
+    // `Local`'s method names `a`, so `Local`'s identity includes `a`: the
+    // recursive use is at `Local` wrapping `a`, the next level at `Local`
+    // wrapping that, and so on without end.
+    const source =
+        \\describe : a, U64 -> U64
+        \\describe = |x, n| {
+        \\    Local := [L].{
+        \\        size : Local -> U64
+        \\        size = |_| {
+        \\            empty : List(a)
+        \\            empty = []
+        \\            List.len(empty)
+        \\        }
+        \\    }
+        \\    _ignored = x
+        \\    if n == 0 { 0 } else { describe(Local.L, n - 1) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - polymorphic recursion at a context-free body-local type allowed" {
+    // `Local` names no enclosing type variable, so it is one type at every
+    // level and the recursion reaches finitely many types.
+    const source =
+        \\describe : a, U64 -> U64
+        \\describe = |x, n| {
+        \\    Local := [L].{
+        \\        size : Local -> U64
+        \\        size = |_| 0
+        \\    }
+        \\    _ignored = x
+        \\    if n == 0 { 0 } else { describe(Local.L, n - 1) }
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "describe", .expected = "a, U64 -> U64" },
+    });
 }
 
 test "check type - polymorphic recursion through a literal requirement is rejected" {
@@ -9116,6 +9246,40 @@ test "check type - polymorphic recursion through a literal requirement is reject
         \\entry = |remaining| walk(remaining, Poly.Val(0.U8))
     ;
     try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - issue 11740 custom literal requirements in polymorphic recursion at a concrete type" {
+    // An annotated recursive edge instantiates a at Poly(U8), a different
+    // type than the caller's own a. The literal's conversion requirement
+    // follows the recursive use to Poly(U8).
+    const source =
+        \\Poly(a) := [Val(a), Quoted(Str)].{
+        \\    from_quote : Str -> Try(Poly(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |text| {
+        \\        dbg text
+        \\        Ok(Quoted(text))
+        \\    }
+        \\    is_eq : Poly(a), Poly(a) -> Bool
+        \\    is_eq = |left, right| match (left, right) {
+        \\        (Quoted(x), Quoted(y)) => x == y
+        \\        _ => Bool.False
+        \\    }
+        \\}
+        \\walk : U64, a -> U64 where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), a.is_eq : a, a -> Bool]
+        \\walk = |remaining, value| {
+        \\    if remaining == 0 {
+        \\        0
+        \\    } else {
+        \\        matched = match value {
+        \\            "low" => 1
+        \\            _ => 0
+        \\        }
+        \\        matched + walk(remaining - 1, Poly.Val(0.U8))
+        \\    }
+        \\}
+        \\entry = |remaining| walk(remaining, Poly.Val(0.U8))
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "entry" } }, "U64 -> U64");
 }
 
 test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
@@ -10616,10 +10780,10 @@ test "check type - polarity - derived parser accepts an implicitly open Missing 
     // output position it is implicitly open, and the derived parser closes
     // it back before judging the field.
     const source =
-        \\parse_user : Str -> Try({ name : Str, nick : Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_user : Str -> Try({ name : Str, nick : Try(Str, [Missing]) }, [InvalidJson(Str)])
         \\parse_user = |s| Json.parse(s)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str)])");
 }
 
 test "check type - polarity - derived encoder closes an implicitly open Missing row" {
@@ -10708,7 +10872,7 @@ test "check type - polarity - derivation leaves a rigid tag-row extension reject
     // Only unbound flex extensions collapse. A named rigid extension may
     // carry tags no parser was checked for, so the derivation stays rejected.
     const source =
-        \\parse_open : Str -> Try([Friendly, ..tags], [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_open : Str -> Try([Friendly, ..tags], [InvalidJson(Str)])
         \\parse_open = |json| Json.parse(json)
     ;
     try checkTypesModule(source, .fail_first, "Missing Method");
@@ -10745,10 +10909,10 @@ test "check type - polarity - derived parser accepts a Missing row reached throu
     const source =
         \\Shape : { name : Str, nick : Try(Str, [Missing]) }
         \\
-        \\parse_user : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_user : Str -> Try(Shape, [InvalidJson(Str)])
         \\parse_user = |s| Json.parse(s)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str)])");
 }
 
 test "check type - polarity - derived encoder closes a Null row reached through an alias marker" {
@@ -10775,10 +10939,10 @@ test "check type - polarity - derived parser closes a Null row reached through a
     const source =
         \\Shape : { name : Str, nick : Try(Str, [Null]) }
         \\
-        \\parse_user : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_user : Str -> Try(Shape, [InvalidJson(Str)])
         \\parse_user = |s| Json.parse(s)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Null]) }, [InvalidJson(Str), MissingRequiredField(Str)])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Null]) }, [InvalidJson(Str)])");
 }
 
 test "check type - polarity - input is inferred as closed" {
@@ -13382,15 +13546,46 @@ test "check type - mutually recursive static dispatch - unannotated name-linked 
     });
 }
 
-test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member is rejected" {
-    // Polymorphic recursion: `deeper` dispatches `size` on `Poly((a, a))`, a
-    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. Each
-    // method-syntax dispatch to an annotated target instantiates the target's
-    // predeclared scheme, whether or not the target sits in the same
-    // name-linked group and has already been checked, and the recursion
-    // through that dispatch grows the type on every trip. (The
-    // `Poly.size`/`Poly.deeper` type-qualified calls create the name-graph
-    // cycle that makes the two methods one binding group.)
+test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member" {
+    // Polymorphic recursion: `deeper` dispatches `size` on `Poly(U64)`, a
+    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. The
+    // annotations license this—each method-syntax dispatch to an annotated
+    // target must instantiate the target's predeclared scheme, whether or not
+    // the target sits in the same name-linked group and has already been
+    // checked. (The `Poly.size`/`Poly.deeper` type-qualified calls create the
+    // name-graph cycle that makes the two methods one binding group.)
+    const source =
+        \\Poly(a) := [Val(a)].{
+        \\  size : Poly(a), U64 -> U64
+        \\  size = |Poly.Val(x), n| {
+        \\    if n == 0 {
+        \\      0
+        \\    } else {
+        \\      Poly.deeper(Poly.Val(x), n)
+        \\    }
+        \\  }
+        \\  deeper : Poly(a), U64 -> U64
+        \\  deeper = |Poly.Val(x), n| {
+        \\    if n == 17 {
+        \\      Poly.size(Poly.Val(x), 0)
+        \\    } else {
+        \\      Poly.Val(n).size(n - 1)
+        \\    }
+        \\  }
+        \\}
+        \\use = Poly.Val(1.U64).size(3)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "Test.Poly.size", .expected = "Poly(a), U64 -> U64" },
+        .{ .def = "Test.Poly.deeper", .expected = "Poly(a), U64 -> U64" },
+        .{ .def = "use", .expected = "U64" },
+    });
+}
+
+test "check type - mutually recursive static dispatch - annotated polymorphic recursion at a growing type into checked group member" {
+    // `deeper` dispatches `size` on `Poly((a, a))`, and `size` calls back into
+    // `deeper` at the same type, so every trip around the cycle doubles the
+    // receiver's payload type.
     const source =
         \\Poly(a) := [Val(a)].{
         \\  size : Poly(a), U64 -> U64
@@ -13411,6 +13606,31 @@ test "check type - mutually recursive static dispatch - annotated polymorphic re
         \\  }
         \\}
         \\use = Poly.Val(1.U64).size(3)
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - mutually recursive static dispatch - dispatch-only mutual methods at a growing type" {
+    // No name-graph edge links the two methods, so each is its own binding
+    // group and `bwd` dispatches to `fwd`'s finished scheme. The cycle still
+    // doubles the payload type every time around.
+    const source =
+        \\Flip(a) := [Val(a)].{
+        \\  fwd : Flip(a), U64 -> U64
+        \\  fwd = |Flip.Val(x), n| if n == 0 { 0 } else { 1 + Flip.Val((x, x)).bwd(n - 1) }
+        \\  bwd : Flip(a), U64 -> U64
+        \\  bwd = |Flip.Val(x), n| if n == 0 { 0 } else { 1 + Flip.Val(x).fwd(n - 1) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - static dispatch - self method at a growing type" {
+    const source =
+        \\Poly(a) := [Val(a)].{
+        \\  size : Poly(a), U64 -> U64
+        \\  size = |Poly.Val(x), n| if n == 0 { 0 } else { 1 + Poly.Val([x]).size(n - 1) }
+        \\}
     ;
     try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }

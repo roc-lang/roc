@@ -1079,7 +1079,8 @@ pub const RootRequest = struct {
     order: u32,
     /// Producer-selected root withheld until the platform has its app bindings.
     requires_pairing: bool = false,
-    /// This session borrows a previously evaluated root from its platform.
+    /// This session borrows both strategies' completed representations of a
+    /// previously evaluated root from its platform.
     evaluation_complete: bool = false,
     /// Full same-module evaluation order, including withheld roots.
     evaluation_order: ?u32 = null,
@@ -1133,7 +1134,6 @@ pub const RootRequestTable = struct {
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         provided_exports: *const ProvidedExportTable,
-        bodies: CheckedBodies,
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_values: *const TopLevelValueTable,
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
@@ -1200,11 +1200,11 @@ pub const RootRequestTable = struct {
             }
         }
 
+        var forwarding_roots = try callable_eval_templates.forwardingRoots(allocator, compile_time_roots.roots.len);
+        defer forwarding_roots.deinit(allocator);
         for (compile_time_roots.roots) |root| {
             if (!compileTimeRootRequestIsEligible(root)) continue;
-            if (compileTimeCallableRootIsProcedureReference(bodies, resolved_value_refs, root)) {
-                continue;
-            }
+            if (forwarding_roots.isSet(@backingInt(root.id))) continue;
             if (compileTimeRootHasRootRequest(requests.items, root)) {
                 continue;
             }
@@ -2156,9 +2156,8 @@ fn compileTimeRootHasRootRequest(
     return false;
 }
 
-/// An exact checked procedure lookup already carries the callable identity
-/// that compile-time evaluation would rediscover. Keep its callable binding
-/// pending for runtime demand instead of scheduling an evaluator wrapper.
+/// A checked procedure lookup is a forwarding candidate. Publication still
+/// proves that its target is directly callable rather than a computed value.
 fn compileTimeCallableRootIsProcedureReference(
     bodies: CheckedBodies,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -3840,9 +3839,28 @@ pub const CheckedTypeStoreView = struct {
     /// finds for its key, so every root of one identity-free type shares one
     /// id.
     pub fn canonicalId(self: CheckedTypeStoreView, id: CheckedTypeId) Allocator.Error!CheckedTypeId {
-        if (try self.rootHasIdentityVariables(id)) return id;
-        return (try self.rootForKey(try self.rootKey(id))) orelse
-            checkedArtifactInvariant("an identity-free checked type has no root for its own key", .{});
+        if (self.knownCanonical(id)) |known| return known;
+        const result = if (try self.rootHasIdentityVariables(id))
+            id
+        else
+            (try self.rootForKey(try self.rootKey(id))) orelse
+                checkedArtifactInvariant("an identity-free checked type has no root for its own key", .{});
+        // An unfinished synthesized graph has no settled identity fact.
+        if (self.knownIdentity(id) != null) {
+            if (type_ids.isSynthesized(id)) {
+                self.synthesizedKeys().canonical.items[self.synthesizedIndex(id)].put(result);
+            } else self.sealedKeys().recordCanonical(type_ids.asVar(id), result);
+        }
+        return result;
+    }
+
+    fn knownCanonical(self: CheckedTypeStoreView, id: CheckedTypeId) ?CheckedTypeId {
+        if (type_ids.isSynthesized(id)) {
+            const keys = self.synthesized_keys orelse return null;
+            return keys.canonical.items[self.synthesizedIndex(id)].get();
+        }
+        const keys = self.sealed_keys orelse return null;
+        return keys.knownCanonical(type_ids.asVar(id));
     }
 
     /// Whether `left` and `right` are one checked type of this view: the same
@@ -4427,6 +4445,11 @@ pub const CheckedNominalDeclaration = struct {
     backing: CheckedTypeId,
     fa_start: u32 = 0,
     fa_len: u32 = 0,
+    /// How many of the formal args, at their end, are context formals: the
+    /// enclosing type variables a declaration in a function body depends on
+    /// (design.md "Body-Local Type Context"). Every use lists their
+    /// arguments after its own.
+    context_len: u32 = 0,
 
     /// Range into `CheckedTypeStore.type_id_pool` for the resolved types of the
     /// declaration's unnamed (`_` / `_name`) padding fields, in declared order.
@@ -4448,6 +4471,16 @@ pub const CheckedNominalDeclaration = struct {
     /// The declaration's formal args within its store's `type_id_pool`.
     pub fn formalArgs(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
         return storePool(pool_owner, CheckedTypeId)[self.fa_start .. self.fa_start + self.fa_len];
+    }
+
+    /// The formal args the declaration's source header declares.
+    pub fn declaredFormalArgs(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
+        return self.formalArgs(pool_owner)[0 .. self.fa_len - self.context_len];
+    }
+
+    /// The context formals that follow the declared ones.
+    pub fn contextFormalArgs(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
+        return self.formalArgs(pool_owner)[self.fa_len - self.context_len ..];
     }
 
     /// The declaration's padding field types within its store's `type_id_pool`.
@@ -5691,8 +5724,15 @@ pub const CheckedTypeStore = struct {
         source: CheckedTypeId,
         substitution: *CheckedTypeSubstitution,
     ) Allocator.Error!union(enum) { done: CheckedTypeId, clone: struct { target: CheckedTypeId, snapshot: CheckedTypePayloadBuild } } {
+        // A formal is matched by identity: an earlier substitution that
+        // passed over a variable it did not bind cloned it as a synthetic
+        // root naming the variable as its identity origin, so a scheme's
+        // variable reaches a later instantiation under another root, as a
+        // literal requirement of a nested local function forwarded through
+        // its enclosing generalized local does.
+        const source_origin = self.identityOrigin(source);
         for (substitution.formals, substitution.actuals) |formal, actual| {
-            if (source == formal) return .{ .done = actual };
+            if (source == formal or source_origin == self.identityOrigin(formal)) return .{ .done = actual };
         }
         if (substitution.images.get(source)) |existing| return .{ .done = existing };
         if (substitution.independent) |reaches| if (!reaches.contains(source)) return .{ .done = source };
@@ -6093,8 +6133,19 @@ fn appendCheckedNominalDeclarationFromStatement(
     const header = module_env.store.getTypeHeader(header_idx);
     const header_args = module_env.store.sliceTypeAnnos(header.args);
 
-    const formal_args = if (header_args.len == 0) &.{} else blk: {
-        const out = try allocator.alloc(CheckedTypeId, header_args.len);
+    // A declaration in a function body takes the enclosing type variables its
+    // identity depends on as formals after its own (design.md "Body-Local
+    // Type Context"): its template application lists each variable itself,
+    // which its backing and its methods name directly, after its header's.
+    const type_store = module.typeStoreConst();
+    const statement_type = type_store.resolveVar(ModuleEnv.varFrom(statement_idx)).desc.content.unwrapNominalType() orelse
+        checkedArtifactInvariant("nominal declaration statement variable was not a nominal type", .{});
+    const template_args = type_store.sliceNominalArgs(statement_type);
+    std.debug.assert(template_args.len >= header_args.len);
+    const context_vars = template_args[header_args.len..];
+    const formal_count = template_args.len;
+    const formal_args = if (formal_count == 0) &.{} else blk: {
+        const out = try allocator.alloc(CheckedTypeId, formal_count);
         errdefer allocator.free(out);
         for (header_args, 0..) |arg_anno, i| {
             out[i] = try appendCheckedTypeRoot(
@@ -6105,6 +6156,15 @@ fn appendCheckedNominalDeclarationFromStatement(
                 ModuleEnv.varFrom(arg_anno),
             );
         }
+        for (context_vars, header_args.len..) |context_var, i| {
+            out[i] = try appendCheckedTypeRoot(
+                allocator,
+                module,
+                store,
+                active,
+                context_var,
+            );
+        }
         break :blk out;
     };
     var formal_args_owned = formal_args.len != 0;
@@ -6113,7 +6173,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     const declaration_formals = if (header_args.len == 0) &.{} else blk: {
         const out = try allocator.alloc(DeclarationFormal, header_args.len);
         errdefer allocator.free(out);
-        for (header_args, formal_args, 0..) |arg_anno, formal_arg, i| {
+        for (header_args, formal_args[0..header_args.len], 0..) |arg_anno, formal_arg, i| {
             const arg = module_env.store.getTypeAnno(arg_anno);
             out[i] = .{
                 .name = switch (arg) {
@@ -6202,14 +6262,18 @@ fn appendCheckedNominalDeclarationFromStatement(
     );
     if (builtin.mode == .debug) {
         // The declaration's formals are exactly the roots its backing was
-        // built over, so instantiating them substitutes into that backing.
+        // built over, so instantiating them substitutes into that backing,
+        // and the statement's own type lists the same context roots.
         const declared_args = store.payload(declaration_root).nominal.args;
-        std.debug.assert(declared_args.len == declaration_formals.len);
-        for (declared_args, declaration_formals) |declared_arg, formal| {
+        std.debug.assert(declared_args.len == declaration_formals.len + context_vars.len);
+        for (declared_args[0..declaration_formals.len], declaration_formals) |declared_arg, formal| {
             std.debug.assert(declared_arg == formal.root);
         }
+        const statement_args = store.payload(statement_root).nominal.args;
+        std.debug.assert(statement_args.len == formal_count);
+        std.debug.assert(checkedTypeIdSliceEql(declared_args[declaration_formals.len..], statement_args[header_args.len..]));
     }
-    try appendCheckedNominalDeclarationFromPayload(allocator, store, declaration_root, backing, declared_record_fields);
+    try appendCheckedNominalDeclarationFromPayload(allocator, store, declaration_root, backing, declared_record_fields, @intCast(context_vars.len));
 }
 
 const DeclarationFormal = struct {
@@ -6757,7 +6821,17 @@ const DeclarationAnnoWalk = struct {
             .template => |var_| {
                 const generic_root = try self.appendRoot(var_);
                 if (actual_args.len == 0) return generic_root;
-                return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.store, generic_root, actual_args);
+                // A declaration in a function body keeps its context
+                // arguments, which its template lists after its declared
+                // ones: each is the enclosing variable itself.
+                const generic_payload = self.store.payload(generic_root);
+                const generic_args: []const CheckedTypeId = if (generic_payload == .nominal) generic_payload.nominal.args else &.{};
+                if (generic_args.len <= actual_args.len) return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.store, generic_root, actual_args);
+                const all_args = try gpa.alloc(CheckedTypeId, generic_args.len);
+                defer gpa.free(all_args);
+                @memcpy(all_args[0..actual_args.len], actual_args);
+                @memcpy(all_args[actual_args.len..], generic_args[actual_args.len..]);
+                return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.store, generic_root, all_args);
             },
         }
     }
@@ -7150,6 +7224,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     root: CheckedTypeId,
     backing: CheckedTypeId,
     declared_record_fields: []const CheckedNominalRecordField,
+    context_len: u32,
 ) Allocator.Error!void {
     const declarations = &store.nominal_declarations;
     const root_payload = store.payload(root);
@@ -7162,6 +7237,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     for (declarations.items) |existing| {
         if (canonicalNominalTypeKeyEql(existing.nominal, nominal_key)) {
             if (existing.backing == backing and
+                existing.context_len == context_len and
                 try checkedTypeRootKeySliceEql(store, existing.formalArgs(store), nominal.args) and
                 try checkedTypeRootKeySliceEql(store, existing.paddingFieldTypes(store), nominal.padding_field_types) and
                 checkedDeclaredFieldSliceEql(existing.declaredFields(store), nominal.declared_fields) and
@@ -7196,6 +7272,7 @@ fn appendCheckedNominalDeclarationFromPayload(
         .backing = backing,
         .fa_start = fa.start,
         .fa_len = fa.len,
+        .context_len = context_len,
         .pf_start = pf.start,
         .pf_len = pf.len,
         .df_start = df.start,
@@ -7490,7 +7567,7 @@ fn embedOneImportedNominalDecl(
     defer if (local_fields.len != 0) allocator.free(local_fields);
 
     const local_backing = try projector.project(owner_decl.backing);
-    try appendCheckedNominalDeclarationFromPayload(allocator, store, local_root, local_backing, local_fields);
+    try appendCheckedNominalDeclarationFromPayload(allocator, store, local_root, local_backing, local_fields, owner_decl.context_len);
 }
 
 /// Ensure the artifact's declaration table holds a copy of every IMPORTED
@@ -7645,6 +7722,8 @@ pub const SynthesizedTypeKeys = struct {
     /// Per root: 0 while unknown, else 1 + whether a walk found the root
     /// reaches an identity variable.
     identity: std.ArrayList(std.atomic.Value(u8)) = .empty,
+    /// Canonical ids of settled synthesized types, recorded on first request.
+    canonical: std.ArrayList(sealed_type_keys.CanonicalIdSlot) = .empty,
     index: collections.OnceSlot(*KeyIndex, .synthesized_type_key_index) = .empty,
     writer_mutex: std.Io.Mutex = .init,
     writer: ?CheckedTypeKeyDigester = null,
@@ -7668,6 +7747,7 @@ pub const SynthesizedTypeKeys = struct {
         if (self.writer) |*writer| writer.deinit();
         self.slots.deinit(allocator);
         self.identity.deinit(allocator);
+        self.canonical.deinit(allocator);
         allocator.destroy(self);
     }
 
@@ -7678,9 +7758,11 @@ pub const SynthesizedTypeKeys = struct {
         if (self.slots.items.len >= count) return;
         try self.slots.ensureTotalCapacity(self.allocator, count);
         try self.identity.ensureTotalCapacity(self.allocator, count);
+        try self.canonical.ensureTotalCapacity(self.allocator, count);
         while (self.slots.items.len < count) {
             self.slots.appendAssumeCapacity(.empty);
             self.identity.appendAssumeCapacity(.init(0));
+            self.canonical.appendAssumeCapacity(.{});
         }
         self.dropIndex();
     }
@@ -9404,7 +9486,7 @@ test "body analyses read state merges, divergence and inspect elision from the c
         ModuleId{},
         &.{},
         &.{},
-        &analyses.index,
+        try analyses.demandIndex(),
         &.{},
         &.{},
         publication_keys,
@@ -9487,7 +9569,7 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
         ModuleId{},
         &.{},
         &.{},
-        &analyses.index,
+        try analyses.demandIndex(),
         &.{},
         &.{},
         publication_keys,
@@ -10163,6 +10245,7 @@ const TestImportViewTables = struct {
     exported_procedure_bindings: ExportedProcedureBindingTable = .{},
     exported_const_templates: ExportedConstTemplateTable = .{},
     provided_exports: ProvidedExportTable = .{},
+    top_level_values: TopLevelValueTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable = .{},
@@ -10227,6 +10310,7 @@ const TestImportViewTables = struct {
             .exported_procedure_bindings = self.exported_procedure_bindings.view(),
             .exported_const_templates = self.exported_const_templates.view(),
             .provided_exports = &self.provided_exports,
+            .top_level_values = &self.top_level_values,
             .top_level_procedure_bindings = &self.top_level_procedure_bindings,
             .platform_required_declarations = &self.platform_required_declarations,
             .platform_required_bindings = &self.platform_required_bindings,
@@ -11340,6 +11424,16 @@ pub const CallableEvalTemplateTable = struct {
 
     pub fn view(self: *const CallableEvalTemplateTable) CallableEvalTemplateTableView {
         return .{ .templates = self.templates.items };
+    }
+
+    /// Only proven forwards may omit evaluation; a lookup can also name a
+    /// computed callable whose value must be produced before runtime lowering.
+    fn forwardingRoots(self: *const CallableEvalTemplateTable, allocator: Allocator, root_count: usize) Allocator.Error!std.DynamicBitSetUnmanaged {
+        var roots = try std.DynamicBitSetUnmanaged.initEmpty(allocator, root_count);
+        for (self.templates.items) |template| {
+            if (template.forwarded_lookup != null) roots.set(@backingInt(template.root));
+        }
+        return roots;
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
@@ -14111,6 +14205,17 @@ const EvidencePass = struct {
                 const template: Var = @fromBackingInt(@intCast(derivation.template_constraint_fn_var));
                 try self.codec_instance_by_template.put(self.types.resolveVar(template).var_, source);
             }
+        }
+        // A relation that recurs a derivation resolves to that derivation.
+        for (module_env.generated_codec_recurrences.items.items) |recurrence| {
+            const source: Var = @fromBackingInt(@intCast(recurrence.derivation_source_fn_var));
+            const derivations = self.generated_codec_by_source.get(source) orelse
+                checkedArtifactInvariant("a recurring generated codec relation named no derivation", .{});
+            const entry = try self.generated_codec_by_source.getOrPut(@fromBackingInt(@intCast(recurrence.constraint_fn_var)));
+            if (entry.found_existing) {
+                checkedArtifactInvariant("a recurring generated codec relation had a derivation of its own", .{});
+            }
+            entry.value_ptr.* = derivations;
         }
         // Records replayed from one source name the same substitution range,
         // whose pairs are indexed once.
@@ -22613,6 +22718,7 @@ pub const PlatformPairing = struct {
         platform_requirement_relations: PlatformRequirementRelationTable.Serialized,
         platform_required_bindings: PlatformRequiredBindingTable.Serialized,
         resolved_value_refs: ResolvedValueRefTable.Serialized,
+        callable_eval_templates: CallableEvalTemplateTable.Serialized,
         provided_exports: ProvidedExportTable.Serialized,
         root_requests: RootRequestTable.Serialized,
         exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
@@ -22655,7 +22761,6 @@ pub const PlatformPairing = struct {
                 "static_dispatch_plans",
                 "nested_proc_sites",
                 "top_level_procedure_bindings",
-                "callable_eval_templates",
                 "hosted_procs",
                 "hosted_bindings",
                 "platform_required_declarations",
@@ -22701,6 +22806,7 @@ pub const PlatformPairing = struct {
             try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
             try self.platform_required_bindings.serialize(&artifact.platform_required_bindings, gpa, writer);
             try self.resolved_value_refs.serialize(&artifact.resolved_value_refs, gpa, writer);
+            try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
             try self.provided_exports.serialize(&artifact.provided_exports, gpa, writer);
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
@@ -22761,6 +22867,7 @@ pub const PlatformPairing = struct {
             result.platform_requirement_relations = self.platform_requirement_relations.deserialize(address);
             result.platform_required_bindings = self.platform_required_bindings.deserialize(address);
             result.resolved_value_refs = self.resolved_value_refs.deserialize(address);
+            result.callable_eval_templates = self.callable_eval_templates.deserialize(address);
             result.provided_exports = self.provided_exports.deserialize(address);
             result.root_requests = self.root_requests.deserialize(address);
             result.exhaustiveness_sites = self.exhaustiveness_sites.deserialize(address);
@@ -22821,6 +22928,21 @@ pub fn pairCheckedPlatform(
             record.ref = categorizeRequiredValueRef(required.requires_idx, &result.platform_required_declarations, &result.platform_required_bindings);
         }
     }
+    // Binding requirements can turn computed callables into exact aliases.
+    // Publish the forwarding proof before classifying calls or root demand,
+    // and retain it in the pairing rather than mutating the source platform.
+    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
+    publishCallableEvalForwarding(
+        &result.callable_eval_templates,
+        result.bodies(),
+        &result.resolved_value_refs,
+        &result.compile_time_roots,
+        result.key,
+        &result.top_level_procedure_bindings,
+        &.{},
+        available_artifacts,
+        &relations,
+    );
     var type_memo = substitutions.substitutionIn(session);
     defer type_memo.deinit();
     var reaches: ?CheckedTypeSet = if (substitutions.formals.len != 0) try result.checked_types.rootsReachingAny(session, substitutions.formals) else null;
@@ -22856,7 +22978,7 @@ pub fn pairCheckedPlatform(
             if (env.store.getExpr(record.expr) != .e_lookup_required) continue;
             ResolvedValueRefTable.setRetired(retired, record.expr);
         }
-        for (platform_analyses.index.node_kinds, 0..) |kind, raw| {
+        for ((try platform_analyses.demandIndex()).node_kinds, 0..) |kind, raw| {
             if (kind != .expr) continue;
             const call_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
             const data = env.store.getExpr(call_expr);
@@ -22930,18 +23052,23 @@ pub fn pairCheckedPlatform(
         .checked_error => {},
     };
     var roots = std.ArrayList(RootRequest).empty;
+    var forwarding_roots = try result.callable_eval_templates.forwardingRoots(session, result.compile_time_roots.roots.len);
+    defer forwarding_roots.deinit(session);
     for (platform.root_requests.requests) |request| {
         // Once a required procedure is bound, an exact callable alias uses the
         // same forwarding rule as publication with already-resolved imports.
         // Runtime demand consumes its checked lookup; no evaluator is needed.
         if (request.requires_pairing and request.compile_time_root != null and
-            compileTimeCallableRootIsProcedureReference(result.bodies(), &result.resolved_value_refs, result.compile_time_roots.root(request.compile_time_root.?))) continue;
+            forwarding_roots.isSet(@backingInt(request.compile_time_root.?))) continue;
         var selected = request;
         selected.order = @intCast(roots.items.len);
         try roots.append(session, selected);
     }
     for (roots.items) |*request| {
-        request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
+        request.evaluation_complete = if (request.abi == .compile_time and !request.requires_pairing) complete: {
+            const root = result.compile_time_roots.root(request.compile_time_root.?);
+            break :complete !root.needsEvaluation(.lss) and !root.needsEvaluation(.boxy);
+        } else false;
         request.requires_pairing = false;
         request.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, request.checked_type, &type_memo);
     }
@@ -22962,12 +23089,10 @@ pub fn pairCheckedPlatform(
     result.root_requests.runtime_requests = try collectRuntimeRootRequests(session, result.root_requests.requests);
     var schedule = std.ArrayList(RootRequest).empty;
     for (result.root_requests.requests) |request| {
-        if (request.evaluation_order == null) continue;
         // A paired platform may inherit a semantically completed value but
         // still need the other strategy's function representation. Keep its
         // declared request so that strategy can run the producer later.
-        const root = result.compile_time_roots.root(request.compile_time_root.?);
-        if (!request.evaluation_complete or root.needsEvaluation(.lss) or root.needsEvaluation(.boxy)) try schedule.append(session, request);
+        if (request.evaluation_order != null and !request.evaluation_complete) try schedule.append(session, request);
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
@@ -30362,11 +30487,11 @@ pub const CheckedModuleArtifact = struct {
             self.checking_context_identity.platform_app_relation == null;
     }
 
-    /// Whether a compile-time request of this finalized artifact names a root
-    /// no compilation that finalized it demanded.
-    /// Whether a compilation under `strategy` has roots to evaluate here:
-    /// a `.lss` compilation never evaluates a literal argument root
-    /// (design.md "Literal Arguments").
+    /// Whether a compilation under `strategy` has roots to evaluate here: a
+    /// compile-time request of this finalized artifact names a root no
+    /// compilation that finalized it demanded, other than one whose value a
+    /// `.boxy` compilation stored for `.boxy` programs alone (design.md
+    /// "Stored Function Values").
     pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) bool {
         for (self.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
@@ -30700,7 +30825,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 115;
+    const serialized_layout_version: u32 = 116;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -31171,6 +31296,7 @@ pub const CheckedModuleArtifact = struct {
         const type_view = self.typesView();
 
         const checked = self.bodies();
+        try checked.demandIndex();
         for (checked.index().node_kinds, 0..) |kind, raw| {
             const node: u32 = @intCast(raw);
             switch (kind) {
@@ -32485,6 +32611,8 @@ pub const ImportedModuleView = struct {
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
     provided_exports: *const ProvidedExportTable,
+    /// Checked binding classification used by dependency walks across visible modules.
+    top_level_values: *const TopLevelValueTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -32549,6 +32677,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
         .provided_exports = &artifact.provided_exports,
+        .top_level_values = &artifact.top_level_values,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .platform_required_declarations = &artifact.platform_required_declarations,
         .platform_required_bindings = &artifact.platform_required_bindings,
@@ -33112,7 +33241,7 @@ const CheckedTypeStoreImportProjector = struct {
         };
         defer if (local_fields.len != 0) self.allocator.free(local_fields);
 
-        try appendCheckedNominalDeclarationFromPayload(self.allocator, self.target_store, local_root, local_backing, local_fields);
+        try appendCheckedNominalDeclarationFromPayload(self.allocator, self.target_store, local_root, local_backing, local_fields, owner_decl.context_len);
     }
 
     fn remapModuleIdentity(
@@ -34140,7 +34269,7 @@ pub fn publishFromTypedModule(
     const analyses = try BodyAnalyses.create(allocator, inputs.io, module_env, promoted_local_procedures);
     var analyses_owned = true;
     errdefer if (analyses_owned) analyses.destroy();
-    const module_index = &analyses.index;
+    const module_index = try analyses.demandIndex();
 
     // Omitted defaults name their fields and origin modules through the
     // module's names.
@@ -34569,7 +34698,6 @@ pub fn publishFromTypedModule(
         &platform_required_declarations,
         &platform_required_bindings,
         &provided_exports,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         &resolved_value_refs,
         &top_level_values,
         &top_level_procedure_bindings,
@@ -34803,7 +34931,7 @@ pub fn publishFromTypedModule(
         .const_templates = const_templates,
         .const_store = checked_const_store,
         .evaluation_state = .prepared,
-        .has_expects = analyses.index.has_expects,
+        .has_expects = module_index.has_expects,
         .body_analyses = analyses,
     };
     // The artifact owns the key slots from here on, and its views name its
@@ -35597,7 +35725,7 @@ test "checked type identity scan finds identity beside recursive tag cycle" {
     try std.testing.expect(try checkedTypeIdsContainIdentityVariables(allocator, &store, &.{root}));
 }
 
-test "provided callable-containing record constant is a data export, not a runtime root" {
+test "provided record constant with an unboxed function is rejected before publication" {
     const source =
         \\platform ""
         \\    requires {}
@@ -35611,11 +35739,9 @@ test "provided callable-containing record constant is a data export, not a runti
         \\table_for_host = { f: |value| value + 1 }
     ;
 
-    try expectProvidedExportKind(source, .{
-        .procedure_roots = 0,
-        .data_exports = 1,
-        .procedure_exports = 0,
-    });
+    var env = try @import("test/TestEnv.zig").init("Platform", source);
+    defer env.deinit();
+    try env.assertOneTypeError("Hosted Function Requires Boxed Lambda");
 }
 
 test "provided procedure remains a runtime root" {
@@ -35628,6 +35754,27 @@ test "provided procedure remains a runtime root" {
         \\
         \\add_one_for_host : I64 -> I64
         \\add_one_for_host = |value| value + 1
+    ;
+
+    try expectProvidedExportKind(source, .{
+        .procedure_roots = 1,
+        .data_exports = 0,
+        .procedure_exports = 1,
+    });
+}
+
+test "provided evaluated function binding remains a procedure signature" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_add_one": add_one_for_host }
+        \\
+        \\make : I64 -> (I64 -> I64)
+        \\make = |amount| |value| value + amount
+        \\add_one_for_host : I64 -> I64
+        \\add_one_for_host = make(1)
     ;
 
     try expectProvidedExportKind(source, .{
@@ -35845,6 +35992,7 @@ fn testVisibilityImportedView(
         .exported_procedure_bindings = undefined,
         .exported_const_templates = undefined,
         .provided_exports = undefined,
+        .top_level_values = undefined,
         .top_level_procedure_bindings = undefined,
         .platform_required_declarations = undefined,
         .platform_required_bindings = undefined,
@@ -36033,9 +36181,9 @@ test "issue 11290: builtin backing declarations survive serialization with share
         } });
         try std.testing.expectEqual(root, try store.appendRootRow(gpa, .payload));
         try store.payloads.append(gpa, payload);
-        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{});
+        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{}, 0);
         // Re-publication reuses both the template and its index entry.
-        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{});
+        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{}, 0);
     }
     try std.testing.expectEqual(@as(usize, 2), store.nominal_declarations.items.len);
 
@@ -36473,8 +36621,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x61, 0x55, 0x27, 0xC1, 0x3A, 0x4B, 0x3E, 0x8B, 0x2D, 0x14, 0x98, 0x64, 0x49, 0x71, 0x0A, 0x99,
-        0x6F, 0x1E, 0xF2, 0xCB, 0x90, 0xCE, 0x3B, 0x80, 0xBE, 0xD8, 0x04, 0xA8, 0xDE, 0x82, 0x0A, 0x73,
+        0xD0, 0x3E, 0x68, 0x49, 0x6B, 0xF2, 0xE3, 0x14, 0xCF, 0xBA, 0xB0, 0x16, 0x5B, 0x78, 0x69, 0xFD,
+        0x6A, 0x22, 0xB0, 0x60, 0x29, 0x57, 0x83, 0xE1, 0x76, 0x07, 0x66, 0x44, 0xE3, 0x39, 0x28, 0x47,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -37154,6 +37302,27 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     try std.testing.expect(store.synthetic_variable_roots.contains(respecialized_tail));
     try std.testing.expect(store.synthetic_variable_roots.contains(plan_tail));
     try std.testing.expectEqual(plan_tail, store.identityOrigin(plan_tail));
+}
+
+test "canonical ids remember settled types but not pending synthesized roots" {
+    const allocator = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    try attachTestSynthesizedKeys(allocator, &store, &names);
+    const first = try store.appendSyntheticPayloadRoot(allocator, .empty_record);
+    const pending = try store.reserveSyntheticTypeRoot(allocator);
+    try std.testing.expectEqual(pending, try store.view().canonicalId(pending));
+    try std.testing.expect(store.view().knownCanonical(pending) == null);
+    try store.fillSyntheticTypeRoot(allocator, pending, .empty_record);
+    try std.testing.expectEqual(first, try store.view().canonicalId(pending));
+    try std.testing.expectEqual(first, store.view().knownCanonical(pending).?);
+    // Appended roots cannot precede the selected lowest existing root.
+    const later = try store.reserveSyntheticTypeRoot(allocator);
+    try store.fillSyntheticTypeRoot(allocator, later, .empty_record);
+    try std.testing.expectEqual(first, try store.view().canonicalId(later));
+    try std.testing.expectEqual(first, try store.view().canonicalId(pending));
 }
 
 test "pairing type columns borrow frozen storage until written" {

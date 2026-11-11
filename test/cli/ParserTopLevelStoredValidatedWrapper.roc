@@ -1,6 +1,9 @@
 ParserTopLevelStoredValidatedWrapper :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
@@ -44,9 +47,9 @@ State := [Present(Str), Done]
 trailing_input : {} -> [TrailingInput]
 trailing_input = |{}| TrailingInput
 
-parser_for : () -> (Str -> Try(a, [FormatError, TrailingInput, ..errs]))
+parser_for : () -> (Str -> Try(a, [FormatError, TrailingInput]))
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, TrailingInput, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parser_for = || {
 	Shape : a
@@ -62,7 +65,7 @@ parser_for = || {
 	}
 }
 
-parse_stored : Str -> Try({ foo : Str }, [FormatError, MissingRequiredField(Str), TrailingInput])
+parse_stored : Str -> Try({ foo : Str }, [FormatError, TrailingInput])
 parse_stored = parser_for()
 
 expect {

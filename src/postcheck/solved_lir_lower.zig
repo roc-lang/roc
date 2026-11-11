@@ -39,73 +39,12 @@ const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 const PatternRefutability = can.PatternRefutability;
 
-/// Runtime field order for a named record field.
-pub const RuntimeRecordFieldSchema = struct {
-    name: []const u8,
-    logical_index: u32,
-};
-
-/// Runtime field order for a named record.
-pub const RuntimeRecordSchema = struct {
-    type_name: []const u8,
-    fields: []const RuntimeRecordFieldSchema,
-
-    pub fn fieldLogicalIndex(self: RuntimeRecordSchema, field_name: []const u8) ?u32 {
-        for (self.fields) |field| {
-            if (std.mem.eql(u8, field.name, field_name)) return field.logical_index;
-        }
-        return null;
-    }
-};
-
-/// Runtime discriminant for a named tag.
-pub const RuntimeTagSchema = struct {
-    name: []const u8,
-    discriminant: u32,
-};
-
-/// Runtime tag order for a named tag union.
-pub const RuntimeTagUnionSchema = struct {
-    type_name: []const u8,
-    tags: []const RuntimeTagSchema,
-
-    pub fn tagDiscriminant(self: RuntimeTagUnionSchema, tag_name: []const u8) ?u32 {
-        for (self.tags) |tag| {
-            if (std.mem.eql(u8, tag.name, tag_name)) return tag.discriminant;
-        }
-        return null;
-    }
-};
-
-/// Runtime schemas emitted while lowering Lambda Solved to LIR.
-pub const RuntimeSchemaStore = struct {
-    allocator: std.mem.Allocator,
-    records: std.ArrayList(RuntimeRecordSchema),
-    tag_unions: std.ArrayList(RuntimeTagUnionSchema),
-
-    pub fn init(allocator: std.mem.Allocator) RuntimeSchemaStore {
-        return .{
-            .allocator = allocator,
-            .records = .empty,
-            .tag_unions = .empty,
-        };
-    }
-
-    pub fn deinit(self: *RuntimeSchemaStore) void {
-        for (self.records.items) |schema| {
-            for (schema.fields) |field| self.allocator.free(field.name);
-            self.allocator.free(schema.fields);
-            self.allocator.free(schema.type_name);
-        }
-        for (self.tag_unions.items) |schema| {
-            for (schema.tags) |tag| self.allocator.free(tag.name);
-            self.allocator.free(schema.tags);
-            self.allocator.free(schema.type_name);
-        }
-        self.tag_unions.deinit(self.allocator);
-        self.records.deinit(self.allocator);
-    }
-};
+const runtime_schemas = @import("runtime_schemas.zig");
+pub const RuntimeRecordFieldSchema = runtime_schemas.RuntimeRecordFieldSchema;
+pub const RuntimeRecordSchema = runtime_schemas.RuntimeRecordSchema;
+pub const RuntimeTagSchema = runtime_schemas.RuntimeTagSchema;
+pub const RuntimeTagUnionSchema = runtime_schemas.RuntimeTagUnionSchema;
+pub const RuntimeSchemaStore = runtime_schemas.RuntimeSchemaStore;
 
 /// LIR result plus runtime schemas emitted by direct LIR lowering.
 pub const Output = struct {
@@ -178,6 +117,8 @@ pub const Options = struct {
     site_code_keys: bool = false,
     /// Explicit dev ownership policy, independent of cache availability.
     owned_proc_signatures: bool = false,
+    /// Non-owning runtime bytes before the entrypoint's typed capture.
+    erased_capture_prefix: u32 = 0,
     inline_plan: SolvedInline.Plan = .{},
     /// Reuse checking workers for prepared procedure-body lowering.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
@@ -294,7 +235,20 @@ pub fn runBorrowed(
     try lowerer.keepReachedErasedMembers();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
+    verifyNoCaptureFreePacks(&lowerer.result.store);
     return lowerer.finish();
+}
+
+/// Every capture-free erased callable is a read of its static callable
+/// (`Lowerer.staticCallableRead`); none is packed at runtime.
+fn verifyNoCaptureFreePacks(store: *const LirStore) void {
+    if (builtin.mode != .debug) return;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt != .assign_packed_erased_fn) continue;
+        if (store.stmtRow(stmt.assign_packed_erased_fn.data).capture == null) {
+            Common.invariant("a capture-free erased callable was packed at runtime instead of read from static data");
+        }
+    }
 }
 
 /// Whether this consumer runs a test: whether a root it lowers carries
@@ -865,6 +819,7 @@ const Lowerer = struct {
     host_boundary_digests: bool,
     site_code_keys: bool,
     owned_proc_signatures: bool,
+    erased_capture_prefix: u32,
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
     /// Drain positions, kept across calls so a second drain resumes.
@@ -895,6 +850,8 @@ const Lowerer = struct {
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
     type_layouts: collections.DenseMap(Type.TypeId, layout.Idx),
+    /// Frozen capture views are committed before workers borrow the layout store.
+    frozen_capture_layouts: collections.DenseMap(layout.Idx, layout.Idx),
     /// Recursive-graph digest the layout commit settled for each type whose
     /// node was local to its graph. A layout graph reuses a cached child only
     /// through this digest, so the child stays visible to recursion analysis.
@@ -909,6 +866,9 @@ const Lowerer = struct {
     const_mono_type_map: collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
+    /// The static-data slot holding each capture-free erased callable, by
+    /// its procedure: one slot per procedure in the program.
+    static_callable_map: collections.DenseMap(LIR.LirProcSpecId, LIR.StaticDataId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
     /// Whether a root-slot read at one type takes its root's slot value
     /// as stored, per (root type, read type) pair.
@@ -1252,6 +1212,7 @@ const Lowerer = struct {
             .host_boundary_digests = options.host_boundary_digests,
             .site_code_keys = options.site_code_keys,
             .owned_proc_signatures = options.owned_proc_signatures,
+            .erased_capture_prefix = options.erased_capture_prefix,
             .root_manifest = options.root_manifest,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
@@ -1273,6 +1234,7 @@ const Lowerer = struct {
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
+            .frozen_capture_layouts = collections.DenseMap(layout.Idx, layout.Idx).init(allocator),
             .type_layout_digests = collections.DenseMap(Type.TypeId, layout.GraphDigest).init(allocator),
             .named_layout_index = std.HashMap(NamedLayoutBucket, std.ArrayList(Type.TypeId), NamedLayoutBucketContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .representation_shapes = collections.DenseMap(Type.TypeId, RepresentationShape).init(allocator),
@@ -1282,6 +1244,7 @@ const Lowerer = struct {
             .const_mono_type_map = collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
+            .static_callable_map = collections.DenseMap(LIR.LirProcSpecId, LIR.StaticDataId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
             .static_initializer_queue = .empty,
@@ -1417,6 +1380,7 @@ const Lowerer = struct {
         self.deinitPackedPlans();
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
+        self.static_callable_map.deinit();
         self.comptime_value_map.deinit();
         self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_representations.deinit(self.allocator);
@@ -1426,6 +1390,7 @@ const Lowerer = struct {
         self.representation_shapes.deinit();
         self.expr_context_tys.deinit();
         self.type_layouts.deinit();
+        self.frozen_capture_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -1559,6 +1524,7 @@ const Lowerer = struct {
         self.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(self.allocator);
         self.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(self.allocator);
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
+        self.static_callable_map = collections.DenseMap(LIR.LirProcSpecId, LIR.StaticDataId).init(self.allocator);
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_read_shares_root = .empty;
         self.comptime_representations = .empty;
@@ -2369,7 +2335,10 @@ const Lowerer = struct {
                         const args = l.types.span(entry.args);
                         for (0..args.len) |index| try self.add(.{ .ty = GuardedList.at(args, index) });
                         try self.add(.{ .ty = entry.ret });
-                        if (entry.spec.capture_ty) |ty| try self.add(.{ .ty = ty });
+                        if (entry.spec.capture_ty) |ty| {
+                            try self.add(.{ .ty = ty });
+                            if (entry.spec.abi == .erased) _ = try l.frozenCaptureLayout(try l.layoutOfType(ty));
+                        }
                         if (entry.capture_arg_ty) |ty| try self.add(.{ .ty = ty });
                         switch (entry.spec.return_reuse) {
                             .none => {},
@@ -2391,7 +2360,16 @@ const Lowerer = struct {
             const data = l.solved.lifted.getExpr(id).data;
             const view = l.solved.lifted.view();
             switch (data) {
-                .static_data_candidate, .comptime_value, .comptime_exhaustiveness_failed => {
+                .static_data_candidate => |candidate| {
+                    if (l.staticDataCandidateIsImmediate(candidate, try l.layoutOfType(ty))) {
+                        switch (candidate.value) {
+                            .runtime => |runtime| try self.add(.{ .expr = runtime }),
+                            .stored => Common.invariant("a stored-list candidate has an immediate layout"),
+                        }
+                    } else self.admissible = false;
+                    return;
+                },
+                .comptime_value, .comptime_exhaustiveness_failed => {
                     self.admissible = false;
                     return;
                 },
@@ -2597,7 +2575,13 @@ const Lowerer = struct {
                     for (0..variants.len) |index| {
                         const variant = GuardedList.at(variants, index);
                         try self.add(.{ .proc = variant.target });
-                        if (variant.capture_ty) |capture_ty| try self.add(.{ .ty = capture_ty });
+                        if (variant.capture_ty) |capture_ty| {
+                            try self.add(.{ .ty = capture_ty });
+                        } else if (content == .erased_fn) {
+                            // A worker reads a capture-free member's static
+                            // callable; only the coordinator adds static data.
+                            _ = try l.staticCallableSlot(try l.procPlaceholder(variant.target), try l.layoutOfType(ty));
+                        }
                     }
                     if (l.callable_source_fn_map.get(ty)) |source| {
                         const func = l.solved.types.rootContent(source).func;
@@ -5075,7 +5059,13 @@ const Lowerer = struct {
             .zst => .zst,
             .hole => Common.invariant("a demand hole reached a constant plan"),
             .list => |elem| if (input) |elem_plan| .{ .list = elem_plan.get(.plan) } else return .{ .call = .{ .plan = .{ .ty = elem } } },
-            .box => |elem| if (input) |elem_plan| .{ .box = elem_plan.get(.plan) } else return .{ .call = .{ .plan = .{ .ty = elem } } },
+            .box => |elem| if (input) |elem_plan| blk: {
+                if (self.sequenceType(elem)) |sequence| break :blk .{ .boxed_sequence = .{
+                    .payload = elem_plan.get(.plan),
+                    .view_layout = try self.layoutOfType(self.runtimeBackingType(sequence)),
+                } };
+                break :blk .{ .box = elem_plan.get(.plan) };
+            } else return .{ .call = .{ .plan = .{ .ty = elem } } },
             .tuple, .record => blk: {
                 if (input) |component| {
                     task.plans[task.index] = component.get(.plan);
@@ -5448,7 +5438,7 @@ const Lowerer = struct {
             const entry_proc = if (held) try self.markReachableFn(member.target) else try self.procPlaceholder(member.target);
             const capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst;
             task.entries[task.index] = .{
-                .on_drop = self.erasedCallableOnDrop(capture_layout),
+                .on_drop = self.erasedCallableOnDrop(try self.frozenCaptureLayout(capture_layout)),
                 .entry = entry_proc,
                 .capture_layout = capture_layout,
                 .template = template,
@@ -7389,6 +7379,19 @@ const Lowerer = struct {
         return .{ .tail = exprTask(where, cond, child, null, expect_stmt) };
     }
 
+    /// Immediate candidates touch no shared static-data inventory, so the
+    /// same rule governs worker admission and actual expression lowering.
+    fn staticDataCandidateIsImmediate(self: *Lowerer, candidate: Mono.StaticDataCandidate, layout_idx: layout.Idx) bool {
+        const candidate_layout = self.result.layouts.getLayout(layout_idx);
+        return switch (candidate_layout.tag) {
+            .scalar => candidate_layout.getScalar().tag != .str or !candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()),
+            // Bool has the ordinary two-nullary-enum layout, not scalar's
+            // tag. Discriminant-only enums have no payload to materialize.
+            .tag_union => self.result.layouts.getTagUnionInfo(candidate_layout).discriminant_offset == 0,
+            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr, .hole, .dynamic => false,
+        };
+    }
+
     fn staticDataCandidateStep(
         self: *Lowerer,
         where: LowerSite,
@@ -7400,10 +7403,12 @@ const Lowerer = struct {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
         const in_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
-        // These expressions describe data to the compile-time encoder only.
-        // Runtime reads always reference the finished value, even when it is
-        // empty or a consumer will subsequently mutate it.
-        if (in_initializer) switch (candidate.value) {
+        const immediate = self.staticDataCandidateIsImmediate(candidate, layout_idx);
+        // Scalars, enums and small strings retain their immediate representation
+        // (design.md "Compile-Time Evaluation"), so optimizers see the same
+        // constants and CTFE/dev consumers emit the same code. Aggregates,
+        // including empty or subsequently mutated ones, read finished data.
+        if (in_initializer or immediate) switch (candidate.value) {
             .runtime => |runtime| return .{ .tail = exprTask(where, target, runtime, ty, next) },
             .stored => {},
         };
@@ -8029,8 +8034,12 @@ const Lowerer = struct {
         if (self.captureSpan(captures).len != capture_operands.len) {
             Common.invariant("erased callable capture operand count differed from lifted function captures");
         }
-        const capture = if (capture_ty) |ty| try self.addTemp(ty) else null;
-        const capture_layout = if (capture) |local| self.result.store.getLocal(local).layout_idx else null;
+        const ty = capture_ty orelse {
+            if (capture_operands.len != 0) Common.invariant("erased callable without capture payload carried capture operands");
+            return .{ .ret = try self.staticCallableRead(where.source(), target, fn_id, next) };
+        };
+        const capture = try self.addTemp(ty);
+        const capture_layout = self.result.store.getLocal(capture).layout_idx;
         const reuse = try self.erasedCallableReuseForPack(target, capture_layout);
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
@@ -8039,13 +8048,62 @@ const Lowerer = struct {
                 .capture = capture,
                 .capture_layout = capture_layout,
                 .on_drop = self.erasedCallableOnDrop(capture_layout),
+                .on_copy = self.erasedCallableOnDrop(capture_layout).copyCallback(),
+                .frozen_capture_layout = try self.frozenCaptureLayout(capture_layout),
                 .reuse = reuse,
             }),
             .next = next,
         } }, where.source());
-        if (capture_ty) |ty| return .{ .tail = try self.captureRecordTask(where, capture.?, captures, capture_operands, ty, assign) };
-        if (capture_operands.len != 0) Common.invariant("erased callable without capture payload carried capture operands");
-        return .{ .ret = assign };
+        return .{ .tail = try self.captureRecordTask(where, capture, captures, capture_operands, ty, assign) };
+    }
+
+    /// Read the capture-free erased callable of `fn_id` into `target`: static,
+    /// immortal data, never a fresh allocation (design.md "Function Values").
+    fn staticCallableRead(
+        self: *Lowerer,
+        origin: LIR.StmtOrigin,
+        target: LIR.LocalId,
+        fn_id: Type.FnId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const slot = try self.staticCallableSlot(try self.markReachableFn(fn_id), self.result.store.getLocal(target).layout_idx);
+        return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .static_data = .{ .id = slot } },
+            .next = next,
+        } }, origin);
+    }
+
+    /// The static-data slot holding the capture-free erased callable of
+    /// `proc`, at erased-callable layout `layout_idx`. Every read of one
+    /// procedure's callable in the program shares one slot.
+    fn staticCallableSlot(self: *Lowerer, proc: LIR.LirProcSpecId, layout_idx: layout.Idx) Common.LowerError!LIR.StaticDataId {
+        if (self.worker_callback) {
+            const slot = self.static_callable_map.get(proc) orelse
+                self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared static callable");
+            if (builtin.mode == .debug and self.result.static_data_values.items[@backingInt(slot)].layout_idx != layout_idx) {
+                Common.invariant("a static callable was read at a layout other than its slot's");
+            }
+            return slot;
+        }
+        const gop = try self.static_callable_map.getOrPut(proc);
+        if (gop.found_existing) {
+            if (builtin.mode == .debug and self.result.static_data_values.items[@backingInt(gop.value_ptr.*)].layout_idx != layout_idx) {
+                Common.invariant("a static callable was read at a layout other than its slot's");
+            }
+            return gop.value_ptr.*;
+        }
+        if (builtin.mode == .debug and self.result.layouts.getLayout(layout_idx).tag != .erased_callable) {
+            Common.invariant("a static callable's slot was not of erased-callable layout");
+        }
+        const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
+        try self.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = layout_idx,
+            .callable = proc,
+        });
+        gop.value_ptr.* = slot;
+        return slot;
     }
 
     /// A chain building the capture record `target` from its capture
@@ -8666,7 +8724,14 @@ const Lowerer = struct {
         if (op == .box_box or op == .box_unbox) {
             if (args.len != 1) Common.invariant("Box low-level operation reached LIR lowering with the wrong arity");
             const arg = GuardedList.at(args, 0);
-            const source = try self.addTemp(try self.lowerExprTy(arg));
+            const source_ty = try self.lowerExprTy(arg);
+            const source = try self.addTemp(source_ty);
+            const source_content = self.types.get(self.unaliasedType(source_ty));
+            const sequence_ty = if (op == .box_box) source_ty else source_content.box;
+            if (self.sequenceType(sequence_ty)) |sequence| {
+                const assign = try self.assignBoxedSequence(where, target, source, sequence, op == .box_box, next);
+                return .{ .tail = exprTask(where, source, arg, source_ty, assign) };
+            }
             const source_layout = self.result.store.getLocal(source).layout_idx;
             const saved_return_target = self.current_return_target;
             if (saved_return_target == target and op == .box_box) {
@@ -10029,6 +10094,19 @@ const Lowerer = struct {
             .none
         else
             .{ .rc_helper = helper_key };
+    }
+
+    fn frozenCaptureLayout(self: *Lowerer, capture_layout: ?layout.Idx) Allocator.Error!?layout.Idx {
+        const original = switch (self.erasedCallableOnDrop(capture_layout)) {
+            .none => return null,
+            .rc_helper => |helper| helper.layout_idx,
+        };
+        if (self.erased_capture_prefix == 0) return original;
+        if (self.frozen_capture_layouts.get(original)) |frozen| return frozen;
+        if (self.worker_callback) self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared frozen capture layout");
+        const frozen = try self.result.layouts.putPrefixedCaptureLayout(original, self.erased_capture_prefix);
+        try self.frozen_capture_layouts.put(original, frozen);
+        return frozen;
     }
 
     fn sameErasedCaptureShapeForCurrentProc(self: *Lowerer, new_layout: ?layout.Idx) Common.LowerError!bool {
@@ -12615,6 +12693,65 @@ const Lowerer = struct {
         return (try self.runBoundary(where, .{ .box = .{ .target = target, .source = source, .source_layout = source_layout, .next = next } })).?;
     }
 
+    fn unaliasedType(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
+        var current = ty;
+        for (0..self.types.typeCount()) |_| {
+            const content = self.types.get(current);
+            if (content != .named or content.named.kind != .alias) return current;
+            current = (content.named.backing orelse Common.invariant("a transparent alias has no backing")).ty;
+        }
+        Common.invariant("a transparent alias chain is cyclic");
+    }
+
+    fn sequenceType(self: *Lowerer, ty: Type.TypeId) ?Type.TypeId {
+        const current = self.unaliasedType(ty);
+        const content = self.types.get(current);
+        if (content != .named) return null;
+        const owner = content.named.builtin_owner orelse return null;
+        return if (owner == .iter or owner == .stream) current else null;
+    }
+
+    fn assignBoxedSequence(self: *Lowerer, where: LowerSite, target: LIR.LocalId, source: LIR.LocalId, sequence: Type.TypeId, packing: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        // These are the compiler-owned builtin sequence fields, not a search
+        // for a user type whose structure happens to resemble an iterator.
+        const fields = self.recordFields(sequence);
+        if (fields.len != 2) Common.invariant("a builtin sequence has two fields");
+        var length_index: ?u32 = null;
+        var step_index: ?u32 = null;
+        for (0..fields.len) |index| {
+            const field = GuardedList.at(fields, index);
+            const name = self.solved.lifted.names.recordFieldLabelText(field.name);
+            if (std.mem.eql(u8, name, "len_if_known")) length_index = @intCast(index);
+            if (std.mem.eql(u8, name, "step") or std.mem.eql(u8, name, "step!")) step_index = @intCast(index);
+        }
+        const li = length_index orelse Common.invariant("a builtin sequence has a length hint");
+        const si = step_index orelse Common.invariant("a builtin sequence has a step");
+        if (li != 0 or si != 1) Common.invariant("builtin sequence fields must retain their logical field order");
+        const backing_ty = self.runtimeBackingType(sequence);
+        const backing = try self.addTemp(backing_ty);
+        const backing_layout = self.result.store.getLocal(backing).layout_idx;
+        if (packing) {
+            const info = self.result.layouts.getLayout(backing_layout).getStruct();
+            const step_offset = self.result.layouts.getStructFieldOffsetByOriginalIndex(info.idx, si);
+            const offset = try self.addLocalForLayout(.u32);
+            const pack = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = .boxed_sequence_pack,
+                .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.boxed_sequence_pack.rcEffect()),
+                .args = try self.result.store.addLocalSpan(&.{ backing, offset }),
+                .next = next,
+            } }, where.source());
+            const set_offset = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = offset,
+                .value = .{ .i64_literal = .{ .value = step_offset, .layout_idx = .u32 } },
+                .next = pack,
+            } }, where.source());
+            return self.assignNominalBoundary(where, backing, source, self.result.store.getLocal(source).layout_idx, set_offset);
+        }
+        const wrap = try self.assignNominalBoundary(where, target, backing, backing_layout, next);
+        return self.assignUnaryLowLevel(where, backing, .boxed_sequence_unpack, source, wrap);
+    }
+
     fn assignRefRead(self: *Lowerer, where: LowerSite, target: LIR.LocalId, storage_layout: layout.Idx, op: LIR.RefOp, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         return (try self.runBoundary(where, .{ .ref_read = .{ .target = target, .storage_layout = storage_layout, .op = op, .next = next } })).?;
     }
@@ -13474,17 +13611,7 @@ const Lowerer = struct {
             },
             .callable_to_erased => {
                 if (task.target_variant.capture_ty == null and task.source_variant.capture_ty == null) {
-                    return .{ .ret = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
-                        .target = target,
-                        .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
-                            .proc = try self.markReachableFn(task.target_variant.target),
-                            .capture = null,
-                            .capture_layout = null,
-                            .on_drop = .none,
-                            .reuse = try self.erasedCallableReuseForPack(target, null),
-                        }),
-                        .next = next,
-                    } }, where.glue()) };
+                    return .{ .ret = try self.staticCallableRead(where.glue(), target, task.target_variant.target, next) };
                 }
                 const target_capture_ty = task.target_variant.capture_ty orelse
                     Common.invariant("callable-to-erased boundary target variant dropped a capture payload");
@@ -13500,6 +13627,8 @@ const Lowerer = struct {
                         .capture = capture,
                         .capture_layout = capture_layout,
                         .on_drop = self.erasedCallableOnDrop(capture_layout),
+                        .on_copy = self.erasedCallableOnDrop(capture_layout).copyCallback(),
+                        .frozen_capture_layout = try self.frozenCaptureLayout(capture_layout),
                         .reuse = try self.erasedCallableReuseForPack(target, capture_layout),
                     }),
                     .next = next,
@@ -13998,6 +14127,7 @@ const Lowerer = struct {
             if (content != .named) return false;
             const backing = content.named.backing orelse return false;
             if (content.named.kind == .@"opaque" and
+                content.named.builtin_owner != .iter and content.named.builtin_owner != .stream and
                 backing.authority != .generated_private and
                 self.solved.types.rootContent(backing.ty) == .record and
                 try self.solvedTypeContainsCallable(backing.ty))
@@ -14029,6 +14159,7 @@ const Lowerer = struct {
             if (content != .named) return false;
             const backing = content.named.backing orelse return false;
             if (content.named.kind == .@"opaque" and
+                content.named.builtin_owner != .iter and content.named.builtin_owner != .stream and
                 backing.authority != .generated_private and
                 self.types.get(backing.ty) == .record and
                 try self.typeContainsCallable(backing.ty))
@@ -14751,6 +14882,7 @@ const Lowerer = struct {
             switch (lowerer.types.get(ty)) {
                 .named => |named| if (named.backing) |backing| {
                     if (named.kind == .@"opaque" and
+                        named.builtin_owner != .iter and named.builtin_owner != .stream and
                         // Generated-private backing is the checked producer's
                         // explicit runtime representation, not source opacity.
                         backing.authority != .generated_private and
@@ -14901,7 +15033,7 @@ const Lowerer = struct {
                 },
                 .list => |elem| return .{ .child = elem },
                 .box => |elem| {
-                    if (!try self.isErasedCallableValueType(elem)) return .{ .child = elem };
+                    if (self.lowerer.sequenceType(elem) == null and !try self.isErasedCallableValueType(elem)) return .{ .child = elem };
                     self.graph.setNode(node, .erased_callable);
                     return .{ .done = .{ .input = layout.localGraphInput(node) } };
                 },

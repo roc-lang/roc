@@ -238,6 +238,8 @@ pub const ConstPlan = union(enum) {
     str,
     list: ConstPlanId,
     box: ConstPlanId,
+    /// A semantic Box(sequence), whose record is a view of its erased allocation.
+    boxed_sequence: BoxedSequencePlan,
     tuple: []const ConstPlanId,
     record: []const ConstPlanId,
     tag_union: []const ConstTagVariant,
@@ -250,6 +252,27 @@ pub const ConstPlan = union(enum) {
     /// A function value of a `.boxy` compile-time program, stored by what
     /// it captured (`postcheck.Boxy.StoredFn`).
     boxy_fn,
+};
+
+/// The semantic payload and committed record view of a boxed Iter or Stream.
+pub const BoxedSequencePlan = struct {
+    payload: ConstPlanId,
+    view_layout: layout.Idx,
+
+    /// The length and step plans in the builtin record's canonical logical order.
+    pub fn recordPlans(self: BoxedSequencePlan, plans: []const ConstPlan) [2]ConstPlanId {
+        var current = self.payload;
+        for (0..plans.len) |_| {
+            const plan = plans[@backingInt(current)];
+            if (plan == .named) {
+                current = plan.named.backing;
+                continue;
+            }
+            if (plan != .record or plan.record.len != 2) base.invariant("boxed sequence plan omitted its two-field record", .{});
+            return .{ plan.record[0], plan.record[1] };
+        }
+        base.invariant("boxed sequence plan contains a nominal cycle", .{});
+    }
 };
 
 /// Constant root metadata needed after LIR interpretation finishes.
@@ -311,13 +334,17 @@ pub const LiteralRootPlan = struct {
 pub const StaticDataValue = struct {
     /// Post-ARC guards reading this slot; threaded through ComptimeValueGuard.
     first_comptime_guard: ?u32 = null,
-    /// Null when completed frozen data or a stored node supplies this slot
-    /// directly.
+    /// Null when completed frozen data, a stored node, or a capture-free
+    /// callable supplies this slot directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
     /// The completed ConstStore node frozen directly at its explicit layout
     /// and storage plan, without an initializer procedure.
     stored: ?StoredStaticValue = null,
+    /// The capture-free erased callable of this procedure, which needs no
+    /// initializer: its value is the callable's payload (the function
+    /// pointer, no `on_drop`, no capture bytes) with the static refcount.
+    callable: ?LIR.LirProcSpecId = null,
     /// Final constant data assembled by the compiler, never runtime LIR.
     parts: ?StaticDataParts = null,
     /// Another physical representation of this canonical completed root.
@@ -351,8 +378,13 @@ pub const StaticDataParts = struct {
         product,
         list,
         box,
+        /// One sequence record child, with its committed step byte offset.
+        boxed_sequence: u32,
         tag: u32,
-        callable: LIR.LirProcSpecId,
+        callable: struct {
+            proc: LIR.LirProcSpecId,
+            on_drop: LIR.ErasedCallableOnDrop = .none,
+        },
     },
     children: []LIR.StaticDataId,
 };
@@ -583,6 +615,7 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
             .str,
             .list,
             .box,
+            .boxed_sequence,
             .named,
             .boxy_fn,
             => {},

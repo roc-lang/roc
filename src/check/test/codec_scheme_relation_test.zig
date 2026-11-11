@@ -46,7 +46,7 @@ test "a definition forwarding a parser keeps the forwarded relation quantified" 
     try env.assertDefType("forwarding", "_arg -> (a -> Try({ rest: a, value: U64 }, _b))");
 }
 
-test "two calls in one body take one parser at two error rows" {
+test "two calls cannot change one format's parser error type" {
     var env = try TestEnv.init("Test", prelude ++
         \\both = |{}| {
         \\    narrow : U64 -> Try({ value : U64, rest : U64 }, [Negative])
@@ -57,7 +57,7 @@ test "two calls in one body take one parser at two error rows" {
         \\}
     );
     defer env.deinit();
-    try env.assertNoErrors();
+    try env.assertOneTypeError("Parser Error Type Mismatch");
 }
 
 test "each use validates its own state against the format" {
@@ -81,7 +81,7 @@ test "each use validates its own error row against the format" {
         \\}
     );
     defer env.deinit();
-    try env.assertOneTypeError("Parser Error Row Missing Tag");
+    try env.assertOneTypeError("Parser Error Type Mismatch");
 }
 
 test "a relation no type can satisfy is reported without any use" {
@@ -110,7 +110,7 @@ test "a body cannot deliver an annotation's rigid error row" {
         \\promised = |_| U64.parser_for(Format.Default)
     );
     defer env.deinit();
-    try env.assertOneTypeError("Parser Error Row Missing Tag");
+    try env.assertOneTypeError("Parser Error Type Mismatch");
 }
 
 test "a relation reaching a weak value still determines that value" {

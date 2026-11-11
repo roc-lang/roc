@@ -58,6 +58,14 @@ pub const Store = struct {
     extra_strings_backing: ByteList,
     /// Backing storage for missing patterns index arrays
     missing_patterns_backing: std.array_list.Managed(ExtraStringIdx),
+    /// Whether compile-time evaluation reported a problem here that the
+    /// store's module's checked cache entry cannot reproduce: a literal's
+    /// rejection or a literal root's failure, which the program's literal
+    /// roots decide again in every compilation; an exhaustiveness failure
+    /// another module's root reached; or a failure in another module named by
+    /// that module's package-qualified name, which is workspace information
+    /// rather than part of the entry's identity.
+    unreproducible_reports: bool = false,
 
     /// Allocation-free empty store, including after ownership transfer.
     pub fn initEmpty(gpa: Allocator) Self {
@@ -203,6 +211,7 @@ pub const Store = struct {
                     .infinite_recursion,
                     .anonymous_recursion,
                     .polymorphic_recursion,
+                    .local_type_escape,
                     .row_label_conflict,
                     .polymorphic_value,
                     .polymorphic_var_annotation,

@@ -311,6 +311,7 @@ const Pass = struct {
             self.visited_plans[index] = true;
 
             switch (self.result.const_plans.items[index]) {
+                .boxed_sequence => |sequence| try self.plan_stack.append(self.allocator, sequence.payload),
                 .pending,
                 .layout_only,
                 .zst,
@@ -372,9 +373,11 @@ const Pass = struct {
         } else if (self.result.static_data_values.items[index].initializer) |initializer| {
             try self.markProc(initializer);
         } else if (self.result.static_data_values.items[index].parts) |parts| {
-            if (parts.kind == .callable) try self.markProc(parts.kind.callable);
+            if (parts.kind == .callable) try self.markProc(parts.kind.callable.proc);
         } else if (self.result.static_data_values.items[index].stored) |stored| {
             try self.markConstPlan(stored.plan);
+        } else if (self.result.static_data_values.items[index].callable) |procedure| {
+            try self.markProc(procedure);
         } else if (self.frozen != null) {
             // A program lowered after some compile-time values completed
             // evaluates the rest itself.
@@ -560,6 +563,7 @@ const Pass = struct {
         for (self.result.static_data_values.items, 0..) |*value, index| {
             if (!self.reachable_static_data[index]) continue;
             if (value.initializer) |initializer| value.initializer = self.remapProc(initializer);
+            if (value.callable) |procedure| value.callable = self.remapProc(procedure);
             if (value.representation_of) |*source| source.slot = self.remapStaticData(source.slot);
             if (value.parts) |*parts| {
                 if (self.static_data_exports[index] != null) {
@@ -570,7 +574,7 @@ const Pass = struct {
                     value.parts = null;
                 } else {
                     for (parts.children) |*child| child.* = self.remapStaticData(child.*);
-                    if (parts.kind == .callable) parts.kind.callable = self.remapProc(parts.kind.callable);
+                    if (parts.kind == .callable) parts.kind.callable.proc = self.remapProc(parts.kind.callable.proc);
                 }
             }
             if (value.compile_time_root) |*root| {
@@ -810,6 +814,12 @@ const Pass = struct {
                 self.verifyProcRef(initializer, proc_count);
                 if (!self.store.getProcSpecImmediate(initializer).is_static_initializer) {
                     reachableProcInvariant("internal static initializer was marked as a runtime proc");
+                }
+            }
+            if (value.callable) |procedure| {
+                self.verifyProcRef(procedure, proc_count);
+                if (self.store.getProcSpecImmediate(procedure).is_static_initializer) {
+                    reachableProcInvariant("a static callable named a static initializer");
                 }
             }
         }
@@ -1249,7 +1259,7 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = .opaque_ptr,
-        .parts = .{ .kind = .{ .callable = procs[2] }, .children = try allocator.alloc(LIR.StaticDataId, 0) },
+        .parts = .{ .kind = .{ .callable = .{ .proc = procs[2] } }, .children = try allocator.alloc(LIR.StaticDataId, 0) },
     });
     var exports = [_]LirProgram.StaticDataExport{.{
         .value_id = callable_slot,
@@ -1271,7 +1281,7 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
     try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ procs[0], procs[1] }, result.root_procs.items);
     for (result.store.getProcSpecs()) |proc| try std.testing.expectEqual(ret, proc.body.?);
     try std.testing.expectEqual(@as(u32, 2), @backingInt(exports[0].relocations[0].procedure.?));
-    try std.testing.expectEqual(procs[2], result.static_data_values.items[0].parts.?.kind.callable);
+    try std.testing.expectEqual(procs[2], result.static_data_values.items[0].parts.?.kind.callable.proc);
 }
 
 test "erased callable pruning frees evidence for fully and partly discarded sets" {

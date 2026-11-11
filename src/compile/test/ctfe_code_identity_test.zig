@@ -63,11 +63,17 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
     });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "Library.roc", .data =
         \\module [answer, used, unrelated]
+        \\import Other
         \\used : {} -> {}
-        \\used = |value| value
+        \\used = |value| Other.identity(value)
         \\answer = used({})
         \\unrelated : a -> a
         \\unrelated = |value| value
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "Other.roc", .data =
+        \\module [identity]
+        \\identity : {} -> {}
+        \\identity = |value| value
     });
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
@@ -85,6 +91,7 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = .boxy;
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();
@@ -110,6 +117,24 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
     var interfaces = lir.CheckedPipeline.BoxyExportInterfaces.init(allocator, io);
     defer interfaces.deinit();
 
+    // Produce the interface of code Library calls through the link. Its
+    // checked bodies must remain unindexed in the subsequent consumer.
+    const other = for (imports) |view| {
+        if (std.mem.eql(u8, view.module_env.module_name, "Other")) break coord.checkedArtifactByKey(view.key.digest()).?;
+    } else return error.TestUnexpectedResult;
+    var producer = try boxy.run(allocator, .{
+        .modules = .{ .root = check.CheckedArtifact.loweringView(other), .imports = try coord.collectImportedArtifactViews(arena.allocator(), other) },
+        .roots = .{ .requests = &.{} },
+        .target_usize = base.target.TargetUsize.native,
+        .unit = .{ .module = .{ .imports = &interfaces, .root = false, .names = &names } },
+    });
+    defer producer.lir_result.deinit();
+    defer static_data_exports.deinitStaticData(allocator, producer.static_data);
+    for (producer.lir_result.exported_procs.items) |proc| {
+        const identity = producer.lir_result.store.getProcSpec(proc).identity;
+        _ = try interfaces.putProc(&producer.lir_result.store, proc, producer.lir_result.boxy_table_needs.get(identity) orelse &.{});
+    }
+
     // Identify the worker from the checked declaration, independently of the
     // lowering's export inventory. Its generic argument also requires a table
     // contract in producer mode, even though no root calls it.
@@ -132,13 +157,44 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         function_unit: ?[32]u8 = null,
         exports_unrelated: bool,
     };
+    var completed = false;
     for ([_]Case{
         .{ .compile_time = true, .exports_unrelated = false },
         .{ .compile_time = false, .exports_unrelated = true },
         .{ .compile_time = false, .stored_functions = true, .function_unit = @splat(17), .exports_unrelated = true },
     }) |case| {
+        // Runtime producers consume completed roots, unlike the evaluator
+        // consumer above whose pending roots are the subject of the test.
+        if (!case.compile_time and !completed) {
+            try coord.finishCheckedProgram(.executable_artifacts);
+            completed = true;
+        }
+        // Restored checked modules have their CIR and published tables, but
+        // fresh analysis slots. Preparation must not demand every visible
+        // module's bodies; this unit emits only Library's workers.
+        var lazy_library = library.*;
+        lazy_library.body_analyses = try check.BodyAnalyses.BodyAnalyses.create(allocator, io, library.moduleEnvConst(), library.checked_procedure_templates.promoted);
+        defer lazy_library.body_analyses.?.destroy();
+        const lazy_imports = try allocator.dupe(check.CheckedArtifact.ImportedModuleView, imports);
+        defer allocator.free(lazy_imports);
+        var initialized: usize = 0;
+        defer for (lazy_imports[0..initialized]) |view| view.checked_bodies.analyses.destroy();
+        for (lazy_imports) |*view| {
+            view.checked_bodies.analyses = try check.BodyAnalyses.BodyAnalyses.create(allocator, io, view.module_env, view.checked_procedure_templates.promoted);
+            initialized += 1;
+        }
+        try std.testing.expect(lazy_imports.len != 0);
+        const modules: lir.CheckedPipeline.CheckedModuleSet = .{ .root = check.CheckedArtifact.loweringView(&lazy_library), .imports = lazy_imports };
+        var prepared = try lir.CheckedPipeline.prepareBoxyCheckedModules(allocator, modules, .{ .requests = if (case.compile_time) roots else &.{} }, .{
+            .specialization_strategy = .boxy,
+            .checked_module_state = .checking_finalization,
+        });
+        defer prepared.deinit();
+        try std.testing.expect(lazy_library.body_analyses.?.indexed.peek() == null);
+        for (lazy_imports) |view| try std.testing.expect(view.checked_bodies.analyses.indexed.peek() == null);
+
         var output = try boxy.run(allocator, .{
-            .modules = .{ .root = check.CheckedArtifact.loweringView(library), .imports = imports },
+            .modules = .{ .root = modules.root, .imports = modules.imports },
             .roots = .{ .requests = if (case.compile_time) roots else &.{} },
             .target_usize = base.target.TargetUsize.native,
             .compile_time = case.compile_time,
@@ -147,9 +203,16 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
             .unit = .{ .module = .{ .imports = &interfaces, .root = false, .names = &names } },
         });
         defer output.lir_result.deinit();
+        defer output.runtime_schemas.deinit();
         defer static_data_exports.deinitStaticData(allocator, output.static_data);
         defer if (output.retained) |retained| retained.deinit();
+        try std.testing.expect(lazy_library.body_analyses.?.indexed.peek() != null);
+        for (lazy_imports) |view| try std.testing.expect(view.checked_bodies.analyses.indexed.peek() == null);
 
+        const has_linked_import = for (output.lir_result.store.getProcSpecs()) |proc| {
+            if (proc.linked) break true;
+        } else false;
+        try std.testing.expect(has_linked_import);
         const has_used_body = for (output.lir_result.store.getProcSpecs()) |proc| {
             if (std.meta.eql(proc.identity, used_identity) and !proc.linked) break true;
         } else false;
@@ -215,20 +278,26 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     }
     // Compile-time evaluation runs `square` through `List.map`, `describe`
     // reading the folded `total`, string and dictionary operations, and the
-    // program runs each again at runtime.
+    // program runs each again at runtime. Each value reads `offset_by`, which
+    // holds a function, so the Solved program evaluates them all (design.md
+    // "Compile-Time Evaluation Under `.lss`").
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\square : U64 -> U64
         \\square = |n| n * n
+        \\make_offset : U64 -> (U64 -> U64)
+        \\make_offset = |k| |n| n + k
+        \\offset_by : U64 -> U64
+        \\offset_by = make_offset(0)
         \\total : U64
-        \\total = List.map([1, 2, 3, 4], square).sum()
+        \\total = offset_by(List.map([1, 2, 3, 4], square).sum())
         \\describe : U64 -> Str
         \\describe = |n| if n > total { "big" } else { "small" }
         \\bigger : Str
         \\bigger = describe(40)
         \\names : List(Str)
-        \\names = ["alpha", "beta"].map(|s| Str.concat(s, "!"))
+        \\names = ["alpha", "beta"].map(|s| Str.concat(s, "!")).drop_first(offset_by(0))
         \\lookup : Dict(Str, U64)
         \\lookup = Dict.empty().insert("a", 1).insert("b", total)
         \\measure : U64 -> { large : U128, ratio : F64, text : Str }
@@ -237,7 +306,7 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
         \\    while $i > 0 { $i = $i - 1 }
         \\    { large: n.to_u128() * 18446744073709551617, ratio: n.to_f64() / 2.0, text: "a long string carried by both native procedure consumers" }
         \\}
-        \\measured = measure(3)
+        \\measured = measure(offset_by(3))
         \\main! = |args| {
         \\    lengths = List.map(args, |arg| arg.to_utf8().len())
         \\    increment = args.len().to_u64()

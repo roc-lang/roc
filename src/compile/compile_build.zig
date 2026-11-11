@@ -235,6 +235,8 @@ pub const BuildEnv = struct {
     /// compile-time roots (`Coordinator.specialization_strategy`).
     specialization_strategy: base.SpecializationStrategy = .lss,
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
+    /// Instrumentation only (`Coordinator.boxy_program_observer`).
+    boxy_program_observer: ?eval.CompileTimeFinalization.BoxyProgramObserver = null,
     /// Instrumentation only; never participates in checked or object identity.
     detailed_monotype_diagnostics: bool = false,
     /// The lowering of the module objects a `.boxy` compile-time evaluation
@@ -445,24 +447,23 @@ pub const BuildEnv = struct {
         if (self.root_url) |*url| url.deinit(self.gpa);
         if (self.main_url) |*url| url.deinit(self.gpa);
 
-        // Deinit and free owned builtin modules. Borrowed builtins outlive this
-        // BuildEnv and are released by their owner.
-        if (self.owns_builtin_modules) {
-            self.builtin_modules.deinit();
-            self.gpa.destroy(self.builtin_modules);
-        }
-
-        if (comptime trace_build) {
-            std.debug.print("[DEINIT] builtin_modules done\n", .{});
-        }
-
-        // Deinit coordinator if present
+        // The coordinator borrows builtin modules through shutdown and its
+        // teardown diagnostics, so release it before the builtin owner.
         if (self.coordinator) |coord| {
             coord.deinit();
             self.gpa.destroy(coord);
         }
         if (comptime trace_build) {
             std.debug.print("[DEINIT] coordinator done\n", .{});
+        }
+
+        // Borrowed builtins outlive this BuildEnv and are released by their owner.
+        if (self.owns_builtin_modules) {
+            self.builtin_modules.deinit();
+            self.gpa.destroy(self.builtin_modules);
+        }
+        if (comptime trace_build) {
+            std.debug.print("[DEINIT] builtin_modules done\n", .{});
         }
 
         // Deinit cache manager if present
@@ -920,6 +921,7 @@ pub const BuildEnv = struct {
         self.sink.std_io = self.filesystem.std_io;
 
         const coord = try self.gpa.create(Coordinator);
+        errdefer self.gpa.destroy(coord);
         coord.* = try Coordinator.init(
             self.gpa,
             self.mode,
@@ -942,6 +944,7 @@ pub const BuildEnv = struct {
         coord.cancel_request = self.cancel_request;
         coord.runtime_lowering = self.runtime_lowering;
         coord.debug_observer = self.debug_observer;
+        coord.boxy_program_observer = self.boxy_program_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.boxy_object_lowering = self.boxy_object_lowering;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
@@ -3862,6 +3865,18 @@ pub const BuildEnv = struct {
         warnings: usize,
     };
 };
+
+test "BuildEnv coordinator initialization releases every failed allocation" {
+    var builtins = try BuiltinModules.init(std.testing.allocator, std.testing.io);
+    defer builtins.deinit();
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: Allocator, borrowed: *BuiltinModules) Allocator.Error!void {
+            var env = BuildEnv.initBorrowingBuiltinModules(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), ".", std.testing.io, borrowed);
+            defer env.deinit();
+            try env.initCoordinator();
+        }
+    }.run, .{&builtins});
+}
 
 test "BuildEnv collectWatchInputStates includes package root state" {
     const testing = std.testing;

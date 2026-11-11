@@ -3250,13 +3250,7 @@ pub fn lookupCheckedMethodTarget(
         const imported_owner = methodOwnerInImportedStore(names, imported.canonical_names, owner) orelse continue;
         const imported_method = imported.canonical_names.lookupMethodName(method_name) orelse continue;
         if (imported.method_registry.lookup(.{ .owner = imported_owner, .method = imported_method })) |found| {
-            switch (found) {
-                .rejected => return found,
-                .target => |target| switch (target.kind) {
-                    .procedure, .structural, .callable_binding => return found,
-                    .local_proc => continue,
-                },
-            }
+            return found;
         }
     }
     return null;

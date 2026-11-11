@@ -49,6 +49,11 @@ Builtin :: [].{
 	# parse_dict_after_key between a key and its value, and
 	# parse_dict_after_entry.
 	#
+	# Every fallible operation, including custom nested parsers and tag
+	# payload callbacks, uses the same format-owned err type. A required
+	# field that was not read calls missing_field : encoding, Str -> err.
+	# Optional and defaulted fields retain their absent-field values.
+	#
 	# A dict key that the format renders as a key string—a Str, a Bool, a
 	# number, or a tag union whose tags all lack payloads—is read and written
 	# by the parse_key_* and encode_key_* methods. Any other key is read and
@@ -76,13 +81,13 @@ Builtin :: [].{
 			name : FieldName(_shape) -> Str
 		}
 
-		ParseTagUnionSpec(_shape) :: {}.{
+		ParseTagUnionSpec(_shape, _encoding, _state, _err) :: {}.{
 
 			## After a format reads the tag name, the generated parser calls
 			## start_payloads once, next_payload before each payload after the
 			## first (with its zero-based index and the total count), and
 			## finish_payloads once after the final payload.
-			parse : ParseTagUnionSpec(_shape),
+			parse : ParseTagUnionSpec(_shape, _encoding, _state, _err),
 			{
 				tag : Str,
 				encoding : _encoding,
@@ -267,8 +272,8 @@ Builtin :: [].{
 				Ok(Str.from_utf8_lossy(encoded.output))
 			}
 
-			parse : Str -> Try(a, [InvalidJson(Str), ..errs])
-				where [a.Parseable([InvalidJson(Str), ..errs])]
+			parse : Str -> Try(a, [InvalidJson(Str)])
+				where [a.Parseable([InvalidJson(Str)])]
 			parse = |json| {
 				Shape : a
 				parse_shape = Shape.parser_for(JsonEncoding.Default)
@@ -284,8 +289,8 @@ Builtin :: [].{
 				}
 			}
 
-			parse_trailing_commas : Str -> Try(a, [InvalidJson(Str), ..errs])
-				where [a.Parseable([InvalidJson(Str), ..errs])]
+			parse_trailing_commas : Str -> Try(a, [InvalidJson(Str)])
+				where [a.Parseable([InvalidJson(Str)])]
 			parse_trailing_commas = |json| {
 				Shape : a
 				parse_shape = Shape.parser_for(JsonEncoding.TrailingCommas)
@@ -301,8 +306,8 @@ Builtin :: [].{
 				}
 			}
 
-			parser_camel : () -> (Str -> Try(a, [InvalidJson(Str), ..errs]))
-				where [a.Parseable([InvalidJson(Str), ..errs])]
+			parser_camel : () -> (Str -> Try(a, [InvalidJson(Str)]))
+				where [a.Parseable([InvalidJson(Str)])]
 			parser_camel = || {
 				Shape : a
 				parse_shape = Shape.parser_for(JsonEncoding.CamelCase)
@@ -1073,7 +1078,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_tag_union_from_json : Str, JsonEncoding, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
+			parse_tag_union_from_json : Str, JsonEncoding, ParseTagUnionSpec(a, JsonEncoding, JsonState, [InvalidJson(Str)]) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union_from_json = |raw, encoding, spec| {
 				remaining = json_trim_start(raw)
 
@@ -1725,7 +1730,10 @@ Builtin :: [].{
 			invalid_value : JsonEncoding, JsonState -> [InvalidJson(Str)]
 			invalid_value = |_, _| Json.invalid_json({})
 
-			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
+			missing_field : JsonEncoding, Str -> [InvalidJson(Str)]
+			missing_field = |_, name| InvalidJson("Missing field: ${name}")
+
+			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a, JsonEncoding, JsonState, [InvalidJson(Str)]), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union = |encoding, spec, state|
 				match state {
 					Input(value) => Json.parse_tag_union_from_json(value, encoding, spec)
@@ -2059,13 +2067,16 @@ Builtin :: [].{
 			rename_field : HttpHeaderEncoding, Str -> Str
 			rename_field = |_, name| HttpHeader.underscores_to_dashes(name)
 
-			parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader])
+			missing_field : HttpHeaderEncoding, Str -> [BadHeader, MissingHeader(Str)]
+			missing_field = |_, name| MissingHeader(name)
+
+			parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader, MissingHeader(Str)])
 			parse_str = |_, state| {
 				value_parts = HttpHeader.take_header_value(state.raw)?
 				Ok({ value: value_parts.value, rest: HttpHeaderState.{ raw: value_parts.after } })
 			}
 
-			parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader])
+			parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader, MissingHeader(Str)])
 			parse_u64 = |_, state| {
 				value_parts = HttpHeader.take_header_value(state.raw)?
 
@@ -2078,7 +2089,7 @@ Builtin :: [].{
 			## Header sequences have no opening delimiter and no way to declare a
 			## header count up front, so parsing always starts in Uncounted mode
 			## on the unchanged input.
-			parse_record_start : HttpHeaderEncoding, HttpHeaderState -> Try([Counted({ len : U64, rest : HttpHeaderState }), Uncounted(HttpHeaderState)], [BadHeader])
+			parse_record_start : HttpHeaderEncoding, HttpHeaderState -> Try([Counted({ len : U64, rest : HttpHeaderState }), Uncounted(HttpHeaderState)], [BadHeader, MissingHeader(Str)])
 			parse_record_start = |_, state| Ok(Uncounted(state))
 
 			parse_record_field : HttpHeaderEncoding,
@@ -2091,17 +2102,17 @@ Builtin :: [].{
 					Continue(HttpHeaderState),
 					Done(HttpHeaderState),
 				],
-				[BadHeader],
+				[BadHeader, MissingHeader(Str)],
 			)
 			parse_record_field = |_, fields, state|
 				HttpHeader.parse_record_field_from_headers(fields, state.raw)
 
 			## Each header value consumes its own CRLF terminator, so the cursor
 			## is already at the next entry boundary after every field.
-			parse_record_after_field : HttpHeaderEncoding, HttpHeaderState -> Try([Continue(HttpHeaderState), Done(HttpHeaderState)], [BadHeader])
+			parse_record_after_field : HttpHeaderEncoding, HttpHeaderState -> Try([Continue(HttpHeaderState), Done(HttpHeaderState)], [BadHeader, MissingHeader(Str)])
 			parse_record_after_field = |_, state| Ok(Continue(state))
 
-			skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, [BadHeader])
+			skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, [BadHeader, MissingHeader(Str)])
 			skip_record_field = |_, state| {
 				parts = HttpHeader.take_header_value(state.raw)?
 				Ok(HttpHeaderState.{ raw: parts.after })
@@ -2119,8 +2130,8 @@ Builtin :: [].{
 					output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, errs)),
 				]
 
-			parser_for : () -> (Str -> Try(output, [BadHeader, ..errs]))
-				where [output.Parseable([BadHeader, ..errs])]
+			parser_for : () -> (Str -> Try(output, [BadHeader, MissingHeader(Str)]))
+				where [output.Parseable([BadHeader, MissingHeader(Str)])]
 			parser_for = || {
 				Output : output
 				parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
@@ -2131,8 +2142,8 @@ Builtin :: [].{
 				}
 			}
 
-			parse : Str -> Try(output, [BadHeader, ..errs])
-				where [output.Parseable([BadHeader, ..errs])]
+			parse : Str -> Try(output, [BadHeader, MissingHeader(Str)])
+				where [output.Parseable([BadHeader, MissingHeader(Str)])]
 			parse = |raw| {
 				Output : output
 
@@ -2142,10 +2153,10 @@ Builtin :: [].{
 				Ok(parsed.value)
 			}
 
-			parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader])
+			parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader, MissingHeader(Str)])
 			parse_str = |encoding, state| HttpHeaderEncoding.parse_str(encoding, state)
 
-			parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader])
+			parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader, MissingHeader(Str)])
 			parse_u64 = |encoding, state| HttpHeaderEncoding.parse_u64(encoding, state)
 
 			parse_record_field_from_headers : FieldName.FieldNames(_shape),

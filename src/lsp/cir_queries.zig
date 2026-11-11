@@ -95,6 +95,14 @@ pub const LookupResult = union(enum) {
             .field_access => |field_access| ModuleEnv.varFrom(field_access.segment_idx),
         };
     }
+
+    /// Return the source region of the selected lookup site.
+    pub fn region(self: LookupResult, store: *const NodeStore) Region {
+        return switch (self) {
+            .expr => |expr_idx| store.getExprRegion(expr_idx),
+            .field_access => |field_access| store.getFieldAccessSegmentRegion(field_access.segment_idx),
+        };
+    }
 };
 
 // Helper Functions
@@ -609,6 +617,18 @@ pub fn findLookupAtOffset(module_env: *ModuleEnv, offset: u32) ?LookupResult {
     }
 
     return ctx.result;
+}
+
+/// Find the lookup at `offset`, unless a narrower node than the lookup holds it.
+///
+/// Operators and method calls count as lookups, so `findLookupAtOffset` also
+/// returns them for offsets in their operands and arguments. `narrowest` is the
+/// region of the smallest node at the offset: a lookup larger than that merely
+/// encloses the node, and doesn't describe it.
+pub fn findLookupNoWiderThan(module_env: *ModuleEnv, offset: u32, narrowest: Region) ?LookupResult {
+    const lookup = findLookupAtOffset(module_env, offset) orelse return null;
+    if (regionSize(lookup.region(&module_env.store)) > regionSize(narrowest)) return null;
+    return lookup;
 }
 
 /// External nominal reference information for a tag.

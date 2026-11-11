@@ -724,6 +724,18 @@ pub const GeneratedCodecRenaming = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A generated codec relation that asks again for a derivation in the chain
+/// of derivations whose method instantiations required it (design.md "Codec
+/// Derivation Recurrence"). It is that derivation, and resolves to it.
+pub const GeneratedCodecRecurrence = extern struct {
+    /// The recurring relation's raw constraint function variable (`Var`).
+    constraint_fn_var: u32,
+    /// The `source_constraint_fn_var` of the derivation it recurs (`Var`).
+    derivation_source_fn_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// One static-dispatch obligation checking rejected. The raw constraint
 /// function variable is the obligation identity used by dispatch expressions,
 /// instantiated scheme evidence, and checked-artifact publication.
@@ -971,8 +983,12 @@ pub const CheckingDependency = struct {
     };
 };
 
-/// One generated-codec dispatch relation that remains part of a binding's
-/// scheme across checked-module boundaries. `scheme_root` preserves alias
+/// One dispatch relation that remains part of a binding's scheme across
+/// checked-module boundaries: a generated-codec relation, which every later
+/// specialization revalidates, or a relation of a function-body binding's
+/// scheme whose callable reaches a variable the scheme quantifies but its type
+/// does not, which evidence reads that variable through (design.md "Scheme
+/// Relations Through Unrooted Variables"). `scheme_root` preserves alias
 /// identity when a cached checked environment is rechecked, and
 /// `constraint_index` names the exact `StaticDispatchConstraint` in this
 /// environment's serialized `TypeStore`; import copying therefore preserves
@@ -1189,6 +1205,8 @@ generated_codec_derivations: GeneratedCodecDerivation.SafeList,
 generated_codec_calls: GeneratedCodecCall.SafeList,
 /// Flat pool backing `generated_codec_derivations.renamings_start/renamings_len`.
 generated_codec_renamings: GeneratedCodecRenaming.SafeList,
+/// Generated codec relations that resolve to a derivation they recur.
+generated_codec_recurrences: GeneratedCodecRecurrence.SafeList,
 /// Static-dispatch obligations explicitly rejected by checking. Publication
 /// consumes these records instead of inferring rejection from erroneous types.
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
@@ -1604,6 +1622,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .generated_codec_renamings = try GeneratedCodecRenaming.SafeList.initCapacity(gpa, 4),
+        .generated_codec_recurrences = try GeneratedCodecRecurrence.SafeList.initCapacity(gpa, 0),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
         .inspect_override_instances = try InspectOverrideInstance.SafeList.initCapacity(gpa, 0),
@@ -1649,6 +1668,7 @@ pub fn deinit(self: *Self) void {
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.generated_codec_renamings.deinit(self.gpa);
+    self.generated_codec_recurrences.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
     self.inspect_override_instances.deinit(self.gpa);
@@ -1812,6 +1832,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.generated_codec_renamings.deinit(self.gpa);
+    self.generated_codec_recurrences.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
     self.inspect_override_instances.deinit(self.gpa);
@@ -4108,6 +4129,7 @@ pub const Serialized = extern struct {
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     generated_codec_renamings: GeneratedCodecRenaming.SafeList.Serialized,
+    generated_codec_recurrences: GeneratedCodecRecurrence.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
     inspect_override_instances: InspectOverrideInstance.SafeList.Serialized,
@@ -4238,6 +4260,7 @@ pub const Serialized = extern struct {
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.generated_codec_renamings.serialize(&env.generated_codec_renamings, allocator, writer);
+        try self.generated_codec_recurrences.serialize(&env.generated_codec_recurrences, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
         try self.inspect_override_instances.serialize(&env.inspect_override_instances, allocator, writer);
@@ -4323,6 +4346,7 @@ pub const Serialized = extern struct {
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .generated_codec_renamings = self.generated_codec_renamings.deserializeInto(base_addr),
+            .generated_codec_recurrences = self.generated_codec_recurrences.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
             .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
@@ -4412,6 +4436,7 @@ pub const Serialized = extern struct {
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_recurrences = try self.generated_codec_recurrences.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
@@ -4516,6 +4541,7 @@ pub const Serialized = extern struct {
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_recurrences = try self.generated_codec_recurrences.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
@@ -5012,6 +5038,18 @@ pub fn recordGeneratedCodecDerivation(
         return;
     }
     _ = try self.generated_codec_derivations.append(self.gpa, derivation);
+}
+
+/// Persist one generated codec relation that recurs a derivation.
+pub fn recordGeneratedCodecRecurrence(
+    self: *Self,
+    constraint_fn_var: TypeVar,
+    derivation_source_fn_var: TypeVar,
+) std.mem.Allocator.Error!void {
+    _ = try self.generated_codec_recurrences.append(self.gpa, .{
+        .constraint_fn_var = @backingInt(constraint_fn_var),
+        .derivation_source_fn_var = @backingInt(derivation_source_fn_var),
+    });
 }
 
 /// Persist one checker-rejected static-dispatch obligation.

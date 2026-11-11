@@ -16,8 +16,14 @@ pub const available = builtin.link_libc and build_options.dev_diagnostics;
 
 /// One developer-diagnostic environment variable.
 pub const Var = enum {
-    /// Trace Boxy-only work; specialized compilation must produce no events.
+    /// Trace Boxy work: the `.boxy` compile-time evaluator's under either
+    /// strategy, and Boxy lowering's. A specialized compilation whose
+    /// compile-time roots are all complete produces no events.
     trace_boxy_work,
+    /// Print each part of every Boxy module digest, so two traces show
+    /// which part an edit changed. Hashing the parts separately costs more
+    /// than the digests themselves, so the work trace leaves it out.
+    trace_boxy_digests,
     /// Rebuild every restored Boxy object and compare it with the cached one.
     verify_boxy_object_reuse,
     /// Separate coordinator request-resolution costs into exclusive phases.
@@ -26,6 +32,9 @@ pub const Var = enum {
     lir_dump,
     /// Print every closed specialization key.
     spec_census,
+    /// Print the procedures each lowered LIR program compiles, one line per
+    /// program and one per procedure.
+    proc_census,
     /// Print deterministic Lambda Solved work once per required invocation.
     lambda_solve_stats,
     /// Start each top-level recursive type analysis with empty proof tables.
@@ -64,9 +73,11 @@ pub const Var = enum {
         return switch (self) {
             .spec_resolution_profile => "ROC_SPEC_RESOLUTION_PROFILE",
             .trace_boxy_work => "ROC_TRACE_BOXY_WORK",
+            .trace_boxy_digests => "ROC_TRACE_BOXY_DIGESTS",
             .verify_boxy_object_reuse => "ROC_VERIFY_BOXY_OBJECT_REUSE",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
+            .proc_census => "ROC_PROC_CENSUS",
             .lambda_solve_stats => "ROC_LAMBDA_SOLVE_STATS",
             .fresh_type_analysis => "ROC_FRESH_TYPE_ANALYSIS",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",

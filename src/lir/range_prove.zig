@@ -50,7 +50,9 @@
 //! entry edge when it comes from outside the loop's body, and a jump from a
 //! join nested inside that body is a back edge like any other. The pass runs proof rounds to a fixpoint
 //! because folding a branch can leave a join body with a single remaining
-//! jump, which lets facts flow through it on the next round.
+//! jump, which lets facts flow through it on the next round. What a round
+//! persists for later rounds only ever weakens once admitted (see "Persisted
+//! state lattice"), so the rounds reach that fixpoint without a cap.
 //!
 //! Only fixed-width unsigned integers up to 64 bits participate. List lengths
 //! are modeled as opaque terms keyed by the list value they measure, so
@@ -96,12 +98,6 @@ const JoinPointId = LIR.JoinPointId;
 /// Allocation failure raised while proving and rewriting.
 pub const ResourceError = Allocator.Error;
 
-/// Bound on proof rounds per proc. Each round can only fold branches that
-/// exist, so rounds converge; this bound is a backstop, not a tuning knob.
-/// A loop lowered as several joins that jump among one another (a search
-/// with a restart state, say) carries a persisted fact one join further per
-/// round, so the backstop must cover a chain of a couple of dozen joins.
-const max_rounds: u32 = 48;
 /// Bound on collected facts along one path.
 const max_facts: usize = 1024;
 /// Bound on nodes touched by one inequality query.
@@ -986,6 +982,137 @@ test "range prove keeps a loop test whose body allocates many value nodes" {
     try testing.expect(store.getCFStmtImmediate(loop_switch).* == .switch_stmt);
 }
 
+/// A merge environment meet for `local` carrying the given upper bounds.
+fn testEnvMeet(local: LocalId, bounds: []const MeetBound) EnvMeet {
+    var meet: EnvMeet = .{
+        .local = local,
+        .root = 0,
+        .off_lo = 0,
+        .off_hi = 0,
+        .valid = false,
+        .bounds = .{},
+        .lower = .{},
+        .lower_any = .{},
+        .len_bounds = .{},
+        .len_bounds_any = .{},
+    };
+    for (bounds) |bound| meet.bounds.append(bound);
+    return meet;
+}
+
+test "range prove reaches a fixpoint when a merge's bound drops out and reappears" {
+    const testing = std.testing;
+    var pass = Pass.init(testing.allocator);
+    defer pass.deinit();
+    // A merged local bounded by two list lengths, as a merge in a large
+    // procedure is when a capped query reaches the second length only on
+    // every other round.
+    const list_a: LocalId = @fromBackingInt(1);
+    const list_b: LocalId = @fromBackingInt(2);
+    const merged: LocalId = @fromBackingInt(3);
+    const len_a: NodeId = 0;
+    const len_b: NodeId = 1;
+    try pass.nodes.append(testing.allocator, .{ .root = len_a, .off_lo = 0, .off_hi = 0, .lo = 0, .hi = std.math.maxInt(i64) });
+    try pass.nodes.append(testing.allocator, .{ .root = len_b, .off_lo = 0, .off_hi = 0, .lo = 0, .hi = std.math.maxInt(i64) });
+    try pass.len_roots.put(len_a, list_a);
+    try pass.len_roots.put(len_b, list_b);
+    const head: CFStmtId = @fromBackingInt(7);
+
+    var state = MergeState{ .live = true, .captures = 2, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
+    defer state.env.deinit(testing.allocator);
+    try state.env.append(testing.allocator, testEnvMeet(merged, &.{}));
+
+    var rounds: usize = 0;
+    var round: usize = 0;
+    while (round < 40) : (round += 1) {
+        // The first length's slack weakens on odd rounds and tightens on
+        // even ones; the second length's bound is derived on even rounds
+        // only.
+        const slack_a: i128 = if (round % 2 == 0) -4 else -2;
+        state.env.items[0] = if (round % 2 == 0)
+            testEnvMeet(merged, &.{ .{ .root = len_a, .c = slack_a }, .{ .root = len_b, .c = -1 } })
+        else
+            testEnvMeet(merged, &.{.{ .root = len_a, .c = slack_a }});
+        pass.seeds_grew = false;
+        try pass.persistMergeEnv(head, &state);
+        if (pass.seeds_grew) rounds = round + 1;
+    }
+    // Only the first round admits anything; every later round, whatever it
+    // derives, only weakens what is persisted.
+    try testing.expectEqual(@as(usize, 1), rounds);
+
+    const stored = pass.merge_env.getPtr(head).?;
+    try testing.expectEqual(@as(usize, 1), stored.len);
+    const entry = stored.items[0];
+    try testing.expectEqual(merged, entry.local);
+    try testing.expectEqual(@as(usize, 2), entry.len);
+    for (entry.bounds[0..entry.len]) |bound| {
+        switch (bound.base) {
+            // The slack only grew, to the loosest any round derived.
+            .len_of => |list| if (list == list_a) {
+                try testing.expectEqual(@as(i128, -2), bound.c);
+            } else {
+                // Dropped on the first round that missed it, and never
+                // admitted again.
+                try testing.expectEqual(list_b, list);
+                try testing.expect(bound.c >= Pass.dropped_slack);
+            },
+            .value_of, .constant => return error.TestUnexpectedResult,
+        }
+    }
+}
+
+test "range prove persisted merge facts only weaken and admit endpoints once" {
+    const testing = std.testing;
+    var pass = Pass.init(testing.allocator);
+    defer pass.deinit();
+    const list: LocalId = @fromBackingInt(1);
+    const cursor: LocalId = @fromBackingInt(2);
+    const limit: LocalId = @fromBackingInt(3);
+    const head: CFStmtId = @fromBackingInt(7);
+    const cursor_in_list = StableFact{ .a = .{ .value_of = cursor }, .b = .{ .len_of = list }, .c = -8 };
+    const cursor_under_limit = StableFact{ .a = .{ .value_of = cursor }, .b = .{ .value_of = limit }, .c = 0 };
+
+    var state = MergeState{ .live = true, .captures = 2, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
+    defer state.stable.deinit(testing.allocator);
+    try state.stable.ensureCapacity(testing.allocator, 4);
+
+    var admitting_rounds: usize = 0;
+    var round: usize = 0;
+    while (round < 40) : (round += 1) {
+        // The first fact's slack grows by one every round; the second holds
+        // on every third round only, and twice over at different slacks
+        // when it does.
+        var first = cursor_in_list;
+        first.c += @intCast(round);
+        state.stable.items[0] = first;
+        state.stable.len = 1;
+        if (round % 3 == 0) {
+            state.stable.items[1] = cursor_under_limit;
+            state.stable.items[2] = .{ .a = cursor_under_limit.a, .b = cursor_under_limit.b, .c = 5 };
+            state.stable.len = 3;
+        }
+        pass.seeds_grew = false;
+        try pass.persistMergeFacts(head, &state);
+        if (pass.seeds_grew) admitting_rounds += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), admitting_rounds);
+
+    const stored = pass.merge_facts.getPtr(head).?;
+    try testing.expectEqual(@as(usize, 2), stored.len);
+    for (stored.items[0..stored.len]) |fact| {
+        if (std.meta.eql(fact.b, cursor_in_list.b)) {
+            // Its slack followed the loosest derivation.
+            try testing.expectEqual(cursor_in_list.c + 39, fact.c);
+        } else {
+            // One entry for the pair, though rounds derive it twice at
+            // different slacks; dropped on the first round without it.
+            try testing.expect(std.meta.eql(fact.b, cursor_under_limit.b));
+            try testing.expect(fact.c >= Pass.dropped_slack);
+        }
+    }
+}
+
 /// One symbolic value. A node is either a root (its own `root`, carrying
 /// inclusive unsigned bounds in `lo`/`hi`) or a bounded affine offset from a
 /// root: control reaching the defining statement guarantees
@@ -1223,8 +1350,6 @@ const StableBase = union(enum) {
 const StableBound = struct {
     base: StableBase,
     c: i128,
-    /// Rounds in a row this bound came back weaker than it was persisted.
-    grew: u8 = 0,
 };
 
 /// A round-stable lower bound on the length of a list-valued loop parameter:
@@ -1294,17 +1419,6 @@ const LoopBounds = struct {
         allocator.free(self.items);
         allocator.free(self.lower_items);
         allocator.free(self.len_items);
-    }
-
-    /// Copy the live prefixes.
-    fn assign(dst: *LoopBounds, allocator: Allocator, src: *const LoopBounds) ResourceError!void {
-        try dst.ensureCapacity(allocator, src.len, src.lower_len, src.len_count);
-        @memcpy(dst.items[0..src.len], src.items[0..src.len]);
-        dst.len = src.len;
-        @memcpy(dst.lower_items[0..src.lower_len], src.lower_items[0..src.lower_len]);
-        dst.lower_len = src.lower_len;
-        @memcpy(dst.len_items[0..src.len_count], src.len_items[0..src.len_count]);
-        dst.len_count = src.len_count;
     }
 };
 
@@ -1462,8 +1576,13 @@ const StableFact = struct {
     b: StableTerm,
     c: i128,
     assumed: u64 = 0,
-    /// Rounds in a row this fact came back weaker than it was persisted.
-    grew: u8 = 0,
+};
+
+/// The endpoints of a stable fact, which identify it in a persisted list:
+/// a list holds one fact per pair of endpoints (see `Pass.weakenFacts`).
+const FactEndpoints = struct {
+    a: StableTerm,
+    b: StableTerm,
 };
 
 /// Bound on persisted facts per loop join.
@@ -1540,52 +1659,7 @@ const MergeEnvBounds = struct {
     fn deinit(self: *MergeEnvBounds, allocator: Allocator) void {
         allocator.free(self.items);
     }
-
-    /// Copy the live prefix.
-    fn assign(dst: *MergeEnvBounds, allocator: Allocator, src: *const MergeEnvBounds) ResourceError!void {
-        try dst.ensureCapacity(allocator, src.len);
-        @memcpy(dst.items[0..src.len], src.items[0..src.len]);
-        dst.len = src.len;
-    }
-
-    /// Whether two meets persist the same bounds for the same locals. The
-    /// entries and the bounds within one are compared as sets: their order
-    /// follows the walk that produced them, which a seeded fact's position
-    /// can shift from round to round without any bound changing.
-    fn sameBounds(previous: *const MergeEnvBounds, current: *const MergeEnvBounds) bool {
-        if (previous.len != current.len) return false;
-        for (current.items[0..current.len]) |new| {
-            var matched = false;
-            for (previous.items[0..previous.len]) |old| {
-                if (old.local != new.local) continue;
-                matched = sameBoundSet(old.bounds[0..old.len], new.bounds[0..new.len]) and
-                    sameBoundSet(old.lower[0..old.lower_len], new.lower[0..new.lower_len]);
-                break;
-            }
-            if (!matched) return false;
-        }
-        return true;
-    }
 };
-
-/// Whether two short bound lists hold the same bounds in any order.
-fn sameBoundSet(previous: []const StableBound, current: []const StableBound) bool {
-    return previous.len == current.len and boundsWithin(current, previous) and boundsWithin(previous, current);
-}
-
-fn boundsWithin(inner: []const StableBound, outer: []const StableBound) bool {
-    for (inner) |bound| {
-        var found = false;
-        for (outer) |other| {
-            if (std.meta.eql(bound, other)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) return false;
-    }
-    return true;
-}
 
 const Pass = struct {
     store: *LirStore,
@@ -1699,7 +1773,16 @@ const Pass = struct {
     enclosing_join: collections.DenseMap(CFStmtId, JoinPointId),
     /// For each join declared inside another join's body, that outer join.
     join_parent: collections.DenseMap(JoinPointId, JoinPointId),
-    new_loop_bounds: bool,
+    /// The round seeds_grew what later rounds are seeded with: it
+    /// admitted a persisted bound, fact, or environment entry (see
+    /// "Persisted state lattice"), admitted or revived an invariant to
+    /// assume, or resolved assumed ones. Only such a round, a round that
+    /// rewrote, or one that deferred a rewrite asks for another round.
+    seeds_grew: bool,
+    /// Assumed invariants whose status this round changed (admission as
+    /// pending aside, which grows the persisted lists): debug builds hold
+    /// every round that asks for another to some one-way progress.
+    invariant_moves: u32 = 0,
     /// An unverified invariant was seeded this round: nothing is persisted
     /// from the round, and a rewrite whose proof rests on an assumption
     /// (see `proof_assumed`) waits until the assumption is promoted or
@@ -1757,15 +1840,13 @@ const Pass = struct {
     /// endpoints and constant, and which candidates another implies.
     candidate_order: std.ArrayList(u32),
     candidate_implied: std.ArrayList(bool),
-    /// Stable-form scratch for a captured edge's facts, its entry facts,
-    /// and a persisted meet under construction; heap-allocated once, as
-    /// each is sized for its cap.
+    /// Stable-form scratch for a captured edge's facts and its entry
+    /// facts; heap-allocated once, as each is sized for its cap.
     stable_scratch: LoopFacts = .{},
     entry_scratch: LoopFacts = .{},
-    persist_scratch: LoopFacts = .{},
-    env_scratch: MergeEnvBounds = .{},
-    /// A loop parameter's bounds under construction, sized for the caps.
-    bounds_scratch: LoopBounds = .{},
+    /// `weakenFacts` scratch: the tightest slack a round derived for each
+    /// pair of endpoints it has not yet joined into the persisted list.
+    fact_slack: std.AutoHashMap(FactEndpoints, i128),
     /// Assumption bits of the facts the current fact-graph query relaxed
     /// through; reset by each top-level query.
     query_used: u64 = 0,
@@ -1838,7 +1919,7 @@ const Pass = struct {
             .current_region = null,
             .enclosing_join = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
             .join_parent = collections.DenseMap(JoinPointId, JoinPointId).init(allocator),
-            .new_loop_bounds = false,
+            .seeds_grew = false,
             .live_pending = false,
             .deferred_rewrites = false,
             .progress_epoch = 0,
@@ -1857,6 +1938,7 @@ const Pass = struct {
             .stable_index = std.AutoHashMap(StableFactKey, u32).init(allocator),
             .stable_candidates = .empty,
             .previous_keys = std.AutoHashMap(StableFactKey, void).init(allocator),
+            .fact_slack = std.AutoHashMap(FactEndpoints, i128).init(allocator),
             .candidate_order = .empty,
             .candidate_implied = .empty,
             .rewrites = 0,
@@ -1883,9 +1965,6 @@ const Pass = struct {
     fn reserveScratch(self: *Pass) ResourceError!void {
         try self.stable_scratch.ensureCapacity(self.allocator, loop_fact_cap);
         try self.entry_scratch.ensureCapacity(self.allocator, loop_fact_cap);
-        try self.persist_scratch.ensureCapacity(self.allocator, loop_fact_cap);
-        try self.env_scratch.ensureCapacity(self.allocator, merge_env_persist_cap);
-        try self.bounds_scratch.ensureCapacity(self.allocator, meet_bound_cap, meet_bound_cap, meet_bound_cap);
     }
 
     /// Return the prover to the state `init` left it in, keeping capacity,
@@ -1908,7 +1987,7 @@ const Pass = struct {
         self.reached_sum_end = false;
         self.refreshing_sums = false;
         self.current_region = null;
-        self.new_loop_bounds = false;
+        self.seeds_grew = false;
         self.progress_epoch = 0;
         self.loop_scan.release(self.allocator);
         self.query_best.clearRetainingCapacity();
@@ -1926,11 +2005,7 @@ const Pass = struct {
         self.candidate_implied.clearRetainingCapacity();
         self.stable_scratch.len = 0;
         self.entry_scratch.len = 0;
-        self.persist_scratch.len = 0;
-        self.env_scratch.len = 0;
-        self.bounds_scratch.len = 0;
-        self.bounds_scratch.lower_len = 0;
-        self.bounds_scratch.len_count = 0;
+        self.fact_slack.clearRetainingCapacity();
         self.query_used = 0;
         self.proof_assumed = 0;
         self.prescan_seen.clearRetainingCapacity();
@@ -2010,9 +2085,7 @@ const Pass = struct {
         self.candidate_implied.deinit(self.allocator);
         self.stable_scratch.deinit(self.allocator);
         self.entry_scratch.deinit(self.allocator);
-        self.persist_scratch.deinit(self.allocator);
-        self.env_scratch.deinit(self.allocator);
-        self.bounds_scratch.deinit(self.allocator);
+        self.fact_slack.deinit();
         self.prescan_seen.deinit();
         self.nesting_stack.deinit(self.allocator);
         self.nesting_seen.deinit();
@@ -2073,6 +2146,18 @@ const Pass = struct {
         self.rewrites = 0;
         self.live_pending = false;
         self.deferred_rewrites = false;
+        self.invariant_moves = 0;
+        // An invariant's assumption bit and re-derivation marks belong to
+        // the round that seeds it; one this round does not seed (its join
+        // went unwalked, or it is dead) carries none into resolution.
+        var bounds_it = self.loop_bounds.values();
+        while (bounds_it.next()) |stored| {
+            for (stored.len_items[0..stored.len_count]) |*item| {
+                item.hit = false;
+                item.assume_bit = 0;
+                item.hit_deps = 0;
+            }
+        }
     }
 
     // Layout helpers
@@ -3680,25 +3765,6 @@ const Pass = struct {
         };
     }
 
-    /// Whether two persisted fact lists hold the same facts, with the same
-    /// assumptions and growth, in any order. A list's order follows the
-    /// walk that captured it, and a merge seeded from another merge's
-    /// persisted facts inherits that order a round late, so along a chain
-    /// of joins the order keeps shifting while the facts stand still.
-    fn sameStableFacts(self: *Pass, previous: *const LoopFacts, current: *const LoopFacts) ResourceError!bool {
-        if (previous.len != current.len) return false;
-        self.stable_index.clearRetainingCapacity();
-        for (previous.items[0..previous.len], 0..) |fact, i| {
-            const gop = try self.stable_index.getOrPut(stableFactKey(fact));
-            if (!gop.found_existing) gop.value_ptr.* = @intCast(i);
-        }
-        for (current.items[0..current.len]) |fact| {
-            const at = self.stable_index.get(stableFactKey(fact)) orelse return false;
-            if (!std.meta.eql(previous.items[at], fact)) return false;
-        }
-        return true;
-    }
-
     /// Keep in `kept` only the facts `other` also holds, each with both
     /// sides' assumptions.
     fn intersectStableFacts(self: *Pass, kept: *LoopFacts, other: *const LoopFacts) ResourceError!void {
@@ -4243,9 +4309,6 @@ const Pass = struct {
         return null;
     }
 
-    /// Persist the completed merges' parameter bounds in round-stable form so
-    /// the next round can seed loop bodies, whose own walk always precedes
-    /// their back-edge captures.
     /// Round-stable form of one captured length lower bound, or null when
     /// its root denotes nothing stable. The result means
     /// `stable_value(base) <= len + c`, where a constant base denotes zero
@@ -4262,33 +4325,94 @@ const Pass = struct {
         return null;
     }
 
-    /// The form in which a bound on `base` with slack `c` persists, given
-    /// the bounds persisted for the same value last round. A bound that
-    /// comes back weaker round after round is being pushed along by the loop
-    /// it describes and would never settle; after `widen_after` such rounds
-    /// it is widened away rather than iterated. A bound that weakens once
-    /// or twice while its loop's edges are still being discovered settles.
-    fn persistedBound(old: []const StableBound, base: StableBase, c: i128) StableBound {
-        for (old) |prev| {
-            if (!sameLenBase(prev.base, base)) continue;
-            if (prev.c >= widened_slack) return .{ .base = base, .c = widened_slack };
-            if (c > prev.c) {
-                const grew = prev.grew + 1;
-                if (grew >= widen_after) return .{ .base = base, .c = widened_slack };
-                return .{ .base = base, .c = c, .grew = grew };
-            }
-            return .{ .base = base, .c = c };
+    // Persisted state lattice
+    //
+    // Everything a round persists for later rounds (merge environments,
+    // merge facts, loop entry facts, loop parameter bounds) is a list of
+    // bounds or facts, each identified by what it bounds: a bound by its
+    // base, a fact by its endpoints. A round joins what it derived into
+    // each list it persists, and every item only ever weakens:
+    //
+    // - an item this round derived again keeps the larger of its stored
+    //   and derived slack;
+    // - an item this round did not derive is dropped (`dropped_slack`)
+    //   and stays in its list, so it is never admitted again;
+    // - an item no round has derived before is admitted while its list
+    //   has room.
+    //
+    // Every persisted item is therefore implied by what the latest round
+    // that persisted its list derived, so seeding it is exactly as sound as
+    // that round's own derivation. Only admissions add to what the next
+    // round is seeded with, so only an admission asks for another round;
+    // weakening cannot let a later round prove anything this one could not.
+    // Each list admits a base or a pair of endpoints at most once and has a
+    // fixed capacity, so the admissions, and with them the rounds, are
+    // bounded by the procedure.
+
+    /// A persisted bound or fact with this slack has been dropped: it stays
+    /// in its list so it is never admitted again, and every consumer skips
+    /// it.
+    const dropped_slack: i128 = 1 << 62;
+
+    /// Join one round's bounds on a value (`this_round`, in round-stable form)
+    /// into the bounds persisted for it in `stored[0..stored_len.*]`, whose
+    /// storage is the list's capacity. Returns whether a base was admitted.
+    fn weakenBounds(stored: []StableBound, stored_len: *usize, this_round: []const StableBound) bool {
+        for (stored[0..stored_len.*]) |*bound| {
+            bound.c = if (tightestFor(this_round, bound.base)) |c| @max(bound.c, c) else dropped_slack;
         }
-        return .{ .base = base, .c = c };
+        var admitted = false;
+        for (this_round) |bound| {
+            if (stored_len.* == stored.len) break;
+            if (tightestFor(stored[0..stored_len.*], bound.base) != null) continue;
+            const c = tightestFor(this_round, bound.base).?;
+            if (c >= dropped_slack) continue;
+            stored[stored_len.*] = .{ .base = bound.base, .c = c };
+            stored_len.* += 1;
+            admitted = true;
+        }
+        return admitted;
     }
 
-    /// Consecutive weakenings after which a persisted bound is widened away.
-    const widen_after: u8 = 3;
+    /// The smallest slack `bounds` holds for `base`, or null when it holds
+    /// none.
+    fn tightestFor(bounds: []const StableBound, base: StableBase) ?i128 {
+        var best: ?i128 = null;
+        for (bounds) |bound| {
+            if (!sameLenBase(bound.base, base)) continue;
+            best = if (best) |c| @min(c, bound.c) else bound.c;
+        }
+        return best;
+    }
 
-    /// A bound persisted with this slack has been widened away: it stays in
-    /// the list so the widening is remembered from round to round, and
-    /// every consumer skips it.
-    const widened_slack: i128 = 1 << 62;
+    /// Join one round's facts into a persisted fact list, as `weakenBounds`
+    /// does for bounds, identifying a fact by its endpoints. Returns whether
+    /// a pair of endpoints was admitted.
+    fn weakenFacts(self: *Pass, stored: *LoopFacts, this_round: []const StableFact) ResourceError!bool {
+        self.fact_slack.clearRetainingCapacity();
+        for (this_round) |fact| {
+            // Facts persist only from rounds that seeded no assumption.
+            if (builtin.mode == .debug and fact.assumed != 0) {
+                invariant("range_prove persisted a fact resting on an unverified assumption", .{});
+            }
+            const gop = try self.fact_slack.getOrPut(.{ .a = fact.a, .b = fact.b });
+            if (!gop.found_existing or fact.c < gop.value_ptr.*) gop.value_ptr.* = fact.c;
+        }
+        for (stored.items[0..stored.len]) |*fact| {
+            fact.c = if (self.fact_slack.fetchRemove(.{ .a = fact.a, .b = fact.b })) |kv| @max(fact.c, kv.value) else dropped_slack;
+        }
+        var admitted = false;
+        for (this_round) |fact| {
+            if (stored.len == loop_fact_cap) break;
+            const kv = self.fact_slack.fetchRemove(.{ .a = fact.a, .b = fact.b }) orelse continue;
+            if (kv.value >= dropped_slack) continue;
+            try stored.ensureCapacity(self.allocator, stored.len + 1);
+            stored.items[stored.len] = .{ .a = fact.a, .b = fact.b, .c = kv.value };
+            stored.len += 1;
+            admitted = true;
+        }
+        return admitted;
+    }
 
     fn sameLenBase(a: StableBase, b: StableBase) bool {
         return switch (a) {
@@ -4346,12 +4470,9 @@ const Pass = struct {
     /// every entry edge makes it hold throughout the loop.
     fn persistLoopFacts(self: *Pass, join_id: JoinPointId, state: *const MergeState) ResourceError!void {
         if (state.entry_captures == 0) return;
-        const stable = &state.entry_stable;
-        if (stable.len == 0) return;
         const entry = try self.loop_facts.getOrPut(join_id);
         if (!entry.found_existing) entry.value_ptr.* = .{};
-        if (!entry.found_existing or entry.value_ptr.len != stable.len) self.new_loop_bounds = true;
-        try entry.value_ptr.assign(self.allocator, stable);
+        if (try self.weakenFacts(entry.value_ptr, state.entry_stable.items[0..state.entry_stable.len])) self.seeds_grew = true;
     }
 
     /// Seed a loop body region with its persisted entry-invariant facts,
@@ -4392,34 +4513,10 @@ const Pass = struct {
     /// Persist a fully-captured merge's all-edge fact intersection for
     /// seeding when a later round must walk it before capture completes.
     fn persistMergeFacts(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
-        const stable = &self.persist_scratch;
-        try stable.assign(self.allocator, &state.stable);
-        if (self.merge_facts.getPtr(head)) |previous| {
-            // A fact that comes back weaker round after round is widened
-            // away rather than iterated, like a persisted bound.
-            for (stable.items[0..stable.len]) |*fact| {
-                for (previous.items[0..previous.len]) |old| {
-                    if (std.meta.eql(old.a, fact.a) and std.meta.eql(old.b, fact.b)) {
-                        if (old.c >= widened_slack) {
-                            fact.c = widened_slack;
-                        } else if (fact.c > old.c) {
-                            fact.grew = old.grew + 1;
-                            if (fact.grew >= widen_after) fact.c = widened_slack;
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-        if (stable.len == 0) return;
+        const this_round = state.stable.items[0..state.stable.len];
         const entry = try self.merge_facts.getOrPut(head);
-        if (entry.found_existing) {
-            if (!try self.sameStableFacts(entry.value_ptr, stable)) self.new_loop_bounds = true;
-        } else {
-            entry.value_ptr.* = .{};
-            self.new_loop_bounds = true;
-        }
-        try entry.value_ptr.assign(self.allocator, stable);
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        if (try self.weakenFacts(entry.value_ptr, this_round)) self.seeds_grew = true;
     }
 
     /// Seed a region walked before its captures complete with the facts
@@ -4435,7 +4532,7 @@ const Pass = struct {
     /// value_b <= root_b + off_hi_b.
     fn seedStableFacts(self: *Pass, stored: *const LoopFacts) ResourceError!void {
         for (stored.items[0..stored.len]) |fact| {
-            if (fact.c >= widened_slack) continue;
+            if (fact.c >= dropped_slack) continue;
             const a = try self.materializeTerm(fact.a);
             const b = try self.materializeTerm(fact.b);
             const c = fact.c + self.offHiOf(b) - self.offLoOf(a);
@@ -4445,52 +4542,68 @@ const Pass = struct {
 
     /// Persist a fully-captured merge's env meet in round-stable form.
     fn persistMergeEnv(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
-        const stable = &self.env_scratch;
-        stable.len = 0;
-        const previous_env = self.merge_env.getPtr(head);
-        for (state.env.items) |meet| {
+        const entry = try self.merge_env.getOrPut(head);
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        const stored = entry.value_ptr;
+        for (stored.items[0..stored.len]) |*have| {
+            const this_round = if (findLocalMeet(state, have.local)) |meet| self.derivedBounds(meet) else DerivedBounds{};
+            if (weakenBounds(&have.bounds, &have.len, this_round.upper[0..this_round.upper_len])) self.seeds_grew = true;
+            if (weakenBounds(&have.lower, &have.lower_len, this_round.lower[0..this_round.lower_len])) self.seeds_grew = true;
+        }
+        for (state.env.items) |*meet| {
             if (meet.field != null) continue;
-            if (stable.len >= merge_env_persist_cap) break;
-            var entry = StoredEnvBound{ .local = meet.local, .bounds = undefined, .len = 0, .lower = undefined, .lower_len = 0 };
-            var old_bounds: []const StableBound = &.{};
-            var old_lower: []const StableBound = &.{};
-            if (previous_env) |prev| {
-                for (prev.items[0..prev.len]) |old| {
-                    if (old.local != meet.local) continue;
-                    old_bounds = old.bounds[0..old.len];
-                    old_lower = old.lower[0..old.lower_len];
+            if (stored.len == merge_env_persist_cap) break;
+            var known = false;
+            for (stored.items[0..stored.len]) |have| {
+                if (have.local == meet.local) {
+                    known = true;
                     break;
                 }
             }
-            for (meet.bounds.slice()) |bound| {
-                if (self.stableBase(bound.root)) |base| {
-                    if (entry.len < meet_bound_cap) {
-                        entry.bounds[entry.len] = persistedBound(old_bounds, base.base, base.c + bound.c);
-                        entry.len += 1;
-                    }
-                }
-            }
-            for (meet.lower.slice()) |bound| {
-                if (self.lenStable(bound)) |stable_lower| {
-                    if (entry.lower_len < meet_bound_cap) {
-                        entry.lower[entry.lower_len] = persistedBound(old_lower, stable_lower.base, stable_lower.c);
-                        entry.lower_len += 1;
-                    }
-                }
-            }
-            if (entry.len == 0 and entry.lower_len == 0) continue;
-            stable.items[stable.len] = entry;
-            stable.len += 1;
+            if (known) continue;
+            const this_round = self.derivedBounds(meet);
+            var admitted = StoredEnvBound{ .local = meet.local, .bounds = undefined, .len = 0, .lower = undefined, .lower_len = 0 };
+            _ = weakenBounds(&admitted.bounds, &admitted.len, this_round.upper[0..this_round.upper_len]);
+            _ = weakenBounds(&admitted.lower, &admitted.lower_len, this_round.lower[0..this_round.lower_len]);
+            if (admitted.len == 0 and admitted.lower_len == 0) continue;
+            try stored.ensureCapacity(self.allocator, stored.len + 1);
+            stored.items[stored.len] = admitted;
+            stored.len += 1;
+            self.seeds_grew = true;
         }
-        if (stable.len == 0) return;
-        const entry = try self.merge_env.getOrPut(head);
-        if (entry.found_existing) {
-            if (!entry.value_ptr.sameBounds(stable)) self.new_loop_bounds = true;
-        } else {
-            entry.value_ptr.* = .{};
-            self.new_loop_bounds = true;
+    }
+
+    /// The meet of a merge's environment for a local itself (not one of its
+    /// fields), or null when the merge carried none.
+    fn findLocalMeet(state: *const MergeState, local: LocalId) ?*const EnvMeet {
+        for (state.env.items) |*meet| {
+            if (meet.field == null and meet.local == local) return meet;
         }
-        try entry.value_ptr.assign(self.allocator, stable);
+        return null;
+    }
+
+    /// The upper and lower bounds a meet derived this round for its local,
+    /// in round-stable form.
+    const DerivedBounds = struct {
+        upper: [meet_bound_cap]StableBound = undefined,
+        upper_len: usize = 0,
+        lower: [meet_bound_cap]StableBound = undefined,
+        lower_len: usize = 0,
+    };
+
+    fn derivedBounds(self: *const Pass, meet: *const EnvMeet) DerivedBounds {
+        var bounds: DerivedBounds = .{};
+        for (meet.bounds.slice()) |bound| {
+            const base = self.stableBase(bound.root) orelse continue;
+            bounds.upper[bounds.upper_len] = .{ .base = base.base, .c = base.c + bound.c };
+            bounds.upper_len += 1;
+        }
+        for (meet.lower.slice()) |bound| {
+            const stable_lower = self.lenStable(bound) orelse continue;
+            bounds.lower[bounds.lower_len] = .{ .base = stable_lower.base, .c = stable_lower.c };
+            bounds.lower_len += 1;
+        }
+        return bounds;
     }
 
     /// Seed the env of a region walked before its captures complete from
@@ -4503,7 +4616,7 @@ const Pass = struct {
             var used = false;
             used = try self.seedLowerBounds(node, entry.lower[0..entry.lower_len]) or used;
             for (entry.bounds[0..entry.len]) |bound| {
-                if (bound.c >= widened_slack) continue;
+                if (bound.c >= dropped_slack) continue;
                 switch (bound.base) {
                     .len_of => |list_local| {
                         const term = try self.materializeTerm(.{ .len_of = list_local });
@@ -4529,12 +4642,12 @@ const Pass = struct {
     fn metValueNode(self: *Pass, local: LocalId, bounds: []const StableBound, lower: []const StableBound) ResourceError!NodeId {
         var hi = trackedIntMax(self.localLayout(local)) orelse std.math.maxInt(u64);
         for (bounds) |bound| {
-            if (bound.c >= widened_slack) continue;
+            if (bound.c >= dropped_slack) continue;
             if (bound.base == .constant) hi = @min(hi, bound.c);
         }
         var lo: i128 = 0;
         for (lower) |bound| {
-            if (bound.c >= widened_slack) continue;
+            if (bound.c >= dropped_slack) continue;
             // `0 <= value + c` is `value >= -c`.
             if (bound.base == .constant) lo = @max(lo, -bound.c);
         }
@@ -4548,7 +4661,7 @@ const Pass = struct {
     fn seedLowerBounds(self: *Pass, node: NodeId, lower: []const StableBound) ResourceError!bool {
         var used = false;
         for (lower) |bound| {
-            if (bound.c >= widened_slack) continue;
+            if (bound.c >= dropped_slack) continue;
             switch (bound.base) {
                 .len_of => |list_local| {
                     const term = try self.materializeTerm(.{ .len_of = list_local });
@@ -4567,6 +4680,10 @@ const Pass = struct {
         return used;
     }
 
+    /// Persist the completed merges' facts and environments, and their
+    /// loops' entry facts and parameter bounds, in round-stable form so the
+    /// next round can seed loop bodies, whose own walk always precedes their
+    /// back-edge captures.
     fn persistLoopBounds(self: *Pass) ResourceError!void {
         var it = self.merge_states.iterator();
         while (it.next()) |entry| {
@@ -4586,25 +4703,19 @@ const Pass = struct {
             // ask for another round for nothing.
             const join_stmt = self.join_stmts.get(join_id) orelse continue;
             const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(join_stmt).join.params);
-            for (state.env.items) |meet| {
-                if (meet.field != null) continue;
-                var is_param = false;
-                for (0..GuardedList.borrowLen(params)) |i| {
-                    if (GuardedList.at(params, i) == meet.local) {
-                        is_param = true;
-                        break;
-                    }
-                }
-                if (!is_param) continue;
-                const key = @backingInt(meet.local);
+            for (0..GuardedList.borrowLen(params)) |param_index| {
+                const param = GuardedList.at(params, param_index);
+                const key = @backingInt(param);
+                const meet = findLocalMeet(state, param);
                 if (self.live_pending) {
                     // Assumption round: the walk ran under unverified seeds,
                     // so nothing new is persisted; pending invariants that
                     // this round re-derived on every edge are marked.
+                    const met = meet orelse continue;
                     const stored = self.loop_bounds.getPtr(join_id, key) orelse continue;
                     for (stored.len_items[0..stored.len_count]) |*item| {
                         if (item.status != .pending) continue;
-                        const bounds = if (item.kind == .length) meet.len_bounds.slice() else meet.lower.slice();
+                        const bounds = if (item.kind == .length) met.len_bounds.slice() else met.lower.slice();
                         for (bounds) |bound| {
                             if (self.lenStable(bound)) |candidate| {
                                 if (sameLenBase(candidate.base, item.base) and candidate.c <= item.c) {
@@ -4618,42 +4729,22 @@ const Pass = struct {
                     continue;
                 }
 
-                const stable = &self.bounds_scratch;
-                stable.len = 0;
-                stable.lower_len = 0;
-                stable.len_count = 0;
-                const previous_bounds = self.loop_bounds.getPtr(join_id, key);
-                const old_items: []const StableBound = if (previous_bounds) |prev| prev.items[0..prev.len] else &.{};
-                const old_lower: []const StableBound = if (previous_bounds) |prev| prev.lower_items[0..prev.lower_len] else &.{};
-                for (meet.bounds.slice()) |bound| {
-                    if (self.stableBase(bound.root)) |base| {
-                        if (stable.len < meet_bound_cap) {
-                            stable.items[stable.len] = persistedBound(old_items, base.base, base.c + bound.c);
-                            stable.len += 1;
-                        }
-                    }
-                }
-                for (meet.lower.slice()) |bound| {
-                    if (self.lenStable(bound)) |stable_lower| {
-                        if (stable.lower_len < meet_bound_cap) {
-                            stable.lower_items[stable.lower_len] = persistedBound(old_lower, stable_lower.base, stable_lower.c);
-                            stable.lower_len += 1;
-                        }
-                    }
-                }
-                // Carry the invariant list forward, admitting new length
+                const this_round = if (meet) |met| self.derivedBounds(met) else DerivedBounds{};
+                const stored = self.loop_bounds.getPtr(join_id, key) orelse blk: {
+                    // A parameter nothing bounds yet persists nothing.
+                    const met = meet orelse continue;
+                    if (this_round.upper_len == 0 and this_round.lower_len == 0 and !self.hasLenCandidates(met)) continue;
+                    const slot = try self.loop_bounds.getOrPut(join_id, key);
+                    slot.value_ptr.* = .{};
+                    break :blk slot.value_ptr;
+                };
+                try stored.ensureCapacity(self.allocator, meet_bound_cap, meet_bound_cap, meet_bound_cap);
+                if (weakenBounds(stored.items[0..meet_bound_cap], &stored.len, this_round.upper[0..this_round.upper_len])) self.seeds_grew = true;
+                if (weakenBounds(stored.lower_items[0..meet_bound_cap], &stored.lower_len, this_round.lower[0..this_round.lower_len])) self.seeds_grew = true;
+                // The invariant list carries forward, admitting new length
                 // candidates as pending. A base that already failed
-                // verification is listed as dead rather than re-admitted.
-                if (previous_bounds) |previous| {
-                    @memcpy(stable.len_items[0..previous.len_count], previous.len_items[0..previous.len_count]);
-                    stable.len_count = previous.len_count;
-                }
-                self.admitLenCandidates(&meet, stable);
-                if (stable.len == 0 and stable.lower_len == 0 and stable.len_count == 0) continue;
-                if (previous_bounds == null or previous_bounds.?.len != stable.len or previous_bounds.?.lower_len != stable.lower_len) self.new_loop_bounds = true;
-                const slot = try self.loop_bounds.getOrPut(join_id, key);
-                if (!slot.found_existing) slot.value_ptr.* = .{};
-                try slot.value_ptr.assign(self.allocator, stable);
+                // verification stays listed as dead rather than re-admitted.
+                if (meet) |met| self.admitLenCandidates(met, stored);
             }
         }
     }
@@ -4667,11 +4758,8 @@ const Pass = struct {
     /// round for nothing.
     fn admitLenCandidates(self: *Pass, meet: *const EnvMeet, stored: *LoopBounds) void {
         const is_int = trackedIntMax(self.localLayout(meet.local)) != null;
-        const bounds = if (is_int) meet.lower_any.slice() else meet.len_bounds_any.slice();
-        for (bounds) |bound| {
-            const candidate = self.lenStable(bound) orelse continue;
-            if (candidate.base == .constant and candidate.c >= 0) continue;
-            if (candidate.c >= std.math.maxInt(i64)) continue;
+        for (self.candidateBounds(meet)) |bound| {
+            const candidate = self.lenCandidate(bound) orelse continue;
             var known = false;
             for (stored.len_items[0..stored.len_count]) |item| {
                 if (sameLenBase(candidate.base, item.base)) {
@@ -4688,9 +4776,33 @@ const Pass = struct {
                     .hit = false,
                 };
                 stored.len_count += 1;
-                self.new_loop_bounds = true;
+                self.seeds_grew = true;
             }
         }
+    }
+
+    /// The bounds some captured edge proves for a parameter, from which its
+    /// invariant candidates come.
+    fn candidateBounds(self: *const Pass, meet: *const EnvMeet) []const MeetBound {
+        return if (trackedIntMax(self.localLayout(meet.local)) != null) meet.lower_any.slice() else meet.len_bounds_any.slice();
+    }
+
+    /// One of `candidateBounds` in round-stable form, or null when it is
+    /// not worth assuming.
+    fn lenCandidate(self: *const Pass, bound: MeetBound) ?struct { base: StableBase, c: i128 } {
+        const candidate = self.lenStable(bound) orelse return null;
+        if (candidate.base == .constant and candidate.c >= 0) return null;
+        if (candidate.c >= std.math.maxInt(i64)) return null;
+        return .{ .base = candidate.base, .c = candidate.c };
+    }
+
+    /// Whether `admitLenCandidates` would admit an invariant for a parameter
+    /// that has none yet.
+    fn hasLenCandidates(self: *const Pass, meet: *const EnvMeet) bool {
+        for (self.candidateBounds(meet)) |bound| {
+            if (self.lenCandidate(bound) != null) return true;
+        }
+        return false;
     }
 
     /// Resolution of the assumed invariants at round end. In an assumption
@@ -4702,9 +4814,10 @@ const Pass = struct {
     /// again, since a failure only means unprovable under those facts.
     fn resolvePendingInvariants(self: *Pass) void {
         if (!self.live_pending) {
-            // A round that rewrote statements or persisted new bounds opens a
-            // new epoch; the rounds after it run to their fixpoint first.
-            if (self.rewrites > 0 or self.new_loop_bounds) {
+            // A round that rewrote statements or seeds_grew the persisted
+            // state opens a new epoch; the rounds after it run to their
+            // fixpoint first.
+            if (self.rewrites > 0 or self.seeds_grew) {
                 self.progress_epoch += 1;
                 return;
             }
@@ -4716,7 +4829,8 @@ const Pass = struct {
                 for (stored.len_items[0..stored.len_count]) |*item| {
                     if (item.status != .dead or item.died_epoch >= self.progress_epoch) continue;
                     item.status = .pending;
-                    self.new_loop_bounds = true;
+                    self.invariant_moves += 1;
+                    self.seeds_grew = true;
                 }
             }
             return;
@@ -4730,6 +4844,7 @@ const Pass = struct {
                 if (!item.hit) {
                     item.status = .dead;
                     item.died_epoch = self.progress_epoch;
+                    self.invariant_moves += 1;
                 }
             }
         }
@@ -4776,7 +4891,10 @@ const Pass = struct {
         it = self.loop_bounds.values();
         while (it.next()) |stored| {
             for (stored.len_items[0..stored.len_count]) |*item| {
-                if (item.status == .pending and item.hit) item.status = .verified;
+                if (item.status == .pending and item.hit) {
+                    item.status = .verified;
+                    self.invariant_moves += 1;
+                }
             }
         }
         // A survivor that rested on a fallen assumption retries next round:
@@ -4784,7 +4902,7 @@ const Pass = struct {
         // through, so it may name an assumption the bound never needed. A
         // dead one waits for a round that makes progress before it is
         // seeded again.
-        self.new_loop_bounds = true;
+        self.seeds_grew = true;
     }
 
     /// Seed a loop parameter from bounds persisted by an earlier round,
@@ -4826,7 +4944,7 @@ const Pass = struct {
         }
         used = try self.seedLowerBounds(node, stored.lower_items[0..stored.lower_len]) or used;
         for (stored.items[0..stored.len]) |bound| {
-            if (bound.c >= widened_slack) continue;
+            if (bound.c >= dropped_slack) continue;
             switch (bound.base) {
                 .len_of => |list_local| {
                     const list_node = try self.valueOf(list_local);
@@ -5323,22 +5441,58 @@ const Pass = struct {
         self.merge_facts.clearRetainingCapacity();
         self.merge_env.clearRetainingCapacity();
         try self.reserveScratch();
-        var round: u32 = 0;
-        while (round < max_rounds) : (round += 1) {
+        // Rounds run until one neither rewrites, adds to the persisted
+        // state, nor defers a rewrite. Each of those is a one-way step the
+        // procedure bounds: a rewrite removes a check or a Bool join, the
+        // persisted lists only admit what they never held (see "Persisted
+        // state lattice"), and an assumed invariant only verifies, dies, or
+        // is revived once per epoch, which only those steps open.
+        var persisted_size: usize = 0;
+        var first = true;
+        while (true) {
             self.resetRound();
             try self.prescanProc(proc);
-            if (round == 0) try self.reserveMergeStorage();
+            if (first) try self.reserveMergeStorage();
+            first = false;
             // Threading restructures control flow, so a round that threads
             // stops there and the next round re-derives the graph facts.
-            self.new_loop_bounds = false;
+            self.seeds_grew = false;
             if (try self.threadBoolJoins(proc.body.?) == 0) {
                 try self.walkRegions(proc.body.?);
                 try self.certifyRound(proc.body.?);
                 try self.persistLoopBounds();
                 self.resolvePendingInvariants();
             }
-            if (self.rewrites == 0 and !self.new_loop_bounds and !self.deferred_rewrites) return;
+            if (self.rewrites == 0 and !self.seeds_grew and !self.deferred_rewrites) return;
+            self.assertRoundProgress(&persisted_size);
         }
+    }
+
+    /// Debug builds only: a round that asks for another made one of the
+    /// one-way steps that bound the rounds. The persisted lists never
+    /// shrink, since a dropped item stays listed, so their total size
+    /// counts admissions.
+    fn assertRoundProgress(self: *Pass, persisted_size: *usize) void {
+        if (builtin.mode != .debug) return;
+        var size: usize = 0;
+        var bounds_it = self.loop_bounds.values();
+        while (bounds_it.next()) |stored| size += stored.len + stored.lower_len + stored.len_count;
+        var loop_facts_it = self.loop_facts.valueIterator();
+        while (loop_facts_it.next()) |facts| size += facts.len;
+        var merge_facts_it = self.merge_facts.valueIterator();
+        while (merge_facts_it.next()) |facts| size += facts.len;
+        var merge_env_it = self.merge_env.valueIterator();
+        while (merge_env_it.next()) |env| {
+            size += env.len;
+            for (env.items[0..env.len]) |entry| size += entry.len + entry.lower_len;
+        }
+        if (size < persisted_size.*) {
+            invariant("range_prove persisted lists shrank from {d} to {d} items", .{ persisted_size.*, size });
+        }
+        if (self.rewrites == 0 and size == persisted_size.* and self.invariant_moves == 0) {
+            invariant("range_prove asked for another round without rewriting, admitting persisted state, or resolving an assumed invariant", .{});
+        }
+        persisted_size.* = size;
     }
 
     fn enqueueRegion(self: *Pass, head: CFStmtId) ResourceError!void {
@@ -5752,6 +5906,7 @@ const Pass = struct {
         const arg_count = GuardedList.borrowLen(args) - @intFromBool(self.store.stmtRowOrDefault(s.extra).dyn_elem_desc);
 
         switch (s.op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => {},
             .simd_concat_shift_bytes => {
                 std.debug.assert(arg_count == 3);
                 const s_extra = self.store.stmtRowOrDefault(s.extra);
@@ -6002,6 +6157,7 @@ const Pass = struct {
             .str_static_small_word_eq,
             .str_static_small_word_caseless_eq,
             .str_concat,
+            .str_append,
             .str_contains,
             .str_trim,
             .str_trim_start,
