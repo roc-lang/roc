@@ -57,7 +57,16 @@ const Rank = @import("types.zig").Rank;
 const DescStoreIdx = @import("store.zig").DescStoreIdx;
 const RecordField = @import("types.zig").RecordField;
 const types = @import("types.zig");
-const UseAbsorbers = @import("use_absorbers.zig").UseAbsorbers;
+
+/// Whether a class is an uncommitted record tail or an uncommitted tag tail
+/// (design.md "Uncommitted Record Tails", "Uncommitted Tag Tails").
+pub fn isUncommittedTail(desc: types.Descriptor) bool {
+    return switch (desc.content) {
+        .flex => desc.flags.uncommitted_record_tail,
+        .structure => |flat| flat == .empty_tag_union and desc.flags.uncommitted_tag_tail,
+        .rigid, .alias, .field_presence, .err => false,
+    };
+}
 
 /// The descriptor a rank frame settles once its children have reported.
 const RankFill = struct {
@@ -158,15 +167,14 @@ pub const Generalizer = struct {
     rank_frames: std.ArrayList(RankFrame),
     /// Settled child ranks, consumed by the frame that requested them.
     pending_ranks: std.ArrayList(Rank),
-    /// What the module being checked can change anonymous structure into,
-    /// or null when every liftable class is copied per use.
-    use_absorbers: ?UseAbsorberQuery = null,
-
-    /// What `Generalizer.use_absorbers` reads structure's names through.
-    pub const UseAbsorberQuery = struct {
-        absorbers: *UseAbsorbers,
-        idents: *const base.Ident.Store,
-    };
+    /// The uncommitted record and tag tails the next pass may quantify
+    /// (design.md "Uncommitted Record Tails", "Uncommitted Tag Tails"). The
+    /// caller fills it before each pass.
+    quantifiable_tails: @import("collections").DenseMap(Var, void),
+    /// The uncommitted tails the last pass would have quantified but
+    /// `quantifiable_tails` does not hold. The pass leaves them unquantified
+    /// at their rank, and the caller commits each to the empty record.
+    unquantified_tails: std.ArrayListUnmanaged(Var) = .empty,
 
     const Self = @This();
 
@@ -178,15 +186,10 @@ pub const Generalizer = struct {
             .store = store,
             .rank_adjusted_vars = @import("collections").DenseMap(Var, void).init(gpa),
             .vars_to_generalized = @import("collections").DenseMap(Var, void).init(gpa),
+            .quantifiable_tails = @import("collections").DenseMap(Var, void).init(gpa),
             .rank_frames = .empty,
             .pending_ranks = .empty,
         };
-    }
-
-    /// Whether a class this pass leaves ungeneralized is per-use structure.
-    fn copiedPerUse(self: *Self, desc: types.Descriptor) std.mem.Allocator.Error!bool {
-        const query = self.use_absorbers orelse return desc.liftsIntoNominal();
-        return query.absorbers.copiedPerUse(self.gpa, self.store, query.idents, desc);
     }
 
     /// Reset the state of the generalizer
@@ -194,12 +197,15 @@ pub const Generalizer = struct {
         self.tmp_vars.clearRetainingCapacity();
         self.rank_adjusted_vars.clearRetainingCapacity();
         self.vars_to_generalized.clearRetainingCapacity();
+        self.unquantified_tails.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *Self, _: std.mem.Allocator) void {
         self.tmp_vars.deinit(self.gpa);
         self.rank_adjusted_vars.deinit();
         self.vars_to_generalized.deinit();
+        self.quantifiable_tails.deinit();
+        self.unquantified_tails.deinit(self.gpa);
         self.rank_frames.deinit(self.gpa);
         self.pending_ranks.deinit(self.gpa);
     }
@@ -235,7 +241,16 @@ pub const Generalizer = struct {
     /// ## Parameters
     /// - `var_pool`: The main variable pool tracking all vars by rank
     /// - `rank_to_generalize`: The rank level to generalize (must be var_pool.current_rank)
-    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+    pub fn generalize(self: *Self, gpa: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+        try self.adjust(gpa, var_pool, rank_to_generalize);
+        try self.quantify(var_pool, rank_to_generalize);
+    }
+
+    /// The first half of `generalize`: adjust the ranks of the vars at
+    /// `rank_to_generalize`, and list in `unquantified_tails` the uncommitted
+    /// record tails the pass would quantify that `quantifiable_tails` does not
+    /// hold. The caller commits each of them before `quantify`.
+    pub fn adjust(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
         if (rank_to_generalize == Rank.generalized) return;
 
         std.debug.assert(var_pool.current_rank == rank_to_generalize);
@@ -273,6 +288,32 @@ pub const Generalizer = struct {
             _ = try self.adjustRank(ranked.var_, ranked.rank);
         }
 
+        // An uncommitted record tail the binding does not hold in its
+        // result's data commits instead of being quantified (design.md
+        // "Uncommitted Record Tails").
+        for (self.tmp_vars.items) |ranked| {
+            const resolved = self.store.resolveVar(ranked.var_);
+            if (!resolved.is_root or !isUncommittedTail(resolved.desc)) continue;
+            if (@backingInt(resolved.desc.rank) != rank_to_generalize_int) continue;
+            if (self.quantifiable_tails.contains(resolved.var_)) continue;
+            try self.unquantified_tails.append(self.gpa, resolved.var_);
+        }
+    }
+
+    /// The second half of `generalize`: quantify the vars `adjust` left at
+    /// `rank_to_generalize` and return the escaped ones to their pools. When
+    /// the caller committed tails `adjust` listed, ranks are adjusted again
+    /// first, so structure that held them alone escapes the quantification.
+    pub fn quantify(self: *Self, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+        if (rank_to_generalize == Rank.generalized) return;
+        const rank_to_generalize_int = @backingInt(rank_to_generalize);
+        if (self.unquantified_tails.items.len != 0) {
+            self.rank_adjusted_vars.clearRetainingCapacity();
+            for (self.tmp_vars.items) |ranked| {
+                _ = try self.adjustRank(ranked.var_, ranked.rank);
+            }
+        }
+
         // Move variables from lower ranks (generalized through rank_to_generalize-1) back to main pool.
         // These are vars that were initially at rank_to_generalize but had their ranks
         // lowered during adjustment because they reference outer-scope variables.
@@ -300,14 +341,9 @@ pub const Generalizer = struct {
                 if (resolved_rank_int < rank_to_generalize_int) {
                     // Escaped var, so move it to the right pool.
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
-                    // Anonymous structure made in this scope is copied by
-                    // every use even though no variable in it is quantified:
-                    // a use may lift it into a nominal type (design.md
-                    // "Anonymous Structure Is Copied Per Use").
-                    if (try self.copiedPerUse(resolved.desc)) {
-                        try self.store.markPerUseStructure(resolved.desc_idx);
-                    }
                 } else {
+                    // The caller committed every tail `adjust` listed.
+                    std.debug.assert(!(isUncommittedTail(resolved.desc) and !self.quantifiable_tails.contains(resolved.var_)));
                     // Safe to generalize
                     try self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }
@@ -493,8 +529,12 @@ pub const Generalizer = struct {
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_record, .empty_tag_union => {
-                    // THEORY: Empty records/tag unions never need to be generalized
-                    try self.settleRank(fill.desc_idx, .outermost);
+                    // An uncommitted tag tail generalizes like a variable, so
+                    // every use of the binding owns its copy (design.md
+                    // "Uncommitted Tag Tails"). Every other empty record or
+                    // tag union is ground.
+                    const rank: Rank = if (resolved.desc.flags.uncommitted_tag_tail) group_rank else .outermost;
+                    try self.settleRank(fill.desc_idx, rank);
                     return true;
                 },
                 .tuple => |tuple| return try self.pushOverArgs(fill, self.store.sliceVars(tuple.elems)),

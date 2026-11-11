@@ -1228,6 +1228,7 @@ const Unifier = struct {
     ) Error!void {
         switch (b_content) {
             .flex => |b_flex| {
+                if (vars.b.desc.flags.uncommitted_record_tail) return error.TypeMismatch;
                 try self.merge(vars, .{ .field_presence = self.flexibleFieldPresenceMerge(a_field_presence) });
                 // b should never have any static dispatch constraints, but if
                 // it somehow does, ensure we record them (preserve soundness)
@@ -1269,6 +1270,20 @@ const Unifier = struct {
     fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, a_flex: Flex, b_content: Content) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        if (vars.a.desc.flags.uncommitted_record_tail) {
+            switch (b_content) {
+                // Two row variables stay one uncommitted flex; the merge keeps
+                // the mark.
+                .flex => {},
+                .structure => |b_flat| {
+                    return self.unifyUncommittedWithStructure(vars, .a, b_flat);
+                },
+                .alias => |b_alias| return self.unifyGuarded(vars.a.var_, self.types_store.getAliasBackingVar(b_alias)),
+                .rigid, .field_presence => return error.TypeMismatch,
+                .err => {},
+            }
+        }
 
         switch (b_content) {
             .flex => |b_flex| {
@@ -1330,6 +1345,8 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
+                // An uncommitted record tail never stands for a rigid row.
+                if (vars.b.desc.flags.uncommitted_record_tail) return error.TypeMismatch;
                 try self.recordDeferredConstraintOn(vars.a.var_, b_flex.constraints);
                 try self.merge(vars, .{ .rigid = a_rigid });
             },
@@ -1363,7 +1380,7 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
-                if (b_flex.constraints.len() == 0) {
+                if (b_flex.constraints.len() == 0 and !vars.b.desc.flags.uncommitted_record_tail) {
                     try self.merge(vars, Content{ .alias = a_alias });
                 } else {
                     // Merge against backing var, so we don't loose static dispatch constraints
@@ -1455,6 +1472,7 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
+                if (vars.b.desc.flags.uncommitted_record_tail) return self.unifyUncommittedWithStructure(vars, .b, a_flat_type);
                 try self.recordDeferredConstraint(vars, b_flex.constraints);
                 try self.merge(vars, Content{ .structure = a_flat_type });
             },
@@ -1528,16 +1546,14 @@ const Unifier = struct {
                         // Try to unify nominal tag union (a) with anonymous tag union (b)
                         try self.unifyTagUnionWithNominal(vars, a_type, b_tag_union, .a_is_nominal);
                     },
-                    .empty_tag_union => {
-                        try self.unifyEmptyWithNominal(vars, a_type, .empty_tag_union, .a_is_nominal, .enforce_opacity);
-                    },
+                    // A closed row is committed: it never lifts (design.md
+                    // "Uncommitted Record Tails").
+                    .empty_tag_union => return error.TypeMismatch,
                     .record => |b_record| {
                         // Try to unify nominal record (a) with anonymous record (b)
                         try self.unifyRecordWithNominal(vars, a_type, b_record.fields, b_record.ext, .a_is_nominal);
                     },
-                    .empty_record => {
-                        try self.unifyEmptyWithNominal(vars, a_type, .empty_record, .a_is_nominal, .enforce_opacity);
-                    },
+                    .empty_record => return error.TypeMismatch,
                     .tuple, .fn_pure, .fn_effectful, .fn_unbound => return error.TypeMismatch,
                 }
             },
@@ -1622,7 +1638,7 @@ const Unifier = struct {
             .record => |a_record| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_record.fields, a_record.ext, null);
+                        try self.unifyRowWithEmptyRecord(self.unresolved_b.?, a_record.fields, a_record.ext);
                     },
                     .record => |b_record| {
                         try self.unifyTwoRecords(
@@ -1657,7 +1673,7 @@ const Unifier = struct {
                     },
 
                     .record => |b_record| {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_record.fields, b_record.ext, null);
+                        try self.unifyRowWithEmptyRecord(self.unresolved_a.?, b_record.fields, b_record.ext);
                     },
                     .nominal_type => |b_type| {
                         // Try to unify empty record (a) with nominal record (b)
@@ -1665,7 +1681,7 @@ const Unifier = struct {
                             try self.merge(vars, .err);
                             return;
                         }
-                        try self.unifyEmptyWithNominal(vars, b_type, .empty_record, .b_is_nominal, .enforce_opacity);
+                        return error.TypeMismatch;
                     },
                     .tuple,
                     .fn_pure,
@@ -1723,7 +1739,7 @@ const Unifier = struct {
                             try self.merge(vars, .err);
                             return;
                         }
-                        try self.unifyEmptyWithNominal(vars, b_type, .empty_tag_union, .b_is_nominal, .skip_opacity);
+                        return error.TypeMismatch;
                     },
                     .tuple,
                     .fn_pure,
@@ -1922,81 +1938,6 @@ const Unifier = struct {
         try self.scratch.opened_nominal_persistable.append(self.scratch.gpa, persistable);
 
         return .{ .opened = opened };
-    }
-
-    /// The shape of the empty anonymous operand.
-    const EmptyShape = enum { empty_record, empty_tag_union };
-    const OpacityGate = enum { enforce_opacity, skip_opacity };
-
-    /// Empty records use ordinary backing-row unification, including default
-    /// and optional field omission. Empty tag unions require an empty backing.
-    /// In either case the nominal wins only after the backing relation succeeds.
-    fn unifyEmptyWithNominal(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        nominal_type: NominalType,
-        comptime empty_shape: EmptyShape,
-        direction: NominalDirection,
-        comptime opacity: OpacityGate,
-    ) Error!void {
-        if (anonIsNominalBackingStructure(vars, direction)) return error.TypeMismatch;
-
-        if (opacity == .enforce_opacity) {
-            // If this nominal is opaque and we're not in the origin module, error
-            if (!nominal_type.canLiftInner(self.self_module_identity)) {
-                return error.TypeMismatch;
-            }
-        }
-
-        const opened = switch (try self.openNominalBacking(vars, nominal_type)) {
-            .opened => |v| v,
-            .no_decl => return error.TypeMismatch,
-        };
-        const backing_content = self.types_store.resolveVar(opened).desc.content;
-        if (backing_content == .err) {
-            try self.merge(vars, .err);
-            return;
-        }
-
-        if (backing_content != .structure) return error.TypeMismatch;
-        if (empty_shape == .empty_record) {
-            switch (backing_content.structure) {
-                .record, .empty_record => {},
-                .nominal_type,
-                .tuple,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .tag_union,
-                .empty_tag_union,
-                => return error.TypeMismatch,
-            }
-
-            try self.retainOuterRecordMismatch(vars, opened, direction);
-            if (backing_content.structure == .empty_record) {
-                try self.mergeToNominal(vars, direction);
-            } else {
-                const record = backing_content.structure.record;
-                const source = switch (direction) {
-                    .a_is_nominal => self.unresolved_b.?,
-                    .b_is_nominal => self.unresolved_a.?,
-                };
-                // Relate the source construction directly to the backing row.
-                // Never merge the opened backing root with the nominal result:
-                // later constructions may reuse that structural opening.
-                try self.enterRecordRelation(vars);
-                try self.unifyRowWithEmptyRecord(vars, source, record.fields, record.ext, direction);
-            }
-            return;
-        }
-
-        if (backing_content.structure == .empty_tag_union) {
-            // Both are empty—merge to the NOMINAL side.
-            try self.mergeToNominal(vars, direction);
-        } else {
-            // Nominal has a non-empty backing, can't unify
-            return error.TypeMismatch;
-        }
     }
 
     /// After a structural value successfully unifies with a nominal's backing,
@@ -2203,6 +2144,11 @@ const Unifier = struct {
         defer trace.end();
 
         if (anonIsNominalBackingStructure(vars, direction)) return error.TypeMismatch;
+        const anon_desc = switch (direction) {
+            .a_is_nominal => vars.b.desc,
+            .b_is_nominal => vars.a.desc,
+        };
+        if (!self.tagRowLiftable(anon_desc, anon_tag_union.ext)) return error.TypeMismatch;
 
         // If this nominal is opaque and we're not in the origin module, error
         if (!nominal_type.canLiftInner(self.self_module_identity)) {
@@ -2306,6 +2252,7 @@ const Unifier = struct {
         defer trace.end();
 
         if (anonIsNominalBackingStructure(vars, direction)) return error.TypeMismatch;
+        if (!self.recordRowLiftable(anon_record_ext)) return error.TypeMismatch;
 
         // If this nominal is opaque and we're not in the origin module, error
         if (!nominal_type.canLiftInner(self.self_module_identity)) {
@@ -2337,8 +2284,14 @@ const Unifier = struct {
             // The nominal's backing is an empty record {}
             // The anon record should also be empty for unification to succeed
             if (anon_record_fields.len() == 0) {
-                // Both are empty—merge to the NOMINAL type.
-                try self.mergeToNominal(vars, direction);
+                // Both are empty—merge to the NOMINAL type, and the anonymous
+                // row's tail commits to the empty record.
+                try self.pushWorkFrame(.{ .merge_to_nominal = .{
+                    .vars = vars.*,
+                    .direction = direction,
+                } });
+                const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
+                try self.unifyGuarded(anon_record_ext, empty_var);
                 return;
             } else {
                 // Anon has fields but nominal is empty
@@ -2558,48 +2511,127 @@ const Unifier = struct {
         }
     }
 
-    /// Absorb an optional/defaulted row only for a fresh construction relation.
-    /// A nominal result retains its wrapper without merging it into the opened
-    /// backing or its extension; those structures may serve other constructions.
+    /// A committed empty record meeting a record row: it relates only to a
+    /// row that holds no field, whose tail then commits too. A closed record
+    /// never absorbs a field (design.md "Uncommitted Record Tails").
     fn unifyRowWithEmptyRecord(
         self: *Self,
-        vars: *const ResolvedVarDescs,
         record_var: Var,
         fields: RecordFieldSafeMultiList.Range,
         ext: Var,
-        nominal_direction: ?NominalDirection,
     ) Error!void {
-        if (fields.len() == 0) {
-            if (nominal_direction) |direction| {
-                try self.pushWorkFrame(.{ .merge_to_nominal = .{
-                    .vars = vars.*,
-                    .direction = direction,
-                } });
-                const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
-                try self.unifyGuarded(ext, empty_var);
-            } else {
-                try self.unifyGuarded(ext, record_var);
+        if (fields.len() != 0) return error.TypeMismatch;
+        try self.unifyGuarded(ext, record_var);
+    }
+
+    /// Which operand of a pair is the uncommitted record tail.
+    const UncommittedSide = enum { a, b };
+
+    /// An uncommitted record tail meeting structure (design.md "Uncommitted
+    /// Record Tails"): it commits to the empty record, or, in a construction
+    /// relation, absorbs a row of optional or defaulted fields and keeps an
+    /// uncommitted tail of its own. Anything else is a mismatch.
+    fn unifyUncommittedWithStructure(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        side: UncommittedSide,
+        flat: FlatType,
+    ) Error!void {
+        const tail = switch (side) {
+            .a => vars.a,
+            .b => vars.b,
+        };
+        const tail_var = switch (side) {
+            .a => self.unresolved_a orelse vars.a.var_,
+            .b => self.unresolved_b orelse vars.b.var_,
+        };
+        const constraints = tail.desc.content.flex.constraints;
+        switch (flat) {
+            .empty_record => {
+                try self.recordDeferredConstraintOn(tail_var, constraints);
+                try self.merge(vars, .{ .structure = .empty_record });
+            },
+            .record => |record| {
+                if (record.fields.len() != 0) {
+                    if (self.row_width_relation == .exact) return error.TypeMismatch;
+                    // A copy's values were built by a body compiled at its own
+                    // type, so no construction here can materialize a default.
+                    const owner_exists = !tail.desc.flags.uncommitted_copy and self.absorptionOwnerExists(tail_var);
+                    try self.validateAbsorbableRecordRow(record.fields, record.ext, owner_exists);
+                    try self.recordAbsorbedRecordDefaults(tail_var, record.fields, record.ext);
+                }
+                try self.recordDeferredConstraintOn(tail_var, constraints);
+                const rest = try self.types_store.register(.{
+                    .content = .{ .flex = Flex.init() },
+                    .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+                    .flags = .{
+                        .uncommitted_record_tail = true,
+                        .uncommitted_copy = tail.desc.flags.uncommitted_copy,
+                    },
+                });
+                _ = try self.scratch.fresh_vars.append(self.scratch.gpa, rest);
+                try self.merge(vars, .{ .structure = .{ .record = record } });
+                try self.unifyGuarded(record.ext, rest);
+            },
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .tag_union,
+            .empty_tag_union,
+            => return error.TypeMismatch,
+        }
+    }
+
+    /// Whether a record row may still be lifted into a nominal type: the
+    /// final extension of its row is an unbound flex variable (design.md
+    /// "Uncommitted Record Tails").
+    fn recordRowLiftable(self: *Self, ext: Var) bool {
+        var current = ext;
+        var remaining = self.types_store.len();
+        while (remaining > 0) : (remaining -= 1) {
+            const resolved = self.types_store.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .record => |record| current = record.ext,
+                    .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return false,
+                },
+                .flex => return !resolved.desc.flags.bounded_row_ext,
+                .rigid, .field_presence, .err => return false,
             }
-            return;
         }
-        if (self.row_width_relation == .exact) return error.TypeMismatch;
+        base.invariant("checker invariant violated: a record row's extension chain is cyclic", .{});
+    }
 
-        try self.validateAbsorbableRecordRow(fields, ext, self.absorptionOwnerExists(record_var));
-        try self.recordAbsorbedRecordDefaults(record_var, fields, ext);
-
-        const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
-        if (nominal_direction) |direction| {
-            try self.pushWorkFrame(.{ .merge_to_nominal = .{
-                .vars = vars.*,
-                .direction = direction,
-            } });
-        } else {
-            try self.merge(vars, Content{ .structure = .{ .record = .{
-                .fields = fields,
-                .ext = ext,
-            } } });
+    /// Whether a tag union may still be lifted into a nominal type: no
+    /// annotation wrote any part of its row, and the row's tail is an unbound
+    /// flex variable no annotation bounds or an uncommitted tag tail
+    /// (design.md "Uncommitted Record Tails", "Uncommitted Tag Tails").
+    fn tagRowLiftable(self: *Self, union_desc: types_mod.Descriptor, ext: Var) bool {
+        if (union_desc.flags.annotation_tag_union) return false;
+        var current = ext;
+        var remaining = self.types_store.len();
+        while (remaining > 0) : (remaining -= 1) {
+            const resolved = self.types_store.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .tag_union => |tag_union| {
+                        if (resolved.desc.flags.annotation_tag_union) return false;
+                        current = tag_union.ext;
+                    },
+                    // A row closed by inference still lifts; one an
+                    // annotation or a commitment closed does not.
+                    .empty_tag_union => return resolved.desc.flags.uncommitted_tag_tail,
+                    .record, .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return false,
+                },
+                .flex => return !resolved.desc.flags.bounded_row_ext,
+                .rigid, .field_presence, .err => return false,
+            }
         }
-        try self.unifyGuarded(ext, empty_var);
+        base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
     /// Retain the checked representatives of a record relation while its

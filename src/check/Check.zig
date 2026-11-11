@@ -636,23 +636,6 @@ binding_scheme_nodes: std.DynamicBitSetUnmanaged,
 /// Scheme identities without a source node, currently pristine annotation
 /// schemes created by the annotated-definition pre-pass.
 synthetic_binding_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
-/// Bindings that are not schemes but whose type holds per-use structure
-/// (`DescriptorFlags.per_use_structure`): each use copies that structure and
-/// shares everything else. Such a binding is monomorphic, so it has no
-/// scheme-use evidence, codec requirements, or dispatch scope of its own
-/// (design.md "Anonymous Structure Is Copied Per Use").
-per_use_copy_bindings: collections.DenseMapUnmanaged(Var, void) = .empty,
-/// What this module's checking can change an anonymous record or tag union
-/// into, collected before any binding generalizes: anonymous structure
-/// nothing in it can change is shared by every use rather than copied
-/// (design.md "Anonymous Structure Is Copied Per Use").
-use_absorbers: types_mod.use_absorbers.UseAbsorbers = .{},
-/// Whether `use_absorbers` is collected. Until it is, every liftable class
-/// is copied per use.
-use_absorbers_collected: bool = false,
-/// The module envs whose types `use_absorbers` holds: every env this check
-/// copies types from.
-use_absorber_sources: std.ArrayListUnmanaged(*const ModuleEnv) = .empty,
 /// Reused exact graph walk for classifying a freshly generalized binding.
 /// Classification happens once at the producer boundary, never on lookup.
 binding_scheme_classification_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
@@ -1828,10 +1811,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .type_scheme_by_var = .keyed,
     .binding_scheme_nodes = .keyed,
     .synthetic_binding_schemes = .keyed,
-    .per_use_copy_bindings = .keyed,
-    .use_absorbers = .keyed,
-    .use_absorbers_collected = .input,
-    .use_absorber_sources = .input,
     .binding_scheme_classification_seen = .scratch,
     .binding_scheme_classification_stack = .scratch,
     .settled_static_dispatch_constraint_fns = .keyed,
@@ -5883,9 +5862,137 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
     }
 }
 
-/// Generalize the variables of `env`'s current rank.
-fn generalizeRank(self: *Self, env: *Env) Allocator.Error!void {
-    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+/// Generalize the variables of `env`'s current rank, for a boundary whose
+/// bindings have the types `roots`. An uncommitted record tail the boundary
+/// would quantify stays quantified only when every occurrence of it in the
+/// roots lies in a function's own result, reached through data alone; every
+/// other one commits to the empty record before anything is quantified
+/// (design.md "Uncommitted Record Tails").
+fn generalizeRank(self: *Self, env: *Env, roots: []const Var) Allocator.Error!void {
+    try self.collectQuantifiableTails(roots);
+    try self.generalizer.adjust(self.gpa, &env.var_pool, env.rank());
+    if (self.generalizer.unquantified_tails.items.len != 0) {
+        var tails: std.ArrayListUnmanaged(Var) = .empty;
+        defer tails.deinit(self.gpa);
+        try tails.appendSlice(self.gpa, self.generalizer.unquantified_tails.items);
+        for (tails.items) |tail| try self.commitUncommittedTail(tail, env);
+    }
+    try self.generalizer.quantify(&env.var_pool, env.rank());
+}
+
+/// Commit an uncommitted tail. A record tail commits to the empty record by
+/// ordinary unification; the empty record is ground, so it takes the
+/// outermost rank. A tag tail already is the empty tag union and only stops
+/// being liftable.
+fn commitUncommittedTail(self: *Self, tail: Var, env: *Env) Allocator.Error!void {
+    const resolved = self.types.resolveVar(tail);
+    if (resolved.desc.content == .structure and resolved.desc.content.structure == .empty_tag_union) {
+        if (resolved.desc.flags.uncommitted_tag_tail) try self.types.commitUncommittedTagTail(resolved.var_);
+        return;
+    }
+    if (resolved.desc.content != .flex or !resolved.desc.flags.uncommitted_record_tail) return;
+    const empty = try self.freshFromContentAtRank(.{ .structure = .empty_record }, env, self.getRegionAt(tail), .outermost);
+    _ = try self.unify(tail, empty, env);
+}
+
+/// Where a walk of a binding's type has reached a var: in a function's own
+/// result through data alone, or anywhere else.
+const TailPosition = enum { result_data, elsewhere };
+
+/// Fill `generalizer.quantifiable_tails` with the uncommitted record tails
+/// `roots` hold only in a function's own result, reached through data
+/// (record fields, tuple items, tag payloads, alias and nominal arguments)
+/// and not in a function type inside that result, the constraints of a
+/// variable, or a tail whose own constraints the empty record does not
+/// discharge (design.md "Uncommitted Record Tails").
+fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!void {
+    const quantifiable = &self.generalizer.quantifiable_tails;
+    quantifiable.clearRetainingCapacity();
+    var disqualified: collections.DenseMapUnmanaged(Var, void) = .empty;
+    defer disqualified.deinit(self.gpa);
+    var seen: collections.DenseMapUnmanaged(Var, TailPosition) = .empty;
+    defer seen.deinit(self.gpa);
+    const Item = struct { var_: Var, position: TailPosition };
+    var pending: std.ArrayListUnmanaged(Item) = .empty;
+    defer pending.deinit(self.gpa);
+
+    for (roots) |root| {
+        const resolved = self.types.resolveVar(root);
+        switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    const entry = try seen.getOrPut(self.gpa, resolved.var_);
+                    entry.value_ptr.* = .elsewhere;
+                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = .elsewhere });
+                    for (self.types.sliceVars(func.effect_deps)) |dep| try pending.append(self.gpa, .{ .var_ = dep, .position = .elsewhere });
+                    try pending.append(self.gpa, .{ .var_ = func.ret, .position = .result_data });
+                    continue;
+                },
+                else => {},
+            },
+            else => {},
+        }
+        try pending.append(self.gpa, .{ .var_ = root, .position = .elsewhere });
+    }
+
+    while (pending.pop()) |item| {
+        const resolved = self.types.resolveVar(item.var_);
+        const entry = try seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) {
+            // A var reached in both positions is walked again elsewhere.
+            if (entry.value_ptr.* == .elsewhere or item.position == .result_data) continue;
+        }
+        entry.value_ptr.* = item.position;
+        const position = item.position;
+        switch (resolved.desc.content) {
+            .err, .field_presence => {},
+            .flex => |flex| {
+                for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                    try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = .elsewhere });
+                }
+                if (resolved.desc.flags.uncommitted_record_tail) {
+                    if (position == .result_data and self.rowDefaultDischargesConstraints(flex.constraints)) {
+                        if (!disqualified.contains(resolved.var_)) try quantifiable.put(resolved.var_, {});
+                    } else {
+                        try disqualified.put(self.gpa, resolved.var_, {});
+                        _ = quantifiable.remove(resolved.var_);
+                    }
+                }
+            },
+            .rigid => |rigid| for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = .elsewhere });
+            },
+            .alias => |alias| {
+                try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .position = position });
+                for (self.types.sliceAliasArgs(alias)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position });
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record => {},
+                // A tag tail is quantified wherever instantiation reaches it
+                // (design.md "Uncommitted Tag Tails").
+                .empty_tag_union => if (resolved.desc.flags.uncommitted_tag_tail) try quantifiable.put(resolved.var_, {}),
+                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try pending.append(self.gpa, .{ .var_ = elem, .position = position }),
+                .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position }),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = .elsewhere });
+                    for (self.types.sliceVars(func.effect_deps)) |dep| try pending.append(self.gpa, .{ .var_ = dep, .position = .elsewhere });
+                    try pending.append(self.gpa, .{ .var_ = func.ret, .position = .elsewhere });
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .position = position });
+                    }
+                    try pending.append(self.gpa, .{ .var_ = record.ext, .position = position });
+                },
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                        for (self.types.sliceVars(args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position });
+                    }
+                    try pending.append(self.gpa, .{ .var_ = tag_union.ext, .position = position });
+                },
+            },
+        }
+    }
 }
 
 /// Mark every dispatch edge that selected an unpromoted local procedure,
@@ -11310,35 +11417,13 @@ fn verifyPredeclaredSchemeUsesRecorded(self: *Self) Allocator.Error!void {
 fn bindBindingSchemeVar(self: *Self, scheme_var: Var, alias_var: Var) Allocator.Error!void {
     if (self.isBindingSchemeVar(scheme_var)) {
         try self.markBindingSchemeVar(alias_var);
-    } else if (self.per_use_copy_bindings.contains(scheme_var)) {
-        try self.per_use_copy_bindings.put(self.gpa, alias_var, {});
     }
 }
 
 /// Whether the post-generalization graph reachable from `root_var` contains a
 /// quantified variable.
 fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
-    return try self.typeCopiedPerUse(root_var) == .generalized;
-}
-
-/// What each use of a binding must copy of its type.
-const PerUseCopy = enum {
-    /// Nothing: every use shares the binding's type.
-    none,
-    /// Per-use structure (`DescriptorFlags.per_use_structure`) and the
-    /// nodes above it, though nothing is quantified.
-    per_use_structure,
-    /// A quantified variable: the binding is a scheme.
-    generalized,
-};
-
-/// What the post-generalization graph reachable from `root_var` makes each
-/// use copy. This exact producer-side walk classifies a rank-1 binding once;
-/// use sites consume the recorded classification in O(1).
-fn typeCopiedPerUse(self: *Self, root_var: Var) Allocator.Error!PerUseCopy {
-    var result: PerUseCopy = .none;
-    if (self.types.resolveVar(root_var).desc.rank == .generalized) return .generalized;
-
+    if (self.types.resolveVar(root_var).desc.rank == .generalized) return true;
     self.binding_scheme_classification_seen.clearRetainingCapacity();
     self.binding_scheme_classification_stack.clearRetainingCapacity();
     defer self.binding_scheme_classification_stack.clearRetainingCapacity();
@@ -11346,8 +11431,7 @@ fn typeCopiedPerUse(self: *Self, root_var: Var) Allocator.Error!PerUseCopy {
     try self.binding_scheme_classification_stack.append(self.gpa, root_var);
     while (self.binding_scheme_classification_stack.pop()) |pending_var| {
         const resolved = self.types.resolveVar(pending_var);
-        if (resolved.desc.rank == .generalized) return .generalized;
-        if (resolved.desc.flags.per_use_structure) result = .per_use_structure;
+        if (resolved.desc.rank == .generalized) return true;
         const seen = try self.binding_scheme_classification_seen.getOrPut(self.gpa, resolved.var_);
         if (seen.found_existing) continue;
 
@@ -11400,19 +11484,13 @@ fn typeCopiedPerUse(self: *Self, root_var: Var) Allocator.Error!PerUseCopy {
             },
         }
     }
-    return result;
+    return false;
 }
 
 /// A binding is a scheme exactly when its type reaches a quantified
-/// variable. A binding whose type reaches only anonymous structure a use may
-/// lift into a nominal type is monomorphic, but each use still copies that
-/// structure (design.md "Anonymous Structure Is Copied Per Use").
+/// variable.
 fn publishBindingScheme(self: *Self, root_var: Var) Allocator.Error!void {
-    switch (try self.typeCopiedPerUse(root_var)) {
-        .none => {},
-        .per_use_structure => try self.per_use_copy_bindings.put(self.gpa, root_var, {}),
-        .generalized => try self.markBindingSchemeVar(root_var),
-    }
+    if (try self.typeHasGeneralizedVar(root_var)) try self.markBindingSchemeVar(root_var);
 }
 
 /// Instantiate a variable
@@ -11597,15 +11675,14 @@ fn instantiateVarPolarized(
     defer trace.end();
 
     // A declaration whose instance at this position resolved to a ground type
-    // with no anonymous record or tag union in it is shared by every later
-    // reference at the same position. Instantiating it again would copy the
-    // same variable-free structure. A shared instance is unified with every
-    // annotation that refers to it, so a mismatch against one of them can
-    // merge it into `.err`; it is then no longer ground and the next
-    // reference instantiates a fresh copy. Anonymous structure is never
-    // shared: one annotation's definition can lift it into a nominal type,
-    // which would change every other annotation sharing it (design.md
-    // "Anonymous Structure Is Copied Per Use").
+    // is shared by every later reference at the same position. Instantiating
+    // it again would copy the same variable-free structure, and a large record
+    // alias referenced from many annotations is copied once per reference.
+    // Annotated structure is committed, so no relation can change it
+    // (design.md "Uncommitted Record Tails"). A shared instance is unified
+    // with every annotation that refers to it, so a mismatch against one of
+    // them can merge it into `.err`; it is then no longer ground and the next
+    // reference instantiates a fresh copy.
     const instance_key: PolarizedInstanceKey = .{
         .declaration = var_to_instantiate,
         .polarity_behavior = polarity_behavior,
@@ -11619,9 +11696,8 @@ fn instantiateVarPolarized(
     }
     // An instance that is not ground still has ground subtrees, identical in
     // every instance at this position: the declaration's own ground subtrees,
-    // copied. The latest instance's ground subtrees free of anonymous
-    // structure that are still ground are read by the next instance instead
-    // of being copied again.
+    // copied. The latest instance's ground subtrees that are still ground are
+    // read by the next instance instead of being copied again.
     var shared_subtrees = self.shared_subtrees_scratch;
     self.shared_subtrees_scratch = .empty;
     defer {
@@ -11652,7 +11728,7 @@ fn instantiateVarPolarized(
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     if (evidence == .none) {
-        if (opened_marker_exts.items.len == 0 and try self.varIsGroundAs(instantiated, .refinable)) {
+        if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
             try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
         } else {
             const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
@@ -11749,12 +11825,11 @@ fn computeGroundMarksKnowing(
     roots: []const Var,
     known_ground: ?*const collections.DenseMapUnmanaged(Var, ?Var),
     stop: KnownGroundStop,
-    liftable: LiftableStructure,
 ) Allocator.Error!GroundMarks {
     var marks = self.takeGroundMarks();
     errdefer self.releaseGroundMarks(&marks);
     for (roots) |root| try marks.pending.append(self.gpa, .{ .var_ = root, .parent = null });
-    try self.walkGroundMarks(&marks, known_ground, stop, liftable);
+    try self.walkGroundMarks(&marks, known_ground, stop);
     return marks;
 }
 
@@ -11764,7 +11839,6 @@ fn walkGroundMarks(
     marks: *GroundMarks,
     known_ground: ?*const collections.DenseMapUnmanaged(Var, ?Var),
     stop: KnownGroundStop,
-    liftable: LiftableStructure,
 ) Allocator.Error!void {
     const pending = &marks.pending;
     while (pending.pop()) |item| {
@@ -11782,7 +11856,6 @@ fn walkGroundMarks(
             .any => continue,
             .copied => if (copy != null) continue,
         };
-        if (liftable == .refinable and try self.copiedPerUse(resolved.desc)) marks.ground.items[index] = false;
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => marks.ground.items[index] = false,
             .alias => |alias| {
@@ -11849,11 +11922,11 @@ fn walkGroundMarks(
 }
 
 /// The copies `instantiateVarPolarized`'s last instantiation made of the
-/// declaration's subtrees that are ground, free of anonymous structure, and
-/// maximal: their instance var is such and reached from a var that is not.
+/// declaration's subtrees that are ground and maximal: their instance var is
+/// ground and reached from a var that is not.
 /// Sharing those roots shares everything below them.
 fn maximalGroundSubtreeCopies(self: *Self, instance_root: Var, entries: *std.ArrayListUnmanaged(Instantiator.SharedSubtree)) Allocator.Error!void {
-    var marks = try self.computeGroundMarksKnowing(&.{instance_root}, null, .any, .refinable);
+    var marks = try self.computeGroundMarksKnowing(&.{instance_root}, null, .any);
     defer self.releaseGroundMarks(&marks);
     errdefer entries.clearRetainingCapacity();
     var copies = self.var_map.iterator();
@@ -11877,7 +11950,7 @@ fn groundSubtreeEntries(self: *Self, entries: []const Instantiator.SharedSubtree
     defer self.releaseGroundMarks(&marks);
     try marks.pending.ensureUnusedCapacity(self.gpa, entries.len);
     for (entries) |entry| marks.pending.appendAssumeCapacity(.{ .var_ = entry.copy, .parent = null });
-    try self.walkGroundMarks(&marks, null, .any, .refinable);
+    try self.walkGroundMarks(&marks, null, .any);
     for (entries) |entry| {
         if (marks.isGround(self.types.resolveVar(entry.copy).var_)) try kept.append(self.gpa, entry);
     }
@@ -11944,25 +12017,8 @@ fn instantiateBindingVar(
     if (self.types.resolveVar(binding_var).desc.rank == .generalized) {
         return self.instantiateVar(binding_var, env, region_behavior, evidence);
     }
-    if (self.per_use_copy_bindings.contains(binding_var)) {
-        return self.instantiatePerUseCopy(binding_var, env, region_behavior);
-    }
     self.var_map.clearRetainingCapacity();
     return binding_var;
-}
-
-/// A use's copy of a monomorphic binding's per-use structure
-/// (`per_use_copy_bindings`). It quantifies nothing, so it records no
-/// scheme-use evidence.
-fn instantiatePerUseCopy(
-    self: *Self,
-    binding_var: Var,
-    env: *Env,
-    region_behavior: InstantiateRegionBehavior,
-) std.mem.Allocator.Error!Var {
-    var instantiate_ctx = self.baseInstantiator(env.rank(), .fresh_flex);
-    instantiate_ctx.polarity_var_behavior = .close;
-    return self.instantiateVarHelp(binding_var, &instantiate_ctx, env, region_behavior, true, .none);
 }
 
 /// Cross-module graph copies are cached templates whose descriptors all carry
@@ -12951,6 +13007,23 @@ fn fresh(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 /// Create fresh var with the provided content
 fn freshFromContent(self: *Self, content: Content, env: *Env, new_region: Region) Allocator.Error!Var {
     return self.freshFromContentAtRank(content, env, new_region, env.rank());
+}
+
+/// A fresh uncommitted record tail (design.md "Uncommitted Record Tails"):
+/// the row extension a record construction or a record pattern without `..`
+/// ends in.
+fn freshUncommittedTail(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
+    const tail = try self.fresh(env, new_region);
+    try self.types.markUncommittedRecordTail(tail);
+    return tail;
+}
+
+/// A fresh uncommitted tag tail (design.md "Uncommitted Tag Tails"): the
+/// empty tag union that closes an inferred tag row.
+fn freshUncommittedTagTail(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
+    const tail = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, new_region);
+    try self.types.markUncommittedTagTail(tail);
+    return tail;
 }
 
 /// Create fresh var with the provided content and an explicit rank.
@@ -14362,7 +14435,6 @@ const PendingRecordDestruct = struct {
 /// and seal the solved type store: every later stage only reads it.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try self.checkFileInternal(false);
-    try self.debugAssertLocalUseAbsorbersCovered();
     try self.types.canonicalizeAndSeal(self.cir.getIdentStoreConst());
 }
 
@@ -14372,7 +14444,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 pub fn checkFileLeavingStoreOpen(self: *Self) std.mem.Allocator.Error!void {
     if (comptime !builtin.is_test) @compileError("checkFileLeavingStoreOpen is test scaffolding");
     try self.checkFileInternal(false);
-    try self.debugAssertLocalUseAbsorbersCovered();
 }
 
 fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
@@ -14381,8 +14452,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // Fill in types store up to the size of CIR nodes
     try ensureTypeStoreIsFilled(self);
-
-    try self.collectUseAbsorbers();
 
     // Record which annotations type host-boundary values before any
     // annotation is generated (their rows are kept as written rather than
@@ -14672,6 +14741,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
+    try self.commitUncommittedTails(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.withdrawProblemsOfVoidRelations();
@@ -20531,6 +20601,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
+    try self.commitUncommittedTails(&env);
 
     try self.finalizeExpectEffectSlots();
     // Expression checking suppresses root selection, but constant-condition
@@ -21107,7 +21178,7 @@ fn predeclareAnnotationSchemeHelp(
     }
     self.unify_scratch.clearPersistentOpenings();
     try self.linkDeferredUsesFrom(env.rank());
-    try self.generalizeRank(env);
+    try self.generalizeRank(env, &.{scheme_var});
     // Problems raised here are discarded below; the annotation's own check
     // reports them against the def.
     try self.deduplicateGeneralizedDispatchRequirements(scheme_var, null, env);
@@ -22299,7 +22370,12 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
     try self.judgePendingAccessesAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
     try self.linkDeferredUsesFrom(env.rank());
-    try self.generalizeRank(env);
+    {
+        var interfaces: std.ArrayListUnmanaged(Var) = .empty;
+        defer interfaces.deinit(self.gpa);
+        for (member_roots) |root| try interfaces.append(self.gpa, root.interface);
+        try self.generalizeRank(env, interfaces.items);
+    }
     try self.captureEscapedSchemeDispatchRequirements(member_roots, env);
     for (defs) |member_def_idx| {
         const member_def = self.cir.store.getDef(member_def_idx);
@@ -24985,6 +25061,25 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
+/// Commit every uncommitted record tail no scheme quantifies to the empty
+/// record (design.md "Uncommitted Record Tails"). The module's uses have
+/// lifted and widened its records as far as they will, and nothing outside
+/// the module can, so later stages read closed records.
+fn commitUncommittedTails(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    var tails: std.ArrayListUnmanaged(Var) = .empty;
+    defer tails.deinit(self.gpa);
+    const var_count: usize = @intCast(self.types.len());
+    for (0..var_count) |index| {
+        const var_: Var = @fromBackingInt(@intCast(index));
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.var_ != var_) continue;
+        if (!types_mod.generalize.isUncommittedTail(resolved.desc)) continue;
+        if (resolved.desc.rank == .generalized) continue;
+        try tails.append(self.gpa, var_);
+    }
+    for (tails.items) |tail| try self.commitUncommittedTail(tail, env);
+}
+
 /// After the module solves, ground every still-open implicitly opened
 /// extension of a top-level weak value binding to `[]` (design.md
 /// "Polarity"). Nothing in this module can widen the row any further, and
@@ -27384,6 +27479,14 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
         } } },
         env,
     );
+    // A tag union an annotation or an alias wrote never lifts into a nominal
+    // type (design.md "Uncommitted Record Tails"); a nominal declaration's
+    // backing is the declaration's own structure.
+    const annotated = switch (ctx) {
+        .annotation => true,
+        .type_decl => |decl| decl.type_ == .alias,
+    };
+    if (annotated) try self.types.markAnnotationTagUnion(anno_var);
     return anno_gen_done;
 }
 
@@ -28525,7 +28628,7 @@ fn stepPatternCheck(
             // Create the type
             const ext_var = switch (ctx.row_openness) {
                 .open => try self.fresh(env, pattern_region),
-                .closed => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, pattern_region),
+                .closed => try self.freshUncommittedTagTail(env, pattern_region),
             };
 
             const tag = types_mod.Tag{ .name = applied_tag.name, .args = arg_vars_slice };
@@ -28662,7 +28765,7 @@ fn stepPatternCheck(
             // is a type mismatch the user must resolve (e.g. by adding the field
             // or a `..` rest).
             const ext_var = state.mb_ext_var orelse
-                try self.freshFromContent(.{ .structure = .empty_record }, env, pattern_region);
+                try self.freshUncommittedTail(env, pattern_region);
             try self.unifyWith(pattern_var, .{ .structure = .{
                 .record = .{
                     .fields = record_fields_range,
@@ -29741,7 +29844,7 @@ const ExprCheckFrame = struct {
         try checker.judgePendingAccessesAtBoundary(env);
         checker.unify_scratch.clearPersistentOpenings();
         try checker.linkDeferredUsesFrom(env.rank());
-        try checker.generalizeRank(env);
+        try checker.generalizeRank(env, &.{self.expr_var});
         try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
         try checker.deduplicateGeneralizedDispatchRequirements(
             self.expr_var_raw,
@@ -30417,7 +30520,10 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
         },
         .e_empty_record => {
             try self.record_constructions.append(self.gpa, expr_idx);
-            try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
+            try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
+                .fields = try self.types.appendRecordFields(&.{}),
+                .ext = try self.freshUncommittedTail(env, expr_region),
+            } } }, env);
         },
         // tags //
         .e_zero_argument_tag => |e| {
@@ -30742,7 +30848,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             }
 
             const resolved_pat = self.types.resolveVar(pat_var);
-            if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var) or self.per_use_copy_bindings.contains(pat_var)) {
+            if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
                 _ = try self.unify(expr_var, instantiated, env);
             } else {
@@ -31508,7 +31614,7 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
                 types_mod.RecordField.sortByNameAsc,
             );
             const projected_fields = try self.types.appendRecordFields(projected_fields_scratch);
-            const projected_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, expr_region);
+            const projected_ext = try self.freshUncommittedTail(env, expr_region);
             const projected_record = try self.freshFromContent(.{ .structure = .{ .record = .{
                 .fields = projected_fields,
                 .ext = projected_ext,
@@ -31600,8 +31706,9 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
     std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), types_mod.RecordField.sortByNameAsc);
     const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
-    // Create a closed record with the provided fields
-    const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, expr_region);
+    // A construction's row ends in an uncommitted tail (design.md
+    // "Uncommitted Record Tails").
+    const ext_var = try self.freshUncommittedTail(env, expr_region);
     try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
         .fields = record_fields_range,
         .ext = ext_var,
@@ -32372,7 +32479,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.judgePendingAccessesAtBoundary(env);
                 self.unify_scratch.clearPersistentOpenings();
                 try self.linkDeferredUsesFrom(env.rank());
-                try self.generalizeRank(env);
+                try self.generalizeRank(env, &.{decl_pattern_var});
                 try self.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }}, env);
                 try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, decl_pattern_var, env);
                 try self.publishBindingScheme(decl_pattern_var);
@@ -35974,8 +36081,10 @@ fn closeExhaustiveVars(
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!void {
+    // An exhaustive match closes the inferred rows it covers, and a relation
+    // may still lift them (design.md "Uncommitted Tag Tails").
     for (result.ext_vars_to_close) |ext_var| {
-        const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+        const empty_tu_var = try self.freshUncommittedTagTail(env, region);
         _ = try self.unify(ext_var, empty_tu_var, env);
     }
 
@@ -37255,170 +37364,10 @@ fn methodCallArgContext(
     } };
 }
 
-/// Collect `use_absorbers`: everything in the store of each module this
-/// check copies types from, and everything this module writes that a use
-/// can change anonymous structure into, read from its syntax because
-/// checking registers it only as it reaches it: each nominal declaration's
-/// backing, and the name of each field written as optional or defaulted in
-/// an annotation, accessed with `.?`, or unset.
-fn collectUseAbsorbers(self: *Self) Allocator.Error!void {
-    std.debug.assert(!self.use_absorbers_collected);
-    if (self.builtin_ctx.builtin_module) |builtin_env| try self.addUseAbsorberSource(builtin_env);
-    for (self.imported_modules) |env| try self.addUseAbsorberSource(env);
-    for (self.owner_modules) |env| try self.addUseAbsorberSource(env);
-    if (self.platform_requirements) |input| {
-        try self.addUseAbsorberSource(input.env);
-        for (input.owner_modules) |env| try self.addUseAbsorberSource(env);
-    }
-
-    const absorbers = &self.use_absorbers;
-    const node_count: usize = @intCast(self.cir.store.nodes.len());
-    for (0..node_count) |index| {
-        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(index));
-        const node = self.cir.store.nodes.get(node_idx);
-        switch (node.tag) {
-            .statement_nominal_decl => {
-                const nominal = self.cir.store.getStatement(@fromBackingInt(@intCast(index))).s_nominal_decl;
-                try self.addLocalUseAbsorber(nominal.anno);
-            },
-            .ty_record_field, .ty_record_field_defaulted => {
-                const field = self.cir.store.getAnnoRecordField(@fromBackingInt(@intCast(index)));
-                if (field.is_optional or field.default_value != null) try absorbers.addWideningField(self.gpa, self.cir.getIdentText(field.name));
-            },
-            .field_access_segment => {
-                const segment = self.cir.store.getFieldAccessSegment(@fromBackingInt(@intCast(index)));
-                if (segment.mode == .optional) try absorbers.addWideningField(self.gpa, self.cir.getIdentText(segment.name));
-            },
-            .record_unset_field => {
-                const field = self.cir.store.getUnsetField(@fromBackingInt(@intCast(index)));
-                try absorbers.addWideningField(self.gpa, self.cir.getIdentText(field.name));
-            },
-            else => {},
-        }
-    }
-
-    self.use_absorbers_collected = true;
-    self.generalizer.use_absorbers = .{
-        .absorbers = &self.use_absorbers,
-        .idents = self.cir.getIdentStoreConst(),
-    };
-}
-
-/// Assert that `use_absorbers` allows every change this module's own types
-/// can make, now that checking has generated them: every lift into a
-/// declaration the module registered, and every widening by a field its
-/// records hold as optional or defaulted.
-fn debugAssertLocalUseAbsorbersCovered(self: *Self) Allocator.Error!void {
-    if (!std.debug.runtime_safety or !self.use_absorbers_collected) return;
-    const idents = self.cir.getIdentStoreConst();
-    const self_module = self.cir.selfModuleIdentity();
-    for (self.types.nominal_decls.items.items) |decl| {
-        if (decl.origin_module != self_module or !decl.isValid()) continue;
-        if (!try self.use_absorbers.coversBacking(self.gpa, self.types, idents, decl.backing)) {
-            base.invariant("a nominal declaration's backing admits a lift its syntax did not record", .{});
-        }
-    }
-    const var_count: usize = @intCast(self.types.len());
-    for (0..var_count) |index| {
-        const var_: Var = @fromBackingInt(@intCast(index));
-        const resolved = self.types.resolveVar(var_);
-        if (resolved.var_ != var_) continue;
-        switch (resolved.desc.content) {
-            .structure => |flat| switch (flat) {
-                .record => |record| if (!self.use_absorbers.coversRecordFields(self.types, idents, record)) {
-                    base.invariant("a record holds an optional or defaulted field no collected source names", .{});
-                },
-                else => {},
-            },
-            else => {},
-        }
-    }
-}
-
-fn addUseAbsorberSource(self: *Self, env: *const ModuleEnv) Allocator.Error!void {
-    if (env == self.cir) return;
-    for (self.use_absorber_sources.items) |known| if (known == env) return;
-    try self.use_absorber_sources.append(self.gpa, env);
-    // Another module cannot lift into an opaque declaration.
-    try self.use_absorbers.addStore(self.gpa, &env.types, env.getIdentStoreConst(), false);
-}
-
-/// Record the backing annotation of a nominal declaration this module
-/// writes. Only a tag union or record written directly as the backing is
-/// checked as one; an application or a lookup is checked as the alias or
-/// nominal type it names, into which no anonymous structure lifts.
-fn addLocalUseAbsorber(self: *Self, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!void {
-    const absorbers = &self.use_absorbers;
-    const hash = types_mod.use_absorbers.nameHash;
-    switch (self.cir.store.getTypeAnno(anno_idx)) {
-        .parens => |parens| try self.addLocalUseAbsorber(parens.anno),
-        .tag_union => |tag_union| {
-            if (tag_union.ext != null) {
-                absorbers.tags.every = true;
-                return;
-            }
-            absorbers.scratch.clearRetainingCapacity();
-            for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_anno| switch (self.cir.store.getTypeAnno(tag_anno)) {
-                .tag => |tag| try absorbers.scratch.append(self.gpa, hash(self.cir.getIdentText(tag.name))),
-                else => {
-                    absorbers.tags.every = true;
-                    return;
-                },
-            };
-            try absorbers.tags.addClosed(self.gpa, absorbers.scratch.items);
-        },
-        .record => |record| {
-            if (record.ext != null) {
-                absorbers.records.every = true;
-                return;
-            }
-            absorbers.scratch.clearRetainingCapacity();
-            for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                const field = self.cir.store.getAnnoRecordField(field_idx);
-                if (field.is_unnamed) continue;
-                try absorbers.scratch.append(self.gpa, hash(self.cir.getIdentText(field.name)));
-            }
-            try absorbers.records.addClosed(self.gpa, absorbers.scratch.items);
-        },
-        .rigid_var, .rigid_var_lookup, .underscore, .malformed => absorbers.addInvalidDecl(),
-        .apply, .lookup, .tag, .tuple, .@"fn" => {},
-    }
-}
-
-/// Whether the class `desc` is per-use structure: anonymous structure a use
-/// of a binding holding it can change (`UseAbsorbers.copiedPerUse`).
-fn copiedPerUse(self: *Self, desc: types_mod.Descriptor) Allocator.Error!bool {
-    if (!self.use_absorbers_collected) return desc.liftsIntoNominal();
-    return self.use_absorbers.copiedPerUse(self.gpa, self.types, self.cir.getIdentStoreConst(), desc);
-}
-
-/// Assert that `env` is a module whose types `use_absorbers` holds,
-/// since this check is about to copy types from it.
-fn debugAssertUseAbsorberSource(self: *const Self, env: *const ModuleEnv) void {
-    if (!std.debug.runtime_safety or !self.use_absorbers_collected) return;
-    if (env == self.cir) return;
-    for (self.use_absorber_sources.items) |known| if (known == env) return;
-    base.invariant("a check copied types from a module whose declarations it did not collect", .{});
-}
-
 /// Whether a type contains no type variables at all: no flex, rigid, or
 /// presence vars, and no error content.
 fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
-    return self.varIsGroundAs(root_var, .ground);
-}
 
-/// How a ground walk treats anonymous structure that a use could lift into a
-/// nominal type (`Descriptor.liftsIntoNominal`).
-const LiftableStructure = enum {
-    /// As ground: the walk asks only whether the type has variables.
-    ground,
-    /// As not ground: the walk asks whether anything relating to the type
-    /// can change it, as a type shared by several relations must not.
-    refinable,
-};
-
-/// `varIsGround`, with `liftable` choosing how liftable structure counts.
-fn varIsGroundAs(self: *Self, root_var: Var, liftable: LiftableStructure) std.mem.Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
     defer self.var_set.clearRetainingCapacity();
     const visited = &self.var_set;
@@ -37432,7 +37381,6 @@ fn varIsGroundAs(self: *Self, root_var: Var, liftable: LiftableStructure) std.me
         const resolved = self.types.resolveVar(var_);
         if (visited.contains(resolved.var_)) continue;
         try visited.put(resolved.var_, {});
-        if (liftable == .refinable and try self.copiedPerUse(resolved.desc)) return false;
 
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
@@ -37905,7 +37853,6 @@ fn copyImportedBindingSchemeCodecRequirements(
     source_node: CIR.Node.Idx,
     copied_scheme_root: Var,
 ) Allocator.Error!void {
-    self.debugAssertUseAbsorberSource(source_env);
     const source_requirements = source_env.bindingSchemeCodecRequirementsForNode(source_node);
     if (source_requirements.len == 0) return;
 
@@ -38348,7 +38295,6 @@ fn copyVarWithSourceSubstitutions(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    self.debugAssertUseAbsorberSource(other_module_env);
 
     // First, reset state
     self.var_map.clearRetainingCapacity();
@@ -44332,8 +44278,12 @@ fn settleBoundaryLocalDerivedCodecRecords(
         }
         const local_start = exts.items.len;
         const reaches_interface = for (shape_exts.items) |ext| {
-            if (self.types.resolveVar(ext).desc.rank != rank) continue;
-            if (interface_vars.contains(ext)) break true;
+            const resolved_ext = self.types.resolveVar(ext);
+            if (resolved_ext.desc.rank != rank) continue;
+            // An uncommitted tail's record has known fields: a codec over it
+            // commits it like any boundary-local row (design.md "Uncommitted
+            // Record Tails").
+            if (interface_vars.contains(ext) and !resolved_ext.desc.flags.uncommitted_record_tail) break true;
             try exts.append(self.gpa, ext);
         } else false;
         if (reaches_interface) {
@@ -47360,7 +47310,6 @@ fn importedOwnerContextSubstitutions(
     const source_decl_idx = source_env.types.lookupNominalDeclByKey(source_origin, owner_statement) orelse return;
     const source_decl = source_env.types.getNominalDecl(source_decl_idx);
     if (source_decl.flags.context_len == 0) return;
-    self.debugAssertUseAbsorberSource(source_env);
 
     self.var_map.clearRetainingCapacity();
     const first_new_var: usize = @intCast(self.types.len());
@@ -53735,7 +53684,7 @@ fn syncSnapshotGroundEpoch(self: *Self) void {
 fn rememberGroundTypes(self: *Self, roots: []const Var) Allocator.Error!void {
     if (self.types.savepointActive()) return;
     self.syncSnapshotGroundEpoch();
-    var marks = try self.computeGroundMarksKnowing(roots, &self.snapshot_ground_copies, .any, .ground);
+    var marks = try self.computeGroundMarksKnowing(roots, &self.snapshot_ground_copies, .any);
     defer self.releaseGroundMarks(&marks);
     for (marks.order.items, marks.ground.items) |resolved_var, is_ground| {
         if (!is_ground) continue;
@@ -57657,7 +57606,7 @@ fn recordGeneratedCodecDerivationSnapshot(
     // remembered for later ones. Copies made inside a probe are rolled back
     // with it, so a probe remembers nothing.
     self.syncSnapshotGroundEpoch();
-    var ground_marks = try self.computeGroundMarksKnowing(roots.items, &self.snapshot_ground_copies, .copied, .ground);
+    var ground_marks = try self.computeGroundMarksKnowing(roots.items, &self.snapshot_ground_copies, .copied);
     defer self.releaseGroundMarks(&ground_marks);
     var shared_copies = collections.DenseMapUnmanaged(Var, void).empty;
     defer shared_copies.deinit(self.gpa);

@@ -148,18 +148,32 @@ pub const DescriptorFlags = packed struct(u16) {
     /// into must have exactly this row. A copy of the row is the same host
     /// row, so instantiation carries the flag.
     host_fixed_row: bool = false,
-    /// An anonymous record or tag union (empty ones included) that a
-    /// generalization boundary found was made in its own scope without being
-    /// generalized: every part of it is ground or belongs to an enclosing
-    /// scope. Each use of the binding still gets its own copy, because a use
-    /// can lift the structure into a nominal type whose backing matches, and
-    /// the lift rewrites the class it reaches (design.md "Anonymous Structure
-    /// Is Copied Per Use"). The rank is untouched: the class is not
-    /// polymorphic, only refinable. A copy is a fresh class at its use's
-    /// rank, so instantiation does not carry the flag, and a merge keeps it
-    /// only when both sides had it.
-    per_use_structure: bool = false,
-    _padding: u6 = 0,
+    /// A record row extension that still stands for "this record, possibly
+    /// lifted into a nominal type or given optional or defaulted fields it
+    /// omits": a record construction's or record pattern's tail (design.md
+    /// "Uncommitted Record Tails"). Meaningful only on a flex class; it never
+    /// stands for a required or undetermined field and never relates to a
+    /// rigid. Copies carry it, and a merge keeps it while the class is a flex.
+    uncommitted_record_tail: bool = false,
+    /// The class holds a copy instantiation made of an uncommitted record
+    /// tail. Such a class absorbs optional fields only, never a defaulted
+    /// one (design.md "Uncommitted Record Tails"). Copies carry it, and a
+    /// merge keeps it while the class is a flex.
+    uncommitted_copy: bool = false,
+    /// A tag union an annotation or type declaration wrote. Annotated
+    /// structure never lifts into a nominal type, whatever its row's tail
+    /// (design.md "Uncommitted Record Tails"). Copies carry it and a merge
+    /// keeps it if either side had it.
+    annotation_tag_union: bool = false,
+    /// An empty tag union that closes an inferred tag row: checking closed it
+    /// (an exhaustive match, a closed tag pattern), no annotation did. The
+    /// row is closed for every purpose, but its union may still lift into a
+    /// nominal type whose backing fits, and the class generalizes like a
+    /// variable so each use of a binding owns its copy (design.md
+    /// "Uncommitted Tag Tails"). Copies carry it; a merge keeps it unless the
+    /// other side is an empty tag union without it.
+    uncommitted_tag_tail: bool = false,
+    _padding: u3 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -173,6 +187,10 @@ pub const DescriptorFlags = packed struct(u16) {
             .empty_tag_union_is_default = self.empty_tag_union_is_default,
             .nominal_backing_structure = self.nominal_backing_structure,
             .host_fixed_row = self.host_fixed_row,
+            .uncommitted_record_tail = self.uncommitted_record_tail,
+            .uncommitted_copy = self.uncommitted_copy,
+            .annotation_tag_union = self.annotation_tag_union,
+            .uncommitted_tag_tail = self.uncommitted_tag_tail,
         };
     }
 
@@ -191,24 +209,6 @@ pub const Descriptor = struct {
     content: Content,
     rank: Rank,
     flags: DescriptorFlags = .{},
-
-    /// Whether unification can lift this class into a nominal type whose
-    /// backing matches, rewriting it to that nominal: an anonymous record or
-    /// tag union, empty ones included, other than structure written in an
-    /// opened nominal backing, which never lifts (design.md "Declared Backing
-    /// Structure"). Such a class can change while staying free of type
-    /// variables, so sharing it shares that change (design.md "Anonymous
-    /// Structure Is Copied Per Use").
-    pub fn liftsIntoNominal(self: Descriptor) bool {
-        if (self.flags.nominal_backing_structure) return false;
-        return switch (self.content) {
-            .structure => |flat_type| switch (flat_type) {
-                .record, .tag_union, .empty_record, .empty_tag_union => true,
-                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => false,
-            },
-            .flex, .rigid, .alias, .field_presence, .err => false,
-        };
-    }
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
