@@ -1599,18 +1599,23 @@ pub const ConstStore = struct {
     /// values built the same way feed equal bytes whatever their node ids.
     /// `context.moduleDigest` gives the bytes naming a nominal type's module,
     /// and `context.fnValueDigest` the bytes naming a stored function.
+    /// The walk's own tables live in `scratch`, never in the store's
+    /// allocator: a completed store is read from any thread, while its
+    /// allocator can be a single-threaded arena owned by its module (a
+    /// reopened cache entry's evaluation columns, a pairing overlay).
     pub fn hashGraph(
         self: *const ConstStore,
+        scratch: Allocator,
         root: ConstNodeId,
         hasher: *base.Sha256,
         context: anytype,
     ) Allocator.Error!void {
-        var ordinals = collections.DenseMap(ConstNodeId, u32).init(self.allocator);
+        var ordinals = collections.DenseMap(ConstNodeId, u32).init(scratch);
         defer ordinals.deinit();
         var next_ordinal: u32 = 0;
         var pending = std.ArrayList(ConstNodeId).empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, root);
+        defer pending.deinit(scratch);
+        try pending.append(scratch, root);
         while (pending.pop()) |node| {
             const entry = try ordinals.getOrPut(node);
             if (entry.found_existing) {
@@ -1628,15 +1633,15 @@ pub const ConstStore = struct {
                 .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
                 .scalar => |scalar| hashScalar(hasher, scalar),
                 inline .str, .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
-                .box => |payload| try pending.append(self.allocator, payload),
+                .box => |payload| try pending.append(scratch, payload),
                 .nominal => |nominal| {
                     hasher.update(&context.moduleDigest(nominal.named_type.module));
-                    try pending.append(self.allocator, nominal.backing);
+                    try pending.append(scratch, nominal.backing);
                 },
                 .list => |list| switch (list) {
                     .nodes => |items| {
                         hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
-                        try pending.appendSlice(self.allocator, items);
+                        try pending.appendSlice(scratch, items);
                     },
                     .packed_bytes => |packed_list| {
                         hasher.update(std.mem.asBytes(&packed_list.len));
@@ -1648,7 +1653,7 @@ pub const ConstStore = struct {
                 },
                 inline .tuple, .record => |items| {
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
-                    try pending.appendSlice(self.allocator, items);
+                    try pending.appendSlice(scratch, items);
                 },
                 .boxy_fn => |function| {
                     // The recipe names its modules by checked key; the
@@ -1659,12 +1664,12 @@ pub const ConstStore = struct {
                     for (keys) |key| hasher.update(&context.moduleDigest(.{ .bytes = key }));
                     hashBytes(hasher, recipeBody(recipe));
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(function.captures.len))));
-                    try pending.appendSlice(self.allocator, function.captures);
+                    try pending.appendSlice(scratch, function.captures);
                 },
                 .tag => |tag| {
                     hashBytes(hasher, tag.tag_name);
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(tag.payloads.len))));
-                    try pending.appendSlice(self.allocator, tag.payloads);
+                    try pending.appendSlice(scratch, tag.payloads);
                 },
             }
         }
@@ -2160,4 +2165,38 @@ fn hashScalar(hasher: *base.Sha256, scalar: ConstScalar) void {
     switch (scalar) {
         inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| hasher.update(std.mem.asBytes(&value)),
     }
+}
+
+test "ConstStore.hashGraph: walks in the caller's scratch, not the store's allocator" {
+    // A completed store is hashed from several threads at once while its own
+    // allocator can be a single-threaded arena owned by its module. The store
+    // here keeps an allocator that fails every request, so the hash succeeds
+    // only when every table of the walk comes from `scratch`.
+    const gpa = std.testing.allocator;
+    var store = ConstStore.init(gpa);
+    defer store.deinit();
+    const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
+    const b = try store.append(.{ .box = a });
+    const payloads = [_]ConstNodeId{ a, b };
+    const tag = try store.append(.{ .tag = .{ .tag_name = "Pair", .payloads = &payloads } });
+    const root = try store.append(.{ .record = &.{ tag, a } });
+
+    const Context = struct {
+        pub fn moduleDigest(_: @This(), _: names.CheckedModuleDigest) [32]u8 {
+            return @splat(0);
+        }
+        pub fn fnValueDigest(_: @This(), _: ConstFnId) [32]u8 {
+            return @splat(0);
+        }
+    };
+
+    var expected = base.Sha256.init(.{});
+    try store.hashGraph(gpa, root, &expected, Context{});
+
+    const owning = store.allocator;
+    store.allocator = std.testing.failing_allocator;
+    defer store.allocator = owning;
+    var hasher = base.Sha256.init(.{});
+    try store.hashGraph(gpa, root, &hasher, Context{});
+    try std.testing.expectEqual(expected.finalResult(), hasher.finalResult());
 }

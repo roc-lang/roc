@@ -398,7 +398,7 @@ pub const Digests = struct {
         const payload = root.payloadFor(.boxy);
         hashTag(hasher, @tagName(std.meta.activeTag(payload)));
         switch (payload) {
-            .const_node => |node| try artifact.const_store.hashGraph(node, hasher, context),
+            .const_node => |node| try artifact.const_store.hashGraph(self.gpa, node, hasher, context),
             .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
             .pending, .unevaluated, .discarded, .expect, .runtime => {},
         }
