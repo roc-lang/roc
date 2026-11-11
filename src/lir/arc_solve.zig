@@ -130,8 +130,6 @@ pub const JoinBody = struct {
     jump_count: u32 = 0,
 };
 
-const no_param_anchor: u8 = std.math.maxInt(u8);
-
 /// Exact lifetime fact for one direct call to a callee in the same call-graph
 /// SCC whose result is immediately returned by the caller. Each represented
 /// argument either names the caller parameter whose borrowed entry lifetime
@@ -139,19 +137,24 @@ const no_param_anchor: u8 = std.math.maxInt(u8);
 /// ownership unit before the caller frame can be replaced.
 pub const TailCallLifetime = struct {
     stmt: LIR.CFStmtId,
-    anchor_params: [arc_sig.tracked_param_count]u8,
-    carriers: [arc_sig.tracked_param_count]u32,
+    /// Each argument's anchoring parameter position plus one; zero when the
+    /// argument has no anchor.
+    anchor_params: [arc_sig.tracked_param_count]u8 = @splat(0),
+    carriers: [arc_sig.tracked_param_count]collections.OptionalId(LIR.LocalId) = @splat(.none),
+
+    comptime {
+        std.debug.assert(arc_sig.tracked_param_count < std.math.maxInt(u8));
+    }
 
     pub fn anchorParam(self: *const TailCallLifetime, position: usize) ?usize {
         if (position >= arc_sig.tracked_param_count) return null;
         const anchor = self.anchor_params[position];
-        return if (anchor == no_param_anchor) null else anchor;
+        return if (anchor == 0) null else anchor - 1;
     }
 
     pub fn carrier(self: *const TailCallLifetime, position: usize) ?LIR.LocalId {
         if (position >= arc_sig.tracked_param_count) return null;
-        const local = self.carriers[position];
-        return if (local == no_local) null else @fromBackingInt(@intCast(local));
+        return self.carriers[position].get();
     }
 
     pub fn argumentOutlivesScc(
@@ -2142,22 +2145,18 @@ fn buildTailCallTable(
         if (!call.tail) continue;
         if (solver.scc[call.caller] != solver.scc[@backingInt(call.callee)]) continue;
 
-        var fact = TailCallLifetime{
-            .stmt = call.stmt,
-            .anchor_params = @as([arc_sig.tracked_param_count]u8, @splat(no_param_anchor)),
-            .carriers = @as([arc_sig.tracked_param_count]u32, @splat(no_local)),
-        };
+        var fact = TailCallLifetime{ .stmt = call.stmt };
         const args = solver.store.getLocalSpan(call.args);
         for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
             const argument = solver.domain.indexOf(GuardedList.at(args, position)) orelse continue;
             if (!binding.borrowed.isSet(argument)) continue;
-            fact.carriers[position] = tailArgumentCarrier(solver, binding, argument);
+            fact.carriers[position] = .some(@fromBackingInt(tailArgumentCarrier(solver, binding, argument)));
             const leader = binding.leader[argument];
             if (!paramIsBorrowed(solver, leader)) continue;
             if (solver.param_proc[leader] != OptionalU32.some(call.caller)) continue;
             const anchor = solver.param_position.get(leader);
             if (anchor >= arc_sig.tracked_param_count) continue;
-            fact.anchor_params[position] = @intCast(anchor);
+            fact.anchor_params[position] = @intCast(anchor + 1);
         }
 
         facts[fill[call.caller]] = fact;

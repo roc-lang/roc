@@ -20,22 +20,9 @@ pub const TypeVarId = enum(u32) {
     }
 };
 
-/// A `TypeVarId` or none, at the width of one id. `Store.add` refuses the
-/// sentinel id, so `none` never names a variable.
-pub const MaybeTypeVarId = enum(u32) {
-    none = std.math.maxInt(u32),
-    _,
-
-    pub fn of(ty: ?TypeVarId) MaybeTypeVarId {
-        const present = ty orelse return .none;
-        return @fromBackingInt(@backingInt(present));
-    }
-
-    pub fn get(self: MaybeTypeVarId) ?TypeVarId {
-        if (self == .none) return null;
-        return @fromBackingInt(@backingInt(self));
-    }
-};
+/// A `TypeVarId` or none, at the width of one id. Absence is zero, so
+/// tables of these start from zeroed memory.
+pub const MaybeTypeVarId = collections.OptionalId(TypeVarId);
 
 /// Slice descriptor for type, field, tag, capture, or member arrays.
 pub const Span = extern struct {
@@ -336,7 +323,7 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
-        if (self.vars.items.len >= @backingInt(MaybeTypeVarId.none)) return error.OutOfMemory;
+        if (self.vars.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
         const id: TypeVarId = @fromBackingInt(@as(u32, @intCast(self.vars.items.len)));
         try self.vars.ensureUnusedCapacity(self.allocator, 1);
         try self.analysis_changes.ensureUnusedCapacity(self.allocator, 1);

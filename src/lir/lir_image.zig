@@ -74,7 +74,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v69: procedure specs store optional locals, plans, tail calls and tail
 ///      groups in four-byte zero-absent forms.
 /// v70: procedure specs store their body and hosted ABI in zero-absent forms.
-pub const FORMAT_VERSION: u32 = 70;
+/// v71: statement row ids, inline scope ids and dynamic local descriptors
+///      encode absence as zero.
+pub const FORMAT_VERSION: u32 = 71;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

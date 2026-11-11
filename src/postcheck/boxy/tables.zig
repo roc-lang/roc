@@ -390,9 +390,11 @@ pub const Evaluation = struct {
     low: std.ArrayList(u32) = .empty,
     on_stack: std.ArrayList(bool) = .empty,
     stack: std.ArrayList(RecipeId) = .empty,
-    visited: u32 = 0,
+    /// The next visit order. Orders are issued from one, so zero marks an
+    /// unvisited recipe.
+    visited: u32 = 1,
 
-    const unvisited = std.math.maxInt(u32);
+    const unvisited: u32 = 0;
 
     pub fn init(program: *lower.Program, source: Source, inputs: []const StaticDescs.CaptureWord, desc_count: u32) Evaluation {
         return .{ .program = program, .allocator = program.allocator, .source = source, .inputs = inputs, .desc_count = desc_count };

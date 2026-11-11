@@ -268,8 +268,10 @@ pub const Scratch = struct {
     path_nodes: std.ArrayListUnmanaged(PathNode) = .empty,
     /// The nodes of emitted params' paths, parents before children.
     param_path_nodes: std.ArrayListUnmanaged(PathNode) = .empty,
-    /// `path_nodes` index -> `param_path_nodes` index, or `no_path_node`.
-    path_node_remap: std.ArrayListUnmanaged(u32) = .empty,
+    /// `path_nodes` index -> `param_path_nodes` index, absent for a node not
+    /// yet moved. Read for each node a moved path reaches, so it starts
+    /// cleared to absent (zero) for each enumeration.
+    path_node_remap: std.ArrayListUnmanaged(collections.OptionalU32) = .empty,
     path_chain: std.ArrayListUnmanaged(u32) = .empty,
     /// Child collection buffer for one node's children, in declared order.
     children: std.ArrayListUnmanaged(Child) = .empty,
@@ -355,21 +357,21 @@ pub const Scratch = struct {
         if (walk_node == no_path_node) return no_path_node;
         self.path_chain.clearRetainingCapacity();
         var node = walk_node;
-        while (node != no_path_node and self.path_node_remap.items[node] == no_path_node) {
+        while (node != no_path_node and self.path_node_remap.items[node] == .none) {
             try self.path_chain.append(gpa, node);
             node = self.path_nodes.items[node].parent;
         }
-        var parent = if (node == no_path_node) no_path_node else self.path_node_remap.items[node];
+        var parent = if (node == no_path_node) no_path_node else self.path_node_remap.items[node].get().?;
         var i = self.path_chain.items.len;
         while (i > 0) {
             i -= 1;
             const next = self.path_chain.items[i];
             const published: u32 = @intCast(self.param_path_nodes.items.len);
             try self.param_path_nodes.append(gpa, .{ .parent = parent, .step = self.path_nodes.items[next].step });
-            self.path_node_remap.items[next] = published;
+            self.path_node_remap.items[next] = .some(published);
             parent = published;
         }
-        return self.path_node_remap.items[walk_node];
+        return self.path_node_remap.items[walk_node].get().?;
     }
 };
 
@@ -433,7 +435,7 @@ pub fn enumerateEvidenceParamsWithRequirements(
         try walk(gpa, store, queued.var_, source, scratch, out);
     }
     // Keep only the nodes on emitted params' paths.
-    try scratch.path_node_remap.appendNTimes(gpa, no_path_node, scratch.path_nodes.items.len);
+    try scratch.path_node_remap.appendNTimes(gpa, .none, scratch.path_nodes.items.len);
     var contract_start: u32 = 0;
     for (out.items[out_base..]) |*param| {
         param.path_node = try scratch.publishPathNode(gpa, param.path_node);

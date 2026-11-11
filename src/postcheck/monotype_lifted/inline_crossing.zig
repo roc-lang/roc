@@ -155,7 +155,7 @@ const Use = union(enum) {
     result,
 };
 
-const UseRow = struct { body: u32, use: Use, next: u32 };
+const UseRow = struct { body: u32, use: Use, next: collections.OptionalU32 };
 
 const LocalUseRow = struct { body: u32, expr: Ast.ExprId, next: u32 };
 
@@ -174,8 +174,10 @@ pub const Index = struct {
     /// Each original function's source body.
     bodies: BodyColumn,
     /// The first use of each source expression, by expression id, in a
-    /// list of every body's uses of it.
-    use_head: []u32,
+    /// list of every body's uses of it; absent for an expression no body
+    /// uses. Read for any expression a walk reaches, so it starts cleared
+    /// to absent (zero).
+    use_head: []collections.OptionalU32,
     uses: std.ArrayList(UseRow) = .empty,
     local_use_head: collections.DenseMapUnmanaged(Ast.LocalId, u32) = .empty,
     local_use_rows: std.ArrayList(LocalUseRow) = .empty,
@@ -204,13 +206,13 @@ pub const Index = struct {
         self.* = .{
             .gpa = gpa,
             .bodies = try BodyColumn.initFilled(gpa, fn_count),
-            .use_head = try gpa.alloc(u32, expr_count),
+            .use_head = try gpa.alloc(collections.OptionalU32, expr_count),
             .returns = try gpa.alloc(std.ArrayList(Ast.ExprId), fn_count),
             .scc = try gpa.alloc(u32, fn_count),
             .on_cycle = try gpa.alloc(bool, fn_count),
             .wrapper = try gpa.alloc(bool, fn_count),
         };
-        @memset(self.use_head, none);
+        @memset(self.use_head, .none);
         for (self.returns) |*list| list.* = .empty;
         @memset(self.wrapper, false);
         for (0..fn_count) |index| {
@@ -249,8 +251,8 @@ pub const Index = struct {
     pub fn bodyHolds(self: *const Index, fn_id: Ast.FnId, expr: Ast.ExprId) bool {
         const raw = @backingInt(expr);
         if (raw >= self.use_head.len) return false;
-        var row = self.use_head[raw];
-        while (row != none) : (row = self.uses.items[row].next) {
+        var cursor = self.use_head[raw];
+        while (cursor.get()) |row| : (cursor = self.uses.items[row].next) {
             if (self.uses.items[row].body == @backingInt(fn_id)) return true;
         }
         return false;
@@ -291,15 +293,15 @@ pub const Index = struct {
     fn addUse(self: *Index, body: u32, expr: Ast.ExprId, use: Use) Allocator.Error!bool {
         const raw = @backingInt(expr);
         var fresh = true;
-        var row = self.use_head[raw];
-        while (row != none) : (row = self.uses.items[row].next) {
+        var cursor = self.use_head[raw];
+        while (cursor.get()) |row| : (cursor = self.uses.items[row].next) {
             const existing = self.uses.items[row];
             if (existing.body != body) continue;
             fresh = false;
             if (std.meta.eql(existing.use, use)) return false;
         }
         try self.uses.append(self.gpa, .{ .body = body, .use = use, .next = self.use_head[raw] });
-        self.use_head[raw] = @intCast(self.uses.items.len - 1);
+        self.use_head[raw] = .some(@intCast(self.uses.items.len - 1));
         return fresh;
     }
 
@@ -572,7 +574,9 @@ pub const Index = struct {
         defer gpa.free(low);
         const on_stack = try gpa.alloc(bool, n);
         defer gpa.free(on_stack);
-        @memset(order, none);
+        // Visit orders are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
+        @memset(order, unvisited);
         @memset(on_stack, false);
         @memset(self.on_cycle, false);
         const DfsFrame = struct { node: u32, next: u32 };
@@ -580,11 +584,11 @@ pub const Index = struct {
         defer frames.deinit(gpa);
         var component: std.ArrayList(u32) = .empty;
         defer component.deinit(gpa);
-        var next_order: u32 = 0;
+        var next_order: u32 = 1;
         var next_scc: u32 = 0;
         for (0..n) |root_index| {
             const root: u32 = @intCast(root_index);
-            if (order[root] != none) continue;
+            if (order[root] != unvisited) continue;
             order[root] = next_order;
             low[root] = next_order;
             next_order += 1;
@@ -597,7 +601,7 @@ pub const Index = struct {
                 if (frame.next < edges[node].items.len) {
                     const target = edges[node].items[frame.next];
                     frame.next += 1;
-                    if (order[target] == none) {
+                    if (order[target] == unvisited) {
                         order[target] = next_order;
                         low[target] = next_order;
                         next_order += 1;
@@ -1433,8 +1437,8 @@ const Walk = struct {
                 const raw = c.item.id;
                 if (raw >= index.use_head.len) Common.invariant("inline crossing walked an expression created after indexing");
                 const body = @backingInt(self.entries.items[c.entry].fn_id);
-                var row = index.use_head[raw];
-                while (row != none) : (row = index.uses.items[row].next) {
+                var cursor = index.use_head[raw];
+                while (cursor.get()) |row| : (cursor = index.uses.items[row].next) {
                     const use = index.uses.items[row];
                     if (use.body == body) try self.stepUse(c, use.use);
                 }

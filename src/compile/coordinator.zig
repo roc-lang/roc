@@ -4239,7 +4239,9 @@ pub const Coordinator = struct {
     /// iterative Tarjan traversal, then reject the edges inside each cycle.
     fn resolvePackageImportCycles(self: *Coordinator, pkg: *PackageState) Allocator.Error!bool {
         const modules = pkg.modules.items;
-        const unvisited = std.math.maxInt(u32);
+        // Visit indices and cycle numbers are issued from one, so zero marks
+        // an unvisited module.
+        const unvisited: u32 = 0;
 
         const visit_index = try self.gpa.alloc(u32, modules.len);
         defer self.gpa.free(visit_index);
@@ -4265,7 +4267,7 @@ pub const Coordinator = struct {
         var cycle_ends = std.ArrayList(u32).empty;
         defer cycle_ends.deinit(self.gpa);
 
-        var next_visit: u32 = 0;
+        var next_visit: u32 = 1;
         for (modules, 0..) |*root, root_index| {
             if (root.completion != .pending or visit_index[root_index] != unvisited) continue;
 
@@ -4324,11 +4326,12 @@ pub const Coordinator = struct {
         if (cycle_ends.items.len == 0) return false;
 
         // `visit_index` is no longer needed, so it records each cycle member's
-        // component; every other module keeps `unvisited` there.
+        // cycle number, counted from one; every other module keeps
+        // `unvisited` there.
         @memset(visit_index, unvisited);
         var members_start: u32 = 0;
-        for (cycle_ends.items, 0..) |members_end, component| {
-            for (cycle_members.items[members_start..members_end]) |member| visit_index[member] = @intCast(component);
+        for (cycle_ends.items, 1..) |members_end, cycle_number| {
+            for (cycle_members.items[members_start..members_end]) |member| visit_index[member] = @intCast(cycle_number);
             members_start = members_end;
         }
 

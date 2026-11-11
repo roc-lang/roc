@@ -44,6 +44,7 @@ const check = @import("check");
 
 const Common = @import("../common.zig");
 const AnyAll = collections.AnyAll;
+const WriteFirstSlice = collections.WriteFirstSlice;
 const MonoType = @import("../monotype/type.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Ast = @import("ast.zig");
@@ -361,7 +362,7 @@ const Solver = struct {
     allocator: Allocator,
     program: *Ast.Program,
     lifted: Lifted.ProgramView,
-    local_tys: []Type.MaybeTypeVarId,
+    local_tys: WriteFirstSlice(Type.TypeVarId),
     expr_tys: []Type.MaybeTypeVarId,
     pat_tys: []Type.MaybeTypeVarId,
     expr_done: std.DynamicBitSetUnmanaged,
@@ -522,10 +523,12 @@ const Solver = struct {
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Solver {
         const lifted = program.lifted.view();
 
-        const local_tys = try allocator.alloc(Type.MaybeTypeVarId, lifted.locals.len);
-        errdefer allocator.free(local_tys);
-        @memset(local_tys, .none);
+        // `solveBodies` types every local before anything reads one.
+        var local_tys = try WriteFirstSlice(Type.TypeVarId).init(allocator, lifted.locals.len);
+        errdefer local_tys.deinit(allocator);
 
+        // Read before written and scanned in full by `finishSolve`, so
+        // both columns start cleared to absent (zero).
         const expr_tys = try allocator.alloc(Type.MaybeTypeVarId, lifted.exprs.len);
         errdefer allocator.free(expr_tys);
         @memset(expr_tys, .none);
@@ -656,7 +659,7 @@ const Solver = struct {
         self.expr_done.deinit(self.allocator);
         self.allocator.free(self.pat_tys);
         self.allocator.free(self.expr_tys);
-        self.allocator.free(self.local_tys);
+        self.local_tys.deinit(self.allocator);
     }
 
     /// Take ownership of the Monotypes whose rows a row join can change.
@@ -675,7 +678,7 @@ const Solver = struct {
         if (@import("builtin").mode == .debug) try self.verifyDistinctFnSymbols();
 
         for (self.lifted.locals, 0..) |local, index| {
-            self.local_tys[index] = .of(try self.lowerTypeFresh(local.ty));
+            self.local_tys.set(index, try self.lowerTypeFresh(local.ty));
         }
 
         try self.program.fn_tys.ensureTotalCapacity(self.allocator, self.lifted.fns.len);
@@ -744,10 +747,9 @@ const Solver = struct {
             try self.program.pat_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
-        try self.program.local_tys.ensureTotalCapacity(self.allocator, self.local_tys.len);
-        for (self.local_tys) |maybe_ty| {
-            const ty = maybe_ty.get() orelse Common.invariant("Lambda Solved local type slot was not initialized");
-            try self.program.local_tys.append(self.allocator, self.program.types.rootCompressed(ty));
+        try self.program.local_tys.ensureTotalCapacity(self.allocator, self.local_tys.len());
+        for (0..self.local_tys.len()) |index| {
+            try self.program.local_tys.append(self.allocator, self.program.types.rootCompressed(self.local_tys.get(index)));
         }
 
         for (self.program.layout_requests.items) |*request| {
@@ -1849,7 +1851,7 @@ const Solver = struct {
     }
 
     fn localTy(self: *Solver, local: Lifted.LocalId) Type.TypeVarId {
-        return self.local_tys[@backingInt(local)].get() orelse Common.invariant("Lambda Solved local reached solver without a type slot");
+        return self.local_tys.get(@backingInt(local));
     }
 
     /// The enclosing function's solved return slot, carried from where its
@@ -5265,7 +5267,8 @@ fn markCycleMembers(
             child_writes[parent] += 1;
         }
     }
-    const unvisited = std.math.maxInt(u32);
+    // Visit indices are issued from one, so zero marks an unvisited node.
+    const unvisited: u32 = 0;
     const index_of = try allocator.alloc(u32, count);
     defer allocator.free(index_of);
     @memset(index_of, unvisited);
@@ -5279,7 +5282,7 @@ fn markCycleMembers(
     const Frame = struct { node: u32, next: u32 };
     var frames = std.ArrayList(Frame).empty;
     defer frames.deinit(allocator);
-    var next_index: u32 = 0;
+    var next_index: u32 = 1;
 
     for (0..count) |start| {
         if (index_of[start] != unvisited) continue;

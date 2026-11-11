@@ -88,8 +88,9 @@ pub fn digestContents(
     for (derivations) |*derivation| derivation.content = own[@backingInt(derivation.identity)];
 }
 
-/// No component assigned yet.
-const unassigned = std.math.maxInt(u32);
+/// No component or visit index assigned yet. Both are issued from one, so
+/// their tables start cleared to zero.
+const unassigned: u32 = 0;
 
 /// A depth-first canonical encoding of one contract's proof graph. Contracts
 /// and evidence nodes are numbered by first visit, so shared and recursive
@@ -167,8 +168,8 @@ const ContentDigester = struct {
         self.visit_index = try self.allocator.alloc(u32, count);
         @memset(self.visit_index, unassigned);
         self.low_link = try self.allocator.alloc(u32, count);
-        var next_index: u32 = 0;
-        var next_component: u32 = 0;
+        var next_index: u32 = 1;
+        var next_component: u32 = 1;
         for (0..count) |start| {
             if (self.visit_index[start] != unassigned) continue;
             try self.enterComponentFrame(@intCast(start), &next_index);

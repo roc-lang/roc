@@ -209,11 +209,24 @@ pub const LayoutRequest = struct {
 pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
 /// Request to make a lifted value available as static data.
 pub const StaticDataValue = Mono.StaticDataValue;
-/// A virtual source frame introduced by post-check inlining.
+/// A virtual source frame introduced by post-check inlining, or `none`. A
+/// frame's id is its row in `inline_scopes` plus one, so a zeroed column
+/// holds `none`.
 pub const InlineScopeId = enum(u32) {
+    none = 0,
     _,
 
-    pub const none: InlineScopeId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
+    /// The id of the frame at `inline_scopes` row `row_index`.
+    pub fn fromRow(row_index: u32) InlineScopeId {
+        std.debug.assert(row_index < std.math.maxInt(u32));
+        return @fromBackingInt(row_index + 1);
+    }
+
+    /// The `inline_scopes` row of a frame.
+    pub fn row(self: InlineScopeId) u32 {
+        std.debug.assert(self != .none);
+        return @backingInt(self) - 1;
+    }
 };
 
 /// One source-level procedure frame retained across post-check inlining.
@@ -1151,11 +1164,11 @@ pub const Program = struct {
     }
 
     pub fn inlineScope(self: *const Program, id: InlineScopeId) InlineScope {
-        return self.row("inline_scopes", @backingInt(id));
+        return self.row("inline_scopes", id.row());
     }
 
     pub fn addInlineScope(self: *Program, scope: InlineScope) std.mem.Allocator.Error!InlineScopeId {
-        const id: InlineScopeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.rowCount("inline_scopes")))));
+        const id: InlineScopeId = .fromRow(@intCast(self.rowCount("inline_scopes")));
         try self.inline_scopes.append(self.allocator, scope);
         return id;
     }

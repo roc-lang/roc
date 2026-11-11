@@ -262,7 +262,8 @@ fn closeOverCalls(
     closed: *EffectGroupColumn,
     groups: *std.ArrayList(Effects),
 ) Allocator.Error!void {
-    const unvisited = std.math.maxInt(u32);
+    // Visit indices are issued from one, so zero marks an unvisited node.
+    const unvisited: u32 = 0;
     const fn_count = callees.len;
     const index = try allocator.alloc(u32, fn_count);
     defer allocator.free(index);
@@ -277,7 +278,7 @@ fn closeOverCalls(
     const Frame = struct { node: u32, next: usize };
     var frames = std.ArrayList(Frame).empty;
     defer frames.deinit(allocator);
-    var next_index: u32 = 0;
+    var next_index: u32 = 1;
     for (0..fn_count) |start_index| {
         if (!scanned[start_index] or index[start_index] != unvisited) continue;
         const start: u32 = @intCast(start_index);

@@ -71,10 +71,6 @@ const TypeDeclDependency = struct {
     dependency: u32,
 };
 
-const no_type_decl_dense_index = std.math.maxInt(u32);
-
-const no_def_group = std.math.maxInt(u32);
-
 const effect_solver = @import("effect_solver.zig");
 const FunctionEffectState = effect_solver.State;
 
@@ -360,8 +356,9 @@ predeclaring_annotation: bool = false,
 /// Type declaration bodies are generated on demand so forward references
 /// instantiate fully generated declarations instead of predeclared shells.
 type_decl_generation_states: std.ArrayListUnmanaged(TypeDeclGenerationState) = .empty,
-/// Dense declaration index for each CIR node, or `no_type_decl_dense_index`.
-type_decl_dense_indices: std.ArrayListUnmanaged(u32) = .empty,
+/// Dense declaration index for each CIR node, absent for a node that
+/// registered none. Per CIR node, so it starts cleared to absent (zero).
+type_decl_dense_indices: std.ArrayListUnmanaged(collections.OptionalU32) = .empty,
 /// CIR statement for each dense declaration index.
 type_decl_statements: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty,
 /// Local annotation-generation failure, closed transitively during finalization.
@@ -582,7 +579,7 @@ canonical_key_writer: canonical_type_keys.TypeWriter,
 /// the checked module.
 check_order: ?DependencyGraph.CheckOrder = null,
 /// Which check-order group each top-level def belongs to.
-def_group: std.ArrayListUnmanaged(u32) = .empty,
+def_group: std.ArrayListUnmanaged(collections.OptionalU32) = .empty,
 /// Per-group progress; a `.checking` group has a frame on `group_stack`.
 group_states: std.ArrayListUnmanaged(GroupState) = .empty,
 /// Scratch for `EnsureGroupActivity`: the walk's worklist, and
@@ -2184,12 +2181,11 @@ fn patternIsTopLevelDef(self: *const Self, pattern: CIR.Pattern.Idx) bool {
 }
 
 fn defGroupIndex(self: *const Self, def_idx: CIR.Def.Idx) ?u32 {
-    const group_index = self.def_group.items[nodeSlot(def_idx)];
-    return if (group_index == no_def_group) null else group_index;
+    return self.def_group.items[nodeSlot(def_idx)].get();
 }
 
 fn setDefGroupIndex(self: *Self, def_idx: CIR.Def.Idx, group_index: u32) void {
-    self.def_group.items[nodeSlot(def_idx)] = group_index;
+    self.def_group.items[nodeSlot(def_idx)] = .some(group_index);
 }
 
 fn predeclaredSchemeVar(self: *const Self, def_idx: CIR.Def.Idx) ?Var {
@@ -2210,8 +2206,7 @@ fn setTypeDeclGenerationState(self: *Self, decl_idx: CIR.Statement.Idx, state: T
 
 fn registerTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.Error!u32 {
     const slot = nodeSlot(decl_idx);
-    const existing = self.type_decl_dense_indices.items[slot];
-    if (existing != no_type_decl_dense_index) return existing;
+    if (self.type_decl_dense_indices.items[slot].get()) |existing| return existing;
 
     switch (self.cir.store.getStatement(decl_idx)) {
         .s_alias_decl, .s_nominal_decl => {},
@@ -2243,13 +2238,12 @@ fn registerTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.
     const dense_idx: u32 = @intCast(self.type_decl_statements.items.len);
     self.type_decl_statements.appendAssumeCapacity(decl_idx);
     self.type_decl_invalid.appendAssumeCapacity(false);
-    self.type_decl_dense_indices.items[slot] = dense_idx;
+    self.type_decl_dense_indices.items[slot] = .some(dense_idx);
     return dense_idx;
 }
 
 fn markTypeDeclInvalid(self: *Self, decl_idx: CIR.Statement.Idx) void {
-    const dense_idx = self.type_decl_dense_indices.items[nodeSlot(decl_idx)];
-    std.debug.assert(dense_idx != no_type_decl_dense_index);
+    const dense_idx = self.type_decl_dense_indices.items[nodeSlot(decl_idx)].get().?;
     self.type_decl_invalid.items[dense_idx] = true;
 }
 
@@ -4743,7 +4737,7 @@ fn initAssumePrepared(
         .inspect_type_visits = collections.DenseMap(Var, u8).init(gpa),
         .ground_hash_seen = collections.DenseMap(Var, u32).init(gpa),
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
-        .type_decl_dense_indices = try initNodeSlots(u32, gpa, node_count, no_type_decl_dense_index),
+        .type_decl_dense_indices = try initNodeSlots(collections.OptionalU32, gpa, node_count, .none),
         .exhaustiveness_arena = base.SingleThreadArena.init(gpa),
         .table_scratch = collections.ScratchArena.init(gpa),
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
@@ -4757,7 +4751,7 @@ fn initAssumePrepared(
         .int_unbound_vars = collections.DenseMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .top_level_ptrns = try initNodeSlots(?DefProcessed, gpa, node_count, null),
-        .def_group = try initNodeSlots(u32, gpa, node_count, no_def_group),
+        .def_group = try initNodeSlots(collections.OptionalU32, gpa, node_count, .none),
         .predeclared_scheme_vars = try initNodeSlots(?Var, gpa, node_count, null),
         .type_schemes = rehydrated_type_schemes,
         .type_scheme_by_var = rehydrated_type_scheme_by_var,
@@ -10142,7 +10136,6 @@ fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
     const found_components = try collections.scc.compute(graph_allocator, flow_starts, flow_targets, flow_sources.starts, flow_sources.targets);
     const components = found_components.component_of;
     const component_count = found_components.count();
-    const unvisited = std.math.maxInt(u32);
 
     // A component is a recursion when a flow stays inside it. The uses to
     // reject are the ones whose flow grows there, or goes from one variable
@@ -10181,9 +10174,14 @@ fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
             }
         };
         std.mem.sort(u32, order, Order{ .components = components, .schemes = node_schemes.items }, Order.lessThan);
-        const first_records = try self.gpa.alloc(u32, component_count);
+        // Absent for a component with no joined pair; `joined_unresolved`
+        // until its first record is found. Small and read for every
+        // component, so it starts cleared to absent (zero).
+        const joined_unresolved: u32 = std.math.maxInt(u32) - 1;
+        std.debug.assert(records.len < joined_unresolved);
+        const first_records = try self.gpa.alloc(collections.OptionalU32, component_count);
         defer self.gpa.free(first_records);
-        @memset(first_records, unvisited);
+        @memset(first_records, .none);
         var any_joined = false;
         for (order[1..], order[0 .. order.len - 1]) |node, previous| {
             const component = components[node];
@@ -10191,17 +10189,18 @@ fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
             if (node_schemes.items[node] != node_schemes.items[previous]) continue;
             if (verdicts[component] == .rejected) continue;
             // Marked here, resolved to the component's first record below.
-            first_records[component] = unvisited - 1;
+            first_records[component] = .some(joined_unresolved);
             any_joined = true;
         }
         if (any_joined) {
             for (flows.items) |flow| {
                 const component = components[flow.from];
-                if (component != components[flow.to] or first_records[component] == unvisited) continue;
-                first_records[component] = @min(first_records[component], flow.record);
+                if (component != components[flow.to]) continue;
+                const first = first_records[component].get() orelse continue;
+                first_records[component] = .some(@min(first, flow.record));
             }
-            for (first_records) |record_index| {
-                if (record_index == unvisited) continue;
+            for (first_records) |maybe_record| {
+                const record_index = maybe_record.get() orelse continue;
                 // Two nodes share a component only through flows inside it.
                 std.debug.assert(record_index < records.len);
                 rejected[record_index] = true;
@@ -11075,7 +11074,8 @@ fn stronglyConnectedComponents(
     const position = self.table_scratch.mark();
     defer self.table_scratch.resetTo(position);
     const node_count = adjacency.len;
-    const unvisited = std.math.maxInt(u32);
+    // Visit indices are issued from one, so zero marks an unvisited node.
+    const unvisited: u32 = 0;
     const index_of = try scratch.alloc(u32, node_count);
     defer scratch.free(index_of);
     @memset(index_of, unvisited);
@@ -11091,7 +11091,7 @@ fn stronglyConnectedComponents(
     var walk_frames: std.ArrayListUnmanaged(WalkFrame) = .empty;
     defer walk_frames.deinit(scratch);
 
-    var next_index: u32 = 0;
+    var next_index: u32 = 1;
     var next_component: u32 = 0;
     for (0..node_count) |start| {
         if (index_of[start] != unvisited) continue;
@@ -42142,18 +42142,20 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         // Thread each component's members, in index order, from its leader,
         // so every component visits only its own members.
         const literal_count = self.literal_defaulting_open_roots.items.len;
-        const component_head = try self.gpa.alloc(usize, literal_count);
+        // A leader's head is read before its first member is threaded, so
+        // the heads start cleared to absent (zero); each member's link is
+        // written before it is read.
+        const component_head = try self.gpa.alloc(collections.OptionalU32, literal_count);
         defer self.gpa.free(component_head);
-        const component_next = try self.gpa.alloc(usize, literal_count);
-        defer self.gpa.free(component_next);
-        const no_member = std.math.maxInt(usize);
-        @memset(component_head, no_member);
+        @memset(component_head, .none);
+        var component_next = try collections.WriteFirstSlice(collections.OptionalU32).init(self.gpa, literal_count);
+        defer component_next.deinit(self.gpa);
         var member_cursor = literal_count;
         while (member_cursor > 0) {
             member_cursor -= 1;
             const leader = componentFind(self.literal_defaulting_component_parent.items, member_cursor);
-            component_next[member_cursor] = component_head[leader];
-            component_head[leader] = member_cursor;
+            component_next.set(member_cursor, component_head[leader]);
+            component_head[leader] = .some(@intCast(member_cursor));
         }
         for (0..literal_count) |leader| {
             if (componentFind(self.literal_defaulting_component_parent.items, leader) != leader) continue;
@@ -42167,8 +42169,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             // driving constraint (mirror-image programs commit identically).
             var component_fits = exact_numeral.FitSet.full;
             var member = component_head[leader];
-            while (member != no_member) : (member = component_next[member]) {
-                const member_idx = member;
+            while (member.get()) |member_idx| : (member = component_next.get(member_idx)) {
                 const member_root = self.literal_defaulting_open_roots.items[member_idx];
                 member_count += 1;
                 const member_range = self.types.resolveVar(member_root).desc.content.flex.constraints;
@@ -47082,7 +47083,8 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
 /// every component it reaches. Fills `component`, `order`, and `order_start`.
 fn tryRowFixpointComponents(self: *Self, node_count: u32) Allocator.Error!void {
     const scratch = &self.try_row_fixpoint_scratch;
-    const unvisited = std.math.maxInt(u32);
+    // Visit indices are issued from one, so zero marks an unvisited node.
+    const unvisited: u32 = 0;
     try scratch.index.appendNTimes(self.gpa, unvisited, node_count);
     // Every node is a root or reached from one, and is written on its visit
     // and at its component's completion, before either column is read.
@@ -47090,7 +47092,7 @@ fn tryRowFixpointComponents(self: *Self, node_count: u32) Allocator.Error!void {
     try scratch.on_stack.appendNTimes(self.gpa, false, node_count);
     _ = try scratch.component.addManyAsSlice(self.gpa, node_count);
     try scratch.order_start.append(self.gpa, 0);
-    var next_index: u32 = 0;
+    var next_index: u32 = 1;
     for (0..node_count) |root_usize| {
         const root: u32 = @intCast(root_usize);
         if (scratch.index.items[root] != unvisited) continue;

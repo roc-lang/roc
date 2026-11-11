@@ -1618,8 +1618,6 @@ const InspectElision = struct {
 /// reuses that construct's published range instead of revisiting its parts,
 /// so each node is walked only by its nearest enclosing plan owner.
 const ReassignmentPublisher = struct {
-    const no_position = std.math.maxInt(u32);
-
     allocator: Allocator,
     bodies: CheckedBodies,
     unit: UnitId,
@@ -1629,9 +1627,9 @@ const ReassignmentPublisher = struct {
     binders: std.ArrayList(BinderId) = .empty,
     scratch: std.ArrayList(BinderId) = .empty,
     work: std.ArrayList(Work) = .empty,
-    /// Per node of the unit, by position: for a binder being deduplicated,
-    /// its position in `scratch`.
-    scratch_positions: []u32 = &.{},
+    /// Per node of the unit, by position: whether a binder being
+    /// deduplicated is already in `scratch`.
+    scratch_seen: std.DynamicBitSetUnmanaged = .{},
 
     const PlanRef = union(enum) {
         /// A loop's mutations: its condition and body. The node is a `for`
@@ -1681,7 +1679,7 @@ const ReassignmentPublisher = struct {
     fn deinitScratch(self: *ReassignmentPublisher) void {
         self.scratch.deinit(self.allocator);
         self.work.deinit(self.allocator);
-        self.allocator.free(self.scratch_positions);
+        self.scratch_seen.deinit(self.allocator);
     }
 
     fn deinitResults(self: *ReassignmentPublisher) void {
@@ -1695,8 +1693,7 @@ const ReassignmentPublisher = struct {
         @memset(self.state_merges, .none);
         self.loop_mutations = try self.allocator.alloc(OptionalBinderSpan, self.nodes.len);
         @memset(self.loop_mutations, .none);
-        self.scratch_positions = try self.allocator.alloc(u32, self.nodes.len);
-        @memset(self.scratch_positions, no_position);
+        self.scratch_seen = try .initEmpty(self.allocator, self.nodes.len);
         const index = self.bodies.index();
         for (self.nodes) |raw| switch (index.nodeKind(raw)) {
             .expr => {
@@ -1864,14 +1861,14 @@ const ReassignmentPublisher = struct {
         const count = self.scratch.items.len;
         for (start..count) |i| {
             const binder = self.scratch.items[i];
-            const slot = &self.scratch_positions[self.position(@backingInt(binder))];
-            if (slot.* == no_position) {
-                slot.* = @intCast(end);
+            const slot = self.position(@backingInt(binder));
+            if (!self.scratch_seen.isSet(slot)) {
+                self.scratch_seen.set(slot);
                 self.scratch.items[end] = binder;
                 end += 1;
             }
         }
-        for (self.scratch.items[start..end]) |binder| self.scratch_positions[self.position(@backingInt(binder))] = no_position;
+        for (self.scratch.items[start..end]) |binder| self.scratch_seen.unset(self.position(@backingInt(binder)));
         const binders_start: u32 = @intCast(self.binders.items.len);
         try self.binders.appendSlice(self.allocator, self.scratch.items[start..end]);
         const range: BinderSpan = .{ .start = binders_start, .len = @intCast(end - start) };
