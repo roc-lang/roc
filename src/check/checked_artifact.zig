@@ -17226,12 +17226,18 @@ const CheckedTemplateRefCollector = struct {
                 for (run.args) |arg| try self.pushChild(.{ .expr = arg });
                 self.endChildren(children);
             },
+            // The operands a retired expression still evaluates are lowered
+            // before its crash, so their uses are collected like any other.
+            .runtime_error => |runtime_error| {
+                const children = self.beginChildren();
+                for (runtime_error.evaluated) |operand| try self.pushChild(.{ .expr = operand });
+                self.endChildren(children);
+            },
             .str_segment,
             .bytes_literal,
             .empty_list,
             .empty_record,
             .zero_argument_tag,
-            .runtime_error,
             .crash,
             .ellipsis,
             .anno_only,
