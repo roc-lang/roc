@@ -73,6 +73,25 @@ fn moduleTestWithLiveAllocations(
 
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    moduleTestWithLiveAllocations(
+        "issue 12887: shared boxed streams step and release their captured state",
+        \\main : () => {}
+        \\main = || {
+        \\    text = Str.concat("abcdefghijklmnopqrstuvwxyz", "0123456789")
+        \\    original = Box.box(Stream.from_iter(text.iter_utf8()))
+        \\    nested = Box.box(original)
+        \\    repacked = Box.box(Box.unbox(original))
+        \\    first = Stream.collect!(Box.unbox(repacked))
+        \\    second = Stream.collect!(Box.unbox(Box.unbox(nested)))
+        \\    expect first == second
+        \\    expect first.len() == 36
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
     exprTestWithLiveAllocations(
         "rc balance: Set storage mutations and early fold release shared heap items",
         \\{

@@ -1922,6 +1922,8 @@ generate_host_abi_types =
 	\\pub const RocErasedCallablePayload = extern struct {
 	\\    callable_fn_ptr: RocErasedCallableFn,
 	\\    on_drop: ?RocErasedCallableOnDrop,
+	\\    on_copy: ?*const fn (?[*]u8, isize) callconv(.c) void = null,
+	\\    capture_size: usize = 0,
 	\\};
 	\\
 	\\/// Runtime representation of `Box(function)`.
@@ -1959,7 +1961,7 @@ generate_host_abi_types =
 	\\    const rc: *isize = @ptrFromInt(@intFromPtr(data) - @sizeOf(isize));
 	\\    rc.* = 1;
 	\\    const payload: *RocErasedCallablePayload = @ptrCast(@alignCast(data));
-	\\    payload.* = .{ .callable_fn_ptr = callable_fn_ptr, .on_drop = on_drop };
+	\\    payload.* = .{ .callable_fn_ptr = callable_fn_ptr, .on_drop = on_drop, .capture_size = capture_size };
 	\\    return data;
 	\\}
 	\\

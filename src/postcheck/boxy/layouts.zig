@@ -403,7 +403,7 @@ pub const Layouts = struct {
             .function => try self.layouts.insertErasedCallable(),
             // `Box(function)` is the function's erased callable, which is
             // already an allocation of its own (design.md "Host ABI").
-            .box => |payload| if (self.store.get(payload) == .function) try self.layouts.insertErasedCallable() else null,
+            .box => |payload| if (self.store.isErasedBoxPayload(payload)) try self.layouts.insertErasedCallable() else null,
             .variable => types.invariant("a type variable reached committed layout selection"),
             .record, .tuple, .tag_union, .list, .nominal => null,
         };

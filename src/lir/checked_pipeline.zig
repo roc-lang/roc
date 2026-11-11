@@ -1410,6 +1410,7 @@ pub fn prepareCheckedModulesMonotype(
     target: TargetConfig,
 ) LowerResourceError!PreparedMonotype {
     if (target.specialization_strategy != .lss) checkedPipelineInvariant("Monotype preparation requires LSS");
+    try checkedModules(modules).demandBodyIndexes();
     try verifyCheckedBoundary(modules, target);
     try requireHostedProceduresBound(modules, target);
 
@@ -1754,6 +1755,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .parallel_metrics = parallel_metrics,
         .completed_scalar_values = target.completed_scalar_values,
         .completed_erased_members = consumer.completed_erased_members,
+        .erased_capture_prefix = target.erased_capture_prefix,
     });
     if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
@@ -2006,7 +2008,7 @@ pub const PreparedBoxy = struct {
             runtime_schemas: postcheck.SolvedLirLower.RuntimeSchemaStore,
         } = .{
             .lir_result = output.lir_result,
-            .runtime_schemas = postcheck.SolvedLirLower.RuntimeSchemaStore.init(allocator),
+            .runtime_schemas = output.runtime_schemas,
         };
         defer lowered.runtime_schemas.deinit();
         var frozen: ?LirProgram.FrozenStaticData = .{ .allocator = allocator, .exports = output.static_data };

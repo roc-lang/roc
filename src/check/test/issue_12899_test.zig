@@ -5,7 +5,7 @@ const TestEnv = @import("TestEnv.zig");
 const can = @import("can");
 const Captures = @import("../nominal_captures.zig").Table;
 
-fn expectParameters(env: *const TestEnv, name: []const u8, source: u32, captures: u31) !void {
+fn expectParameters(env: *const TestEnv, name: []const u8, source: u32, captures: u31) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     for (env.module_env.types.nominal_decls.items.items) |decl| {
         if (!std.mem.eql(u8, env.module_env.getIdent(decl.ident.ident_idx), name)) continue;
         try std.testing.expectEqual(captures, decl.flags.capture_count);
@@ -128,7 +128,7 @@ test "issue 12899: an enclosing binder is not replaced by a same-named phantom p
     try env.assertDefType("render", "a -> Str");
 }
 
-fn exerciseCaptureAllocations(allocator: std.mem.Allocator, module: *const can.ModuleEnv) !void {
+fn exerciseCaptureAllocations(allocator: std.mem.Allocator, module: *const can.ModuleEnv) error{ OutOfMemory, TestUnexpectedResult, TestExpectedEqual }!void {
     var table = Captures{};
     defer table.deinit(allocator);
     try table.ensure(allocator, module);

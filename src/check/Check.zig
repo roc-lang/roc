@@ -12875,6 +12875,9 @@ fn mkParseSpecVar(
     self: *Self,
     decl: BuiltinParseSpecDecl,
     shape_var: Var,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
@@ -12884,7 +12887,7 @@ fn mkParseSpecVar(
             base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
         },
     };
-    return try self.freshFromContent(try self.mkBuiltinNominalContent(ident_idx, &.{shape_var}, self.sourceDeclForBuiltinParseSpec(decl)), env, region);
+    return try self.freshFromContent(try self.mkBuiltinNominalContent(ident_idx, &.{ shape_var, encoding_var, state_var, err_var }, self.sourceDeclForBuiltinParseSpec(decl)), env, region);
 }
 
 fn mkFieldsVar(
@@ -18497,7 +18500,7 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     for (self.cir.provides_entries.items.items) |provides_entry| {
         const symbol_text = self.cir.getString(provides_entry.ffi_symbol);
         try self.checkHostSymbol(symbol_text, &symbols);
-        try self.checkProvidesEntryHostBoundaryRows(provides_entry);
+        try self.checkProvidesEntryHostBoundary(provides_entry);
     }
 
     for (section) |entry| {
@@ -18609,7 +18612,7 @@ fn hostedEntryDisplayName(
         allocator.dupe(u8, func_name);
 }
 
-fn checkProvidesEntryHostBoundaryRows(
+fn checkProvidesEntryHostBoundary(
     self: *Self,
     provides_entry: ModuleEnv.ProvidesEntry,
 ) std.mem.Allocator.Error!void {
@@ -18621,6 +18624,44 @@ fn checkProvidesEntryHostBoundaryRows(
 }
 
 fn checkHostBoundaryType(self: *Self, var_: Var, region: Region) std.mem.Allocator.Error!void {
+    const boundary = @import("host_boundary.zig");
+    const Context = struct {
+        check: *Self,
+
+        pub fn builtin(ctx: @This(), nominal: types_mod.NominalType) boundary.Builtin {
+            if (!nominal.originIsBuiltin()) return .other;
+            if (ctx.check.builtin_ctx.builtin_indices) |indices| {
+                const source_decl = nominal.sourceDeclOptional() orelse return .other;
+                if (source_decl == @backingInt(indices.iter_type)) return .iter;
+                if (source_decl == @backingInt(indices.stream_type)) return .stream;
+            }
+            return switch (ctx.check.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional()) orelse return .other) {
+                .box => .box,
+                .list => .list,
+                .dict, .set, .try_type, .fields, .field, .numeral, .num => .other,
+            };
+        }
+
+        pub fn fieldName(ctx: @This(), ident: Ident.Idx) []const u8 {
+            return ctx.check.cir.getIdent(ident);
+        }
+
+        pub fn hasBacking(ctx: @This(), nominal: types_mod.NominalType) bool {
+            return ctx.check.nominalDeclBackingTemplate(nominal) != null;
+        }
+    };
+    if (try boundary.findViolation(self.gpa, self.types, var_, true, Context{ .check = self })) |violation| {
+        defer self.gpa.free(violation.path);
+        _ = try self.problems.appendProblem(.{ .hosted_unboxed_function = .{
+            .region = region,
+            .path = try self.problems.putExtraString(violation.path),
+            .kind = switch (violation.kind) {
+                .function => .function,
+                .iter => .iter,
+                .stream => .stream,
+            },
+        } });
+    }
     if (try self.varViolatesHostBoundaryRule(.closed_rows, var_)) {
         _ = try self.problems.appendProblem(.{ .host_boundary_open_row = .{
             .region = region,
@@ -22636,7 +22677,7 @@ fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
 
 /// Report every generated-codec error tag that lands in the implicitly opened
 /// row of the definition whose body introduced the codec (design.md "Derived
-/// Parser Required-Field Error Composition"). A derived parser or encoder
+/// Parser Format-Owned Errors"). A derived parser or encoder
 /// produces its demanded tags on behalf of that definition, and the annotation
 /// bounds what the definition may produce, exactly as for a tag its body
 /// constructs directly. Callers may still widen the row; a tag a caller added
@@ -23497,15 +23538,6 @@ fn tagRowHasTag(self: *const Self, row: Var, tag_name: Ident.Idx) bool {
             .flex, .rigid, .field_presence, .err => return false,
         }
     }
-}
-
-/// Record the error tags the generated codec being validated requires in
-/// `row` (see `codec_row_demands`).
-fn recordCodecRowDemand(self: *Self, row: Var, tags: []const Ident.Idx) Allocator.Error!void {
-    if (self.active_codec_owner_region == null) return;
-    const names_start = self.codec_row_demand_tags.items.len;
-    try self.codec_row_demand_tags.appendSlice(self.gpa, tags);
-    try self.recordCodecRowDemandRange(row, names_start);
 }
 
 /// Record a demand whose tag names were just appended to
@@ -29666,12 +29698,6 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 if (!hostedAnnotationIsEffectful(self.cir, annotation_idx)) {
                     _ = try self.problems.appendProblem(.{ .hosted_function_not_effectful = .{
                         .region = self.cir.store.getAnnotationRegion(annotation_idx),
-                    } });
-                }
-                if (try self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
-                    const region = self.cir.store.getAnnotationRegion(annotation_idx);
-                    _ = try self.problems.appendProblem(.{ .hosted_unboxed_function = .{
-                        .region = region,
                     } });
                 }
                 if (try self.varHasUnboxedTypeVariableInHostedSignature(annotation_var)) {
@@ -51302,11 +51328,6 @@ fn nominalDictKeyValueVars(self: *Self, nominal_type: types_mod.NominalType) ?Di
     return .{ .key = args[0], .value = args[1] };
 }
 
-fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set);
-}
-
 /// Per nominal declaration, which of its formals its backing uses outside
 /// every `Box`: an argument in such a position is laid out where the host sees
 /// it, while an argument used only inside a `Box` is behind a pointer.
@@ -51663,65 +51684,6 @@ const HostBoundaryScan = struct {
 
     pub fn exit(_: *HostBoundaryScan, _: Leaf, _: ?bool) Allocator.Error!void {}
 };
-
-fn varContainsUnboxedFunctionInHostedSignatureInternal(
-    self: *Self,
-    var_: Var,
-    allow_top_fn: bool,
-    visited: *collections.DenseMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    // The signature's own top-level function (through aliases) is allowed;
-    // every function below it must be boxed. Vars are searched in the order a
-    // left-to-right walk reaches them: each popped var pushes its children
-    // last-first.
-    const Item = struct { var_: Var, top_fn_allowed: bool };
-    var pending: std.ArrayList(Item) = .empty;
-    defer pending.deinit(self.gpa);
-    try pending.append(self.gpa, .{ .var_ = var_, .top_fn_allowed = allow_top_fn });
-    while (pending.pop()) |item| {
-        const resolved = self.types.resolveVar(item.var_);
-        // Cycle guard: recursive nominal/structural types would otherwise walk
-        // forever through their backing vars. A var already visited
-        // contributes no new unboxed function we haven't already considered.
-        if (visited.contains(resolved.var_)) continue;
-        try visited.put(resolved.var_, {});
-        const start = pending.items.len;
-        switch (resolved.desc.content) {
-            .structure => |flat_type| switch (flat_type) {
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    if (!item.top_fn_allowed) return true;
-                    for (self.types.sliceVars(func.args)) |arg_var| try pending.append(self.gpa, .{ .var_ = arg_var, .top_fn_allowed = false });
-                    try pending.append(self.gpa, .{ .var_ = func.ret, .top_fn_allowed = false });
-                },
-                .empty_record, .empty_tag_union => {},
-                .record => |record| {
-                    const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-                    for (fields_slice.items(.presence)) |presence| try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .top_fn_allowed = false });
-                },
-                .tuple => |tuple| {
-                    for (self.types.sliceVars(tuple.elems)) |elem_var| try pending.append(self.gpa, .{ .var_ = elem_var, .top_fn_allowed = false });
-                },
-                .tag_union => |tag_union| {
-                    const tags_slice = self.types.getTagsSlice(tag_union.tags);
-                    for (tags_slice.items(.args)) |tag_args| {
-                        for (self.types.sliceVars(tag_args)) |arg_var| try pending.append(self.gpa, .{ .var_ = arg_var, .top_fn_allowed = false });
-                    }
-                },
-                .nominal_type => |nominal| {
-                    if (self.nominalIsBuiltinDecl(nominal, .box)) continue;
-                    for (self.types.sliceNominalArgs(nominal)) |arg_var| try pending.append(self.gpa, .{ .var_ = arg_var, .top_fn_allowed = false });
-                    // Formals in the template are rigid leaves (never functions)
-                    // standing for the args checked above.
-                    if (self.nominalDeclBackingTemplate(nominal)) |template| try pending.append(self.gpa, .{ .var_ = template, .top_fn_allowed = false });
-                },
-            },
-            .alias => |alias| try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .top_fn_allowed = item.top_fn_allowed }),
-            .flex, .rigid, .err, .field_presence => {},
-        }
-        std.mem.reverse(Item, pending.items[start..]);
-    }
-    return false;
-}
 
 fn varSupportsStructuralDeriveInternal(
     self: *Self,
@@ -56670,7 +56632,7 @@ fn finishParseSettle(self: *Self, inputs: DerivedCodecInputs, post: ParseSettleP
             if (method.own_error_row) |row| if (derivedCodecFailed(try self.constrainDerivedParserFormatError(row.parent, row.child, inputs.constraint, inputs.failure_expr, inputs.env, inputs.region))) |validation| return validation;
             return try self.finishGeneratedCodecMethodValidation(method.result, method.method_name, method.encoding_var, method.expected_fn, method.method_var, method.subject_var);
         },
-        .nominal_error_row => |child_err_var| return try self.constrainDerivedParserErrorRowIncludes(inputs.err_var, child_err_var, inputs.constraint, inputs.failure_expr, inputs.env, inputs.region),
+        .nominal_error_row => |child_err_var| return try self.constrainDerivedParserFormatError(inputs.err_var, child_err_var, inputs.constraint, inputs.failure_expr, inputs.env, inputs.region),
     }
 }
 
@@ -56682,16 +56644,8 @@ fn beginParseMethodCheck(self: *Self, inputs: DerivedCodecInputs, check: ParseMe
         .key => |key_var| try self.beginParseKeyMethod(inputs, key_var),
         .str_key => try self.beginParseKeyMethod(inputs, try self.freshStr(inputs.env, inputs.region)),
         .skip_record_field => try self.beginSkipRecordFieldMethod(inputs),
-        .invalid_value => .{ .done = try self.validateInvalidValueMethod(
-            inputs.encoding_var,
-            inputs.state_var,
-            inputs.err_var,
-            inputs.constraint,
-            inputs.env,
-            inputs.region,
-            inputs.failure_expr,
-            inputs.walk,
-        ) },
+        .invalid_value => try self.beginParseErrorMethod(inputs, .invalid_value),
+        .missing_field => try self.beginParseErrorMethod(inputs, .missing_field),
     };
 }
 
@@ -57033,10 +56987,9 @@ fn beginParseFormatMethod(
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr) };
     };
-    // ParseTagUnionSpec executes compiler-generated payload parsers at this
-    // contract's row. Its format callable therefore depends on the enclosing
-    // error row, unlike first-order methods with no generated payload parser.
-    const child_err_var = if (spec_decl == .tag_union) err_var else try self.fresh(env, region);
+    // Settle the format's declared error before relating it to the contract,
+    // including methods which call generated tag-payload parsers.
+    const child_err_var = try self.fresh(env, region);
     const expected_ret = switch (spec_decl) {
         .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, child_err_var, env, region),
         .null, .tuple_start, .tuple_next, .tuple_end => try self.freshFromContent(try self.mkTryContent(state_var, child_err_var), env, region),
@@ -57064,7 +57017,10 @@ fn beginParseFormatMethod(
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, fields_var, state_var }, expected_ret), env, region);
         },
         .tag_union => blk: {
-            const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
+            // The spec owns the same complete callback contract as its format.
+            // Relating only the method's result would allow incompatible options
+            // to be hidden by a translation after ParseTagUnionSpec.parse.
+            const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, encoding_var, state_var, child_err_var, env, region);
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, spec_var, state_var }, expected_ret), env, region);
         },
     };
@@ -57080,7 +57036,7 @@ fn beginParseFormatMethod(
         .dispatchers_start = dispatchers_start,
         .deferred_start = deferred_start,
         .post = .{ .method = .{
-            .own_error_row = if (spec_decl == .tag_union) null else .{ .parent = err_var, .child = child_err_var },
+            .own_error_row = .{ .parent = err_var, .child = child_err_var },
             .result = result,
             .method_name = method_name,
             .encoding_var = encoding_var,
@@ -57318,116 +57274,29 @@ fn validateEncodeKeyMethod(
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, key_var);
 }
 
-fn constrainDerivedParserRequiredFieldError(
-    self: *Self,
-    record_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    failure_expr: ?CIR.Expr.Idx,
-    env: *Env,
-    region: Region,
-) Allocator.Error!DerivedParseValidation {
-    const str_var = try self.freshStr(env, region);
-    const tag_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("MissingRequiredField"));
-    const tag = try self.types.mkTag(tag_name, &.{str_var});
-    const ext_var = try self.fresh(env, region);
-    const required_err_var = try self.freshFromContent(try self.types.mkTagUnion(&.{tag}, ext_var), env, region);
-    // A mismatch is reported as the dedicated derived-parser error-row
-    // problem at the codec relation's owner region; the generic row-vs-row
-    // mismatch would point at the unified variables' regions inside the
-    // generic helper instead of at the call that fixes the record type.
-    const result = try self.runUnify(err_var, required_err_var, env, .{ .on_mismatch = .write_no_report });
-    if (!result.isEstablished()) {
-        var field_idents = std.ArrayListUnmanaged(Ident.Idx).empty;
-        defer field_idents.deinit(self.gpa);
-        try self.requiredParseFieldIdents(record_var, &field_idents);
-        try self.reportDerivedParserErrorRow(.required_field, record_var, null, err_var, field_idents.items, constraint, failure_expr, region);
-        return .reported_error;
-    }
-    try self.recordCodecRowDemand(err_var, &.{tag_name});
-    return .ok;
-}
-
 /// Report the dedicated derived-parser error-row problem, located at the
 /// expression that introduced the codec relation (the call that fixes the
 /// record type). Built only after the unification has already failed, so the
 /// no-error path pays nothing.
 fn reportDerivedParserErrorRow(
     self: *Self,
-    reason: @FieldType(problem.types.DerivedParserErrorRow, "reason"),
-    record_var: ?Var,
-    tags_var: ?Var,
+    tags_var: Var,
     row_var: Var,
-    required_field_idents: []const Ident.Idx,
     constraint: StaticDispatchConstraint,
     failure_expr: ?CIR.Expr.Idx,
     region: Region,
 ) Allocator.Error!void {
     const owner_region = self.derivedCodecDiagnosticRegion(constraint, failure_expr, region);
-    const record_snapshot = if (record_var) |v|
-        try self.snapshotVarForError(v)
-    else
-        null;
-    const tags_snapshot = if (tags_var) |v|
-        try self.snapshotVarForError(v)
-    else
-        null;
+    const tags_snapshot = try self.snapshotVarForError(tags_var);
     const row_snapshot = try self.snapshotVarForError(row_var);
-    var required_fields: ?problem.ExtraStringIdx = null;
-    if (required_field_idents.len > 0) {
-        var joined = std.ArrayListUnmanaged(u8).empty;
-        defer joined.deinit(self.gpa);
-        for (required_field_idents, 0..) |field_ident, i| {
-            if (i > 0) try joined.appendSlice(self.gpa, ", ");
-            try joined.appendSlice(self.gpa, self.cir.getIdentText(field_ident));
-        }
-        required_fields = try self.problems.putExtraString(joined.items);
-    }
     _ = try self.problems.appendProblem(.{ .derived_parser_error_row = .{
         .region = owner_region,
-        .reason = reason,
-        .record_snapshot = record_snapshot,
         .tags_snapshot = tags_snapshot,
         .row_snapshot = row_snapshot,
-        .required_fields = required_fields,
-        .required_field_count = @intCast(required_field_idents.len),
     } });
 }
 
-/// Collect the names of the record's fields whose presence makes the derived
-/// parser able to fail with `MissingRequiredField` (the same predicate
-/// `recordParseNeedsRequiredFieldError` applies).
-fn requiredParseFieldIdents(
-    self: *Self,
-    record_var: Var,
-    out: *std.ArrayListUnmanaged(Ident.Idx),
-) Allocator.Error!void {
-    var current = record_var;
-    var guard = types_mod.debug.IterationGuard.init("requiredParseFieldIdents");
-    while (true) {
-        guard.tick();
-        switch (self.types.resolveVar(current).desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |structure| switch (structure) {
-                .record => |record| {
-                    const fields = self.types.getRecordFieldsSlice(record.fields);
-                    for (fields.items(.name), fields.items(.presence)) |field_name, presence| {
-                        if (try self.fieldPresenceDemandsRequiredFieldError(presence)) {
-                            try out.append(self.gpa, field_name);
-                        }
-                    }
-                    current = record.ext;
-                },
-                .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return,
-            },
-            .flex, .rigid, .field_presence, .err => return,
-        }
-    }
-}
-
-/// Whether one field's presence makes the derived parser able to fail with
-/// `MissingRequiredField`: a field whose KIND can self-fill never does, and
-/// a field whose value type is an optional-parse field does not either.
+/// Only fields that cannot self-fill demand the format's missing_field method.
 fn fieldPresenceDemandsRequiredFieldError(
     self: *Self,
     presence: types_mod.RecordField.Presence,
@@ -57444,9 +57313,8 @@ fn fieldPresenceDemandsRequiredFieldError(
     return !try self.varIsOptionalParseField(presence.typeVar());
 }
 
-/// Format errors need not be tag rows (for example a format may return Str).
-/// Non-row errors retain ordinary equality. Row composition is the declared
-/// relation only for a tag row or an unconstrained absent-error variable.
+/// Every selected parser uses the format's error type. Settle a declared row
+/// before equality so an implicitly open output cannot acquire child errors.
 fn constrainDerivedParserFormatError(
     self: *Self,
     parent: Var,
@@ -57459,11 +57327,11 @@ fn constrainDerivedParserFormatError(
     switch (self.types.resolveThroughAliases(child).desc.content) {
         .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |structure| switch (structure) {
-            .tag_union, .empty_tag_union => return try self.constrainDerivedParserErrorRowIncludes(parent, child, constraint, failure_expr, env, region),
+            .tag_union, .empty_tag_union => return try self.constrainDerivedParserErrorEquality(parent, child, constraint, failure_expr, env, region),
             .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
         },
         .flex => |flex| if (flex.constraints.len() == 0) {
-            return try self.constrainDerivedParserErrorRowIncludes(parent, child, constraint, failure_expr, env, region);
+            return try self.constrainDerivedParserErrorEquality(parent, child, constraint, failure_expr, env, region);
         },
         .rigid, .field_presence => {},
         .err => return .ok,
@@ -57472,10 +57340,8 @@ fn constrainDerivedParserFormatError(
     return if (result.isEstablished()) .ok else .reported_error;
 }
 
-/// Compose one declared parser's complete error row in one unification. Tag
-/// payload ranges already belong to the type store; copying their Var slices
-/// would duplicate storage without changing the shared-payload relation.
-fn constrainDerivedParserErrorRowIncludes(
+/// Commit one declared parser's error row before enforcing contract equality.
+fn constrainDerivedParserErrorEquality(
     self: *Self,
     parent_err_var: Var,
     child_err_var: Var,
@@ -57524,28 +57390,9 @@ fn constrainDerivedParserErrorRowIncludes(
         }
     }
     const tags = self.scratch_tags.sliceFromStart(mark);
-    if (tags.len == 0) return .ok;
-    // The dedicated diagnostic is about tags the row does not list at all. A
-    // payload conflict on a tag the row already lists is an ordinary mismatch
-    // between the two rows (issue 11246), so it keeps the generic report.
-    var all_child_tags_listed = true;
-    for (tags) |tag| {
-        if (!self.tagRowHasTag(parent_err_var, tag.name)) all_child_tags_listed = false;
-    }
-    const parent_ext = try self.fresh(env, region);
-    const required_parent = try self.freshFromContent(try self.types.mkTagUnion(tags, parent_ext), env, region);
-    // A mismatch on a tag the row lacks is reported as the dedicated
-    // derived-parser error-row problem at the codec relation's owner region,
-    // like the required-field demand; the generic row-vs-row mismatch would
-    // point inside the helper.
-    const result = if (all_child_tags_listed)
-        try self.unify(parent_err_var, required_parent, env)
-    else
-        try self.runUnify(parent_err_var, required_parent, env, .{ .on_mismatch = .write_no_report });
+    const result = try self.runUnify(parent_err_var, child_err_var, env, .{ .on_mismatch = .write_no_report });
     if (!result.isEstablished()) {
-        if (!all_child_tags_listed) {
-            try self.reportDerivedParserErrorRow(.nested_row, null, required_parent, parent_err_var, &.{}, constraint, failure_expr, region);
-        }
+        try self.reportDerivedParserErrorRow(child_err_var, parent_err_var, constraint, failure_expr, region);
         return .reported_error;
     }
     if (self.active_codec_owner_region != null) {
@@ -57556,25 +57403,28 @@ fn constrainDerivedParserErrorRowIncludes(
     return .ok;
 }
 
-fn validateInvalidValueMethod(
+/// Error constructors obey the same settled whole-error equality as readers.
+fn beginParseErrorMethod(
     self: *Self,
-    encoding_var: Var,
-    state_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    failure_expr: ?CIR.Expr.Idx,
-    walk: ?*const DerivedCodecWalk,
-) Allocator.Error!DerivedParseValidation {
-    const method_name = try self.protocolMethodName("invalid_value");
-    if (walk) |active_walk| {
-        if (self.hasReusableGeneratedCodecCall(method_name, active_walk)) return .ok;
-    }
+    inputs: DerivedCodecInputs,
+    comptime kind: enum { missing_field, invalid_value },
+) Allocator.Error!ParseMethodBegin {
+    const encoding_var = inputs.encoding_var;
+    const env = inputs.env;
+    const region = inputs.region;
+    const method_name = try self.protocolMethodName(@tagName(kind));
+    if (self.hasReusableGeneratedCodecCall(method_name, inputs.walk)) return .{ .done = .ok };
+    const dispatchers_start = self.instantiation_dispatchers.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
-        return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
+        return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, inputs.constraint, env, inputs.failure_expr) };
     };
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, err_var), env, region);
+    const argument_var = switch (kind) {
+        .missing_field => try self.freshStr(env, region),
+        .invalid_value => inputs.state_var,
+    };
+    const child_err_var = try self.fresh(env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, argument_var }, child_err_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,
@@ -57582,7 +57432,20 @@ fn validateInvalidValueMethod(
             .method_name = method_name,
         },
     });
-    return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, null);
+    if (!result.isEstablished()) return .{ .done = .reported_error };
+    return .{ .settle = .{
+        .dispatchers_start = dispatchers_start,
+        .deferred_start = deferred_start,
+        .post = .{ .method = .{
+            .own_error_row = .{ .parent = inputs.err_var, .child = child_err_var },
+            .result = result,
+            .method_name = method_name,
+            .encoding_var = encoding_var,
+            .expected_fn = expected_fn,
+            .method_var = method.var_,
+            .subject_var = null,
+        } },
+    } };
 }
 
 fn beginSkipRecordFieldMethod(self: *Self, inputs: DerivedCodecInputs) Allocator.Error!ParseMethodBegin {
@@ -58076,6 +57939,7 @@ const ParseMethodCheck = union(enum) {
     str_key,
     skip_record_field,
     invalid_value,
+    missing_field,
 };
 
 const DictParseMethod = enum {
@@ -58394,6 +58258,9 @@ fn stepDerivedParse(
                 .fields => {
                     frame.stage = .components;
                     if (try self.validateDerivedParseRecordFields(inputs, record_var, &frame.presences)) |failed| return .{ .done = failed };
+                    if (try self.recordParseNeedsRequiredFieldError(frame.presences.items)) {
+                        return try self.startParseMethodChecks(frame, &.{.missing_field});
+                    }
                 },
                 .components => {},
                 .checked_payload,
@@ -58559,7 +58426,6 @@ fn validateDerivedParseRecordFields(
     field_presences: *std.ArrayListUnmanaged(types_mod.RecordField.Presence),
 ) Allocator.Error!?DerivedParseValidation {
     const encoding_var = inputs.encoding_var;
-    const err_var = inputs.err_var;
     const constraint = inputs.constraint;
     const env = inputs.env;
     const region = inputs.region;
@@ -58576,9 +58442,6 @@ fn validateDerivedParseRecordFields(
     for (field_presences.items) |presence| {
         const field_var = presence.typeVar();
         if (derivedCodecFailed(try self.pinWildcardOptionalParseField(field_var, env, region))) |result| return result;
-    }
-    if (try self.recordParseNeedsRequiredFieldError(field_presences.items)) {
-        if (derivedCodecFailed(try self.constrainDerivedParserRequiredFieldError(record_var, err_var, constraint, failure_expr, env, region))) |result| return result;
     }
     return null;
 }
@@ -58758,9 +58621,8 @@ fn stepDerivedParseNominal(
     // same here keeps a generated derivation's frozen callable types a function
     // of the contract key it is looked up by (kind, shape, encoding, state,
     // error row), so two contexts that agree on that key cannot freeze
-    // disagreeing contracts. A CUSTOM nominal parser instead keeps its own
-    // minimal error row, which `constrainDerivedParserErrorRowIncludes`
-    // composes into the parent below.
+    // disagreeing contracts. A CUSTOM nominal parser instead settles its own
+    // declared error type before enforcing equality with the format below.
     const generated_parser = isGeneratedStructuralCodecMethodBinding(method_lookup, .parser);
     const child_err_var = if (generated_parser) err_var else try self.fresh(env, region);
     const expected_ret = try self.freshParseResultTryVar(nominal_var, state_var, child_err_var, env, region);

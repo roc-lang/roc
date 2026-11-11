@@ -198,6 +198,7 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
 
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     const bodies = artifact.bodies();
+    try bodies.demandIndex();
     const store = &artifact.moduleEnvConst().store;
     var rejected: usize = 0;
     for (artifact.static_dispatch_plans.plans) |plan| {

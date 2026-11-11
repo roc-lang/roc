@@ -349,8 +349,8 @@ pub const Constants = struct {
     /// 164: sorted array builders serialize zeroed entry padding and an
     ///      integer offset that the cache validator checks.
     /// 165: compile-time reads persist placement and semantic root identity.
-    /// 175: nominal declarations persist their hidden lexical capture count.
-    pub const CACHE_VERSION = 175;
+    /// 176: nominal declarations persist their hidden lexical capture count.
+    pub const CACHE_VERSION = 176;
 };
 
 /// Configuration for the Roc cache system.

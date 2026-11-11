@@ -6,7 +6,7 @@ Inner : { favoritesCount : U64 }
 
 Model : { wrapped : Inner, tag : [A(U64), B(Str)] }
 
-Wide : [InvalidJson(Str), MissingRequiredField(Str), Rejected(Str)]
+Wide : [InvalidJson(Str), Rejected(Str)]
 
 parse : Str -> Try(Model, Wide)
 parse = |json| {
@@ -22,8 +22,7 @@ show = |result| {
     match result {
         Ok({ wrapped, tag: A(number) }) => "ok ${wrapped.favoritesCount.to_str()} A ${number.to_str()}"
         Ok({ wrapped, tag: B(text) }) => "ok ${wrapped.favoritesCount.to_str()} B ${text}"
-        Err(InvalidJson(_)) => "invalid"
-        Err(MissingRequiredField(field)) => "missing ${field}"
+        Err(InvalidJson(message)) => message
         Err(Rejected(reason)) => reason
     }
 }

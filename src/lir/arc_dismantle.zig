@@ -863,16 +863,15 @@ const Analysis = struct {
         const view_base: u32 = if (self.isView(source)) self.view_base[@backingInt(source)] else 0;
         const fields = ProductFields.of(self.store, self.layouts, source).?;
         const first = fields.slotBase(field_idx);
-        // An erased product supplies its own ownership-slot coordinates.
-        // Scalar and prefix fields can occupy no slots even though their
-        // standalone layouts occupy one in a static product.
-        const count = if (fields.shape) |shape|
-            GuardedList.at(self.store.getU32Span(shape.slots), field_idx + 1) - first
-        else
-            self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx);
         return .{
             .first = view_base + first,
-            .count = count,
+            // Explicit products can give scalar fields no ownership slots.
+            // Their source-authored range, not the target's standalone
+            // layout count, determines which stored units the read observes.
+            .count = if (fields.shape != null)
+                fields.slotBase(field_idx + 1) - first
+            else
+                self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
         };
     }
 

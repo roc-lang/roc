@@ -172,6 +172,7 @@ pub const ExportInterfaces = struct {
         while (entries.next()) |entry| {
             var owned = entry.value_ptr.*;
             owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, owned.rc_ret_conditions);
+            owned.table_needs = try self.arena.allocator().dupe(u8, owned.table_needs);
             try self.map.put(self.allocator, entry.key_ptr.*, owned);
         }
     }
@@ -234,11 +235,12 @@ test "export interface snapshot owns the complete calling contract" {
         .rc_ret_unique_fields = 4,
         .rc_ret_conditions = &.{ 7, 8, 9 },
         .may_leave_pending = true,
+        .table_needs = "producer needs",
     };
     try producer.put(identity, expected);
     try consumer.copyFrom(&producer);
     producer.clear();
-    try producer.put(identity, .{ .rc_ret_conditions = &.{ 10, 11, 12 } });
+    try producer.put(identity, .{ .rc_ret_conditions = &.{ 10, 11, 12 }, .table_needs = "replaced needs" });
     try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
     try consumer.copyFrom(&consumer);
     try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
@@ -248,6 +250,7 @@ test "export interface snapshot owns the complete calling contract" {
 pub const Output = struct {
     lir_result: LirProgram.Result,
     static_data: []LirProgram.StaticDataExport,
+    runtime_schemas: @import("../runtime_schemas.zig").RuntimeSchemaStore,
     /// With `Input.stored_functions`, the program's types and workers.
     retained: ?*StoredFn.Retained = null,
 };
@@ -323,15 +326,103 @@ pub const WorkerKey = union(enum) {
 };
 
 /// What a template worker's scheme variables are bound to while its body is
-/// lowered (design.md "Pre-Specialized List(U8) Workers").
-pub const TemplateBinding = enum(u8) {
+/// lowered (design.md "Pre-Specialized Integer List Workers").
+pub const TemplateBinding = union(enum) {
     /// Every scheme variable is a type variable: the template's one generic
     /// worker.
     generic,
     /// The list item variable of a `List` template (`Program.listItemSlot`)
-    /// is `U8`; every other scheme variable is a type variable.
-    list_u8,
+    /// is the integer type; every other scheme variable is a type variable.
+    list_int: ListIntItem,
 };
+
+/// The fixed-size integer types every `List` template with a checked body
+/// has a pre-specialized worker for (design.md "Pre-Specialized Integer List
+/// Workers"), in the declared order its module's unit lowers them in.
+pub const ListIntItem = enum(u8) {
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    u64,
+    i64,
+    u128,
+    i128,
+
+    /// The primitive type the list item variable is bound to.
+    pub fn primitive(self: ListIntItem) types.Primitive {
+        return switch (self) {
+            .u8 => .u8,
+            .i8 => .i8,
+            .u16 => .u16,
+            .i16 => .i16,
+            .u32 => .u32,
+            .i32 => .i32,
+            .u64 => .u64,
+            .i64 => .i64,
+            .u128 => .u128,
+            .i128 => .i128,
+        };
+    }
+
+    /// The item type whose worker a call binding the list item variable to
+    /// `value` targets, or null when `value` has none.
+    pub fn ofPrimitive(value: types.Primitive) ?ListIntItem {
+        return switch (value) {
+            .u8 => .u8,
+            .i8 => .i8,
+            .u16 => .u16,
+            .i16 => .i16,
+            .u32 => .u32,
+            .i32 => .i32,
+            .u64 => .u64,
+            .i64 => .i64,
+            .u128 => .u128,
+            .i128 => .i128,
+            .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => null,
+        };
+    }
+
+    /// The suffix of the worker's readable name (`Builtin.List.get@U32`).
+    pub fn nameSuffix(self: ListIntItem) []const u8 {
+        return switch (self) {
+            .u8 => "@U8",
+            .i8 => "@I8",
+            .u16 => "@U16",
+            .i16 => "@I16",
+            .u32 => "@U32",
+            .i32 => "@I32",
+            .u64 => "@U64",
+            .i64 => "@I64",
+            .u128 => "@U128",
+            .i128 => "@I128",
+        };
+    }
+};
+
+test "integer list worker identities distinguish all ten bindings and the generic worker" {
+    const module_name: [32]u8 = @splat(7);
+    const template: checked_names.CheckedProcedureTemplateId = @fromBackingInt(23);
+    const generic = templateWorkerIdentity(module_name, template);
+    const items = std.enums.values(ListIntItem);
+    try std.testing.expectEqual(@as(usize, 10), items.len);
+    for (items, 0..) |item, index| {
+        const identity = listIntTemplateWorkerIdentity(module_name, template, item);
+        try std.testing.expect(!std.meta.eql(identity, generic));
+        try std.testing.expectEqual(identity, listIntTemplateWorkerIdentity(module_name, template, item));
+        try std.testing.expect(!std.meta.eql(identity, listIntTemplateWorkerIdentity(@splat(8), template, item)));
+        try std.testing.expect(!std.meta.eql(identity, listIntTemplateWorkerIdentity(module_name, @fromBackingInt(24), item)));
+        for (items[index + 1 ..]) |other| {
+            try std.testing.expect(!std.meta.eql(identity, listIntTemplateWorkerIdentity(module_name, template, other)));
+        }
+    }
+}
+
+/// A worker's list item variable bound to an integer type: its position
+/// among the worker's scheme variables, and the type.
+pub const ListIntSlot = struct { slot: u32, item: ListIntItem };
 
 /// Why a dictionary slot's method crashes.
 pub const CrashDictionary = enum { checked_error, unreachable_value };
@@ -377,12 +468,13 @@ pub const Worker = struct {
     /// indexed by, and that checked list's length.
     checked_slots: []const u32 = &.{},
     checked_scheme_count: u32 = 0,
-    /// For a template worker lowered at `TemplateBinding.list_u8`, and for
+    /// For a template worker lowered at `TemplateBinding.list_int`, and for
     /// every lambda worker whose scope chain such a worker roots: the
-    /// position among `scheme_vars` of the list item variable, which the body
-    /// binds to `U8`. Its descriptor stays an input, filled with `U8`'s, so
-    /// the worker's inputs are the generic worker's.
-    list_u8_slot: ?u32 = null,
+    /// position among `scheme_vars` of the list item variable and the
+    /// integer type the body binds it to. Its descriptor stays an input,
+    /// filled with that type's, so the worker's inputs are the generic
+    /// worker's.
+    list_int: ?ListIntSlot = null,
     /// Evidence parameters that are runtime dictionaries, in hidden
     /// dictionary order (indices into the template's params).
     dictionary_params: []const u32,
@@ -483,15 +575,17 @@ pub fn templateWorkerIdentity(link_name: [32]u8, template: checked_names.Checked
     return .{ .bytes = hasher.finalResult() };
 }
 
-/// The content identity of the `List(U8)` worker of module `link_name`'s
-/// template `template` (`TemplateBinding.list_u8`), distinct from its
-/// generic worker's and the same in every object of the link.
-pub fn listU8TemplateWorkerIdentity(link_name: [32]u8, template: checked_names.CheckedProcedureTemplateId) LIR.ProcIdentity {
+/// The content identity of the integer list worker for `item` of module
+/// `link_name`'s template `template` (`TemplateBinding.list_int`), distinct
+/// from its generic worker's and its other item types' and the same in every
+/// object of the link.
+pub fn listIntTemplateWorkerIdentity(link_name: [32]u8, template: checked_names.CheckedProcedureTemplateId, item: ListIntItem) LIR.ProcIdentity {
     var hasher = base.TypeDigestHasher.init();
     hasher.update("roc.boxy.worker.v1");
-    hasher.update("template_list_u8");
+    hasher.update("template_list_int");
     hasher.update(&link_name);
     hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template))));
+    hasher.update(&.{@backingInt(item)});
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -697,8 +791,6 @@ pub const Program = struct {
     composed_in_body: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
     /// The nested procedure site of each lambda and closure expression.
     sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
-    /// Modules by their stable identity hash.
-    by_identity: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
     /// The default a record construction that omits a field materializes.
     omitted_defaults: std.AutoHashMapUnmanaged(OmittedField, checked.CheckedFieldDefault) = .empty,
     /// The generated codec families and their workers.
@@ -714,6 +806,7 @@ pub const Program = struct {
         const allocator = self.allocator;
         const view = self.module(module_index);
         const bodies = view.bodies();
+        try bodies.demandIndex();
         for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
@@ -813,7 +906,7 @@ pub const Program = struct {
         switch (key) {
             .template => |template| return switch (template.binding) {
                 .generic => templateWorkerIdentity(self.modules.linkName(template.module), template.template),
-                .list_u8 => listU8TemplateWorkerIdentity(self.modules.linkName(template.module), template.template),
+                .list_int => |item| listIntTemplateWorkerIdentity(self.modules.linkName(template.module), template.template, item),
             },
             .lambda => |lambda| {
                 hasher.update("lambda");
@@ -955,6 +1048,11 @@ pub const Program = struct {
                     hasher.update(&try self.typeContent(field.ty));
                     hasher.update(&[_]u8{@backingInt(field.kind)});
                     hashWord(&hasher, field.slot_variable);
+                    hasher.update(&[_]u8{@intFromBool(field.default != null)});
+                    if (field.default) |default| {
+                        hasher.update(&self.modules.get(default.module).view.module_identity.stable_hash);
+                        hashWord(&hasher, default.expr_node);
+                    }
                 }
                 try self.hashOptionalType(&hasher, record.ext);
                 if (record.declared) |declared| {
@@ -1162,7 +1260,6 @@ pub const Program = struct {
         self.allocator.free(self.body_indexed);
         self.local_scopes.deinit(self.allocator);
         self.local_procs.deinit(self.allocator);
-        self.by_identity.deinit(self.allocator);
         self.sites_by_expr.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);
         self.composed_in_body.deinit(self.allocator);
@@ -1338,11 +1435,12 @@ pub const Program = struct {
         return id;
     }
 
-    /// The `List(U8)` worker of a `List` template (design.md "Pre-Specialized
-    /// List(U8) Workers"), queued for lowering, or bound to the interface its
-    /// own object solved when another module's object defines it.
-    pub fn listU8TemplateWorker(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
-        const id = try self.listU8TemplateScope(module_index, template_id);
+    /// The integer list worker for `item` of a `List` template (design.md
+    /// "Pre-Specialized Integer List Workers"), queued for lowering, or bound
+    /// to the interface its own object solved when another module's object
+    /// defines it.
+    pub fn listIntTemplateWorker(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId, item: ListIntItem) Allocator.Error!WorkerId {
+        const id = try self.listIntTemplateScope(module_index, template_id, item);
         if (!self.worker(id).queued) {
             self.worker(id).queued = true;
             if (self.worker(id).imported) {
@@ -1354,20 +1452,20 @@ pub const Program = struct {
         return id;
     }
 
-    /// The `List(U8)` worker of a `List` template: the generic worker's
-    /// scope, inputs, and dictionaries, with the list item variable bound
-    /// to `U8` in its signature and body.
-    fn listU8TemplateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
-        const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id, .binding = .list_u8 } };
+    /// The integer list worker for `item` of a `List` template: the generic
+    /// worker's scope, inputs, and dictionaries, with the list item variable
+    /// bound to `item` in its signature and body.
+    fn listIntTemplateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId, item: ListIntItem) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id, .binding = .{ .list_int = item } } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const generic_id = try self.templateScope(module_index, template_id);
-        const slot = (try self.listItemSlot(generic_id)) orelse invariant("a List(U8) worker was requested for a template with no list item variable");
+        const slot = (try self.listItemSlot(generic_id)) orelse invariant("an integer list worker was requested for a template with no list item variable");
         const generic = self.worker(generic_id).*;
         const view = self.module(module_index);
         const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
         const bound = try self.arena.allocator().alloc(TypeId, generic.scheme_vars.len);
         for (bound, 0..) |*entry, index| entry.* = try self.store.variable(@intCast(index));
-        bound[slot] = try self.store.primitive(.u8);
+        bound[slot] = try self.store.primitive(item.primitive());
         const env: types.Env = .{ .module = module_index, .vars = generic.scheme_vars, .bound = bound };
         const fn_ty = try self.converter().convert(module_index, template.checked_fn_root, env);
         const signature = switch (self.store.get(fn_ty)) {
@@ -1383,16 +1481,16 @@ pub const Program = struct {
             .args = .empty(),
             .ret_layout = .zst,
         }, base.SourceLoc.none);
-        var u8_worker = generic;
-        u8_worker.key = key;
-        u8_worker.proc = proc;
-        u8_worker.params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args));
-        u8_worker.ret = signature.ret;
-        u8_worker.list_u8_slot = slot;
-        u8_worker.queued = false;
-        u8_worker.lowered = generic.imported;
-        u8_worker.needs = null;
-        try self.workers.append(self.allocator, u8_worker);
+        var int_worker = generic;
+        int_worker.key = key;
+        int_worker.proc = proc;
+        int_worker.params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args));
+        int_worker.ret = signature.ret;
+        int_worker.list_int = .{ .slot = slot, .item = item };
+        int_worker.queued = false;
+        int_worker.lowered = generic.imported;
+        int_worker.needs = null;
+        try self.workers.append(self.allocator, int_worker);
         try self.worker_ids.put(self.allocator, key, id);
         if (generic.imported) try self.declareImportedTemplateSignature(id);
         return id;
@@ -1400,7 +1498,8 @@ pub const Program = struct {
 
     /// The position among the scheme variables of generic template worker
     /// `id` of its list item variable, or null when the template has no
-    /// `List(U8)` worker (design.md "Pre-Specialized List(U8) Workers"):
+    /// integer list workers (design.md "Pre-Specialized Integer List
+    /// Workers"):
     /// the template must be a method the Builtin module registers for
     /// `List`, have a checked body (a provided low-level operation is
     /// emitted at every direct call instead), and take as its first
@@ -1467,9 +1566,10 @@ pub const Program = struct {
 
     /// The worker a direct call of template worker `callee` at the
     /// instantiation `bound` (one type per scheme variable) targets: the
-    /// template's `List(U8)` worker when its list item variable takes
-    /// exactly `U8`, and `callee` itself otherwise (design.md
-    /// "Pre-Specialized List(U8) Workers").
+    /// template's integer list worker for the type its list item variable
+    /// takes when that is exactly one of the `ListIntItem` types, and
+    /// `callee` itself otherwise (design.md "Pre-Specialized Integer List
+    /// Workers").
     pub fn directCallTarget(self: *Program, callee: WorkerId, bound: []const TypeId) Allocator.Error!WorkerId {
         const target = self.worker(callee).*;
         const key = switch (target.key) {
@@ -1478,15 +1578,15 @@ pub const Program = struct {
         };
         switch (key.binding) {
             .generic => {},
-            .list_u8 => return callee,
+            .list_int => return callee,
         }
         const slot = (try self.listItemSlot(callee)) orelse return callee;
         if (bound.len != target.scheme_vars.len) invariant("a call's instantiation differs from its target's scheme");
-        switch (self.store.get(bound[slot])) {
-            .primitive => |primitive| if (primitive != .u8) return callee,
+        const item = switch (self.store.get(bound[slot])) {
+            .primitive => |primitive| ListIntItem.ofPrimitive(primitive) orelse return callee,
             .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => return callee,
-        }
-        return try self.listU8TemplateWorker(key.module, key.template);
+        };
+        return try self.listIntTemplateWorker(key.module, key.template, item);
     }
 
     /// The entries of a use's checked substitution `subst` (indexed by the
@@ -1524,16 +1624,16 @@ pub const Program = struct {
         const key: WorkerKey = .{ .lambda = .{ .module = outer_worker.module, .expr = lambda_expr, .outer = outer, .captured_scheme = if (own) |scheme| scheme.per_call == false and (try self.isLocalProc(outer_worker.module, lambda_expr)) else false } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const scheme_vars = if (own) |scheme| try std.mem.concat(self.arena.allocator(), checked.CheckedTypeId, &.{ outer_worker.scheme_vars, scheme.scheme_vars }) else outer_worker.scheme_vars;
-        // A lambda of a `List(U8)` worker's scope binds the item variable
-        // to `U8` as that worker does, in its signature and captures as in
+        // A lambda of an integer list worker's scope binds the item variable
+        // to that worker's integer type, in its signature and captures as in
         // its body.
         var lambda_ty = fn_ty;
         const stored_capture_types = try self.arena.allocator().dupe(TypeId, capture_types);
-        if (outer_worker.list_u8_slot) |slot| {
+        if (outer_worker.list_int) |list_int| {
             const bound = try self.allocator.alloc(TypeId, scheme_vars.len);
             defer self.allocator.free(bound);
             for (bound, 0..) |*entry, index| entry.* = try self.store.variable(@intCast(index));
-            bound[slot] = try self.store.primitive(.u8);
+            bound[list_int.slot] = try self.store.primitive(list_int.item.primitive());
             lambda_ty = try self.substitute(self.allocator, fn_ty, bound);
             for (stored_capture_types) |*capture_ty| capture_ty.* = try self.substitute(self.allocator, capture_ty.*, bound);
         }
@@ -1558,7 +1658,7 @@ pub const Program = struct {
             .proc = proc,
             .module = outer_worker.module,
             .scheme_vars = scheme_vars,
-            .list_u8_slot = outer_worker.list_u8_slot,
+            .list_int = outer_worker.list_int,
             .dictionary_params = &.{},
             .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
             .ret = signature.ret,
@@ -1915,7 +2015,9 @@ pub const Program = struct {
                             if (field.slot_variable >= bound.len) invariant("a substituted field kind names a variable past its bindings");
                             try fields.append(allocator, self.store.instantiatedField(field.name, ty, bound[field.slot_variable]));
                         } else {
-                            try fields.append(allocator, .{ .name = field.name, .ty = ty, .kind = field.kind });
+                            var substituted = field;
+                            substituted.ty = ty;
+                            try fields.append(allocator, substituted);
                         }
                     }
                     var ext: ?TypeId = if (record.ext) |ext| done.get(ext).? else null;
@@ -2587,6 +2689,7 @@ pub const Program = struct {
         const span = table.sites[site_index].runtime_captures;
         const listed = table.runtime_captures[span.start..][0..span.len];
         const bodies = view.bodies();
+        try bodies.demandIndex();
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
         for (listed) |capture| {
             if (bodies.binder(capture.pattern).is_scheme_alias) continue;
@@ -2600,6 +2703,7 @@ pub const Program = struct {
         const key: WorkerKey = .{ .default = .{ .module = module_index, .expr = expr } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
+        try view.bodies().demandIndex();
         const ret = try self.converter().convert(module_index, view.bodies().exprType(expr), .{ .module = module_index, .vars = &.{}, .bound = &.{} });
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = self.workerIdentity(key);
@@ -3254,7 +3358,7 @@ fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerI
             const name_store = view.nameStore();
             const suffix: []const u8 = switch (key.binding) {
                 .generic => "",
-                .list_u8 => "@U8",
+                .list_int => |item| item.nameSuffix(),
             };
             break :blk if (name_store.procBase(template.proc_base).export_name) |export_name|
                 .{ .module = moduleUnlessPrefixed(module_name, name_store.exportNameText(export_name)), .text = name_store.exportNameText(export_name), .suffix = suffix }
@@ -3387,7 +3491,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     @memset(program.body_indexed, false);
     base.dev_diagnostics.countTestWork(.boxy_body_index_available_modules, program.modules.views.items.len);
     for (program.modules.views.items) |view| {
-        try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
         for (view.view.exported_procedure_bindings.bindings) |*binding| {
             try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
@@ -3409,6 +3512,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     // links against it.
     if (program.moduleUnit() != null and !input.compile_time) try seedUnitWorkers(program);
 
+    var schema_roots: std.ArrayList(TypeId) = .empty;
+    defer schema_roots.deinit(allocator);
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
         const root_id = request.compile_time_root orelse continue;
@@ -3426,6 +3531,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         const worker_id = try lowerRoot(program, request, @intCast(index), source_module);
         const proc = program.worker(worker_id).proc;
         try program.result.root_procs.append(allocator, proc);
+        if (request.abi == .platform) {
+            try schema_roots.appendSlice(allocator, program.worker(worker_id).params);
+            try schema_roots.append(allocator, program.worker(worker_id).ret);
+        }
         // A compile-time evaluator stores each root's value by the plan
         // and stored type of the root's own result type. A lowering that
         // evaluates none (a test lowering one constant's root) runs the
@@ -3516,11 +3625,11 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const names = view.nameStore();
                     const export_name = names.procBase(template.proc_base).export_name orelse break :blk switch (key.binding) {
                         .generic => "boxy.template",
-                        .list_u8 => "boxy.template@U8",
+                        .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "boxy.template{s}", .{item.nameSuffix()}),
                     };
                     break :blk switch (key.binding) {
                         .generic => names.exportNameText(export_name),
-                        .list_u8 => try std.fmt.allocPrint(program.arena.allocator(), "{s}@U8", .{names.exportNameText(export_name)}),
+                        .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "{s}{s}", .{ names.exportNameText(export_name), item.nameSuffix() }),
                     };
                 },
                 inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
@@ -3529,12 +3638,15 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
     program.result.finishExpectSites();
+    var runtime_schemas = try @import("runtime_schemas.zig").collect(program, schema_roots.items);
+    errdefer runtime_schemas.deinit();
     const static_data = try program.static_descs.takeExports();
     const kept = if (input.stored_functions) try StoredFn.retain(allocator, program) else null;
     retained = kept != null;
     return .{
         .lir_result = program.result,
         .static_data = static_data,
+        .runtime_schemas = runtime_schemas,
         .retained = kept,
     };
 }
@@ -3548,15 +3660,19 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
+        try view.bodies().demandIndex();
         for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
             if (!unitEmitsTemplate(view, template)) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
-            // A `List` template's `List(U8)` worker is lowered with it:
-            // every importer's direct calls at `U8` name it by symbol
-            // (design.md "Pre-Specialized List(U8) Workers").
-            if (try program.listItemSlot(worker) != null) _ = try program.listU8TemplateWorker(view.index, @fromBackingInt(@intCast(index)));
+            // A `List` template's integer list workers are lowered with it,
+            // in `ListIntItem` order: every importer's direct calls at those
+            // types name them by symbol (design.md "Pre-Specialized Integer
+            // List Workers").
+            if (try program.listItemSlot(worker) != null) {
+                for (std.enums.values(ListIntItem)) |item| _ = try program.listIntTemplateWorker(view.index, @fromBackingInt(@intCast(index)), item);
+            }
         }
         for (view.view.method_registry.entries) |entry| {
             const target = entry.target orelse continue;
@@ -3595,13 +3711,9 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
-        .entry_wrapper => |wrapper_id| blk: {
-            const root = view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root);
-            if (checked.compileTimeCallableRootIsProcedureReference(view.bodies(), view.view.resolved_value_refs, root)) break :blk false;
-            break :blk switch (root.kind) {
-                .expect, .repl_expr => false,
-                .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
-            };
+        .entry_wrapper => |wrapper_id| switch (view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root).kind) {
+            .expect, .repl_expr => false,
+            .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
         },
     };
 }
@@ -3880,6 +3992,45 @@ test "a generated worker's identity is its content, whatever lowering reaches it
     // Workers of different content have different identities.
     for (identities[0], 0..) |identity, index| {
         for (identities[0][index + 1 ..]) |other| try std.testing.expect(!std.meta.eql(identity, other));
+    }
+}
+
+test "Boxy field default identity survives substitution and stable type digests" {
+    const allocator = std.testing.allocator;
+    var digests: [2][3][32]u8 = undefined;
+    for (0..2) |round| {
+        var program: Program = undefined;
+        program.allocator = allocator;
+        program.store = types.Store.init(allocator);
+        defer program.store.deinit();
+        program.modules = .{ .allocator = allocator };
+        defer program.modules.deinit();
+        program.type_contents = .empty;
+        defer program.type_contents.deinit(allocator);
+        for (0..2) |index| {
+            var view: checked.ImportedModuleView = undefined;
+            view.key = .{ .bytes = @splat(@intCast(if (round == 0) index + 1 else 2 - index)) };
+            view.module_identity.stable_hash = view.key.bytes;
+            _ = try program.modules.add(view);
+        }
+        const store = &program.store;
+        const name = try store.internName("count");
+        const variable = try store.variable(0);
+        const number = try store.primitive(.u8);
+        var fields = [_]types.Field{.{ .name = name, .ty = variable, .kind = .inline_slot }};
+        for (0..3) |variant| {
+            fields[0].default = if (variant == 0) null else .{ .module = @fromBackingInt(@intCast(round)), .expr_node = @intCast(variant * 10) };
+            const generic = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+            const concrete = try program.substitute(allocator, generic, &.{number});
+            const field = store.fieldSpan(store.get(concrete).record.fields)[0];
+            try std.testing.expectEqual(number, field.ty);
+            try std.testing.expectEqual(fields[0].default, field.default);
+            digests[round][variant] = try program.typeContent(concrete);
+        }
+    }
+    for (digests[0], digests[1]) |first, second| try std.testing.expectEqual(first, second);
+    for (digests[0], 0..) |first, index| {
+        for (digests[0][index + 1 ..]) |second| try std.testing.expect(!std.mem.eql(u8, &first, &second));
     }
 }
 

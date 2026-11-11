@@ -7,7 +7,7 @@ FooDto := {
 }
 
 program = |_| {
-	parsed : Try(FooDto, [InvalidJson(Str), MissingRequiredField(Str)])
+	parsed : Try(FooDto, [InvalidJson(Str)])
 	parsed = Json.parse("{\"foo\":\"ok\"}")
 	_ = parsed
 	{}

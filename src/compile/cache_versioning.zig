@@ -24,10 +24,12 @@ const PlatformPairing = check.CheckedArtifact.PlatformPairing;
 
 /// A kind of persisted cache entry.
 pub const Entry = enum {
-    /// One combined checking entry: source env, publication inputs, and artifact.
+    /// One combined checking entry: source env, publication inputs, artifact,
+    /// and the reports its checking and evaluation produced.
     checked_module,
-    /// One exact platform/app composition's changed columns, written in the
-    /// checked-module envelope with an empty env body.
+    /// One exact platform/app composition's changed columns and the reports
+    /// its evaluation produced, written in the checked-module envelope with an
+    /// empty env body.
     platform_pairing,
     /// One module's canonicalization output: an env body and the encoded
     /// parse-stage record.
@@ -37,11 +39,15 @@ pub const Entry = enum {
 /// Layout fingerprint of `ModuleEnv.Serialized`.
 pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
+/// Layout fingerprint of `CheckedReports.Serialized`, the reports body of
+/// checked-module and platform-pairing entries.
+const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
+
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 17 includes lexical captures in
+/// reflected in layout fingerprints. Version 20 includes lexical captures in
 /// nominal argument tuples and checked type identities. Platform-pairing entries
 /// share it, including those whose own serialized layout did not change.
-const checked_envelope_version: u32 = 17;
+const checked_envelope_version: u32 = 20;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
@@ -53,12 +59,12 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout, check.rootLayoutVersionHash(check.CheckingReuse.Serialized, 1) },
+            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout, check.rootLayoutVersionHash(check.CheckingReuse.Serialized, 1), checked_reports_layout },
         ),
         .platform_pairing => compose(
             "roc-platform-pairing-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH },
+            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH, checked_reports_layout },
         ),
         .canonicalized_module => compose(
             "roc-canonicalized-module-entry-v1",
@@ -140,8 +146,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x38, 0xC6, 0x89, 0xEA, 0x80, 0x97, 0x79, 0x2A, 0x6C, 0xF6, 0x4E, 0xF0, 0x56, 0x06, 0xCB, 0x86,
-        0x25, 0xD0, 0xFD, 0x31, 0x19, 0x3F, 0x0A, 0xFD, 0x6B, 0x91, 0xAF, 0x0E, 0xC6, 0x29, 0xC9, 0x76,
+        0xB3, 0x4C, 0x1A, 0x03, 0x6D, 0xAC, 0x58, 0x17, 0x47, 0x5C, 0x8D, 0x78, 0x77, 0x37, 0x71, 0x2F,
+        0xD4, 0x6D, 0x99, 0x39, 0x3A, 0x35, 0x82, 0xC7, 0x73, 0x3A, 0x68, 0xCC, 0xBD, 0x1F, 0x61, 0xDB,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

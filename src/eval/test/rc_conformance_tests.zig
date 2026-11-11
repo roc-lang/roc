@@ -59,6 +59,19 @@ const Exemption = struct {
 /// Static data has a constant refcount, which no op can move.
 const cases = [_]Case{
     .{
+        .name = "boxed sequence packing and unpacking preserve shared captures",
+        .source =
+        \\{
+        \\    text = Str.concat("an iterator capture that cannot fit in a small string", "!")
+        \\    original = Box.box(text.iter_utf8())
+        \\    repacked = Box.box(Box.unbox(original))
+        \\    first = List.from_iter(Box.unbox(repacked))
+        \\    second = List.from_iter(Box.unbox(original))
+        \\    first.len() + second.len()
+        \\}
+        ,
+    },
+    .{
         // A parsed prefix's `rest` is a slice of its argument, so each of
         // these hands back part of an allocation it borrowed or took.
         .name = "numeric prefix parsers slice unique and shared inputs",

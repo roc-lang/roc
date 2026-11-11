@@ -386,6 +386,13 @@ pub fn captureDrop(capture: ?[*]u8, ops: *RocOps) callconv(.c) void {
     decref(record_desc, record, ops);
 }
 
+/// Retain the independently copied references of a dynamic capture record.
+pub fn captureIncref(capture: ?[*]u8, count: isize, ops: *RocOps) void {
+    const record = capture.?;
+    const record_desc: *const TypeDesc = @ptrCast(@alignCast(@as(*const ?*const anyopaque, @ptrCast(@alignCast(record))).*.?));
+    incref(record_desc, record, count, ops);
+}
+
 // Builtin list element callbacks. The context is the element descriptor; the
 // builtins pass no `RocOps`, so these reach the host through
 // `in_process_host.ops()`.
@@ -773,8 +780,9 @@ const InspectCtx = struct {
             .record => .{ .record = named },
             .tuple => .{ .tuple = named },
             .tag_union => if (d.flags.presence_slot) .{ .presence_slot = named } else .{ .tag_union = named },
-            // A box of a function is the callable itself (design.md "Function Values").
-            .erased_callable => if (d.child) |function| .{ .box = .at(function, value.ptr, null) } else .function,
+            // Boxed sequences and functions share the erased allocation but
+            // only sequences carry a separate record view.
+            .erased_callable => if (d.child) |child_desc| .{ .box = .at(child_desc, if (child_desc.flags.sequence) builtins.boxed_sequence.recordPtr(value.word().?) else value.ptr, null) } else .function,
             .nominal => .{ .nominal = .{
                 .override = if (override(d, .to_inspect) != null) named else null,
                 .backing = if (d.flags.inspect_opaque) null else .at(d.child.?, value.ptr, named.childNames()),
