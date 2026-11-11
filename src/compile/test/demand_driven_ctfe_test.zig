@@ -285,7 +285,7 @@ test "checking reports a generic function's conversion rejected at its concrete 
     try checked.expectErrors(true);
 }
 
-test "a build continues the evaluation's program with every runtime body" {
+test "a build that evaluates compile-time roots specializes its runtime program apart from that evaluation" {
     if (is_freestanding) return error.SkipZigTest;
     const target: lir.CheckedPipeline.TargetConfig = .{
         .inline_mode = .wrappers,
@@ -295,12 +295,14 @@ test "a build continues the evaluation's program with every runtime body" {
     var checked = try checkApp(std.testing.allocator, genericLabelApp("good"), &.{helper_module}, target);
     defer checked.deinit();
     try checked.expectErrors(false);
-    // A build's evaluation names its program roots in full: nothing is
-    // discovered, and nothing is parked.
+    // The app hoists compile-time constants, so the build evaluates exactly
+    // what checking evaluates: `main!` is a discovery root for its generic
+    // conversion. The runtime program is specialized from the program roots
+    // alone, with every runtime body.
     const demand = checked.demand();
-    try std.testing.expectEqual(@as(u64, 0), demand.discovery_roots);
-    try std.testing.expectEqual(@as(u64, 0), demand.monotype.parked);
+    try std.testing.expectEqual(@as(u64, 1), demand.discovery_roots);
     const session = &checked.coord.program_session.?;
+    try std.testing.expect(session.runtime_stages == .respecialized);
     try std.testing.expect(session.runtime_prepared != null);
     var runtime = try session.takeRuntime(std.testing.allocator, session.runtime_roots, target);
     defer runtime.deinit();

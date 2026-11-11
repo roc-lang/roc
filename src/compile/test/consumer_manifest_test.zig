@@ -292,7 +292,8 @@ test "one evaluated root has one completed-value slot however many places read i
         \\main! = |args| {
         \\    Echo.line!(Str.inspect(Helper.base_value))
         \\    Echo.line!(Str.inspect(Helper.doubled))
-        \\    Echo.line!(Str.inspect((Helper.offset, args.len())))
+        \\    Echo.line!(Str.inspect(Helper.offset))
+        \\    Echo.line!(Str.inspect(args.len()))
         \\    Ok({})
         \\}
     });
@@ -330,10 +331,10 @@ test "one evaluated root has one completed-value slot however many places read i
     const helper_roots = helper.root_requests.compile_time_requests;
     try std.testing.expectEqual(@as(usize, 3), helper_roots.len);
 
-    // Every one of these values is computed, read at runtime, and
-    // materialized for the runtime consumer; `base_value` is additionally
-    // read by `doubled`, at compile time. No program has two slots for one
-    // concrete value, however many places in it read the value.
+    // Every one of these values is computed and read by a constant `main!`
+    // hoists, so it is materialized for the stage evaluating that constant;
+    // `base_value` is additionally read by `doubled`. No program has two
+    // slots for one concrete value, however many places in it read the value.
     for (helper_roots) |request| {
         const root = try rootIdentity(request);
         try std.testing.expect(materializingStage(stages, helper.key.digest(), root) != null);
