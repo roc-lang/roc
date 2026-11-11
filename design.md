@@ -1777,6 +1777,9 @@ kind and its resolved value reference. It must not infer a procedure from source
 names, function type alone, body shape below the root expression, or post-check
 specialization results. Any wrapper, capture, conditional, call, or other
 function-valued computation remains an ordinary compile-time callable root.
+When platform pairing binds a required procedure, it records the resulting
+alias forwarding in the pairing's own callable templates and persists it with
+the pairing. The unpaired platform's templates remain unchanged.
 
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
@@ -1925,12 +1928,13 @@ as the scalar literal rather than a slot read, so range proving, loop
 versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
-record, or guard exists for the root. Small strings may likewise use their
-immediate representation. Restoring stored constants uses the same rule:
-scalar Bool and strings fitting the target's inline representation stay
-constructions, visible to constant propagation and worker preparation.
-All other aggregate values, including empty lists,
-records, tuples, tags, boxes, and captured functions, read immutable stored
+record, or guard exists for the root. Discriminant-only enums (including Bool)
+are scalar values for this rule, even though their layout is a tag union.
+Small strings may likewise use their immediate representation. Restoring
+stored constants uses the same rule, so these values stay constructions,
+visible to constant propagation and worker preparation. All aggregate
+values, including empty lists, records, tuples, payload-bearing tags, boxes,
+and captured functions, read immutable stored
 data. There is no construction tree, runtime constructor, or fresh alternative
 for a completed value. Mutation uses the normal copy-on-write operation.
 Allocation capacity is not part of the frozen value; empty lists require no
@@ -2071,10 +2075,12 @@ failure: it records the failure it read and is not reported again, because the
 failing root already reported it in the module that owns it. A literal root
 belongs to no checked module, so nothing retains its failure between
 compilations except the checked results that embed it: a checked root that
-stops at a literal root's value guard, or reaches a rejected literal inline,
-reports that failure in its own module, naming the literal as the failure's
-origin, which keeps that module's checked entry from being written while its
-result holds the failure. A failed literal root that no checked root embeds is
+stops at a literal root's value guard reports that failure in its own module,
+naming the literal as the failure's origin, which keeps that module's checked
+entry from being written while its result holds the failure. A checked root
+that reaches another module's rejected literal inline reports the rejection
+the same way, and its entry stores that report beside the failed result it
+restores ("Literal Arguments"). A failed literal root that no checked root embeds is
 reported at its literal once finalization is done. A module whose finalization completed in
 an earlier compilation receives such a report through the coordinator's report
 destination for it, without its cached result changing; a literal in the
@@ -2633,6 +2639,12 @@ SpecConstr inlined its callees into it or the backend does; a builtin like
 no known value crosses it, still expands completely into `Dict.insert`. A
 procedure on a cycle of direct calls keeps a call however much is expanded,
 so it is never a leaf.
+
+Application entry procedures, identified by the backend's explicit entrypoint
+list, do not gain mandatory inlining through transitive leaf expansion. Their
+ABI-wrapper caller can inline them after simplification; forcing them in early
+can retain redundant computations. The original wrapper and direct-leaf rules,
+and transitive inlining of ordinary helpers, are unchanged.
 
 The always-inline selection of wrappers and leaves is a speed-build policy.
 A size build (`--opt=size`) selects nothing: every function the module
@@ -4427,13 +4439,13 @@ platform. A warm build therefore prints the same reports in the same order, with
 the same exit code, as a cold one. A module with type errors is checked,
 evaluated, stored and reused like any other module: its errors are reports, its
 roots that reach code checking rejected are failed roots, and its importers
-check against the same artifact whether it was loaded or checked. `BuildEnv`
+check against the same checked module data whether it was loaded or checked. `BuildEnv`
 moves the reports into its output sink only after finalization or when
 aborting.
 
 Some evaluation problems are ones an entry cannot reproduce: a literal's
-rejection or a literal root's failure, which the program's literal roots decide
-again in every compilation; an empirical exhaustiveness failure another
+rejection reported at the literal or a literal root's failure, which the
+program's literal roots decide again in every compilation; an empirical exhaustiveness failure another
 module's root reached; and a failure located in another module that is named by
 that module's package-qualified name, which is workspace information rather
 than part of the entry's identity. Evaluation marks the problem store it
@@ -14417,7 +14429,7 @@ module's layouts, descriptors, and workers are a function of its own checked
 module and its imports' checked modules alone (Per-Module Output, below), so
 two modules never need to agree on anything a third module decided.
 
-A record field's default identity is part of its immutable semantic type,
+A record field's default identity is part of its immutable checked type,
 even though required and defaulted fields have identical inline layouts.
 Boxy interns and digests the declaring module's content identity and default
 expression identity, preserving them through substitution and stored-function
@@ -15531,7 +15543,9 @@ Nothing a module emits depends on a module that imports it:
   (Pre-Specialized Integer List Workers); the
   wrappers of its `expect` and REPL roots are not, since nothing reaches them
   but a test plan's or a REPL's own roots, and each of those lowers as one
-  program whose roots may name modules no unit lowers;
+  program whose roots may name modules no unit lowers; exact procedure aliases
+  likewise emit no evaluator wrapper, because their checked forwarding metadata
+  directs every use to the referenced procedure rather than an evaluated value;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module never demands an
@@ -15654,7 +15668,7 @@ and Per-Module Output is the invariant that makes it possible:
   the digest of those records (`exportRecordsDigest`). An importer's key
   folds in the module's export digest, which combines that records digest
   with its imports' export digests (`Digests.recordExportsDigest`), so a
-  restored object's records are not hashed again. This is a semantic
+  restored object's records are not hashed again. This is a checked
   interface digest, never a payload-integrity hash. The v2 export digest
   composition changes hash bytes; object format 19 also incorporates stored
   field-default identities alongside integer worker bindings and invalidates
@@ -16003,11 +16017,11 @@ all its records succeeds.
 
 A checked module's own body index (`body_analyses.ModuleIndex`: which nodes
 its bodies reach, the top-level unit owning each, and per-binding declaration
-facts) follows the same rule one level down. It is a pure function of the
+data) follows the same rule one level down. It is a pure function of the
 module's CIR and promoted local procedures, so it is built on first demand into
-a write-once slot of the module's `BodyAnalyses`, like every other body fact,
-and is never serialized. Publishing a freshly checked module demands it, since
-publication reads it; installing a cached checked entry does not. A consumer
+a write-once slot of the module's `BodyAnalyses`, like every other body analysis,
+and is never serialized. Storing a freshly checked module demands it, since
+storing reads it; installing a cached checked entry does not. A consumer
 demands the index of every module whose bodies it reads before reading any:
 LSS lowering at its preparation (`CheckedModules.demandBodyIndexes`), literal
 demand, and platform pairing. Boxy registration and preparation demand none:
@@ -24888,9 +24902,7 @@ above the guard, with no compiler frames beneath the generated entry, so how
 deep a program recurses before it overflows, and the instruction that
 overflows, are a function of the program and the compiler build alone, and an
 overflow's reported position is reproducible. The crash boundary is set on the
-evaluation stack (`CrashBoundary.run`). Its guarded callback is never tail-called:
-the frame containing the recovery point must remain live while the callback
-can escape to it. Thus the escape from a crash or an
+evaluation stack (`CrashBoundary.run`), so the escape from a crash or an
 overflow lands there and the root returns to the thread's own stack through
 the switch it entered by. The guarded callback is explicitly never tail-called:
 the frame holding the recovery point must remain live until the callback returns
@@ -26633,6 +26645,23 @@ import library writer (`coff/ImportLibrary.zig`). A Mach-O link puts the
 unmapped `__DWARF` segment at `__LINKEDIT`'s address, as dyld requires a
 dylib's segments in address order.
 
+Roc hosts must support relocatable code and data. Native executables always
+enable PIE/ASLR: ELF and Mach-O use PIE, and PE retains base relocations and
+enables dynamic-base loading. There is no platform opt-in or migration guard.
+This lets the function-address dictionary seed follow OS address randomization.
+Generated objects, including archives for foreign linkers, are PIC.
+
+ELF PIE executables are a distinct host-link mode, not shared libraries.
+They use section-backed provides and the same dynamic relative-relocation
+table extension as shared hosts; absolute provides cannot track the load base.
+The host key distinguishes fixed executables, PIE executables and libraries.
+Program startup and library exports remain separate from relocation policy.
+Static PIE requires platform-supplied self-relocating startup (for example
+musl `rcrt1.o`). Platform authors own startup correctness; selecting PIE never
+substitutes startup inputs or infers compatibility from filenames. The
+compiler-owned Linux default platform applies relocations before initialization,
+without libc. macOS and Windows loaders relocate their images before startup.
+
 A `.boxy` dev `roc run` of an app without a platform header builds it
 against the synthetic default platform with a fast dev link and runs the
 binary, reusing every object `roc check` filed (Caching Under `.boxy`).
@@ -26753,10 +26782,10 @@ one cache entry per host (`host_prelink`, `macho/HostPrelink`,
 `coff/HostPrelink`, family `prelinked_host`). The generated object defines
 every `provides` symbol as a window the host's references resolve to at
 prelink time, which each build fills in: a jump to the entry wrapper for a
-procedure, the value's bytes for a data symbol. In an ELF host (Linux and
-the BSDs) the windows are absolute addresses at a fixed place in the app
+procedure, the value's bytes for a data symbol. In a fixed ELF executable binary
+(Linux and the BSDs) the windows are absolute addresses at a fixed place in the app
 region, and a provided value larger than its window is a reported build
-error. On macOS and Windows the
+error. For ELF PIE/shared hosts, macOS and Windows the
 windows are sections of the host itself, a procedure's 16 bytes of code for a
 long jump and a value's layout size of writable data, where the pointers in
 the copied value can be relocated; which provides are procedures and how

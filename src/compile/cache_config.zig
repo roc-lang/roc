@@ -349,13 +349,13 @@ pub const Constants = struct {
     /// 164: sorted array builders serialize zeroed entry padding and an
     ///      integer offset that the cache validator checks.
     /// 165: compile-time reads persist placement and semantic root identity.
-    /// 176: platform invocation scheme uses and deferred diagnostic captures.
-    /// 177: type-store columns serialize independently in declared field order.
-    /// 178: checked artifacts store no platform invocation scheme uses or
-    ///      deferred diagnostic captures.
-    /// 179: stored function recipes name modules the storing module imports.
-    /// 180: type stores list the names of their optional and defaulted fields.
-    pub const CACHE_VERSION = 180;
+    /// 181: checked-module entries store reproducible checking and evaluation
+    ///      reports beside body-local type context arguments, per-use
+    ///      anonymous structure and generated-codec recurrences; stored
+    ///      function recipes name modules the storing module imports; type
+    ///      stores serialize their columns independently in declared field
+    ///      order and list the names of their optional and defaulted fields.
+    pub const CACHE_VERSION = 181;
 };
 
 /// Configuration for the Roc cache system.

@@ -4983,8 +4983,11 @@ fn reportForeignLiteralRejection(
     message: []const u8,
 ) FinalizeError!EmbeddedReport {
     const store = maybe_problem_store orelse return .reported_elsewhere;
+    // The literal's module only locates the literal; the report is made in
+    // the root's module, whose result restores it, so taking the target marks
+    // no store's reports unreproducible.
     var targets = try owners.reportTargets(site.owner);
-    const literal_module = (targets.nextTarget() orelse finalizationInvariant("a rejected literal's module has no checked module data")).module;
+    const literal_module = (targets.take() orelse finalizationInvariant("a rejected literal's module has no checked module data")).module;
     const literal_env = literal_module.moduleEnvConst();
     const info = literal_env.calcRegionInfo(literalSourceRegion(literal_module, site.node));
     const env = module.moduleEnvConst();

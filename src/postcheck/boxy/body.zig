@@ -8829,9 +8829,14 @@ pub const Builder = struct {
             if (table) |local| try fields.append(self.allocator, local);
         }
         const proc = self.program.worker(worker).proc;
-        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{});
+        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc } }, &.{});
         const record = try self.staticPartsLocal(record_layout, .product, fields.items);
-        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{record});
+        const layouts = &self.program.result.layouts;
+        const on_drop: LIR.ErasedCallableOnDrop = if (layouts.layoutContainsRefcounted(layouts.getLayout(record_layout)))
+            .{ .rc_helper = .{ .op = .host_drop, .layout_idx = try layouts.putPrefixedCaptureLayout(record_layout, self.program.result.erased_capture_prefix) } }
+        else
+            .none;
+        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{record});
     }
 
     /// Pop a function value's arguments and the function value, and call it
