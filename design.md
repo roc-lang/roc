@@ -670,6 +670,22 @@ checked module and reads the declaration there. Nothing chooses a
 representative among a named type's checked occurrences, and there is no
 program-wide index of them.
 
+The argument tuple includes lexical type captures. A body-local nominal can
+depend on an enclosing function's type variables even when it has no written
+parameters. Checking records those dependencies as hidden arguments before
+generalization or type-key computation; source arity and rendering exclude them.
+Backing and padding instantiation, identity, substitution, and specialization
+consume the same complete tuple. Neither lowering strategy rediscovers captures
+from declaration backings.
+
+Capture identity is lexical, not a variable's spelling or the identity of the
+whole enclosing specialization. Declaration references propagate only the
+variables they depend on, including through recursive groups; a declaration's
+own binders are never captures. Captured arguments retain their enclosing types
+rather than receiving a new annotation-opening interpretation at each use.
+Capture discovery belongs to declaration production, with shared dependency
+propagation rather than a transitive backing scan per application.
+
 ### Cache storage
 
 Checked modules (with their evaluation output), platform/app pairings,

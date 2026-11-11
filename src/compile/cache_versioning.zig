@@ -38,9 +38,10 @@ pub const Entry = enum {
 pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 16 stores Boxy callable capture
-/// graphs, including descriptor scopes. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 16;
+/// reflected in layout fingerprints. Version 17 includes lexical captures in
+/// nominal argument tuples and checked type identities. Platform-pairing entries
+/// share it, including those whose own serialized layout did not change.
+const checked_envelope_version: u32 = 17;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
@@ -139,8 +140,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xC6, 0xBD, 0x8D, 0xDF, 0x69, 0x9F, 0x14, 0xCE, 0xB7, 0xCB, 0xCD, 0x19, 0x2F, 0x6B, 0x6E, 0xC7,
-        0x76, 0x6B, 0xD8, 0xE3, 0xD4, 0x97, 0x04, 0x5F, 0x59, 0x4C, 0xD9, 0x10, 0xC0, 0xD5, 0xF1, 0x95,
+        0x38, 0xC6, 0x89, 0xEA, 0x80, 0x97, 0x79, 0x2A, 0x6C, 0xF6, 0x4E, 0xF0, 0x56, 0x06, 0xCB, 0x86,
+        0x25, 0xD0, 0xFD, 0x31, 0x19, 0x3F, 0x0A, 0xFD, 0x6B, 0x91, 0xAF, 0x0E, 0xC6, 0x29, 0xC9, 0x76,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

@@ -105,13 +105,14 @@ pub fn instantiateNominalBacking(
         try store.gpa.alloc(Instantiator.RigidSub, formals.len);
     defer if (formals.len > inline_rigid_subs.len) store.gpa.free(rigid_sub_buffer);
     var rigid_sub_count: usize = 0;
-    for (formals, args) |formal, arg| {
+    for (formals, args, 0..) |formal, arg, index| {
         const formal_resolved = store.resolveVar(formal);
         try var_map.put(formal_resolved.var_, arg);
         // A malformed header arg (underscore/malformed anno) is err, not
         // rigid; the template cannot reference it by name.
         switch (formal_resolved.desc.content) {
             .rigid => |rigid| {
+                if (index >= formals.len - decl.flags.capture_count) continue;
                 rigid_sub_buffer[rigid_sub_count] = .{ .name = rigid.name, .var_ = arg };
                 rigid_sub_count += 1;
             },
@@ -411,6 +412,9 @@ pub const Instantiator = struct {
     /// variables—every use constrains the same var the body's annotation
     /// regeneration constrains—instead of an independent unconstrained copy.
     share_vars: []const Var = &.{},
+    /// Exact lexical bindings, seeded by checker instantiation before any
+    /// name-based substitutions. Ranges stay valid as the type store grows.
+    exact_bindings: Bindings = .{},
     /// Source subtrees this instantiation reads from an earlier copy: each
     /// source var maps to that copy in `var_map` before the walk starts, so
     /// the walk shares the copy instead of copying the subtree again. Only
@@ -520,6 +524,23 @@ pub const Instantiator = struct {
 
     /// A formal's rigid name and the argument it stands for.
     pub const RigidSub = struct { name: Ident.Idx, var_: Var };
+
+    /// Producer-owned substitutions indexed by lexical variable identity.
+    pub const Bindings = struct {
+        formals: Var.SafeList.Range = Var.SafeList.Range.empty(),
+        actuals: Var.SafeList.Range = Var.SafeList.Range.empty(),
+    };
+
+    /// Install positional bindings without conflating equal source names.
+    pub fn seedBindings(self: *Instantiator) std.mem.Allocator.Error!void {
+        const bindings = self.exact_bindings;
+        std.debug.assert(bindings.formals.len() == bindings.actuals.len());
+        for (0..bindings.formals.len()) |index| {
+            const formal = self.store.getVarAt(bindings.formals, @intCast(index));
+            const actual = self.store.getVarAt(bindings.actuals, @intCast(index));
+            try self.var_map.put(self.store.resolveVar(formal).var_, actual);
+        }
+    }
 
     /// The argument for `name`; a later entry for the same name wins.
     fn rigidSub(subs: []const RigidSub, name: Ident.Idx) ?Var {

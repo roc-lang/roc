@@ -656,7 +656,7 @@ pub const NominalType = struct {
     pub const Source = NominalSource;
 
     ident: TypeIdent,
-    /// The actual type arguments (may be empty).
+    /// Source arguments followed by lexical captures (may be empty).
     args: Var.SafeList.Range,
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
@@ -725,9 +725,9 @@ pub const NominalDecl = struct {
     /// statement must be present: a declaration entry without a source
     /// statement has no key and cannot be registered.
     source: NominalType.Source,
-    /// The declaration's formal type parameters (rigid vars), in declaration
-    /// order. Instantiating the backing for a nominal application substitutes
-    /// the application's actual args for these, positionally.
+    /// Source formal parameters followed by captured lexical type variables.
+    /// Instantiating the backing substitutes the application's complete
+    /// argument tuple for these, positionally.
     formals: Var.SafeList.Range,
     /// The declaration's backing template. It references `formals` and is
     /// never unified against directly—backing access instantiates a copy
@@ -743,7 +743,8 @@ pub const NominalDecl = struct {
         /// invalid recursion). Applications of invalid declarations poison
         /// to err.
         valid: bool,
-        _unused: u31 = 0,
+        /// Hidden lexical arguments following the source parameters.
+        capture_count: u31 = 0,
     };
 
     /// The statement index of this declaration in its origin module env.

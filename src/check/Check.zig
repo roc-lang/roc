@@ -869,6 +869,7 @@ alias_hidden_ext_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Roots `finishAliasDeclarationParameters` has added as parameters.
 alias_hidden_ext_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
+nominal_captures: @import("nominal_captures.zig").Table = .{},
 annotation_implicit_open_exts: collections.DenseMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange) = .empty,
 /// The `implicit_open_exts` ranges of top-level VALUE bindings that do not
 /// generalize (a weak shared row; design.md "Polarity"). Grounded to `[]`
@@ -1786,6 +1787,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .alias_hidden_ext_vars = .scratch,
     .alias_hidden_ext_seen = .scratch,
     .nominal_positions = .keyed,
+    .nominal_captures = .keyed,
     .annotation_implicit_open_exts = .keyed,
     .weak_value_implicit_open_ext_ranges = .settled,
     .late_implicit_open_ext_audits = .settled,
@@ -10540,6 +10542,7 @@ fn instantiateVarPolarized(
     instantiate_ctx.nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition };
     instantiate_ctx.alias_argument_unused = .{ .context = self, .resolve = aliasArgumentUnused };
     instantiate_ctx.shared_subtrees = shared_subtrees.items;
+    if (evidence == .none) instantiate_ctx.exact_bindings = self.nominalCaptureBindings(var_to_instantiate);
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     if (evidence == .none) {
@@ -11165,7 +11168,7 @@ fn instantiateVarWithSubsPolarized(
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarizedFromScheme(var_to_instantiate, var_to_instantiate, subs, env, region_behavior, polarity_behavior, polarity, reach, .instantiation);
+    return self.instantiateVarWithSubsPolarizedFromScheme(var_to_instantiate, var_to_instantiate, subs, env, region_behavior, polarity_behavior, polarity, reach, .instantiation, self.nominalCaptureBindings(var_to_instantiate));
 }
 
 /// A constructor projection changes the structural copy root, not the source
@@ -11183,6 +11186,7 @@ fn instantiateVarWithSubsPolarizedFromScheme(
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
     purpose: NominalOpeningPurpose,
+    bindings: Instantiator.Bindings,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -11198,8 +11202,10 @@ fn instantiateVarWithSubsPolarizedFromScheme(
     instantiate_ctx.preserved_marker_exts = self.alias_hidden_exts;
     instantiate_ctx.nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition };
     instantiate_ctx.alias_argument_unused = .{ .context = self, .resolve = aliasArgumentUnused };
+    instantiate_ctx.exact_bindings = bindings;
     if (purpose == .diagnostic) {
         self.var_map.clearRetainingCapacity();
+        try instantiate_ctx.seedBindings();
         const fresh_start = self.types.len();
         const copied = try instantiate_ctx.instantiateVar(var_to_instantiate);
         try self.registerExpectedShapeVars(fresh_start, env);
@@ -11292,6 +11298,7 @@ fn instantiateVarHelpFromScheme(
     for (instantiator.shared_subtrees) |subtree| {
         try instantiator.var_map.put(self.types.resolveVar(subtree.source).var_, subtree.copy);
     }
+    try instantiator.seedBindings();
 
     // Then, instantiate the variable with the provided context
     const instantiated_var = if (force_type_scheme_root) scheme: {
@@ -11305,7 +11312,7 @@ fn instantiateVarHelpFromScheme(
         // callables"): a replayed use never reads them.
         self.scratch_deferred_slots.clearRetainingCapacity();
         if (instantiator.skip_generalized_reachability and evidence == .value_use and
-            instantiator.share_vars.len == 0 and instantiator.shared_subtrees.len == 0 and
+            instantiator.share_vars.len == 0 and instantiator.shared_subtrees.len == 0 and instantiator.exact_bindings.formals.len() == 0 and
             self.probe_depth == 0 and !self.commit_probe_active and
             !try self.moduleDeclaresLocalMethods())
         {
@@ -11348,7 +11355,7 @@ fn instantiateVarHelpFromScheme(
     // is registered for whole-use replay with the relation callables it
     // copies.
     const registers_use = evidence == .value_use and force_type_scheme_root and
-        instantiator.share_vars.len == 0 and
+        instantiator.share_vars.len == 0 and instantiator.exact_bindings.formals.len() == 0 and
         self.probe_depth == 0 and !self.commit_probe_active;
     self.scratch_use_owned.clearRetainingCapacity();
     if (registers_use) {
@@ -21958,13 +21965,11 @@ fn predeclareNominalDecl(
 
     try self.unifyWithTargetRank(
         decl_var,
-        try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-            .{ .ident_idx = header.relative_name },
+        try self.localNominalContent(
+            @fromBackingInt(@intCast(@backingInt(decl_var))),
+            header.relative_name,
             header_vars,
-            self.cir.selfModuleIdentity(),
-            @backingInt(decl_var),
             nominal.is_opaque,
-            self.cir.module_role == .builtin,
         ),
         env,
     );
@@ -21976,6 +21981,52 @@ fn predeclareNominalDecl(
         backing_var,
         nominal.is_opaque,
     );
+}
+
+/// Source applications bind captured variables to their lexical identities.
+/// Scheme instantiation subsequently substitutes these ordinary argument cells.
+fn localNominalContent(self: *Self, statement: CIR.Statement.Idx, name: Ident.Idx, args: []const Var, opaque_: bool) Allocator.Error!Content {
+    const top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(top);
+    const all_args = try self.localNominalArgs(statement, args);
+    return self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = name },
+        all_args,
+        self.cir.selfModuleIdentity(),
+        @backingInt(statement),
+        opaque_,
+        self.cir.module_role == .builtin,
+    );
+}
+
+/// The caller owns the scratch suffix when a declaration has captures.
+fn localNominalArgs(self: *Self, statement: CIR.Statement.Idx, args: []const Var) Allocator.Error![]const Var {
+    try self.nominal_captures.ensure(self.gpa, self.cir);
+    const captures = self.nominal_captures.get(statement);
+    if (captures.len == 0) return args;
+    const top = self.scratch_vars.top();
+    for (args) |arg| try self.scratch_vars.append(arg);
+    for (captures) |capture| try self.scratch_vars.append(ModuleEnv.varFrom(capture));
+    return self.scratch_vars.sliceFromStart(top);
+}
+
+/// A source type use shares its enclosing binders rather than quantifying them
+/// again. Ordinary function-scheme instantiation still copies the entire tuple.
+fn nominalCaptureBindings(self: *const Self, variable: Var) Instantiator.Bindings {
+    const content = self.types.resolveVar(variable).desc.content;
+    if (content != .structure or content.structure != .nominal_type) return .{};
+    const nominal = content.structure.nominal_type;
+    const declaration = self.types.lookupNominalDecl(nominal) orelse {
+        std.debug.assert(!nominal.sourceDecl().present);
+        return .{};
+    };
+    const count = self.types.getNominalDecl(declaration).flags.capture_count;
+    if (count == 0) return .{};
+    var captures = nominal.args;
+    std.debug.assert(count <= captures.count);
+    captures.start = @fromBackingInt(@backingInt(captures.start) + captures.count - count);
+    captures.count = count;
+    return .{ .formals = captures, .actuals = captures };
 }
 
 /// Register (or refresh) the declaration-table entry for a local nominal
@@ -21991,6 +22042,9 @@ fn registerLocalNominalDecl(
     is_opaque: bool,
 ) Allocator.Error!void {
     const builtin_origin = self.cir.module_role == .builtin;
+    const top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(top);
+    const formals = try self.localNominalArgs(@fromBackingInt(decl_statement), header_vars);
     _ = try self.types.registerNominalDecl(.{
         .ident = .{ .ident_idx = name },
         .origin_module = self.cir.selfModuleIdentity(),
@@ -21999,9 +22053,9 @@ fn registerLocalNominalDecl(
             is_opaque,
             builtin_origin,
         ),
-        .formals = try self.types.appendVars(header_vars),
+        .formals = try self.types.appendVars(formals),
         .backing = backing_var,
-        .flags = .{ .valid = true },
+        .flags = .{ .valid = true, .capture_count = @intCast(formals.len - header_vars.len) },
     });
 }
 
@@ -22014,7 +22068,7 @@ fn predeclaredAliasArgs(self: *const Self, decl_var: Var) ?[]Var {
 fn predeclaredNominalArgs(self: *const Self, decl_var: Var) ?[]Var {
     const resolved = self.types.resolveVar(decl_var).desc.content;
     if (resolved != .structure or resolved.structure != .nominal_type) return null;
-    return self.types.sliceNominalArgs(resolved.structure.nominal_type);
+    return self.types.sliceNominalSourceArgs(resolved.structure.nominal_type);
 }
 
 /// Generate types for a standalone type annotation (one without a corresponding definition).
@@ -23781,7 +23835,7 @@ fn walkApplicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *
     const formals = switch (content) {
         .alias => |alias| self.types.sliceAliasArgs(alias),
         .structure => |flat| switch (flat) {
-            .nominal_type => |nominal| self.types.sliceNominalArgs(nominal),
+            .nominal_type => |nominal| self.types.sliceNominalSourceArgs(nominal),
             .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .tag_union, .empty_record, .empty_tag_union => base.invariant("check invariant violated: a type declaration's variable holds non-nominal structure", .{}),
         },
         .err => return,
@@ -23899,7 +23953,9 @@ fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, 
     const statement = nominal.sourceDeclOptional() orelse return .{ .at = surrounding };
     const owner = self.moduleEnvForIdentity(self.cir, nominal.origin_module).env;
     const positions = (try self.declarationPositions(owner, @fromBackingInt(@intCast(statement)))) orelse return null; // Rejected source has no position transfer.
-    std.debug.assert(index < positions.len);
+    // Captures follow the written arguments. They retain the enclosing
+    // scope's types; this application may not implicitly open their rows.
+    if (index >= positions.len) return .both;
     if (positions[index].isInvariant()) return .both;
     return .{ .at = positions[index].polarity(surrounding) };
 }
@@ -24151,7 +24207,7 @@ fn unappliedTypeConstructorArity(self: *const Self, decl_var: Var) u32 {
             },
             .structure => |flat_type| switch (flat_type) {
                 .nominal_type => |nominal| {
-                    const args = self.types.sliceNominalArgs(nominal);
+                    const args = self.types.sliceNominalSourceArgs(nominal);
                     return if (declared) @intCast(args.len) else self.countUnboundTypeVars(args);
                 },
                 .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return 0,
@@ -25054,13 +25110,11 @@ fn beginNominalDeclBody(
     if (predeclared_header_vars == null) {
         try self.unifyWithTargetRank(
             decl_var,
-            try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-                .{ .ident_idx = header.relative_name },
+            try self.localNominalContent(
+                decl_idx,
+                header.relative_name,
                 header_vars,
-                self.cir.selfModuleIdentity(),
-                @backingInt(decl_idx),
                 nominal.is_opaque,
-                self.cir.module_role == .builtin,
             ),
             env,
         );
@@ -25207,13 +25261,11 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                                         },
                                         .nominal => {
                                             // Nominal types can be recursive
-                                            try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-                                                .{ .ident_idx = this_decl.name },
+                                            try self.unifyWith(anno_var, try self.localNominalContent(
+                                                this_decl.idx,
+                                                this_decl.name,
                                                 &.{},
-                                                self.cir.selfModuleIdentity(),
-                                                @backingInt(this_decl.idx),
                                                 this_decl.is_opaque,
-                                                self.cir.module_role == .builtin,
                                             ), env);
                                         },
                                     }
@@ -25726,13 +25778,11 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
                                 },
                                 .nominal => {
                                     // Nominal types can be recursive
-                                    try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-                                        .{ .ident_idx = this_decl.name },
+                                    try self.unifyWith(anno_var, try self.localNominalContent(
+                                        this_decl.idx,
+                                        this_decl.name,
                                         anno_arg_vars,
-                                        self.cir.selfModuleIdentity(),
-                                        @backingInt(this_decl.idx),
                                         this_decl.is_opaque,
-                                        self.cir.module_role == .builtin,
                                     ), env);
                                 },
                             }
@@ -25764,7 +25814,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
                             .structure => |flat_type| {
                                 if (flat_type == .nominal_type) {
                                     const decl_nominal = flat_type.nominal_type;
-                                    break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
+                                    break :blk .{ self.types.sliceNominalSourceArgs(decl_nominal), decl_nominal.ident.ident_idx };
                                 } else {
                                     // External type resolved to a non-nominal structure (e.g., record, func, etc.)
                                     // This shouldn't happen for type applications, treat as error
@@ -25870,7 +25920,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
             break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
         } else if (decl_resolved == .structure and decl_resolved.structure == .nominal_type) {
             const decl_nominal = decl_resolved.structure.nominal_type;
-            break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
+            break :blk .{ self.types.sliceNominalSourceArgs(decl_nominal), decl_nominal.ident.ident_idx };
         } else if (decl_resolved == .err) {
             try self.markErroneous(anno_var);
             return anno_gen_done;
@@ -28074,7 +28124,7 @@ fn projectExpectedTagPayload(
             const formal = self.types.resolveVar(self.types.getVarAt(decl.formals, @intCast(index)));
             const actual = self.scratch_vars.sliceFromStart(scratch_top)[index];
             try self.var_map.put(formal.var_, actual);
-            if (formal.desc.content == .rigid) {
+            if (index < decl.formals.len() - decl.flags.capture_count and formal.desc.content == .rigid) {
                 substitutions[substitution_count] = .{ .name = formal.desc.content.rigid.name, .var_ = actual };
                 substitution_count += 1;
             }
@@ -36965,8 +37015,7 @@ const NominalCheckResult = enum {
 /// The checker-side explicit opening operation (issue #9983): resolve the
 /// application's declaration in this module's declaration table and
 /// instantiate its backing template, substituting the application's actual
-/// args for the declaration's formals (by rigid name, mirroring the type-
-/// application annotation path). Returns null when the declaration is
+/// args for the declaration's formals by lexical identity. Returns null when the declaration is
 /// invalid or unresolvable—callers poison the use.
 fn openNominalBackingForApp(
     self: *Self,
@@ -36997,15 +37046,15 @@ fn openNominalBackingFromTemplate(
     const decl = self.types.getNominalDecl(decl_idx);
     if (!decl.isValid()) return null;
 
-    // Substitute the application's args for the declaration's formals by
-    // rigid name (formals are rigid vars with distinct names; the same
-    // mapping the annotation application path builds).
+    // Source-formal names also serve the annotation-application copies in
+    // legacy templates. Captures never enter that namespace: their identities
+    // may have the same spelling as a source formal.
     const formals = self.types.sliceVars(decl.formals);
     const args = self.types.sliceNominalArgs(nominal_type);
     std.debug.assert(formals.len == args.len);
 
     self.rigid_var_substitutions.clearRetainingCapacity();
-    for (formals, args) |formal_var, arg_var| {
+    for (formals[0 .. formals.len - decl.flags.capture_count], args[0 .. args.len - decl.flags.capture_count]) |formal_var, arg_var| {
         const formal_resolved = self.types.resolveVar(formal_var).desc.content;
         // A malformed header arg (underscore/malformed anno) is err, not
         // rigid; the template cannot reference it by name, so it has no
@@ -37025,6 +37074,7 @@ fn openNominalBackingFromTemplate(
         .pos,
         .nested,
         purpose,
+        if (decl.flags.capture_count == 0) .{} else .{ .formals = decl.formals, .actuals = nominal_type.args },
     );
     try self.types.markNominalBackingStructure(opened, minted_start, @intCast(self.types.len()));
     return opened;
@@ -37240,7 +37290,10 @@ fn prepareNominalTypeUsage(
     env: *Env,
     constructor: ?ConstructorTag,
 ) std.mem.Allocator.Error!?PreparedNominalTypeUsage {
-    const nominal_var = try self.instantiateVar(nominal_type_decl_var, env, .{ .explicit = region }, .none);
+    var instantiator = self.baseInstantiator(env.rank(), .fresh_flex);
+    instantiator.polarity_var_behavior = .close;
+    instantiator.exact_bindings = self.nominalCaptureBindings(nominal_type_decl_var);
+    const nominal_var = try self.instantiateVarHelp(nominal_type_decl_var, &instantiator, env, .{ .explicit = region }, false, .none);
     const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
 
     if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {

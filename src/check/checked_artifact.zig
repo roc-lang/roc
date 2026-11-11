@@ -6093,8 +6093,10 @@ fn appendCheckedNominalDeclarationFromStatement(
     const header = module_env.store.getTypeHeader(header_idx);
     const header_args = module_env.store.sliceTypeAnnos(header.args);
 
-    const formal_args = if (header_args.len == 0) &.{} else blk: {
-        const out = try allocator.alloc(CheckedTypeId, header_args.len);
+    const formal_args = if (statement_nominal.args.len == 0) &.{} else blk: {
+        // Source arguments are followed by the lexical captures already
+        // published by checking. Both parameterize the declaration backing.
+        const out = try allocator.dupe(CheckedTypeId, statement_nominal.args);
         errdefer allocator.free(out);
         for (header_args, 0..) |arg_anno, i| {
             out[i] = try appendCheckedTypeRoot(
@@ -6113,24 +6115,11 @@ fn appendCheckedNominalDeclarationFromStatement(
     const declaration_formals = if (header_args.len == 0) &.{} else blk: {
         const out = try allocator.alloc(DeclarationFormal, header_args.len);
         errdefer allocator.free(out);
-        for (header_args, formal_args, 0..) |arg_anno, formal_arg, i| {
+        for (header_args, formal_args[0..header_args.len], 0..) |arg_anno, formal_arg, i| {
             const arg = module_env.store.getTypeAnno(arg_anno);
+            std.debug.assert(arg == .rigid_var);
             out[i] = .{
-                .name = switch (arg) {
-                    .rigid_var => |rigid| rigid.name,
-                    .apply,
-                    .rigid_var_lookup,
-                    .underscore,
-                    .lookup,
-                    .tag_union,
-                    .tag,
-                    .tuple,
-                    .record,
-                    .@"fn",
-                    .parens,
-                    .malformed,
-                    => checkedArtifactInvariant("nominal declaration header argument was not a rigid type variable", .{}),
-                },
+                .source = ModuleEnv.varFrom(arg_anno),
                 .root = formal_arg,
             };
         }
@@ -6204,8 +6193,8 @@ fn appendCheckedNominalDeclarationFromStatement(
         // The declaration's formals are exactly the roots its backing was
         // built over, so instantiating them substitutes into that backing.
         const declared_args = store.payload(declaration_root).nominal.args;
-        std.debug.assert(declared_args.len == declaration_formals.len);
-        for (declared_args, declaration_formals) |declared_arg, formal| {
+        std.debug.assert(declared_args.len >= declaration_formals.len);
+        for (declared_args[0..declaration_formals.len], declaration_formals) |declared_arg, formal| {
             std.debug.assert(declared_arg == formal.root);
         }
     }
@@ -6213,13 +6202,13 @@ fn appendCheckedNominalDeclarationFromStatement(
 }
 
 const DeclarationFormal = struct {
-    name: Ident.Idx,
+    source: Var,
     root: CheckedTypeId,
 };
 
-fn declarationFormalRoot(formals: []const DeclarationFormal, name: Ident.Idx) ?CheckedTypeId {
+fn declarationFormalRoot(formals: []const DeclarationFormal, source: Var) ?CheckedTypeId {
     for (formals) |formal| {
-        if (formal.name == name) return formal.root;
+        if (formal.source == source) return formal.root;
     }
     return null;
 }
@@ -6296,10 +6285,9 @@ fn checkedTagBuildLabelLessThan(names: *const canonical.CanonicalNameStore, lhs:
 pub const DeclarationAnnoNode = union(enum) {
     /// A leaf the walk publishes as the root of this source variable.
     leaf: Var,
-    /// A rigid variable: the walk's formal of that name when it binds one,
-    /// otherwise the root of `var_`. `name` is null for a lookup that does
-    /// not refer to a rigid variable annotation.
-    rigid: struct { name: ?Ident.Idx, var_: Var },
+    /// A lexical binder: the walk's substitution for this exact source
+    /// variable when bound, otherwise its published root.
+    rigid: struct { var_: Var },
     /// A bare reference to a local alias, which the walk expands as its body.
     local_alias: struct { anno: CIR.TypeAnno.Idx, statement: CIR.Statement.Idx },
     /// A composite annotation the walk builds from its children.
@@ -6330,25 +6318,14 @@ pub fn declarationAnnoNode(
                 .pending,
                 => return .{ .leaf = ModuleEnv.varFrom(current) },
             },
-            .rigid_var => |rigid| return .{ .rigid = .{ .name = rigid.name, .var_ = ModuleEnv.varFrom(current) } },
-            .rigid_var_lookup => |lookup| return .{ .rigid = .{
-                .name = switch (module_env.store.getTypeAnno(lookup.ref)) {
-                    .rigid_var => |rigid| rigid.name,
-                    .apply,
-                    .rigid_var_lookup,
-                    .underscore,
-                    .lookup,
-                    .tag_union,
-                    .tag,
-                    .tuple,
-                    .record,
-                    .@"fn",
-                    .parens,
-                    .malformed,
-                    => null,
-                },
-                .var_ = ModuleEnv.varFrom(lookup.ref),
-            } },
+            .rigid_var => return .{ .rigid = .{ .var_ = ModuleEnv.varFrom(current) } },
+            .rigid_var_lookup => |lookup| {
+                var binder = lookup.ref;
+                while (module_env.store.getTypeAnno(binder) == .rigid_var_lookup) {
+                    binder = module_env.store.getTypeAnno(binder).rigid_var_lookup.ref;
+                }
+                return .{ .rigid = .{ .var_ = ModuleEnv.varFrom(binder) } };
+            },
             .underscore,
             .tag,
             .malformed,
@@ -6519,7 +6496,7 @@ const DeclarationAnnoWalk = struct {
         const current = switch (declarationAnnoNode(self.module, self.local_type_declarations, anno_idx)) {
             .leaf => |var_| return try self.appendRoot(var_),
             .rigid => |rigid| {
-                if (rigid.name) |name| if (declarationFormalRoot(formals, name)) |formal| return formal;
+                if (declarationFormalRoot(formals, rigid.var_)) |formal| return formal;
                 return try self.appendRoot(rigid.var_);
             },
             .local_alias => |local_alias| {
@@ -6757,6 +6734,22 @@ const DeclarationAnnoWalk = struct {
             .template => |var_| {
                 const generic_root = try self.appendRoot(var_);
                 if (actual_args.len == 0) return generic_root;
+                const source_store = self.module.typeStoreConst();
+                const content = source_store.resolveVar(var_).desc.content;
+                if (content == .structure and content.structure == .nominal_type) {
+                    const nominal = content.structure.nominal_type;
+                    const declaration = source_store.getNominalDecl(source_store.lookupNominalDecl(nominal).?);
+                    const capture_count = declaration.flags.capture_count;
+                    if (capture_count != 0) {
+                        const generic_args = self.store.payload(generic_root).nominal.args;
+                        std.debug.assert(generic_args.len == actual_args.len + capture_count);
+                        const complete_args = try gpa.alloc(CheckedTypeId, generic_args.len);
+                        defer gpa.free(complete_args);
+                        @memcpy(complete_args[0..actual_args.len], actual_args);
+                        @memcpy(complete_args[actual_args.len..], generic_args[actual_args.len..]);
+                        return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.store, generic_root, complete_args);
+                    }
+                }
                 return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.store, generic_root, actual_args);
             },
         }
@@ -6785,22 +6778,9 @@ const DeclarationAnnoWalk = struct {
         const declaration_formals: []DeclarationFormal = if (header_args.len == 0) &.{} else blk: {
             const out = try gpa.alloc(DeclarationFormal, header_args.len);
             for (header_args, actual_args, out) |arg_anno, actual_arg, *slot| {
+                std.debug.assert(module_env.store.getTypeAnno(arg_anno) == .rigid_var);
                 slot.* = .{
-                    .name = switch (module_env.store.getTypeAnno(arg_anno)) {
-                        .rigid_var => |rigid| rigid.name,
-                        .apply,
-                        .rigid_var_lookup,
-                        .underscore,
-                        .lookup,
-                        .tag_union,
-                        .tag,
-                        .tuple,
-                        .record,
-                        .@"fn",
-                        .parens,
-                        .malformed,
-                        => checkedArtifactInvariant("alias declaration header argument was not a rigid type variable", .{}),
-                    },
+                    .source = ModuleEnv.varFrom(arg_anno),
                     .root = actual_arg,
                 };
             }

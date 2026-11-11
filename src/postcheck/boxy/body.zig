@@ -3684,7 +3684,7 @@ pub const Builder = struct {
             },
             .pending, .field_kind, .err, .flex, .rigid, .function, .record, .tuple, .empty_record, .tag_union, .empty_tag_union => invariant("a literal conversion's result is not a Try type"),
         };
-        const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) }, self.env);
+        const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) });
         try self.push(.{ .finish_literal_conversion = .{ .node = node, .kind = kind, .try_ty = try_ty, .result = result_ty } });
         try self.lowerDispatchAt(plan_id, try_ty);
     }
@@ -7104,7 +7104,7 @@ pub const Builder = struct {
                     const args = try self.allocator.alloc(TypeId, named.args.len);
                     defer self.allocator.free(args);
                     for (const_types.typeSpan(named.args), args) |child, *arg| arg.* = done.get(child).?;
-                    break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args, self.env);
+                    break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args);
                 },
                 // Only a closure's capture holds an erased function type, and
                 // its restore relates no such capture (`constTypeHasErased`).

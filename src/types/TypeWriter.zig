@@ -813,7 +813,8 @@ fn startTuple(self: *TypeWriter, writer: *ByteWrite, tuple: Tuple) error{ OutOfM
 /// has any.
 fn startNominalType(self: *TypeWriter, writer: *ByteWrite, nominal_type: NominalType) error{ OutOfMemory, WriteFailed }!bool {
     try writer.writeAll(self.getDisplayName(nominal_type.ident.ident_idx));
-    const args = nominal_type.args;
+    var args = nominal_type.args;
+    args.count = @intCast(self.types.sliceNominalSourceArgs(nominal_type).len);
     if (args.len() == 0) return false;
     try writer.writeAll("(");
     try self.frames.append(.{ .args = .{ .vars = args, .context = .General } });
@@ -1566,10 +1567,7 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
             try self.count_pending.appendSlice(self.types.sliceVars(tuple.elems));
         },
         .nominal_type => |nominal_type| {
-            var args_iter = self.types.iterNominalArgs(nominal_type);
-            while (args_iter.next()) |arg_var| {
-                try self.count_pending.append(arg_var);
-            }
+            try self.count_pending.appendSlice(self.types.sliceNominalSourceArgs(nominal_type));
         },
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
             try self.count_pending.appendSlice(self.types.sliceVars(func.args));

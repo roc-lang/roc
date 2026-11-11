@@ -2129,6 +2129,16 @@ pub const Store = struct {
         return self.vars.sliceRange(nominal.args);
     }
 
+    /// Source-visible parameters exclude the declaration's lexical captures.
+    pub fn sliceNominalSourceArgs(self: *const Self, nominal: NominalType) []Var {
+        const args = self.sliceNominalArgs(nominal);
+        const declaration = self.lookupNominalDecl(nominal) orelse {
+            std.debug.assert(!nominal.sourceDecl().present);
+            return args;
+        };
+        return args[0 .. args.len - self.getNominalDecl(declaration).flags.capture_count];
+    }
+
     /// Get the arg vars range for this nominal type.
     /// Returns a range (start index + count) which can be stored safely.
     /// Unlike sliceNominalArgs, this returns indices that remain valid even if
