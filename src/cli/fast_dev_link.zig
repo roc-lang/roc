@@ -9,9 +9,9 @@
 //! the system calls the output file is written with (`link_output.zig`).
 //!
 //! The output file is created when the build starts, and a background job
-//! hashes the platform's host inputs. For an ELF host it then computes the
+//! hashes the platform's host inputs. For a fixed ELF executable it computes the
 //! host's key and on a cache hit copies the host into the output while the
-//! program compiles. A Mach-O or COFF host's key also covers the kinds and
+//! program compiles. An ELF PIE/shared, Mach-O or COFF host's key also covers the kinds and
 //! sizes of the `provides` symbols, which the program's images tell, so its
 //! lookup waits for them; on macOS the copy is a clone where the filesystem
 //! has them. On a miss the link step prelinks the host with LLD, files it,
@@ -61,6 +61,10 @@ pub const HostSpec = struct {
     host_required: []const []const u8,
     /// Whether the output is a shared library rather than an executable.
     shared: bool,
+    /// ELF executable relocation mode, selected by the command's target.
+    /// Static Linux platforms supply compatible startup (rcrt1.o or equivalent).
+    /// This does not change shared-library exports.
+    pie: bool = false,
     /// For a shared library, the symbols it exports: the provides and the
     /// host inputs' own exports. Sorted and distinct; empty for an
     /// executable.
@@ -149,7 +153,7 @@ pub const HostJob = struct {
         self.hash_ns = elapsed(self.std_io, hash_started);
         // An ELF executable's windows are fixed; every other host's are
         // sized by the provides' layouts, which its key waits for.
-        if (self.spec.format == .elf and !self.spec.shared) {
+        if (self.spec.format == .elf and !self.spec.shared and !self.spec.pie) {
             self.key = self.keyFor(&.{});
             self.lookup();
         } else {
@@ -171,6 +175,7 @@ pub const HostJob = struct {
             .provide_layouts = provides,
             .keep = self.spec.keep,
             .shared = self.spec.shared,
+            .pie = self.spec.pie,
             .exports = self.spec.exports,
             .link_items = self.spec.link_items,
             .bundle_hash = self.spec.bundle_hash,
@@ -320,13 +325,15 @@ pub const PrelinkError = linker.LinkError || host_prelink.FinishError || HostPre
 
 /// Link the platform's host with LLD into a host record (cold path) and
 /// file it in the cache, when there is one. The caller owns the record.
-/// `provides` carries the provides' layouts, which a Mach-O or COFF host's
-/// windows are sized by.
+/// `provides` carries the layouts for section-backed windows (ELF PIE/shared,
+/// Mach-O and COFF).
 pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: ?*CacheManager, scratch_dir: []const u8, provides: []const host_prelink.Provide) PrelinkError![]align(16) u8 {
+    std.debug.assert(!spec.pie or (spec.format == .elf and !spec.shared));
     const arm64 = spec.target.toCpuArch() == .aarch64;
+    const elf_kind: host_prelink.Kind = if (spec.shared) .shared else if (spec.pie) .pie else .executable;
     const output_kind: linker.OutputKind = if (spec.shared) .shared_lib else .exe;
     const object = switch (spec.format) {
-        .elf => if (spec.shared) try host_prelink.linkSharedObject(ctx.gpa, arm64, provides) else try host_prelink.linkObject(ctx.gpa, arm64, spec.provides),
+        .elf => if (elf_kind.positionIndependent()) try host_prelink.linkPositionIndependentObject(ctx.gpa, arm64, provides) else try host_prelink.linkObject(ctx.gpa, arm64, spec.provides),
         .macho => try HostPrelink.linkObject(ctx.gpa, arm64, provides, spec.keep),
         .coff => try CoffHostPrelink.linkObject(ctx.gpa, arm64, provides, spec.keep),
     };
@@ -335,22 +342,7 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: ?*Cach
     const exe_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_fast_dev_host" });
     std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = object_path, .data = object }) catch return error.LinkFailed;
     switch (spec.format) {
-        .elf => try linker.link(ctx, .{
-            .target_format = .elf,
-            .target_abi = spec.link_abi,
-            .target_os = spec.target.toOsTag(),
-            .target_arch = spec.target.toCpuArch(),
-            .output_path = exe_path,
-            .output_kind = output_kind,
-            .export_symbols = spec.exports,
-            .lazy_platform_archives = true,
-            .object_files = &.{object_path},
-            .platform_files_pre = spec.platform_files_pre,
-            .platform_files_post = spec.platform_files_post,
-            .force_undefined_symbols = spec.keep,
-            .platform_files_dir = spec.platform_files_dir,
-            .scratch_dir = scratch_dir,
-        }),
+        .elf => try linker.link(ctx, elfLinkConfig(spec, &.{object_path}, exe_path, scratch_dir)),
         .macho => {
             // Every kept symbol is left to dynamic lookup when nothing
             // defines it, so a host lacking one still links; the patch link
@@ -410,12 +402,34 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: ?*Cach
     const exe = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, exe_path, ctx.gpa, .unlimited) catch return error.ReadFailed;
     defer ctx.gpa.free(exe);
     const record = switch (spec.format) {
-        .elf => try host_prelink.finish(ctx.gpa, exe, spec.provides, spec.keep, if (spec.shared) provides else null),
+        .elf => try host_prelink.finish(ctx.gpa, exe, spec.provides, spec.keep, elf_kind, provides),
         .macho => try HostPrelink.finish(ctx.gpa, exe, provides, spec.keep),
         .coff => try CoffHostPrelink.finish(ctx.gpa, exe, provides, spec.keep),
     };
     if (manager) |cache| cache.storeFamilyBytes(.prelinked_host, key, record, host_scope, "prelinked host");
     return record;
+}
+
+/// The ELF host's link contract, shared by embedded-LLD linking and tests
+/// that invoke LLD as a subprocess.
+pub fn elfLinkConfig(spec: *const HostSpec, objects: []const []const u8, output_path: []const u8, scratch_dir: []const u8) linker.LinkConfig {
+    return .{
+        .target_format = .elf,
+        .target_abi = spec.link_abi,
+        .target_os = spec.target.toOsTag(),
+        .target_arch = spec.target.toCpuArch(),
+        .output_path = output_path,
+        .output_kind = if (spec.shared) .shared_lib else .exe,
+        .elf_pie = spec.pie,
+        .export_symbols = spec.exports,
+        .lazy_platform_archives = true,
+        .object_files = objects,
+        .platform_files_pre = spec.platform_files_pre,
+        .platform_files_post = spec.platform_files_post,
+        .force_undefined_symbols = spec.keep,
+        .platform_files_dir = spec.platform_files_dir,
+        .scratch_dir = scratch_dir,
+    };
 }
 
 const headerpad_arg = std.fmt.comptimePrint("0x{x}", .{HostPrelink.headerpad});

@@ -1,6 +1,11 @@
 //! Consumer manifests: what each consumer of one producer program lowers,
 //! which evaluated values it materializes, and what it keeps of the
 //! producer's root metadata.
+//!
+//! The producer is the Solved program evaluating the roots that read a value
+//! holding a function: every other root is the `.boxy` evaluator's (design.md
+//! "Compile-Time Evaluation Under `.lss`"). Each fixture's values therefore
+//! read a constant holding a function.
 
 const std = @import("std");
 const base = @import("base");
@@ -170,15 +175,19 @@ test "a build evaluates every compile-time value and materializes the ones its p
     try writeEchoPlatform(tmp_dir.dir, io);
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "Helper.roc", .data =
         \\Helper := [].{
+        \\    make_fill : U64 -> (U64 -> List(U64))
+        \\    make_fill = |count| |n| List.repeat(n, count)
+        \\    fill : U64 -> List(U64)
+        \\    fill = make_fill(4)
         \\    used_table : List(U64)
         \\    used_table = {
         \\        dbg "evaluated used table"
-        \\        List.repeat(7, 4)
+        \\        fill(7)
         \\    }
         \\    unused_table : List(U64)
         \\    unused_table = {
         \\        dbg "evaluated unused table"
-        \\        List.repeat(9, 4)
+        \\        fill(9)
         \\    }
         \\}
     });
@@ -247,12 +256,13 @@ test "a build evaluates every compile-time value and materializes the ones its p
     const host = &session.completed.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
     const helper_roots = helper.root_requests.compile_time_requests;
-    try std.testing.expectEqual(@as(usize, 2), helper_roots.len);
+    try std.testing.expectEqual(@as(usize, 3), helper_roots.len);
     // The value the program reads is materialized and frozen; the other root
     // is complete but stays in its module's store. Transcoding rejects a read
     // whose value the host did not materialize, so the runtime continuation
     // below also fails if the wrong root were the materialized one.
-    try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key.digest(), helper_roots));
+    const tables = [_]CheckedArtifact.RootRequest{ try rootWithOrder(helper_roots, 1), try rootWithOrder(helper_roots, 2) };
+    try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key.digest(), &tables));
     for (helper_roots) |request| {
         try std.testing.expect(helper.compile_time_roots.root(request.compile_time_root.?).payload != .unevaluated);
     }
@@ -275,14 +285,16 @@ test "one evaluated root has one completed-value slot however many places read i
     try writeEchoPlatform(tmp_dir.dir, io);
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "Helper.roc", .data =
         \\Helper := [].{
+        \\    make_scale : U64 -> (U64 -> U64)
+        \\    make_scale = |k| |n| n * k
         \\    triple : U64 -> U64
-        \\    triple = |n| n * 3
+        \\    triple = make_scale(3)
         \\    base_value : U64
         \\    base_value = triple(7)
         \\    doubled : U64
         \\    doubled = base_value + base_value
         \\    offset : I64
-        \\    offset = -3
+        \\    offset = triple(1).to_i64_wrap() - 6
         \\}
     });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
@@ -328,26 +340,27 @@ test "one evaluated root has one completed-value slot however many places read i
     const stages = &session.completed.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
     const helper_roots = helper.root_requests.compile_time_requests;
-    try std.testing.expectEqual(@as(usize, 3), helper_roots.len);
+    try std.testing.expectEqual(@as(usize, 4), helper_roots.len);
+    const value_roots = [_]CheckedArtifact.RootRequest{ try rootWithOrder(helper_roots, 1), try rootWithOrder(helper_roots, 2), try rootWithOrder(helper_roots, 3) };
 
     // Every one of these values is computed, read at runtime, and
     // materialized for the runtime consumer; `base_value` is additionally
     // read by `doubled`, at compile time. No program has two slots for one
     // concrete value, however many places in it read the value.
-    for (helper_roots) |request| {
+    for (value_roots) |request| {
         const root = try rootIdentity(request);
         try std.testing.expect(materializingStage(stages, helper.key.digest(), root) != null);
         for (stages.programs()) |program| try std.testing.expect(valueSlotsForRoot(program, helper.key.digest(), root) <= 1);
     }
-    try std.testing.expectEqual(@as(usize, 3), try materializedAmong(stages, helper.key.digest(), helper_roots));
+    try std.testing.expectEqual(@as(usize, 3), try materializedAmong(stages, helper.key.digest(), &value_roots));
 
     // `doubled` reads `base_value` once it has completed: in a later stage
     // than the one evaluating `base_value`, where the completed scalar is a
     // literal and needs no slot. A root nothing evaluated later reads has a
     // slot only where it runs.
-    const base_root = try rootIdentity(try rootWithOrder(helper_roots, 0));
-    const doubled_root = try rootIdentity(try rootWithOrder(helper_roots, 1));
-    const offset_root = try rootIdentity(try rootWithOrder(helper_roots, 2));
+    const base_root = try rootIdentity(value_roots[0]);
+    const doubled_root = try rootIdentity(value_roots[1]);
+    const offset_root = try rootIdentity(value_roots[2]);
     const base_stage = materializingStage(stages, helper.key.digest(), base_root).?;
     const doubled_stage = materializingStage(stages, helper.key.digest(), doubled_root).?;
     try std.testing.expect(doubled_stage > base_stage);
@@ -392,8 +405,12 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
         \\Helper := [].{
         \\    comptime_only : U64 -> U64
         \\    comptime_only = |n| n + n
+        \\    make_adder : U64 -> (U64 -> U64)
+        \\    make_adder = |k| |n| comptime_only(n) + k
+        \\    add_zero : U64 -> U64
+        \\    add_zero = make_adder(0)
         \\    answer : U64
-        \\    answer = comptime_only(21)
+        \\    answer = add_zero(21)
         \\}
     });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
@@ -486,8 +503,12 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
         \\Helper := [].{
         \\    twice : I64 -> I64
         \\    twice = |n| n + n
+        \\    make_adder : I64 -> (I64 -> I64)
+        \\    make_adder = |k| |n| twice(n) + k
+        \\    add_zero : I64 -> I64
+        \\    add_zero = make_adder(0)
         \\    answer : I64
-        \\    answer = twice(21)
+        \\    answer = add_zero(21)
         \\}
     });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data =

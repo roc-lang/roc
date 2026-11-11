@@ -297,6 +297,18 @@ pub fn roc_builtins_str_concat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_ca
     strConcatOutOfLine(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, update_mode);
 }
 
+/// Wrapper: strConcatC(RocStr, RocStr, UpdateMode, *RocOps) -> RocStr for
+/// the `str_append` low-level: a generated rendering joining a piece onto the
+/// string it is building. Same result and ownership as
+/// `roc_builtins_str_concat`, with no small-string path of its own: the
+/// string being built stops being small after its first pieces, so at these
+/// sites that path is a copy that never pays, and this wrapper is only the
+/// call. The update mode is forwarded to the builtin's uniqueness check;
+/// `.InPlace` skips it.
+pub fn roc_builtins_str_append(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, update_mode: utils.UpdateMode) callconv(.c) void {
+    strConcatOutOfLine(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, update_mode);
+}
+
 noinline fn strConcatOutOfLine(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, update_mode: utils.UpdateMode) void {
     const roc_ops = in_process_host.ops();
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };

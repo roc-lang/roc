@@ -127,8 +127,12 @@ const issue806MultiTagAppBody = issue806LargeAggregateDefinitions ++ issue806Mul
     \\
 ++ issue806MainSuffix;
 
-const issue806InlineClosureCaptureAppBody = issue806LargeAggregateDefinitions ++ issue806MainPrefix ++
-    \\    captured = make12(1)
+// The captured record is built from the argument count so that it is only
+// known at runtime and the closure captures it.
+const issue806InlineClosureCaptureAppBody = issue806LargeAggregateDefinitions ++
+    \\main! : List(Str) => Try({}, [Exit(I8), ..])
+    \\main! = |args| {
+    \\    captured = make12(List.len(args))
     \\    boxed = Box.box(|_| rightmost(captured))
     \\    closure = Box.unbox(boxed)
     \\    _ = closure({})
@@ -186,8 +190,8 @@ test "issue 806: large match payload extraction is explicit before backend consu
     try harness.expectLirInspection(issue806MatchPayloadAppBody, expectLargeMatchPayloadExtractionIsExplicitAndFrameProbed);
 }
 
-test "issue 806: large closure captures are explicit before backend consumers" {
-    try harness.expectLirInspection(issue806InlineClosureCaptureAppBody, expectLargeClosureCapturesAreExplicitAndFrameProbed);
+test "issue 806: functions holding a large closure capture probe their stack frames" {
+    try harness.expectLirInspection(issue806InlineClosureCaptureAppBody, expectLargeClosureCapturesAreFrameProbed);
 }
 
 fn expectLargeStackStructAssignsAreFrameProbed(
@@ -320,11 +324,11 @@ fn hasLargeStackReturn(
     return false;
 }
 
-fn expectLargeClosureCapturesAreExplicitAndFrameProbed(
+fn expectLargeClosureCapturesAreFrameProbed(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
-    try rejectConsumerOwnedLargeStackClosureCaptures(store, layouts);
+    try std.testing.expect(hasLargeClosureCapture(store, layouts));
     try expectLargeAggregateProcsRequireStackProbe(store, layouts);
 }
 
@@ -336,32 +340,21 @@ fn expectLargeMatchPayloadExtractionIsExplicitAndFrameProbed(
     try expectLargeAggregateProcsRequireStackProbe(store, layouts);
 }
 
-fn rejectConsumerOwnedLargeStackClosureCaptures(
+/// Whether a boxed closure captures a record or tag union larger than the
+/// guard pages the test assumes.
+fn hasLargeClosureCapture(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
-) harness.LowerToLirHarnessError!void {
-    try std.testing.expect(hasPackedErasedFn(store));
-
+) bool {
     for (store.getCFStmts()) |stmt| {
-        if (stmt == .assign_packed_erased_fn) {
-            const assign = store.stmtRow(stmt.assign_packed_erased_fn.data);
-            if (assign.capture) |capture| {
-                if (isUnsafeLargeAggregateLocal(store, layouts, capture)) {
-                    return error.Issue806UnsafeLargeStackClosureCapture;
-                }
-            }
-            if (assign.capture_layout) |capture_layout| {
-                if (isUnsafeLargeAggregateLayoutIdx(layouts, capture_layout)) {
-                    return error.Issue806UnsafeLargeStackClosureCapture;
-                }
-            }
+        if (stmt != .assign_packed_erased_fn) continue;
+        const assign = store.stmtRow(stmt.assign_packed_erased_fn.data);
+        if (assign.capture) |capture| {
+            if (isUnsafeLargeAggregateLocal(store, layouts, capture)) return true;
         }
-    }
-}
-
-fn hasPackedErasedFn(store: *const lir.LirStore) bool {
-    for (store.getCFStmts()) |stmt| {
-        if (stmt == .assign_packed_erased_fn) return true;
+        if (assign.capture_layout) |capture_layout| {
+            if (isUnsafeLargeAggregateLayoutIdx(layouts, capture_layout)) return true;
+        }
     }
     return false;
 }

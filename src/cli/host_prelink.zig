@@ -7,7 +7,7 @@
 //! app code to be appended, and a side table describing what the patch link
 //! needs of them (`patch_link.zig`).
 //!
-//! The generated object (`linkObject`) carries no code. It defines every
+//! A fixed executable's generated object (`linkObject`) carries no code. It defines every
 //! `provides` symbol as an absolute address in the app region, at a fixed
 //! window per symbol (`provideAddress`), so the host's references to the app
 //! resolve at prelink time to bytes each build fills in: a jump to the entry
@@ -17,6 +17,10 @@
 //! spare entries for the app's segments. The table keeps the distance from
 //! its file offset to its address that the first segment has, so every
 //! kernel computes `AT_PHDR` for it correctly.
+//! PIE executables and shared libraries instead use section-backed windows
+//! (`linkPositionIndependentObject`): an absolute symbol cannot follow the
+//! load base. Their records retain runtime relocation metadata separately
+//! from artifact identity; PIE still has executable startup and no exports.
 //!
 //! Nothing in the host link is compiler-owned code: the builtins and the
 //! Boxy runtime are part of the app region (design.md "Sealed Roc Object
@@ -28,12 +32,22 @@ const std = @import("std");
 const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
+/// ELF artifact identity, independent of whether its load addresses slide.
+pub const Kind = enum(u32) {
+    executable,
+    pie,
+    shared,
+
+    pub fn positionIndependent(self: Kind) bool {
+        return self != .executable;
+    }
+};
+
 /// Whether a `provides` symbol is a procedure or a value.
 pub const ProvideKind = enum(u8) { procedure = 0, data = 1 };
 
-/// One `provides` symbol of the platform, as a Mach-O or COFF host link
-/// places it: those hosts size each symbol's window by its kind and layout
-/// size, which the program's images tell before the host is looked up.
+/// One section-backed `provides` symbol (ELF PIE/shared, Mach-O or COFF).
+/// Its kind and layout size are known before the host is looked up.
 pub const Provide = struct {
     /// The C name, without any Mach-O underscore.
     name: []const u8,
@@ -50,10 +64,9 @@ pub const Provide = struct {
     }
 };
 
-/// A procedure window of a Mach-O or COFF host: room for a long jump and a
-/// trap.
+/// A section-backed procedure window: room for a long jump and a trap.
 pub const procedure_window: u64 = 16;
-/// The alignment of every window of a Mach-O or COFF host.
+/// The alignment of every section-backed window.
 pub const window_align: u64 = 16;
 
 /// The address the app region starts at. The host must end below it, and
@@ -161,18 +174,18 @@ pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const []const u
     return try out.toOwnedSlice(allocator);
 }
 
-/// The section of a shared host's procedure windows.
-pub const shared_procedure_section = ".rocprov";
-/// The section of a shared host's value windows.
-pub const shared_value_section = ".rocprovd";
+/// The section of a position-independent host's procedure windows.
+const procedure_section_name = ".rocprov";
+/// The section of a position-independent host's value windows.
+const value_section_name = ".rocprovd";
 
-/// The generated object of a shared library host link: the reserved program
+/// The generated object of a position-independent host link: the reserved program
 /// header table, a window section defining each provide (`provides`, sorted
 /// and distinct, with their layouts), as a Mach-O or COFF host's object
 /// does, and one absolute word against the reserve, whose relocation gives
-/// the library a dynamic relocation table for the patch link to extend.
+/// the image a dynamic relocation table for the patch link to extend.
 /// `arm64` selects the AArch64 machine over x86_64.
-pub fn linkSharedObject(allocator: Allocator, arm64: bool, provides: []const Provide) Allocator.Error![]u8 {
+pub fn linkPositionIndependentObject(allocator: Allocator, arm64: bool, provides: []const Provide) Allocator.Error![]u8 {
     var procedure_size: u64 = 0;
     var value_size: u64 = 0;
     for (provides) |provide| switch (provide.kind) {
@@ -252,11 +265,11 @@ pub fn linkSharedObject(allocator: Allocator, arm64: bool, provides: []const Pro
     const symtab_size = out.items.len - symtab_offset;
     const strtab_offset = out.items.len;
     try out.appendSlice(allocator, strtab.items);
-    const shstrtab = "\x00" ++ reserve_section_name ++ "\x00" ++ shared_procedure_section ++ "\x00" ++ shared_value_section ++ "\x00.rocanchor\x00.rela.rocanchor\x00.symtab\x00.strtab\x00.shstrtab\x00";
+    const shstrtab = "\x00" ++ reserve_section_name ++ "\x00" ++ procedure_section_name ++ "\x00" ++ value_section_name ++ "\x00.rocanchor\x00.rela.rocanchor\x00.symtab\x00.strtab\x00.shstrtab\x00";
     const name_reserve = 1;
     const name_procedures = name_reserve + reserve_section_name.len + 1;
-    const name_values = name_procedures + shared_procedure_section.len + 1;
-    const name_anchor = name_values + shared_value_section.len + 1;
+    const name_values = name_procedures + procedure_section_name.len + 1;
+    const name_anchor = name_values + value_section_name.len + 1;
     const name_rela = name_anchor + ".rocanchor".len + 1;
     const name_symtab = name_rela + ".rela.rocanchor".len + 1;
     const name_strtab = name_symtab + ".symtab".len + 1;
@@ -318,14 +331,16 @@ pub const KeyInput = struct {
     link_abi: []const u8,
     /// Sorted, distinct.
     provides: []const []const u8,
-    /// For a Mach-O or COFF host, each provide's kind and layout size, in
-    /// the provides' order; empty for an ELF host, whose windows are fixed.
+    /// Each section-backed provide's kind and layout size, in provides order;
+    /// empty for a fixed ELF executable, whose windows do not depend on layout.
     provide_layouts: []const Provide = &.{},
     /// The symbols kept for the app region; sorted, distinct.
     keep: []const []const u8,
     /// Whether the host is linked as a shared library rather than an
     /// executable.
     shared: bool = false,
+    /// Opt-in PIE executable; startup inputs must relocate the image.
+    pie: bool = false,
     /// For a shared library, the symbols it exports; sorted, distinct.
     exports: []const []const u8 = &.{},
     /// The platform's link items as its header names them, relative to its
@@ -358,6 +373,7 @@ pub fn key(input: KeyInput) [32]u8 {
     }
     hashList(&hasher, input.keep);
     hasher.update(&.{@intFromBool(input.shared)});
+    hasher.update(&.{@intFromBool(input.pie)});
     hashList(&hasher, input.exports);
     hashList(&hasher, input.link_items);
     if (input.bundle_hash) |bundle| {
@@ -388,7 +404,7 @@ fn hashList(hasher: *std.crypto.hash.sha2.Sha256, list: []const []const u8) void
 }
 
 /// The record format; bumped whenever `finish`'s output changes.
-pub const format_version: u32 = 5;
+pub const format_version: u32 = 6;
 const magic = "RHST".*;
 /// The offset of the host's bytes in a record, so they can be copied by
 /// file range from a page boundary.
@@ -433,10 +449,9 @@ const Header = extern struct {
     provide_count: u32,
     strings_offset: u32,
     strings_size: u32,
-    /// 1 for a shared library host, whose provides have windows in its
-    /// sections (`Window`, at `windows_offset`) and whose dynamic
-    /// relocation table a link extends.
-    shared: u32,
+    /// Artifact identity (`Kind`). PIE and shared hosts both have section
+    /// windows and dynamic relocations, but only shared hosts are libraries.
+    kind: u32,
     windows_offset: u32,
     /// The `.dynamic` section's offset in the host's bytes.
     dynamic_offset: u64,
@@ -470,13 +485,13 @@ pub const FinishError = Allocator.Error || error{
 /// symbols the app region may import; the record holds the address of each
 /// one the host defines.
 ///
-/// A shared library host (`shared`, the provides' layouts in name order,
-/// linked from `linkSharedObject`) records each provide's window section
-/// place and the dynamic relocation table the patch link extends.
-pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, keep: []const []const u8, shared: ?[]const Provide) FinishError![]align(16) u8 {
+/// Position-independent hosts, linked from `linkPositionIndependentObject`,
+/// record section-backed windows and the dynamic relocations the patch link
+/// extends. `layouts` is in provides order and empty for fixed executables.
+pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, keep: []const []const u8, kind: Kind, layouts: []const Provide) FinishError![]align(16) u8 {
     if (exe.len < 64 or !std.mem.eql(u8, exe[0..4], "\x7fELF") or exe[4] != 2 or exe[5] != 1) return error.UnexpectedHostLayout;
     const machine = readU16(exe, 18);
-    const expected_type: u16 = if (shared != null) ET_DYN else ET_EXEC;
+    const expected_type: u16 = if (kind.positionIndependent()) ET_DYN else ET_EXEC;
     if (readU16(exe, 16) != expected_type or (machine != EM_X86_64 and machine != EM_AARCH64)) return error.UnexpectedHostLayout;
     const phoff = readU64(exe, 32);
     const shoff = readU64(exe, 40);
@@ -514,7 +529,7 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
     var build_id_size: u32 = 0;
     var symtab_index: u32 = 0;
     var debug_indices = [_]u32{ 0, 0, 0 };
-    // A shared host's window sections, by their address and file offset.
+    // Section-backed windows, by their address and file offset.
     var procedure_section: ?[2]u64 = null;
     var value_section: ?[2]u64 = null;
     for (0..shnum) |index| {
@@ -529,9 +544,9 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         if (std.mem.eql(u8, name, reserve_section_name)) {
             if (size != phdr_capacity * phdr_size or addr != offset + delta) return error.UnexpectedHostLayout;
             reserve_offset = offset;
-        } else if (std.mem.eql(u8, name, shared_procedure_section)) {
+        } else if (std.mem.eql(u8, name, procedure_section_name)) {
             procedure_section = .{ addr, offset };
-        } else if (std.mem.eql(u8, name, shared_value_section)) {
+        } else if (std.mem.eql(u8, name, value_section_name)) {
             value_section = .{ addr, offset };
         } else if (std.mem.eql(u8, name, ".note.gnu.build-id")) {
             const note = sliceAt(exe, offset, size) orelse return error.UnexpectedHostLayout;
@@ -621,12 +636,12 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         try strings.append(allocator, 0);
     }
 
-    // A shared host: each provide's window, and the dynamic relocation
+    // A position-independent host: each provide's window and dynamic relocation
     // table and the `.dynamic` entries naming it.
-    const windows = try allocator.alloc(Window, if (shared != null) provides.len else 0);
+    const windows = try allocator.alloc(Window, if (kind.positionIndependent()) provides.len else 0);
     defer allocator.free(windows);
     var dynamic_info: DynamicInfo = .{};
-    if (shared) |layouts| {
+    if (kind.positionIndependent()) {
         std.debug.assert(layouts.len == provides.len);
         var procedure_at: u64 = 0;
         var value_at: u64 = 0;
@@ -749,7 +764,7 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         .provide_count = @intCast(provide_names.len),
         .strings_offset = @intCast(strings_offset),
         .strings_size = @intCast(strings.items.len),
-        .shared = @intFromBool(shared != null),
+        .kind = @backingInt(kind),
         .windows_offset = @intCast(windows_offset),
         .dynamic_offset = dynamic_info.offset,
         .rela_vaddr = dynamic_info.rela_vaddr,
@@ -775,7 +790,7 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
     return out;
 }
 
-/// What a shared host's patch link reads of its dynamic relocations.
+/// What a position-independent host's patch link reads of its dynamic relocations.
 const DynamicInfo = struct {
     offset: u64 = 0,
     rela_vaddr: u64 = 0,
@@ -786,7 +801,7 @@ const DynamicInfo = struct {
     relasz_entry: u32 = 0,
 };
 
-/// A shared host's window of one provide, in name order.
+/// A section-backed window of one provide, in name order.
 pub const Window = extern struct {
     vaddr: u64,
     /// The window's offset in the host's bytes.
@@ -820,13 +835,15 @@ pub const View = struct {
         if (header.sht_offset % 8 != 0 or header.sht_offset + @as(u64, header.shnum) * 64 > bytes.len) return error.InvalidRecord;
         if (header.build_id_offset + header.build_id_size > header.host_size) return error.InvalidRecord;
         if (header.host_end_vaddr > app_base) return error.InvalidRecord;
-        if (header.shared != 0) {
+        const kind = std.enums.fromInt(Kind, header.kind) orelse return error.InvalidRecord;
+        if (kind.positionIndependent()) {
             if (header.windows_offset % 8 != 0 or @as(u64, header.windows_offset) + @as(u64, header.provide_count) * @sizeOf(Window) > bytes.len) return error.InvalidRecord;
             if (header.dynamic_offset >= header.host_size or header.rela_offset + header.rela_size > header.host_size or header.rela_section >= header.shnum) return error.InvalidRecord;
         }
         if (header.host_size < 64) return error.InvalidRecord;
         const machine = readU16(bytes[host_offset..], 18);
         if (machine != EM_X86_64 and machine != EM_AARCH64) return error.InvalidRecord;
+        if (readU16(bytes[host_offset..], 16) != @as(u16, if (kind.positionIndependent()) ET_DYN else ET_EXEC)) return error.InvalidRecord;
         return .{ .bytes = bytes, .header = header };
     }
 
@@ -858,12 +875,20 @@ pub const View = struct {
     }
     /// Whether the host is a shared library.
     pub fn shared(self: View) bool {
-        return self.header.shared != 0;
+        return self.header.kind == @backingInt(Kind.shared);
     }
-    /// A shared host's windows, one per provide in name order; empty for
-    /// an executable host, whose windows are `provideAddress`.
+    /// Whether runtime startup must apply load-base relocations.
+    pub fn positionIndependent(self: View) bool {
+        return self.header.kind != @backingInt(Kind.executable);
+    }
+    /// Whether provides occupy typed host sections rather than fixed app windows.
+    pub fn hasWindowSections(self: View) bool {
+        return self.positionIndependent();
+    }
+    /// Section-backed windows, one per provide in name order; empty for
+    /// a fixed executable, whose windows are `provideAddress`.
     pub fn windows(self: View) []const Window {
-        if (!self.shared()) return &.{};
+        if (!self.hasWindowSections()) return &.{};
         const start: [*]const Window = @ptrCast(@alignCast(self.bytes.ptr + self.header.windows_offset));
         return start[0..self.header.provide_count];
     }
@@ -1015,11 +1040,11 @@ test "the host link object defines each provide at its window" {
     try std.testing.expectEqualSlices(u8, object[20..], aarch64[20..]);
 }
 
-test "a shared host's object defines each provide in a window section and anchors a relocation" {
+test "a position-independent host object defines section windows and anchors a relocation" {
     const UnitImage = @import("backend").dev.UnitImage;
     const allocator = std.testing.allocator;
     for ([_]bool{ false, true }) |arm64| {
-        const object = try linkSharedObject(allocator, arm64, &.{
+        const object = try linkPositionIndependentObject(allocator, arm64, &.{
             .{ .name = "roc_config", .kind = .data, .size = 24 },
             .{ .name = "roc_main", .kind = .procedure, .size = 0 },
         });
@@ -1056,4 +1081,10 @@ test "a host key is a function of contents, not of where they are" {
     var sized = input;
     sized.provide_layouts = &.{.{ .name = "roc_main", .kind = .procedure, .size = 0 }};
     try std.testing.expect(!std.mem.eql(u8, &baseline, &key(sized)));
+    var pie = sized;
+    pie.pie = true;
+    var shared = sized;
+    shared.shared = true;
+    try std.testing.expect(!std.mem.eql(u8, &key(sized), &key(pie)));
+    try std.testing.expect(!std.mem.eql(u8, &key(shared), &key(pie)));
 }

@@ -1449,6 +1449,8 @@ const ProcShape = struct {
     list_reserve_for_append_count: usize = 0,
     str_count_utf8_bytes_count: usize = 0,
     str_concat_count: usize = 0,
+    str_append_count: usize = 0,
+    str_reserve_count: usize = 0,
     box_box_count: usize = 0,
     box_unbox_count: usize = 0,
     box_prepare_update_count: usize = 0,
@@ -4276,6 +4278,37 @@ test "issue 12609 lss runs imported lambdas a stored conditional, match, or bloc
     try std.testing.expectEqualStrings("(\"abab\", [1, 1], \"hi!\", \"ok?\")", output);
 }
 
+test "generated inspect renderings append onto one reserved accumulator" {
+    // A record, a tuple, a tag with payloads, and a nested list, each rendered
+    // by generated code: every piece is joined with `str_append`, each
+    // rendering of several pieces reserves its literal text first, and no
+    // `str_concat` is generated.
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\Shape : [Circle(F64), Rect(F64, F64), Dot]
+        \\
+        \\main : { name : Str, count : U64, shape : Shape, pair : (I64, Str), rows : List(List(U8)) } -> Str
+        \\main = |value| Str.inspect(value)
+    , .wrappers);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_concat_count"));
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_append_count") > 0);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_reserve_count") > 0);
+}
+
+test "a spelled Str.concat keeps str_concat beside a generated rendering" {
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\main : { left : Str, right : U64 } -> Str
+        \\main = |value| Str.concat(value.left, Str.inspect(value))
+    , .wrappers);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_concat_count"));
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_append_count") > 0);
+}
+
 test "issue 11170 boxy generic inspect preserves SIMD descriptor methods" {
     const allocator = std.testing.allocator;
     const source =
@@ -5178,6 +5211,8 @@ fn collectLirResultProcShape(
                 if (stmt.op == .list_reserve_for_append) shape.list_reserve_for_append_count += 1;
                 if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
                 if (stmt.op == .str_concat) shape.str_concat_count += 1;
+                if (stmt.op == .str_append) shape.str_append_count += 1;
+                if (stmt.op == .str_reserve) shape.str_reserve_count += 1;
                 if (stmt.op == .box_box) shape.box_box_count += 1;
                 if (stmt.op == .box_unbox or stmt.op == .box_unbox_borrowed) shape.box_unbox_count += 1;
                 if (stmt.op == .box_prepare_update) shape.box_prepare_update_count += 1;
@@ -13490,7 +13525,7 @@ test "issue 11291 boxy imported nominal forwarding executes with exact backing d
     try std.testing.expectEqualStrings("[120, 121, 122]", output);
 }
 
-test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
+test "issue 11376: mixed-width products survive Boxy boundaries and copy-on-write" {
     const allocator = std.testing.allocator;
     const source =
         \\Pair := { a: U8, z: U64 }
@@ -13554,13 +13589,17 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
             );
             defer interpreter.deinit();
             static_data.install(&interpreter);
-            var index: u64 = 1;
-            const evaluated = try interpreter.eval(.{
-                .proc_id = try rootProc(&lowered.lowered),
-                .arg_layouts = &.{.u64},
-                .arg_ptr = @ptrCast(&index),
-            });
-            try std.testing.expectEqual(@as(u64, 131), evaluated.value.read(u64));
+            // Cover both elements and the bounds failure without depending
+            // on whether the constant list is a literal or frozen data.
+            for ([_]u64{ 131, 131, 0 }, 0..) |expected, position| {
+                var index: u64 = @intCast(position);
+                const evaluated = try interpreter.eval(.{
+                    .proc_id = try rootProc(&lowered.lowered),
+                    .arg_layouts = &.{.u64},
+                    .arg_ptr = @ptrCast(&index),
+                });
+                try std.testing.expectEqual(expected, evaluated.value.read(u64));
+            }
         }
         try runtime_env.checkForLeaks();
     }
@@ -13776,6 +13815,7 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     // an enclosing codec contract must not split those ordinary helpers.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
+    // Pin specialization, not expression/local bookkeeping within a worker.
     try std.testing.expectEqual(@as(usize, 23), stats.functions);
     try std.testing.expectEqual(@as(usize, 16), stats.definitions);
     // Each of the two restored Values keeps its source static-data candidate,

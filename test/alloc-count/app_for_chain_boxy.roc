@@ -7,7 +7,8 @@ import pf.Host
 # state, building no step closures, so it allocates nothing per element.
 # Every length depends on the hosted input so compile-time evaluation cannot
 # remove the loops, and each chain's allocation count must not depend on the
-# length it runs over.
+# length it runs over. The one closure capturing a value (`seed`) is the one
+# allocation per call; a closure capturing nothing is static data.
 run! : Str => Str
 run! = |input| {
     seed = Str.count_utf8_bytes(input)
