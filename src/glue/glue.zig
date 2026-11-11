@@ -4709,7 +4709,7 @@ test "issue 12760: boundary layout requirements survive memoization and callable
         \\
         \\Alias(a) :: a
         \\Wrapper(a) := a
-        \\probe : Model, Alias(Model), Wrapper(Model), Box(Model), (Model -> Model), (U64 -> U64) -> Model
+        \\probe : Model, Alias(Model), Wrapper(Model), Box(Model), Box((Model -> Model)), Box((U64 -> U64)) -> Model
         \\probe = |model, _, _, _, _, _| model
     });
     const cwd = try tmp.dir.realPathFileAlloc(io, ".", gpa);
@@ -4789,16 +4789,19 @@ test "issue 12760: boundary layout requirements survive memoization and callable
 
     var table = TypeTable.init(gpa, &artifacts);
     defer table.deinit();
-    // The same unknown type can still be carried behind a real box. A stored
-    // callable stays representable, but must not advertise a fabricated ABI.
+    // The same unknown type can still be carried behind a real box. A
+    // directly boxed callable stays representable, but a callable over the
+    // unknown type must not advertise a fabricated ABI.
     const boxed = try table.getOrInsertRoot(artifact, signature.args[3]);
     try std.testing.expect(table.entries.items[@intCast(boxed)].repr == .box);
     const before_callable = table.entries.items.len;
-    const opaque_callable = try table.getOrInsertRoot(artifact, signature.args[4]);
+    const opaque_box = try table.getOrInsertRoot(artifact, signature.args[4]);
+    const opaque_callable = table.entries.items[@intCast(opaque_box)].repr.box.inner_id;
     try std.testing.expect(table.entries.items[@intCast(opaque_callable)].repr.erased_callable.signature == null);
     try std.testing.expect(table.unresolved_error == null);
-    try std.testing.expectEqual(before_callable + 1, table.entries.items.len);
-    const concrete_callable = try table.getOrInsertRoot(artifact, signature.args[5]);
+    try std.testing.expectEqual(before_callable + 2, table.entries.items.len);
+    const concrete_box = try table.getOrInsertRoot(artifact, signature.args[5]);
+    const concrete_callable = table.entries.items[@intCast(concrete_box)].repr.box.inner_id;
     try std.testing.expect(table.entries.items[@intCast(concrete_callable)].repr.erased_callable.signature != null);
     try std.testing.expect(table.unresolved_error == null);
     try std.testing.expectEqual(boxed, try table.getOrInsertRoot(artifact, signature.args[3]));
