@@ -1111,6 +1111,48 @@ pub const Converter = struct {
         };
     }
 
+    /// The distinct flex and rigid variables the checked type `root` of
+    /// `module` mentions, in the order a depth-first walk first reaches them.
+    pub fn typeVariables(self: Converter, allocator: Allocator, module: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error![]const checked.CheckedTypeId {
+        const types = self.modules.get(module).types();
+        const scratch = self.store.allocator;
+        var found: std.ArrayList(checked.CheckedTypeId) = .empty;
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(scratch);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(scratch);
+        try pending.append(scratch, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(scratch, ty)).found_existing) continue;
+            const start = pending.items.len;
+            switch (types.payload(ty)) {
+                .flex, .rigid => try found.append(allocator, ty),
+                .alias => |alias| {
+                    try pending.appendSlice(scratch, alias.args);
+                    try pending.append(scratch, alias.backing);
+                },
+                .record => |record| {
+                    for (0..record.fields.len()) |field_index| try pending.append(scratch, record.fields.get(field_index).ty);
+                    try pending.append(scratch, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(scratch, items),
+                .tag_union => |tag_union| {
+                    for (0..tag_union.tags.len()) |tag_index| try pending.appendSlice(scratch, tag_union.tags.get(tag_index).args);
+                    try pending.append(scratch, tag_union.ext);
+                },
+                .function => |function| {
+                    try pending.appendSlice(scratch, function.args);
+                    try pending.append(scratch, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(scratch, nominal.args),
+                .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+            }
+            // Children are visited in the order they were listed.
+            std.mem.reverse(checked.CheckedTypeId, pending.items[start..]);
+        }
+        return found.items;
+    }
+
     /// The type a scheme variable takes where nothing relates it to a use:
     /// what it seals to when no scope binds it.
     pub fn sealedScheme(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId) Allocator.Error!TypeId {
@@ -1328,7 +1370,8 @@ pub const Converter = struct {
     }
 
     /// The type of the nominal `ty` of `module` names (through aliases),
-    /// applied to the complete argument tuple `args`, including captures.
+    /// applied to `args` rather than to its own arguments: its declared
+    /// arguments, then its context arguments.
     pub fn nominalAt(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, args: []const TypeId) Allocator.Error!TypeId {
         const types = self.modules.get(module).types();
         var current = ty;

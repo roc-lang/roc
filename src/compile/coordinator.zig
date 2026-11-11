@@ -2221,6 +2221,9 @@ pub const Coordinator = struct {
     /// The compilation's module objects, once it has one to build.
     boxy_objects: ?BoxyObjects = null,
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
+    /// Instrumentation only: reads each `.boxy` compile-time program the
+    /// compilation lowers.
+    boxy_program_observer: ?eval.CompileTimeFinalization.BoxyProgramObserver = null,
     /// Keep compile-time evaluation artifacts so tests can compare them
     /// with the code emitted by a build.
     keep_compile_time_artifacts: bool = false,
@@ -3882,6 +3885,7 @@ pub const Coordinator = struct {
         options.discovery_roots = .{ .requests = discovery_requests.items, .source_modules = discovery_sources.items };
         options.defer_debug_replay = !replay_cached_debug;
         options.debug_observer = self.debug_observer;
+        options.boxy_program_observer = self.boxy_program_observer;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         // An explicitly empty test execution subset has no runtime consumer.
         // Checking still finalizes every pending compile-time obligation.
@@ -3930,8 +3934,8 @@ pub const Coordinator = struct {
         return manager.config.enabled;
     }
 
-    /// The roots a compilation under `strategy` has yet to evaluate; a
-    /// `.lss` compilation never evaluates a literal argument root.
+    /// The roots a compilation under `strategy` has yet to evaluate
+    /// (`CheckedModuleArtifact.hasUnevaluatedRequests`).
     fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy) usize {
         var count: usize = 0;
         for (artifact.root_requests.compile_time_requests) |request| {
@@ -3967,7 +3971,11 @@ pub const Coordinator = struct {
 
     /// Report destinations for checked modules whose finalization completed
     /// in an earlier compilation. A literal such a module owns can still be
-    /// rejected by a specialization this program makes of it; the report
+    /// rejected by a specialization this program makes of it where no
+    /// literal argument root of any module converts it at that type: an
+    /// instantiation checking records no edge for, such as a platform's call
+    /// of the app's procedure, a stored function value, or a target derived
+    /// from a function's type (design.md "Literal Arguments"). The report
     /// joins that module's reports without touching its cached result, since
     /// every compilation that makes the specialization evaluates it again.
     ///
@@ -12871,20 +12879,20 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
             try coord.finishCheckedProgram(.none);
             try std.testing.expect(!coord.hasUserErrors());
             const session = &coord.program_session.?;
-            // Evaluation completed `answer`, so the runtime program is
-            // specialized once more, from the stored value, with no stage of
-            // its own: it registers no literal root.
-            try std.testing.expect(session.runtime_stages == .respecialized);
-            try std.testing.expect(session.runtime_stages.respecialized == null);
-            const stage_count: u32 = @intCast(session.completed.?.programs().len);
+            // The `.boxy` evaluator completed `answer` before the Solved
+            // program was specialized, so that program restores the stored
+            // value and is specialized once, and the runtime consumer
+            // continues it: it registers no literal root.
+            try std.testing.expect(session.runtime_stages == .evaluation);
+            const stage_count: u32 = if (session.completed) |*completed| @intCast(completed.programs().len) else 0;
             try std.testing.expect(session.runtime_prepared != null);
-            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
             try std.testing.expectEqual(stage_count, metrics.lir_continuations);
             var runtime = try session.takeRuntime(allocator, requests, target);
             defer runtime.deinit();
-            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
             try std.testing.expectEqual(stage_count + 1, metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The runtime consumer lowers its own continuation, where the

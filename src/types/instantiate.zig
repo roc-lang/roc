@@ -105,14 +105,13 @@ pub fn instantiateNominalBacking(
         try store.gpa.alloc(Instantiator.RigidSub, formals.len);
     defer if (formals.len > inline_rigid_subs.len) store.gpa.free(rigid_sub_buffer);
     var rigid_sub_count: usize = 0;
-    for (formals, args, 0..) |formal, arg, index| {
+    for (formals, args) |formal, arg| {
         const formal_resolved = store.resolveVar(formal);
         try var_map.put(formal_resolved.var_, arg);
         // A malformed header arg (underscore/malformed anno) is err, not
         // rigid; the template cannot reference it by name.
         switch (formal_resolved.desc.content) {
             .rigid => |rigid| {
-                if (index >= formals.len - decl.flags.capture_count) continue;
                 rigid_sub_buffer[rigid_sub_count] = .{ .name = rigid.name, .var_ = arg };
                 rigid_sub_count += 1;
             },
@@ -381,11 +380,13 @@ pub const Instantiator = struct {
 
     /// A rank-1 scheme can contain quantified leaves below monomorphic
     /// structural nodes. While instantiating such a scheme, copy exactly the
-    /// monomorphic nodes from which a generalized variable is reachable (as
-    /// recorded in `Scratch.reach_state`) so the walk reaches every
-    /// generalized descendant. Every other monomorphic node stays shared: it
-    /// is not quantified, so each use must see the same node, including a
-    /// function node's effect kind and effect dependencies.
+    /// monomorphic nodes from which a generalized variable or per-use
+    /// structure (`DescriptorFlags.per_use_structure`) is reachable,
+    /// per-use structure included (as recorded in `Scratch.reach_state`), so
+    /// the walk reaches every node each use must own. Every other monomorphic
+    /// node stays shared: it is not quantified, so each use must see the same
+    /// node, including a function node's effect kind and effect
+    /// dependencies.
     copy_scheme_structure: bool = false,
     /// Set by a caller that knows the next scheme root it instantiates has no
     /// monomorphic structural node from which a generalized variable is
@@ -412,14 +413,12 @@ pub const Instantiator = struct {
     /// variables—every use constrains the same var the body's annotation
     /// regeneration constrains—instead of an independent unconstrained copy.
     share_vars: []const Var = &.{},
-    /// Exact lexical bindings, seeded by checker instantiation before any
-    /// name-based substitutions. Ranges stay valid as the type store grows.
-    exact_bindings: Bindings = .{},
-    /// Source subtrees this instantiation reads from an earlier copy: each
-    /// source var maps to that copy in `var_map` before the walk starts, so
-    /// the walk shares the copy instead of copying the subtree again. Only
-    /// sound for a subtree whose copy is a ground type identical to what a
-    /// fresh copy would produce (see `Check.instantiateVarPolarized`).
+    /// Source vars this instantiation maps to given vars: each source var
+    /// maps to its copy in `var_map` before the walk starts. Either a
+    /// subtree read from an earlier copy, sound only for a subtree whose
+    /// copy is a ground type identical to what a fresh copy would produce
+    /// (see `Check.instantiateVarPolarized`), or a variable substituted by
+    /// variable (`Check.openNominalBackingFromTemplate`).
     shared_subtrees: []const SharedSubtree = &.{},
     /// Share every leaf (flex, rigid, field presence, error) whatever its
     /// rank, copying only structure and resolving polarity markers. This is
@@ -524,23 +523,6 @@ pub const Instantiator = struct {
 
     /// A formal's rigid name and the argument it stands for.
     pub const RigidSub = struct { name: Ident.Idx, var_: Var };
-
-    /// Producer-owned substitutions indexed by lexical variable identity.
-    pub const Bindings = struct {
-        formals: Var.SafeList.Range = Var.SafeList.Range.empty(),
-        actuals: Var.SafeList.Range = Var.SafeList.Range.empty(),
-    };
-
-    /// Install positional bindings without conflating equal source names.
-    pub fn seedBindings(self: *Instantiator) std.mem.Allocator.Error!void {
-        const bindings = self.exact_bindings;
-        std.debug.assert(bindings.formals.len() == bindings.actuals.len());
-        for (0..bindings.formals.len()) |index| {
-            const formal = self.store.getVarAt(bindings.formals, @intCast(index));
-            const actual = self.store.getVarAt(bindings.actuals, @intCast(index));
-            try self.var_map.put(self.store.resolveVar(formal).var_, actual);
-        }
-    }
 
     /// The argument for `name`; a later entry for the same name wins.
     fn rigidSub(subs: []const RigidSub, name: Ident.Idx) ?Var {
@@ -719,7 +701,8 @@ pub const Instantiator = struct {
     }
 
     /// Fill `Scratch.reach_state` for every node reachable from `root`: true
-    /// when a generalized variable is reachable from that node. The walk
+    /// when a generalized variable, or structure every use copies
+    /// (`schemeCopiesNode`), is reachable from that node. The walk
     /// follows exactly the child edges the copy follows, stops at monomorphic
     /// flex and rigid leaves (shared, so their constraints are shared too),
     /// and records every edge by its child. Reachability then propagates from
@@ -736,7 +719,7 @@ pub const Instantiator = struct {
         reach_state.clearRetainingCapacity();
 
         const root_resolved = self.store.resolveVar(root);
-        try reach_state.put(root_resolved.var_, root_resolved.desc.rank == .generalized);
+        try reach_state.put(root_resolved.var_, schemeCopiesNode(root_resolved.desc));
         try machine.reach_stack.append(self.store.gpa, root_resolved.var_);
 
         while (machine.reach_stack.pop()) |parent| {
@@ -861,8 +844,16 @@ pub const Instantiator = struct {
         head.value_ptr.* = edge_idx;
         const entry = try machine.reach_state.?.getOrPut(resolved.var_);
         if (entry.found_existing) return;
-        entry.value_ptr.* = resolved.desc.rank == .generalized;
+        entry.value_ptr.* = schemeCopiesNode(resolved.desc);
         try machine.reach_stack.append(self.store.gpa, resolved.var_);
+    }
+
+    /// Whether every instantiation of a scheme copies this node itself: a
+    /// generalized variable, or anonymous structure made in the scheme's own
+    /// scope, which a use may lift into a nominal type
+    /// (`DescriptorFlags.per_use_structure`).
+    fn schemeCopiesNode(desc: types_mod.Descriptor) bool {
+        return desc.rank == .generalized or desc.flags.per_use_structure;
     }
 
     /// Resolve shared declaration binders before copying. Every semantic
@@ -1115,10 +1106,11 @@ pub const Instantiator = struct {
         }
 
         // Ordinary instantiation shares every non-generalized var. A binding
-        // explicitly classified as a scheme instead copies the non-generalized
-        // structural nodes from which a generalized leaf is reachable, so
-        // generalized leaves at arbitrary depth remain reachable while every
-        // monomorphic node and leaf keeps its identity. A polarity marker is
+        // explicitly classified as a scheme instead copies its per-use
+        // structure and the non-generalized structural nodes from which a
+        // generalized leaf or per-use structure is reachable, so those stay
+        // reachable at arbitrary depth while every other monomorphic node and
+        // leaf keeps its identity. A polarity marker is
         // never shared: it stands for "decided by this instantiation" whatever
         // its rank (a where-method signature is instantiated per body use
         // before the enclosing scheme generalizes).

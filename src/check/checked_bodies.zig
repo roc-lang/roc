@@ -409,6 +409,9 @@ pub const Binder = struct {
     reassignable: bool,
     /// A generalized callable lookup binding.
     is_scheme_alias: bool,
+    /// The binder of a promoted local procedure, which names a top-level
+    /// procedure rather than a value of the body declaring it.
+    is_promoted: bool,
     /// Bound by a recursive value declaration.
     recursive_value: bool,
 };
@@ -1143,6 +1146,7 @@ pub const CheckedBodies = struct {
             .pattern = pattern_id,
             .reassignable = self.store().getPattern(pattern_id) == .var_assign,
             .is_scheme_alias = module_index.isSchemeAlias(pattern_id),
+            .is_promoted = module_index.isPromotedPattern(pattern_id),
             .recursive_value = module_index.isRecursiveBinder(pattern_id),
         };
     }

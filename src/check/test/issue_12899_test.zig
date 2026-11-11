@@ -1,21 +1,21 @@
-//! Lexical type captures are explicit nominal arguments before types are sealed.
+//! A body-local nominal lists the enclosing functions' type variables it
+//! depends on as context arguments after its declared ones
+//! (design.md "Body-Local Type Context").
 
 const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
-const can = @import("can");
-const Captures = @import("../nominal_captures.zig").Table;
 
-fn expectParameters(env: *const TestEnv, name: []const u8, source: u32, captures: u31) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+fn expectParameters(env: *const TestEnv, name: []const u8, declared: u32, context: u16) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     for (env.module_env.types.nominal_decls.items.items) |decl| {
         if (!std.mem.eql(u8, env.module_env.getIdent(decl.ident.ident_idx), name)) continue;
-        try std.testing.expectEqual(captures, decl.flags.capture_count);
-        try std.testing.expectEqual(source + captures, decl.formals.count);
+        try std.testing.expectEqual(context, decl.flags.context_len);
+        try std.testing.expectEqual(declared + context, decl.formals.count);
         return;
     }
     return error.TestUnexpectedResult;
 }
 
-test "issue 12899: a local nominal publishes its lexical type capture" {
+test "issue 12899: a local nominal lists its enclosing type variable as context" {
     var env = try TestEnv.init("Test",
         \\wrapped : a -> Str
         \\wrapped = |x| {
@@ -26,9 +26,10 @@ test "issue 12899: a local nominal publishes its lexical type capture" {
     defer env.deinit();
     try env.assertNoErrors();
     try expectParameters(&env, "Wrap", 0, 1);
+    try env.assertDefType("wrapped", "a -> Str");
 }
 
-test "issue 12899: captures propagate through declarations without capturing their formals" {
+test "issue 12899: context propagates through declarations without including their own parameters" {
     var env = try TestEnv.init("Test",
         \\wrapped : a, b -> Str
         \\wrapped = |x, _unused| {
@@ -46,7 +47,7 @@ test "issue 12899: captures propagate through declarations without capturing the
     try env.assertDefType("wrapped", "a, b -> Str");
 }
 
-test "issue 12899: recursive local declarations retain one capture" {
+test "issue 12899: a recursive local declaration has one context variable" {
     var env = try TestEnv.init("Test",
         \\wrapped : a -> Str
         \\wrapped = |x| {
@@ -59,59 +60,20 @@ test "issue 12899: recursive local declarations retain one capture" {
     try expectParameters(&env, "Chain", 0, 1);
 }
 
-test "issue 12899: a padding-only dependency is a capture" {
+test "issue 12899: a padding-only dependency is context" {
     var env = try TestEnv.init("Test",
-        \\wrapped : a -> _
+        \\wrapped : a -> Str
         \\wrapped = |_x| {
         \\    Padded := { value : U8, _ : a }
-        \\    Padded.{ value: 1.U8 }
+        \\    Str.inspect(Padded.{ value: 1.U8 })
         \\}
     );
     defer env.deinit();
     try env.assertNoErrors();
     try expectParameters(&env, "Padded", 0, 1);
-    // No value field relates the capture to the argument. Its identity must
-    // come from lexical binding, not inference from a constructor payload.
-    var found = false;
-    const store = env.module_env.types;
-    for (env.module_env.store.sliceDefs(env.module_env.all_defs)) |def_idx| {
-        const def = env.module_env.store.getDef(def_idx);
-        const pattern = env.module_env.store.getPattern(def.pattern);
-        if (pattern != .assign or !std.mem.eql(u8, env.module_env.getIdent(pattern.assign.ident), "wrapped")) continue;
-        const function = store.resolveVar(can.ModuleEnv.varFrom(def_idx)).desc.content.structure.fn_pure;
-        const nominal = store.resolveVar(function.ret).desc.content.structure.nominal_type;
-        const args = store.sliceVars(function.args);
-        const captures = store.sliceNominalArgs(nominal);
-        try std.testing.expectEqual(@as(usize, 1), captures.len);
-        try std.testing.expectEqual(store.resolveVar(args[0]).var_, store.resolveVar(captures[0]).var_);
-        found = true;
-    }
-    try std.testing.expect(found);
 }
 
-test "issue 12899: imported local nominal applications preserve their complete argument tuple" {
-    var producer = try TestEnv.init("Producer",
-        \\Producer := [].{
-        \\    make : a -> _
-        \\    make = |x| {
-        \\        Wrap := [Wrap(a)]
-        \\        Wrap.Wrap(x)
-        \\    }
-        \\}
-    );
-    defer producer.deinit();
-    try producer.assertNoErrors();
-    var consumer = try TestEnv.initWithImport("Consumer",
-        \\import Producer
-        \\first = Producer.make(5.U64)
-        \\second = Producer.make("hi")
-    , "Producer", &producer);
-    defer consumer.deinit();
-    try consumer.assertNoErrors();
-    try expectParameters(&consumer, "Wrap", 0, 1);
-}
-
-test "issue 12899: an enclosing binder is not replaced by a same-named phantom parameter" {
+test "issue 12899: an enclosing type variable is not replaced by a same-named parameter" {
     var env = try TestEnv.init("Test",
         \\render : a -> Str
         \\render = |x| {
@@ -124,30 +86,29 @@ test "issue 12899: an enclosing binder is not replaced by a same-named phantom p
     );
     defer env.deinit();
     try env.assertNoErrors();
+    try expectParameters(&env, "Captured", 0, 1);
     try expectParameters(&env, "Pair", 1, 1);
     try env.assertDefType("render", "a -> Str");
 }
 
-fn exerciseCaptureAllocations(allocator: std.mem.Allocator, module: *const can.ModuleEnv) error{ OutOfMemory, TestUnexpectedResult, TestExpectedEqual }!void {
-    var table = Captures{};
-    defer table.deinit(allocator);
-    try table.ensure(allocator, module);
-    const count = table.captures.count();
-    try std.testing.expect(count != 0);
-    try table.ensure(allocator, module);
-    try std.testing.expectEqual(count, table.captures.count());
-}
-
-test "issue 12899: capture analysis releases partial results on allocation failure" {
-    var env = try TestEnv.init("Test",
-        \\wrapped : a -> Str
-        \\wrapped = |x| {
-        \\    Inner := [Inner(a)]
-        \\    Outer := [Outer(Inner)]
-        \\    Str.inspect(Outer.Outer(Inner.Inner(x)))
+test "issue 12899: a body-local nominal of an imported function is used at two types" {
+    var producer = try TestEnv.init("Producer",
+        \\Producer := [].{
+        \\    render : a -> Str
+        \\    render = |x| {
+        \\        Wrap := [Wrap(a)]
+        \\        Str.inspect(Wrap.Wrap(x))
+        \\    }
         \\}
     );
-    defer env.deinit();
-    try env.assertNoErrors();
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseCaptureAllocations, .{env.module_env});
+    defer producer.deinit();
+    try producer.assertNoErrors();
+    try expectParameters(&producer, "Wrap", 0, 1);
+    var consumer = try TestEnv.initWithImport("Consumer",
+        \\import Producer
+        \\first = Producer.render(5.U64)
+        \\second = Producer.render("hi")
+    , "Producer", &producer);
+    defer consumer.deinit();
+    try consumer.assertNoErrors();
 }

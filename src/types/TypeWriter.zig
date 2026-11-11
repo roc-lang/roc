@@ -813,12 +813,20 @@ fn startTuple(self: *TypeWriter, writer: *ByteWrite, tuple: Tuple) error{ OutOfM
 /// has any.
 fn startNominalType(self: *TypeWriter, writer: *ByteWrite, nominal_type: NominalType) error{ OutOfMemory, WriteFailed }!bool {
     try writer.writeAll(self.getDisplayName(nominal_type.ident.ident_idx));
-    var args = nominal_type.args;
-    args.count = @intCast(self.types.sliceNominalSourceArgs(nominal_type).len);
+    const args = self.displayedNominalArgs(nominal_type);
     if (args.len() == 0) return false;
     try writer.writeAll("(");
     try self.frames.append(.{ .args = .{ .vars = args, .context = .General } });
     return true;
+}
+
+/// The arguments a nominal application shows: its declared ones. A
+/// declaration in a function body's trailing context arguments (design.md
+/// "Body-Local Type Context") are never written.
+fn displayedNominalArgs(self: *const TypeWriter, nominal_type: NominalType) Var.SafeList.Range {
+    var args = nominal_type.args;
+    args.count = @intCast(self.types.nominalDeclaredArgs(nominal_type).len);
+    return args;
 }
 
 /// Write a function type's leading bytes and push the frame that renders its
@@ -1567,7 +1575,7 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
             try self.count_pending.appendSlice(self.types.sliceVars(tuple.elems));
         },
         .nominal_type => |nominal_type| {
-            try self.count_pending.appendSlice(self.types.sliceNominalSourceArgs(nominal_type));
+            try self.count_pending.appendSlice(self.types.sliceVars(self.displayedNominalArgs(nominal_type)));
         },
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
             try self.count_pending.appendSlice(self.types.sliceVars(func.args));

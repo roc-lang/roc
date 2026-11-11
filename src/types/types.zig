@@ -148,7 +148,18 @@ pub const DescriptorFlags = packed struct(u16) {
     /// into must have exactly this row. A copy of the row is the same host
     /// row, so instantiation carries the flag.
     host_fixed_row: bool = false,
-    _padding: u7 = 0,
+    /// An anonymous record or tag union (empty ones included) that a
+    /// generalization boundary found was made in its own scope without being
+    /// generalized: every part of it is ground or belongs to an enclosing
+    /// scope. Each use of the binding still gets its own copy, because a use
+    /// can lift the structure into a nominal type whose backing matches, and
+    /// the lift rewrites the class it reaches (design.md "Anonymous Structure
+    /// Is Copied Per Use"). The rank is untouched: the class is not
+    /// polymorphic, only refinable. A copy is a fresh class at its use's
+    /// rank, so instantiation does not carry the flag, and a merge keeps it
+    /// only when both sides had it.
+    per_use_structure: bool = false,
+    _padding: u6 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -180,6 +191,24 @@ pub const Descriptor = struct {
     content: Content,
     rank: Rank,
     flags: DescriptorFlags = .{},
+
+    /// Whether unification can lift this class into a nominal type whose
+    /// backing matches, rewriting it to that nominal: an anonymous record or
+    /// tag union, empty ones included, other than structure written in an
+    /// opened nominal backing, which never lifts (design.md "Declared Backing
+    /// Structure"). Such a class can change while staying free of type
+    /// variables, so sharing it shares that change (design.md "Anonymous
+    /// Structure Is Copied Per Use").
+    pub fn liftsIntoNominal(self: Descriptor) bool {
+        if (self.flags.nominal_backing_structure) return false;
+        return switch (self.content) {
+            .structure => |flat_type| switch (flat_type) {
+                .record, .tag_union, .empty_record, .empty_tag_union => true,
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => false,
+            },
+            .flex, .rigid, .alias, .field_presence, .err => false,
+        };
+    }
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -656,7 +685,7 @@ pub const NominalType = struct {
     pub const Source = NominalSource;
 
     ident: TypeIdent,
-    /// Source arguments followed by lexical captures (may be empty).
+    /// The actual type arguments (may be empty).
     args: Var.SafeList.Range,
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
@@ -725,9 +754,13 @@ pub const NominalDecl = struct {
     /// statement must be present: a declaration entry without a source
     /// statement has no key and cannot be registered.
     source: NominalType.Source,
-    /// Source formal parameters followed by captured lexical type variables.
-    /// Instantiating the backing substitutes the application's complete
-    /// argument tuple for these, positionally.
+    /// The declaration's formal type parameters (rigid vars), in declaration
+    /// order. Instantiating the backing for a nominal application substitutes
+    /// the application's actual args for these, positionally. The last
+    /// `flags.context_len` of them are the declaration's context variables
+    /// (design.md "Body-Local Type Context"): the type variables of enclosing
+    /// functions that a declaration in a function body depends on, which
+    /// every application lists after its declared arguments.
     formals: Var.SafeList.Range,
     /// The declaration's backing template. It references `formals` and is
     /// never unified against directly—backing access instantiates a copy
@@ -743,9 +776,18 @@ pub const NominalDecl = struct {
         /// invalid recursion). Applications of invalid declarations poison
         /// to err.
         valid: bool,
-        /// Hidden lexical arguments following the source parameters.
-        capture_count: u31 = 0,
+        /// How many trailing formals are context variables. Only a
+        /// declaration in a function body has any.
+        context_len: u16 = 0,
+        _unused: u15 = 0,
     };
+
+    /// How many of the declaration's formals it declares itself, before its
+    /// context variables.
+    pub fn declaredFormalCount(self: NominalDecl) u32 {
+        std.debug.assert(self.flags.context_len <= self.formals.count);
+        return self.formals.count - self.flags.context_len;
+    }
 
     /// The statement index of this declaration in its origin module env.
     pub fn statement(self: NominalDecl) u32 {

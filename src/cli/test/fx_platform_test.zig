@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const roc_target = @import("roc_target");
 const testing = std.testing;
 const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
@@ -567,6 +568,193 @@ test "provided static data exports are host-linkable readonly constants" {
 
 test "boxy provided static data exports are host-linkable readonly constants" {
     try expectStaticDataHostConstants(&.{"--specialize=no"});
+}
+
+test "Linux executable builds use static PIE with platform-owned and default startup" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const target = switch (roc_target.classifyCpuArch(builtin.cpu.arch)) {
+        .x86_64 => "--target=x64musl",
+        .aarch64 => "--target=arm64musl",
+        .aarch64_be, .arm, .wasm32, .other => return error.SkipZigTest,
+    };
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "default.roc", .data =
+        \\main! = |_args| {
+        \\    echo!("PIE")
+        \\    Ok({})
+        \\}
+    });
+    const default_source = try tmp.dir.realPathFileAlloc(io, "default.roc", allocator);
+    defer allocator.free(default_source);
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(dir);
+    const output = try std.fs.path.join(allocator, &.{ dir, "program" });
+    defer allocator.free(output);
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output});
+    defer allocator.free(output_arg);
+
+    const Case = struct { opt: []const u8, strategy: []const u8 };
+    for ([_]Case{
+        .{ .opt = "--opt=speed", .strategy = "--specialize=yes" },
+        .{ .opt = "--opt=size", .strategy = "--specialize=yes" },
+        .{ .opt = "--opt=dev", .strategy = "--specialize=yes" },
+        .{ .opt = "--opt=dev", .strategy = "--specialize=no" },
+        .{ .opt = "--opt=interpreter", .strategy = "--specialize=yes" },
+    }) |case| {
+        for ([_]bool{ false, true }) |default_platform| {
+            const source = if (default_platform) default_source else "test/fx/dict_pseudo_seed_repro.roc";
+            const build = try util.runChildWithTimeout(io, allocator, &.{
+                util.roc_binary_path, "build", target, case.opt, case.strategy, output_arg, source,
+            }, .{ .max_output_bytes = 10 * 1024 * 1024 });
+            defer allocator.free(build.stdout);
+            defer allocator.free(build.stderr);
+            if (build.term != .exited or build.term.exited != 0) {
+                std.debug.print("PIE build {s} {s}, default={}: {any}\n{s}\n{s}\n", .{ case.opt, case.strategy, default_platform, build.term, build.stdout, build.stderr });
+                return error.TestUnexpectedResult;
+            }
+            const bytes = try tmp.dir.readFileAlloc(io, "program", allocator, .unlimited);
+            defer allocator.free(bytes);
+            try testing.expectEqualStrings("\x7fELF", bytes[0..4]);
+            try testing.expectEqual(@as(u8, 2), bytes[4]); // ELF64
+            try testing.expectEqual(@as(u16, 3), std.mem.readInt(u16, bytes[16..18], .little)); // ET_DYN
+            const phoff: usize = @intCast(std.mem.readInt(u64, bytes[32..40], .little));
+            const phsize = std.mem.readInt(u16, bytes[54..56], .little);
+            const phnum = std.mem.readInt(u16, bytes[56..58], .little);
+            var has_pie_flag = false;
+            for (0..phnum) |index| {
+                const at = phoff + index * phsize;
+                const kind = std.mem.readInt(u32, bytes[at..][0..4], .little);
+                try testing.expect(kind != 3); // No PT_INTERP
+                if (kind == 2) { // PT_DYNAMIC
+                    const offset: usize = @intCast(std.mem.readInt(u64, bytes[at + 8 ..][0..8], .little));
+                    const size: usize = @intCast(std.mem.readInt(u64, bytes[at + 32 ..][0..8], .little));
+                    var pos = offset;
+                    while (pos < offset + size) : (pos += 16) {
+                        const tag = std.mem.readInt(u64, bytes[pos..][0..8], .little);
+                        if (tag == 0) break;
+                        try testing.expect(tag != 1 and tag != 22); // No DT_NEEDED or DT_TEXTREL
+                        if (tag == 0x6ffffffb) has_pie_flag = std.mem.readInt(u64, bytes[pos + 8 ..][0..8], .little) & 0x08000000 != 0;
+                    }
+                }
+            }
+            try testing.expect(has_pie_flag);
+            const run = try util.runChildWithTimeout(io, allocator, &.{output}, .{ .max_output_bytes = 1024 * 1024 });
+            defer allocator.free(run.stdout);
+            defer allocator.free(run.stderr);
+            try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, run.term);
+            try testing.expectEqualStrings(if (default_platform) "PIE" else "b\n", run.stdout);
+            try testing.expectEqualStrings("", run.stderr);
+        }
+    }
+}
+
+test "macOS and Windows executable builds retain ASLR flags and pointer fixups" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // Runtime indexing keeps absolute pointers to long strings in the image:
+    // testing only a header flag would miss a broken relocation table.
+    try tmp.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
+        \\words = ["relocatable first long string", "relocatable second long string"]
+        \\main! = |args| {
+        \\    word = match words.get(List.len(args) % 2) {
+        \\        Ok(value) => value
+        \\        Err(_) => crash "invalid index"
+        \\    }
+        \\    echo!(word)
+        \\    Ok({})
+        \\}
+    });
+    const source = try tmp.dir.realPathFileAlloc(io, "main.roc", allocator);
+    defer allocator.free(source);
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(dir);
+    const output = try std.fs.path.join(allocator, &.{ dir, "program.exe" });
+    defer allocator.free(output);
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output});
+    defer allocator.free(output_arg);
+    const TargetCase = struct { arg: []const u8, os: std.Target.Os.Tag, arch: std.Target.Cpu.Arch };
+    const Mode = struct { opt: []const u8, strategy: []const u8 };
+    for ([_]TargetCase{
+        .{ .arg = "--target=x64mac", .os = .macos, .arch = .x86_64 },
+        .{ .arg = "--target=arm64mac", .os = .macos, .arch = .aarch64 },
+        .{ .arg = "--target=x64win", .os = .windows, .arch = .x86_64 },
+        .{ .arg = "--target=arm64win", .os = .windows, .arch = .aarch64 },
+        .{ .arg = "--target=x64mingw", .os = .windows, .arch = .x86_64 },
+        .{ .arg = "--target=arm64mingw", .os = .windows, .arch = .aarch64 },
+    }) |target| {
+        for ([_]Mode{
+            .{ .opt = "--opt=speed", .strategy = "--specialize=yes" },
+            .{ .opt = "--opt=size", .strategy = "--specialize=yes" },
+            .{ .opt = "--opt=dev", .strategy = "--specialize=yes" },
+            .{ .opt = "--opt=dev", .strategy = "--specialize=no" },
+        }) |mode| {
+            const build = try util.runChildWithTimeout(io, allocator, &.{
+                util.roc_binary_path, "build", target.arg, mode.opt, mode.strategy, output_arg, source,
+            }, .{ .max_output_bytes = 10 * 1024 * 1024 });
+            defer allocator.free(build.stdout);
+            defer allocator.free(build.stderr);
+            if (build.term != .exited or build.term.exited != 0) {
+                std.debug.print("ASLR build {s} {s} {s}: {any}\n{s}\n{s}\n", .{ target.arg, mode.opt, mode.strategy, build.term, build.stdout, build.stderr });
+                return error.TestUnexpectedResult;
+            }
+            const bytes = try tmp.dir.readFileAlloc(io, "program.exe", allocator, .unlimited);
+            defer allocator.free(bytes);
+            try expectNativeAddressRandomization(bytes, target.os);
+            if (builtin.os.tag == target.os and builtin.cpu.arch == target.arch) {
+                const run = try util.runChildWithTimeout(io, allocator, &.{output}, .{ .max_output_bytes = 1024 * 1024 });
+                defer allocator.free(run.stdout);
+                defer allocator.free(run.stderr);
+                try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, run.term);
+                try testing.expect(std.mem.eql(u8, run.stdout, "relocatable first long string") or
+                    std.mem.eql(u8, run.stdout, "relocatable second long string"));
+                try testing.expectEqualStrings("", run.stderr);
+            }
+        }
+    }
+}
+
+fn expectNativeAddressRandomization(bytes: []const u8, os: std.Target.Os.Tag) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+    try testing.expect(bytes.len >= 128);
+    if (os == .windows) {
+        const pe: usize = std.mem.readInt(u32, bytes[60..64], .little);
+        try testing.expect(pe + 24 + 160 <= bytes.len);
+        try testing.expectEqualStrings("PE\x00\x00", bytes[pe..][0..4]);
+        const characteristics = std.mem.readInt(u16, bytes[pe + 22 ..][0..2], .little);
+        try testing.expect(characteristics & 1 == 0); // IMAGE_FILE_RELOCS_STRIPPED
+        const optional = bytes[pe + 24 ..];
+        try testing.expectEqual(@as(u16, 0x20b), std.mem.readInt(u16, optional[0..2], .little));
+        const dll_flags = std.mem.readInt(u16, optional[70..72], .little);
+        try testing.expect(dll_flags & 0x60 == 0x60); // DYNAMIC_BASE | HIGH_ENTROPY_VA
+        const relocations = optional[112 + 5 * 8 ..][0..8];
+        try testing.expect(std.mem.readInt(u32, relocations[0..4], .little) != 0);
+        try testing.expect(std.mem.readInt(u32, relocations[4..8], .little) != 0);
+    } else {
+        try testing.expectEqual(std.Target.Os.Tag.macos, os);
+        try testing.expectEqual(@as(u32, 0xfeedfacf), std.mem.readInt(u32, bytes[0..4], .little));
+        try testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, bytes[12..16], .little)); // MH_EXECUTE
+        try testing.expect(std.mem.readInt(u32, bytes[24..28], .little) & 0x200000 != 0); // MH_PIE
+        const ncmds = std.mem.readInt(u32, bytes[16..20], .little);
+        var at: usize = 32;
+        var has_rebases = false;
+        for (0..ncmds) |_| {
+            try testing.expect(at + 8 <= bytes.len);
+            const cmd = std.mem.readInt(u32, bytes[at..][0..4], .little);
+            const size = std.mem.readInt(u32, bytes[at + 4 ..][0..4], .little);
+            try testing.expect(size >= 8 and at + size <= bytes.len);
+            // LC_DYLD_INFO[_ONLY] or LC_DYLD_CHAINED_FIXUPS.
+            if (cmd == 0x22 or cmd == 0x80000022 or cmd == 0x80000034) {
+                try testing.expect(size >= 16);
+                has_rebases = has_rebases or std.mem.readInt(u32, bytes[at + 12 ..][0..4], .little) != 0;
+            }
+            at += size;
+        }
+        try testing.expect(has_rebases);
+    }
 }
 
 fn expectStaticDataHostConstants(extra_args: []const []const u8) FxPlatformTestError!void {

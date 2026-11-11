@@ -64,7 +64,7 @@ const NUM_BACKENDS = 2;
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev" };
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 
-const BackendEvalError = helpers.TestHelperError || Interpreter.Error || Allocator.Error || error{DevBackendUnavailable};
+const BackendEvalError = helpers.TestHelperError || Interpreter.Error || Allocator.Error || error{ DevBackendUnavailable, StaticDataImageFailed };
 const StatsJsonError = Allocator.Error || std.Io.Dir.AccessError || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error;
 const RunnerMainError = std.fmt.ParseIntError || StatsJsonError || std.process.Args.ToSliceError || Allocator.Error;
 
@@ -258,10 +258,9 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
 
     if (fork_result == 0) {
         harness.closeFd(pipe_read);
-        var child_arena = collections.SingleThreadArena.init(base.defaultGpa());
-        const child_alloc = child_arena.allocator();
-
-        const run = eval_fn(child_alloc, lowered) catch |err| {
+        // Frees take effect, so memory the evaluated program releases is
+        // reused; `_exit` reclaims whatever is left.
+        const run = eval_fn(base.defaultGpa(), lowered) catch |err| {
             const name = @errorName(err);
             harness.writeAll(pipe_write, name);
             harness.closeFd(pipe_write);

@@ -16,6 +16,9 @@ This module provides:
 
 The builtins module is essential for both the compiler (during type checking and code generation) and the runtime (during program execution).
 
+Libc-free Linux entrypoints share static-PIE relocation support so none can
+initialize runtime state while its stored pointers still lack the load base.
+
 ## Numeric Oracle Tests
 
 Numeric builtins should have tests whose expected values come from an

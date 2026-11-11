@@ -9,10 +9,6 @@ mutate solver types or escape as solver blockers. Exact template dependencies
 allow irrelevant substitutions to share identity while private unknowns retain
 their application scope.
 
-Local nominal types carry lexical type captures as hidden arguments before
-generalization and publication. This keeps type identity and representation
-independent of the lowering strategy without repeated backing discovery.
-
 Inhabitedness uses a greatest fixed point to preserve conservative recursive
 payload semantics without enumerating shared paths. Row-only cycles provide no
 constructor witness. General, constructor-payload, and known-absent queries retain
