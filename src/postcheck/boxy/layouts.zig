@@ -182,12 +182,6 @@ pub const Layouts = struct {
         return self.components.get(edge.child) == component;
     }
 
-    /// The members of recursive component `component` that a pointer slot
-    /// points at.
-    pub fn componentTargets(self: *const Layouts, component: u32) []const TypeId {
-        return self.component_targets.items[component];
-    }
-
     /// Tarjan's strongly connected components over the open types reachable
     /// from `root` through inline edges (`edges`), with an explicit stack.
     fn placeComponents(self: *Layouts, root: TypeId, comptime edges_followed: Edges) Allocator.Error!void {
@@ -304,59 +298,6 @@ pub const Layouts = struct {
         return try targets.toOwnedSlice(self.allocator);
     }
 
-    /// The type variables the descriptor of the recursive member `ty`
-    /// depends on, in a fixed order.
-    pub fn memberVars(self: *Layouts, ty: TypeId) Allocator.Error![]const TypeId {
-        if (self.member_vars.get(ty)) |vars| return vars;
-        var vars: std.ArrayList(TypeId) = .empty;
-        errdefer vars.deinit(self.allocator);
-        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
-        defer seen.deinit(self.allocator);
-        var pending: std.ArrayList(TypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, ty);
-        try seen.put(self.allocator, ty, {});
-        var cursor: usize = 0;
-        while (cursor < pending.items.len) : (cursor += 1) {
-            const current = pending.items[cursor];
-            const before = pending.items.len;
-            switch (self.store.get(current)) {
-                .variable => try vars.append(self.allocator, current),
-                .list => |elem| try pending.append(self.allocator, elem),
-                .box => |payload| try pending.append(self.allocator, payload),
-                .tuple => |items| try pending.appendSlice(self.allocator, self.store.span(items)),
-                .record => |record| {
-                    if (record.ext) |ext| try pending.append(self.allocator, ext);
-                    const fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
-                    defer self.allocator.free(fields);
-                    for (fields) |field| try pending.append(self.allocator, try self.fieldStorage(field));
-                    try pending.appendSlice(self.allocator, self.store.paddingTypes(record));
-                },
-                .tag_union => |tag_union| {
-                    if (tag_union.ext) |ext| try pending.append(self.allocator, ext);
-                    const tags = try self.allocator.dupe(types.Tag, self.store.tagSpan(tag_union.tags));
-                    defer self.allocator.free(tags);
-                    for (tags) |tag| try pending.appendSlice(self.allocator, self.store.span(tag.payloads));
-                },
-                .nominal => |nominal| if (nominal.has_backing) try pending.append(self.allocator, try self.converter.backing(current)),
-                .primitive, .empty_record, .function => {},
-            }
-            // Keep each newly reached open type once.
-            var write = before;
-            for (pending.items[before..]) |child| {
-                if (seen.contains(child) or try self.converter.representationClosed(child)) continue;
-                try seen.put(self.allocator, child, {});
-                pending.items[write] = child;
-                write += 1;
-            }
-            pending.shrinkRetainingCapacity(write);
-        }
-        const owned = try vars.toOwnedSlice(self.allocator);
-        errdefer self.allocator.free(owned);
-        try self.member_vars.put(self.allocator, ty, owned);
-        return owned;
-    }
-
     /// The presence-slot type `[#Missing, #Present(payload)]` of an
     /// optional field (design.md "Field Kinds").
     pub fn presenceSlot(self: *Layouts, payload: TypeId) Allocator.Error!TypeId {
@@ -462,7 +403,7 @@ pub const Layouts = struct {
             .function => try self.layouts.insertErasedCallable(),
             // `Box(function)` is the function's erased callable, which is
             // already an allocation of its own (design.md "Host ABI").
-            .box => |payload| if (self.store.get(payload) == .function) try self.layouts.insertErasedCallable() else null,
+            .box => |payload| if (self.store.isErasedBoxPayload(payload)) try self.layouts.insertErasedCallable() else null,
             .variable => types.invariant("a type variable reached committed layout selection"),
             .record, .tuple, .tag_union, .list, .nominal => null,
         };

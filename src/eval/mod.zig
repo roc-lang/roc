@@ -34,8 +34,6 @@ pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 /// Checked-artifact compile-time evaluation finalizer
 pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
 pub const checked_root_graph = @import("checked_root_graph.zig");
-/// Reuse of compile-time values across edits of a module.
-/// Literal values persisted across compilations of one program.
 /// Compiler-owned RocOps environment for compile-time evaluation
 pub const CompilerHost = @import("compiler_host.zig");
 /// Dev-backend RocOps environment for native compile-time evaluation

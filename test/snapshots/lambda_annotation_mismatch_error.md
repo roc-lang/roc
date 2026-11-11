@@ -137,7 +137,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "times") (constraint-fn-var 267)
+			(e-dispatch-call (method "times") (constraint-fn-var 270)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

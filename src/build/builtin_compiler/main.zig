@@ -157,14 +157,17 @@ fn serializeBuiltinArtifact(
     defer typed_modules.deinit();
 
     // The baked artifact serves either strategy's programs and no
-    // compilation reopens it, so its evaluation completes every root.
-    const finalizer_options: comptime_finalizer.Options = .{ .complete_baked_module = true };
+    // compilation reopens it; its evaluation completes every root, as every
+    // compilation's does.
+    const finalizer_options: comptime_finalizer.Options = .{};
     var artifact = try check.CheckedArtifact.publishFromTypedModule(
         gpa,
         &typed_modules,
         0,
         .{
             .module_env_storage = .{ .checked_source = builtin_env },
+            .hoisted_roots = .none,
+            .io = io,
             .compile_time_finalizer = comptime_finalizer.finalizerWithOptions(&finalizer_options),
         },
     );

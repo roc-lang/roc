@@ -210,7 +210,7 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 223, .end = 229 },
         // object_image.zig binds a loaded object's `roc_desc_*` references to the
         // Boxy runtime's entry points, which are matched by symbol name.
-        .{ .file = "object_image.zig", .start = 33, .end = 38 },
+        .{ .file = "object_image.zig", .start = 34, .end = 39 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
         .{ .file = "inspected.zig", .start = 2474, .end = 2474 },
@@ -227,10 +227,6 @@ const CheckTypeCheckerPatternsStep = struct {
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
         .{ .file = "report.zig", .start = 615, .end = 615 },
-        // sealed_type_view.zig's debug-only publication gate checks that a
-        // published variable name, which publication copies out of the ident
-        // store, spells the solver variable's name. The text is what it verifies.
-        .{ .file = "sealed_type_view.zig", .start = 972, .end = 972 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -1113,8 +1109,6 @@ fn isRocAppFile(contents: []const u8) bool {
 }
 
 fn checkTestAssetCoverage(ctx: Context) !void {
-    std.debug.print("---- checking test asset coverage ----\n", .{});
-
     const allocator = ctx.allocator;
     const io = ctx.io;
 
@@ -1221,11 +1215,11 @@ fn checkTestAssetCoverage(ctx: Context) !void {
         total_missing += missing_count;
     }
 
+    // Silent on success: the build runner shows any stderr output of a
+    // passing check under a "failed command" heading.
     if (total_missing > 0) {
-        return fail("{d} app .roc file(s) have no spec entry", .{total_missing});
+        return fail("{d} of {d} app .roc file(s) have no spec entry", .{ total_missing, total_checked });
     }
-
-    std.debug.print("All {d} app .roc files across {d} asset directories are covered.\n", .{ total_checked, test_asset_coverage_dirs.len });
 }
 
 fn checkBakes(ctx: Context) !void {

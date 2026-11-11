@@ -24,12 +24,12 @@ const PlatformPairing = check.CheckedArtifact.PlatformPairing;
 
 /// A kind of persisted cache entry.
 pub const Entry = enum {
-    /// One fully checked module: an env body and an artifact body.
+    /// One combined checking entry: source env, publication inputs, artifact,
+    /// and the reports its checking and evaluation produced.
     checked_module,
-    /// Solved source and checker-owned publication inputs, before evaluation.
-    inference,
-    /// One exact platform/app composition's changed columns, written in the
-    /// checked-module envelope with an empty env body.
+    /// One exact platform/app composition's changed columns and the reports
+    /// its evaluation produced, written in the checked-module envelope with an
+    /// empty env body.
     platform_pairing,
     /// One module's canonicalization output: an env body and the encoded
     /// parse-stage record.
@@ -39,9 +39,19 @@ pub const Entry = enum {
 /// Layout fingerprint of `ModuleEnv.Serialized`.
 pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
-/// Version of the checked-module envelope: its magic, header layout, and body
-/// order. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 14;
+/// Layout fingerprint of `CheckedReports.Serialized`, the reports body of
+/// checked-module and platform-pairing entries.
+const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
+
+/// Version of the checked-module envelope and opaque body encodings not
+/// reflected in layout fingerprints. Version 22 stores reproducible checking
+/// and evaluation reports beside cached literal argument roots for both
+/// strategies, body-local type context arguments, generated-codec recurrences,
+/// field-default identities in Boxy stored-function types, and integer list
+/// worker item-type bindings. It rejects every version 18 recipe format and
+/// the independent version 19, 20 and 21 formats. Platform-pairing entries
+/// share it.
+const checked_envelope_version: u32 = 22;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
@@ -50,20 +60,15 @@ const canonicalized_envelope_version: u32 = 3;
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
     return comptime switch (entry) {
-        .inference => compose(
-            "roc-inference-entry-v1",
-            &.{ 1, check.CheckingDependencies.format_version },
-            &.{ module_env_layout, check.rootLayoutVersionHash(check.InferenceOutput.Serialized, 1) },
-        ),
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout },
+            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout, check.rootLayoutVersionHash(check.CheckingReuse.Serialized, 1), checked_reports_layout },
         ),
         .platform_pairing => compose(
             "roc-platform-pairing-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH },
+            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH, checked_reports_layout },
         ),
         .canonicalized_module => compose(
             "roc-canonicalized-module-entry-v1",
@@ -118,7 +123,6 @@ fn splitmix64(x: u64) u64 {
 test "every entry kind has a distinct admission hash" {
     const hashes = [_][32]u8{
         entryVersionHash(.checked_module),
-        entryVersionHash(.inference),
         entryVersionHash(.platform_pairing),
         entryVersionHash(.canonicalized_module),
     };
@@ -146,8 +150,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x26, 0xE1, 0x25, 0x35, 0xD1, 0xDC, 0xF9, 0x23, 0x5B, 0x58, 0xEF, 0x1D, 0xFB, 0x8D, 0x7D, 0x32,
-        0x6B, 0x4D, 0x13, 0x6D, 0x3F, 0x70, 0x79, 0xBE, 0x89, 0x5A, 0xC8, 0xBD, 0x62, 0xDC, 0x6A, 0x39,
+        0xF2, 0x59, 0x15, 0x42, 0x4F, 0xEC, 0xA6, 0xEF, 0x88, 0x7B, 0xA6, 0xEC, 0xB8, 0xB4, 0xD1, 0xA9,
+        0xC2, 0xE4, 0x96, 0x1B, 0xD4, 0xD7, 0xB6, 0x63, 0x29, 0x59, 0xFF, 0xD0, 0x74, 0x92, 0xB1, 0x06,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

@@ -57,6 +57,7 @@ const Relocation = @import("Relocation.zig").IndexedRelocation;
 const relocation_mod = @import("Relocation.zig");
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
+const UnitImage = @import("UnitImage.zig");
 const StackPlan = lir.StackPlan;
 const boxy_runtime = @import("boxy_runtime");
 const BoxyListOp = boxy_runtime.compiled.ListOp;
@@ -1881,6 +1882,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const args = self.store.getLocalSpan(ll.args);
 
             switch (ll.op) {
+                .boxed_sequence_pack => {
+                    const record = GuardedList.at(args, 0);
+                    const size = self.getLayoutSize(self.localLayout(record));
+                    const slot = try self.ensureOnStack(try self.emitValueLocal(record), size);
+                    const offset = try self.ensureInGeneralReg(try self.emitValueLocal(GuardedList.at(args, 1)));
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
+                    try builder.addLeaArg(frame_ptr, slot);
+                    try builder.addImmArg(size);
+                    try builder.addRegArg(offset);
+                    try self.callBuiltin(&builder, .boxed_sequence_pack);
+                    self.codegen.freeGeneral(offset);
+                    return self.scalarRetReg();
+                },
+                .boxed_sequence_unpack => {
+                    const step = try self.ensureInGeneralReg(try self.emitValueLocal(GuardedList.at(args, 0)));
+                    const size = self.getLayoutSize(ll.ret_layout);
+                    const slot = self.codegen.allocStackSlot(size);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
+                    try builder.addLeaArg(frame_ptr, slot);
+                    try builder.addRegArg(step);
+                    try builder.addImmArg(size);
+                    try self.callBuiltin(&builder, .boxed_sequence_unpack);
+                    self.codegen.freeGeneral(step);
+                    return self.stackLocationForLayout(ll.ret_layout, slot);
+                },
                 .num_plus, .num_minus, .num_times => unreachable, // source-policy markers that LIR lowering commits through CheckedArithmetic.lowerOp
                 .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
                 // A hint only; this backend emits no code for it.
@@ -3321,18 +3349,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const eq_reg = try self.ensureInGeneralReg(eq_loc);
                     return .{ .general_reg = eq_reg };
                 },
-                .str_concat => {
+                .str_concat, .str_append => {
                     expectArgCount(ll.op, args, 2);
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
                     if (builtin.mode == .debug and (a_loc != .stack_str or b_loc != .stack_str)) {
                         base.invariant(
-                            "LIR/codegen invariant violated: str_concat expects stack_str args, got lhs={s} rhs={s}",
-                            .{ @tagName(a_loc), @tagName(b_loc) },
+                            "LIR/codegen invariant violated: {s} expects stack_str args, got lhs={s} rhs={s}",
+                            .{ @tagName(ll.op), @tagName(a_loc), @tagName(b_loc) },
                         );
                     }
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2RocOpsToStr(a_off, b_off, LowLevelBuiltins.strOp(.str_concat), updateModeImmForArg0(ll.unique_args));
+                    return try self.callStr2RocOpsToStr(a_off, b_off, LowLevelBuiltins.strOp(ll.op), updateModeImmForArg0(ll.unique_args));
                 },
                 .str_contains => {
                     expectArgCount(ll.op, args, 2);
@@ -14530,11 +14558,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// runtime makes the calls left in it.
         fn emitOwnPendingCell(self: *Self, invocation: ?i32) Allocator.Error!void {
             const word = @sizeOf(u64);
-            const cell = self.codegen.allocStackSlot(builtins.native_callable.pending_words * word);
+            const cell = self.codegen.allocStackSlot(builtins.native_callable.pendingByteSize(word));
             const slot = self.codegen.allocStackSlot(word);
             const reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(reg, 0);
-            try self.emitStore(.w64, frame_ptr, cell, reg);
+            for (0..builtins.native_callable.zeroed_words) |i| {
+                try self.emitStore(.w64, frame_ptr, cell + @as(i32, @intCast(i * word)), reg);
+            }
             try self.emitLeaStack(reg, cell);
             try self.emitStore(.w64, frame_ptr, slot, reg);
             self.codegen.freeGeneral(reg);
@@ -14607,6 +14637,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             target_layout: layout.Idx,
             capture_layout: ?layout.Idx,
             on_drop: lir.LIR.ErasedCallableOnDrop,
+            on_copy: lir.LIR.ErasedCallableOnDrop,
             reuse: ?LocalId,
             reuse_unique: bool,
         ) Allocator.Error!ValueLocation {
@@ -14668,6 +14699,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         original_on_drop_reg,
                     );
                     self.codegen.freeGeneral(original_on_drop_reg);
+                    const original_on_copy_reg = try self.materializeErasedCallableOnDrop(on_copy);
+                    try self.emitStore(.w64, frame_ptr, capture_src_slot + @as(i32, @intCast(@offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_copy"))), original_on_copy_reg);
+                    self.codegen.freeGeneral(original_on_copy_reg);
                 }
 
                 if (capture) |capture_local| {
@@ -14743,7 +14777,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addImmArg(@backingInt(update_mode));
                     try self.callBuiltin(&builder, .erased_callable_repack);
                 }
-                return try self.scalarRetReg();
+                const result = try self.scalarRetReg();
+                try self.writeErasedCaptureMetadata(try self.ensureInGeneralReg(result), base_capture_size, on_copy);
+                return result;
             }
 
             const payload_size = builtins.erased_callable.payloadSize(base_capture_size);
@@ -14807,12 +14843,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     original_on_drop_reg,
                 );
                 self.codegen.freeGeneral(original_on_drop_reg);
+                const original_on_copy_reg = try self.materializeErasedCallableOnDrop(on_copy);
+                try self.emitStore(.w64, heap_ptr, @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_copy")), original_on_copy_reg);
+                self.codegen.freeGeneral(original_on_copy_reg);
             } else {
                 const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
                 try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
                 self.codegen.freeGeneral(on_drop_reg);
             }
 
+            try self.writeErasedCaptureMetadata(heap_ptr, base_capture_size, on_copy);
             if (capture) |capture_local| {
                 const layout_idx = capture_layout orelse unreachable; // the presence check at the top of generatePackedErasedFn pairs capture with capture_layout
                 const capture_loc = self.requireExactValueLocationToLayout(
@@ -14841,6 +14881,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
             return .{ .general_reg = result_reg };
+        }
+
+        fn writeErasedCaptureMetadata(self: *Self, ptr: GeneralReg, size: u32, on_copy: lir.LIR.ErasedCallableOnDrop) Allocator.Error!void {
+            const reg = if (self.hotReloadEnabled()) blk: {
+                const result = try self.allocTempGeneral();
+                try self.emitBuiltinAddress(result, .hot_reload_erased_callable_copy);
+                break :blk result;
+            } else try self.materializeErasedCallableOnDrop(on_copy);
+            try self.emitStore(.w64, ptr, @intCast(@offsetOf(builtins.erased_callable.Payload, "on_copy")), reg);
+            try self.codegen.emitLoadImm(reg, size);
+            try self.emitStore(.w64, ptr, @intCast(@offsetOf(builtins.erased_callable.Payload, "capture_size")), reg);
+            self.codegen.freeGeneral(reg);
         }
 
         fn materializeErasedCallableOnDrop(
@@ -17374,11 +17426,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         //
         // A dynamic local's slot holds the address of its bytes, which its
         // descriptor describes. Descriptor, name, and dictionary locals hold
-        // one pointer-sized word. Every operation the descriptor decides is a
-        // call to the Boxy runtime's `roc_desc_*` entry points.
+        // one pointer-sized word. Copies, list item and record field
+        // addresses, discriminant reads, and unsafe list reads read the
+        // descriptor inline (design.md "Dynamic Values In LIR"); every other
+        // operation the descriptor decides is a call to the Boxy runtime's
+        // `roc_desc_*` entry points.
 
         const desc_size_offset: i32 = @offsetOf(boxy_runtime.TypeDesc, "size");
         const desc_alignment_offset: i32 = @offsetOf(boxy_runtime.TypeDesc, "alignment");
+        /// The descriptor format at this backend's 64-bit targets.
+        const target_desc_layout = boxy_runtime.TypeDesc.layout(.u64);
+        const target_field_layout = boxy_runtime.Field.layout(.u64);
+        const desc_kind_offset: i32 = @intCast(target_desc_layout.of(.kind));
+        const desc_child_offset: i32 = @intCast(target_desc_layout.of(.child));
+        const desc_entries_offset: i32 = @intCast(target_desc_layout.of(.entries));
+        const desc_discriminant_offset_offset: i32 = @intCast(target_desc_layout.of(.discriminant_offset));
+        const desc_discriminant_size_offset: i32 = @intCast(target_desc_layout.of(.discriminant_size));
+        const field_offset_offset: i32 = @intCast(target_field_layout.of(.offset));
+        const field_slot_offset: i32 = @intCast(target_field_layout.of(.field_slot));
+        const field_desc_offset: i32 = @intCast(target_field_layout.of(.desc));
+        const field_entry_size: u32 = target_field_layout.size;
+        comptime {
+            std.debug.assert(field_entry_size == 24);
+            std.debug.assert(desc_size_offset == target_desc_layout.of(.size));
+        }
 
         fn localDyn(self: *Self, local: LocalId) ?LIR.DynLocal {
             return self.store.getLocal(local).dyn;
@@ -17412,6 +17483,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Pass the word an `opaque_ptr` local holds.
         fn addWordArg(self: *Self, builder: *Builder, local: LocalId) Allocator.Error!void {
             try builder.addMemArg(frame_ptr, self.localSlot(local));
+        }
+
+        /// Pass an index operand: its value, or the `u32` local holding it,
+        /// whose slot's low 32 bits the callee reads.
+        fn addIndexArg(self: *Self, builder: *Builder, index: LIR.DynIndex) Allocator.Error!void {
+            switch (index) {
+                .immediate => |value| try builder.addImmArg(value),
+                .local => |local| try self.addWordArg(builder, local),
+            }
         }
 
         /// Pass the address of a local's bytes: a dynamic local's address, or
@@ -17511,12 +17591,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Bind a closed target to the `size`-byte result in the return
         /// register.
         fn bindReturnedScalar(self: *Self, dst_local: LocalId, size: u32) Allocator.Error!void {
+            return self.bindScalarIn(dst_local, size, ret_reg_0);
+        }
+
+        /// Bind a closed target to the `size`-byte result in `reg`.
+        fn bindScalarIn(self: *Self, dst_local: LocalId, size: u32, reg: GeneralReg) Allocator.Error!void {
             if (self.localDyn(dst_local) != null) base.invariant("LIR/codegen invariant violated: dynamic local {d} received a scalar result", .{@backingInt(dst_local)});
             const slot = self.codegen.allocStackSlot(8);
             switch (size) {
-                1 => try self.emitStoreW8(frame_ptr, slot, ret_reg_0),
-                4 => try self.emitStore(.w32, frame_ptr, slot, ret_reg_0),
-                8 => try self.emitStore(.w64, frame_ptr, slot, ret_reg_0),
+                1 => try self.emitStoreW8(frame_ptr, slot, reg),
+                4 => try self.emitStore(.w32, frame_ptr, slot, reg),
+                8 => try self.emitStore(.w64, frame_ptr, slot, reg),
                 else => unreachable, // callers pass the width of the runtime entry point's result
             }
             try self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
@@ -17525,30 +17610,296 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// A component address in the return register: a `view` target takes
         /// it, a closed target loads the component's bytes.
         fn bindComponentAddress(self: *Self, dst_local: LocalId) Allocator.Error!void {
+            const address = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(address);
+            try self.emitMovRegReg(address, ret_reg_0);
+            try self.bindComponentAddressIn(dst_local, address);
+        }
+
+        /// A component address in `address`, a register the caller holds: a
+        /// `view` target takes it, a closed target loads the component's bytes.
+        fn bindComponentAddressIn(self: *Self, dst_local: LocalId, address: GeneralReg) Allocator.Error!void {
             if (self.localDyn(dst_local)) |dyn| {
-                if (dyn.storage != .view) base.invariant("LIR/codegen invariant violated: component address dst_local {d} is not a view", .{@backingInt(dst_local)});
-                try self.emitStore(.w64, frame_ptr, self.localSlot(dst_local), ret_reg_0);
-                return;
+                if (dyn.storage == .view) {
+                    try self.emitStore(.w64, frame_ptr, self.localSlot(dst_local), address);
+                    return;
+                }
+                // Save the component address before setting up the
+                // descriptor copy's arguments, which can clobber registers.
+                const address_slot = self.codegen.allocStackSlot(8);
+                try self.emitStore(.w64, frame_ptr, address_slot, address);
+                const dst = try self.dynTarget(dst_local);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try self.addWordArg(&builder, dyn.desc);
+                try addTargetArg(&builder, dst);
+                try builder.addMemArg(frame_ptr, address_slot);
+                try self.callBoxyRuntime(&builder, "roc_desc_copy");
+                return self.finishTarget(dst_local, dst);
             }
             const size = self.getLayoutSize(self.localLayout(dst_local));
             if (size == 0) return self.bindAssignedLocal(dst_local, .{ .immediate_i64 = 0 });
             const slot = self.codegen.allocStackSlot(@max(size, 8));
-            const address, const temp = try self.allocTempGenerals(2);
-            try self.emitMovRegReg(address, ret_reg_0);
+            const temp = try self.allocTempGeneral();
             try self.copyChunked(temp, address, 0, frame_ptr, slot, size);
-            self.freeGenerals(.{ temp, address });
+            self.codegen.freeGeneral(temp);
             try self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
         }
 
-        /// Copy a value's bytes from `src` into `dst` through `desc`. Reference
-        /// counts are untouched.
+        /// Patch every jump in `jumps` to the current offset.
+        fn patchJumpsHere(self: *Self, jumps: []const usize) Allocator.Error!void {
+            for (jumps) |jump| try self.codegen.patchJump(jump, self.codegen.currentOffset());
+        }
+
+        /// Replace the descriptor in `desc` by its backing while it is a
+        /// nominal, which shares its backing's layout (`compiled.backing`).
+        /// `kind` is scratch.
+        fn emitDescBacking(self: *Self, desc: GeneralReg, kind: GeneralReg) Allocator.Error!void {
+            const loop = self.codegen.currentOffset();
+            try self.emitLoadW8(kind, desc, desc_kind_offset);
+            try self.emitCmpImm(kind, @backingInt(boxy_runtime.Kind.nominal));
+            const exit = try self.codegen.emitCondJump(condCode(.not_equal));
+            try self.emitLoad(.w64, desc, desc, desc_child_offset);
+            try self.codegen.patchJump(try self.codegen.emitJump(), loop);
+            try self.codegen.patchJump(exit, self.codegen.currentOffset());
+        }
+
+        /// Copy `size` bytes from the address in `src` to the address in
+        /// `dst` with one load and one store when `size` is 1, 2, 4, 8, or 16,
+        /// and nothing when it is 0, loading every byte before storing any, as
+        /// the runtime's `walk.copyBytes` does. A copy of another size jumps
+        /// to a location appended to `other`, every finished copy to one
+        /// appended to `done`. `size` is clobbered; `scratch` is a further
+        /// register.
+        fn emitSizedCopy(self: *Self, size: GeneralReg, src: GeneralReg, dst: GeneralReg, scratch: GeneralReg, other: *std.ArrayList(usize), done: *std.ArrayList(usize)) Allocator.Error!void {
+            const value = size;
+            try self.emitCmpImm(size, 8);
+            const to_8 = try self.codegen.emitCondJump(condCode(.equal));
+            const to_16 = try self.codegen.emitCondJump(condCode(.above));
+            try self.emitCmpImm(size, 4);
+            const to_4 = try self.codegen.emitCondJump(condCode(.equal));
+            try other.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
+            try self.emitCmpImm(size, 2);
+            const to_2 = try self.codegen.emitCondJump(condCode(.equal));
+            try other.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
+            try self.emitCmpImm(size, 0);
+            try done.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
+            try self.emitLoadW8(value, src, 0);
+            try self.emitStoreW8(dst, 0, value);
+            try done.append(self.allocator, try self.codegen.emitJump());
+            try self.codegen.patchJump(to_2, self.codegen.currentOffset());
+            try self.emitLoadW16(value, src, 0);
+            try self.emitStoreW16(dst, 0, value);
+            try done.append(self.allocator, try self.codegen.emitJump());
+            try self.codegen.patchJump(to_4, self.codegen.currentOffset());
+            try self.emitLoad(.w32, value, src, 0);
+            try self.emitStore(.w32, dst, 0, value);
+            try done.append(self.allocator, try self.codegen.emitJump());
+            try self.codegen.patchJump(to_8, self.codegen.currentOffset());
+            try self.emitLoad(.w64, value, src, 0);
+            try self.emitStore(.w64, dst, 0, value);
+            try done.append(self.allocator, try self.codegen.emitJump());
+            try self.codegen.patchJump(to_16, self.codegen.currentOffset());
+            try self.emitCmpImm(size, 16);
+            try other.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
+            try self.emitLoad(.w64, value, src, 0);
+            try self.emitLoad(.w64, scratch, src, 8);
+            try self.emitStore(.w64, dst, 0, value);
+            try self.emitStore(.w64, dst, 8, scratch);
+            try done.append(self.allocator, try self.codegen.emitJump());
+        }
+
+        /// Copy a value's bytes from `src` into `dst` through `desc`
+        /// (`walk.copy`). Reference counts are untouched. The sizes
+        /// `emitSizedCopy` handles copy inline; others call the runtime.
         fn emitDescCopy(self: *Self, desc: LocalId, dst: DynTarget, src: LocalId) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            var other: std.ArrayList(usize) = .empty;
+            defer other.deinit(self.allocator);
+            var done: std.ArrayList(usize) = .empty;
+            defer done.deinit(self.allocator);
+            {
+                const size, const from, const to, const scratch = try self.allocTempGenerals(4);
+                defer self.freeGenerals(.{ scratch, to, from, size });
+                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(desc));
+                try self.emitLoad(.w32, size, size, desc_size_offset);
+                try self.emitBytesAddress(src, from);
+                try self.emitTargetAddress(dst, to);
+                try self.emitSizedCopy(size, from, to, scratch, &other, &done);
+            }
+            try self.patchJumpsHere(other.items);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try self.addWordArg(&builder, desc);
             try addTargetArg(&builder, dst);
             try self.addBytesArg(&builder, src);
             try self.callBoxyRuntime(&builder, "roc_desc_copy");
+            try self.patchJumpsHere(done.items);
+        }
+
+        /// `dyn_list_item_addr` (`compiled.listElemAddr`): the list's bytes
+        /// plus `index` times the item size. A zero-sized item's address is
+        /// the runtime's.
+        fn emitDynListItemAddr(self: *Self, dst_local: LocalId, item: anytype) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            const address = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(address);
+            var zero_sized: usize = undefined;
+            {
+                const size, const index = try self.allocTempGenerals(2);
+                defer self.freeGenerals(.{ index, size });
+                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(item.elem_desc));
+                try self.emitLoad(.w32, size, size, desc_size_offset);
+                try self.emitCmpImm(size, 0);
+                zero_sized = try self.codegen.emitCondJump(condCode(.equal));
+                try self.emitBytesAddress(item.list, address);
+                try self.emitLoad(.w64, address, address, list_bytes_offset);
+                try self.emitLoad(.w64, index, frame_ptr, self.localSlot(item.index));
+                try self.codegen.emitMul(.w64, index, index, size);
+                try self.codegen.emitAdd(.w64, address, address, index);
+            }
+            const done = try self.codegen.emitJump();
+            try self.codegen.patchJump(zero_sized, self.codegen.currentOffset());
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try self.addWordArg(&builder, item.elem_desc);
+                try self.addBytesArg(&builder, item.list);
+                try self.addWordArg(&builder, item.index);
+                try self.callBoxyRuntime(&builder, "roc_desc_list_item_addr");
+                try self.emitMovRegReg(address, ret_reg_0);
+            }
+            try self.codegen.patchJump(done, self.codegen.currentOffset());
+            try self.bindComponentAddressIn(dst_local, address);
+        }
+
+        /// `list_get_unsafe` and `list_map_extract_unsafe` with an element
+        /// descriptor (`compiled.listOp`): copy the item at `index` to the
+        /// target. A zero-sized item, or a list without bytes, writes
+        /// nothing. The sizes `emitSizedCopy` handles copy inline; others
+        /// copy through the runtime's `roc_desc_copy`.
+        fn emitDynListGetUnsafe(self: *Self, dst_local: LocalId, elem_desc: LocalId, list: LocalId, index: LocalId) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            const dst = try self.dynTarget(dst_local);
+            const item_slot = self.codegen.allocStackSlot(8);
+            var other: std.ArrayList(usize) = .empty;
+            defer other.deinit(self.allocator);
+            var done: std.ArrayList(usize) = .empty;
+            defer done.deinit(self.allocator);
+            {
+                const size, const from, const to, const scratch = try self.allocTempGenerals(4);
+                defer self.freeGenerals(.{ scratch, to, from, size });
+                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(elem_desc));
+                try self.emitLoad(.w32, size, size, desc_size_offset);
+                try self.emitCmpImm(size, 0);
+                try done.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
+                try self.emitBytesAddress(list, from);
+                try self.emitLoad(.w64, from, from, list_bytes_offset);
+                try self.emitCmpImm(from, 0);
+                try done.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
+                try self.emitBytesAddress(index, to);
+                try self.emitLoad(.w64, to, to, 0);
+                try self.codegen.emitMul(.w64, to, to, size);
+                try self.codegen.emitAdd(.w64, from, from, to);
+                try self.emitStore(.w64, frame_ptr, item_slot, from);
+                try self.emitTargetAddress(dst, to);
+                try self.emitSizedCopy(size, from, to, scratch, &other, &done);
+            }
+            try self.patchJumpsHere(other.items);
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try self.addWordArg(&builder, elem_desc);
+                try addTargetArg(&builder, dst);
+                try builder.addMemArg(frame_ptr, item_slot);
+                try self.callBoxyRuntime(&builder, "roc_desc_copy");
+            }
+            try self.patchJumpsHere(done.items);
+            try self.finishTarget(dst_local, dst);
+        }
+
+        /// `dyn_field_addr` (`compiled.fieldAddr`): the record's address plus
+        /// the field's offset, read from the descriptor's field table. A field
+        /// whose slot is a recursion box is addressed by the runtime.
+        fn emitDynFieldAddr(self: *Self, dst_local: LocalId, desc: LocalId, base_local: LocalId, field_index: u32) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            const address = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(address);
+            var boxed: usize = undefined;
+            {
+                const entry, const temp, const scale = try self.allocTempGenerals(3);
+                defer self.freeGenerals(.{ scale, temp, entry });
+                try self.emitLoad(.w64, entry, frame_ptr, self.localSlot(desc));
+                try self.emitDescBacking(entry, temp);
+                try self.emitLoad(.w64, entry, entry, desc_entries_offset);
+                // The semantic index's entry names the field's memory slot.
+                const index_entry: i32 = @intCast(@as(u64, field_index) * field_entry_size);
+                try self.emitLoad(.w32, temp, entry, index_entry + field_slot_offset);
+                // A field entry is 24 bytes: the slot times three, then times eight.
+                try self.emitMovRegReg(scale, temp);
+                try self.emitShiftImm(.shl, .w64, temp, temp, 1);
+                try self.codegen.emitAdd(.w64, temp, temp, scale);
+                try self.emitShiftImm(.shl, .w64, temp, temp, 3);
+                try self.codegen.emitAdd(.w64, entry, entry, temp);
+                try self.emitLoad(.w64, temp, entry, field_desc_offset);
+                try self.emitLoadW8(temp, temp, desc_kind_offset);
+                try self.emitCmpImm(temp, @backingInt(boxy_runtime.Kind.recursive_box));
+                boxed = try self.codegen.emitCondJump(condCode(.equal));
+                try self.emitLoad(.w32, temp, entry, field_offset_offset);
+                try self.emitBytesAddress(base_local, address);
+                try self.codegen.emitAdd(.w64, address, address, temp);
+            }
+            const done = try self.codegen.emitJump();
+            try self.codegen.patchJump(boxed, self.codegen.currentOffset());
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try self.addWordArg(&builder, desc);
+                try self.addBytesArg(&builder, base_local);
+                try builder.addImmArg(field_index);
+                try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
+                try self.emitMovRegReg(address, ret_reg_0);
+            }
+            try self.codegen.patchJump(done, self.codegen.currentOffset());
+            try self.bindComponentAddressIn(dst_local, address);
+        }
+
+        /// `dyn_tag_discriminant` (`compiled.tagDiscriminant`): the
+        /// `discriminant_size` bytes at `discriminant_offset` of the union
+        /// behind any nominals. An 8-byte discriminant is below 2^32, so its
+        /// low four bytes are its value.
+        fn emitDynTagDiscriminant(self: *Self, dst_local: LocalId, tag: anytype) Allocator.Error!void {
+            const value = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(value);
+            var done: std.ArrayList(usize) = .empty;
+            defer done.deinit(self.allocator);
+            {
+                const desc, const at = try self.allocTempGenerals(2);
+                defer self.freeGenerals(.{ at, desc });
+                try self.emitLoad(.w64, desc, frame_ptr, self.localSlot(tag.desc));
+                try self.emitDescBacking(desc, at);
+                try self.emitBytesAddress(tag.base, at);
+                try self.emitLoad(.w32, value, desc, desc_discriminant_offset_offset);
+                try self.codegen.emitAdd(.w64, at, at, value);
+                try self.emitLoad(.w32, desc, desc, desc_discriminant_size_offset);
+                try self.emitCmpImm(desc, 2);
+                const wide = try self.codegen.emitCondJump(condCode(.above));
+                const two = try self.codegen.emitCondJump(condCode(.equal));
+                try self.emitCmpImm(desc, 1);
+                const one = try self.codegen.emitCondJump(condCode(.equal));
+                try self.codegen.emitLoadImm(value, 0);
+                try done.append(self.allocator, try self.codegen.emitJump());
+                try self.codegen.patchJump(one, self.codegen.currentOffset());
+                try self.emitLoadW8(value, at, 0);
+                try done.append(self.allocator, try self.codegen.emitJump());
+                try self.codegen.patchJump(two, self.codegen.currentOffset());
+                try self.emitLoadW16(value, at, 0);
+                try done.append(self.allocator, try self.codegen.emitJump());
+                try self.codegen.patchJump(wide, self.codegen.currentOffset());
+                try self.emitLoad(.w32, value, at, 0);
+            }
+            try self.patchJumpsHere(done.items);
+            try self.bindScalarIn(dst_local, 4, value);
         }
 
         /// `set_local`, or a join parameter's initialization, where either side
@@ -17683,73 +18034,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(reg);
         }
 
-        /// Inline the site's acquire-load and operand comparisons. Only a miss
-        /// builds the runtime arguments, probes the interner, and publishes.
-        fn generateCachedComposition(self: *Self, dst: LocalId, op: LIR.DynOp, cache: LIR.StaticDataId) Allocator.Error!void {
-            try self.spillAllVectorLocals();
-            var operands: std.ArrayList(LocalId) = .empty;
-            defer operands.deinit(self.allocator);
-            try lir.DynOps.Operands.of(op).appendAll(self.store, self.allocator, &operands);
-            var misses: std.ArrayList(usize) = .empty;
-            defer misses.deinit(self.allocator);
-            const result_slot = self.codegen.allocStackSlot(8);
-            const site_slot = self.codegen.allocStackSlot(8);
-            {
-                const entry, const current, const expected = try self.allocTempGenerals(3);
-                defer self.freeGenerals(.{ entry, current, expected });
-                switch (self.generation_mode) {
-                    .native_execution => try self.codegen.emitLoadImm(entry, @bitCast(@as(u64, self.nativeStaticDataAddress(cache)))),
-                    .shim_execution, .object_file => try self.emitStaticDataAddress(entry, cache),
-                }
-                try self.emitStore(.w64, frame_ptr, site_slot, entry);
-                if (comptime target.toCpuArch() == .aarch64)
-                    try self.codegen.emit.ldarRegMem(entry, entry)
-                else
-                    // Aligned x86 loads have acquire ordering.
-                    try self.emitLoad(.w64, entry, entry, 0);
-                try self.emitCmpImm(entry, 0);
-                try misses.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
-                for (operands.items, 0..) |operand, i| {
-                    try self.emitLoad(.w64, current, frame_ptr, self.localSlot(operand));
-                    try self.emitLoad(.w64, expected, entry, @intCast((i + 1) * 8));
-                    try self.emitCmpReg(current, expected);
-                    try misses.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
-                }
-                try self.emitLoad(.w64, current, entry, @offsetOf(boxy_runtime.compose.CompositionEntry, "result"));
-                try self.emitStore(.w64, frame_ptr, result_slot, current);
-            }
-            const hit = try self.codegen.emitJump();
-            for (misses.items) |miss| try self.codegen.patchJump(miss, self.codegen.currentOffset());
-            try self.generateDyn(dst, op);
-            const words = self.codegen.allocStackSlot(@intCast(@max(operands.items.len, 1) * 8));
-            var open: ?usize = null;
-            {
-                const reg = try self.allocTempGeneral();
-                defer self.codegen.freeGeneral(reg);
-                try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(dst));
-                try self.emitStore(.w64, frame_ptr, result_slot, reg);
-                if (op == .desc_recursive_open) {
-                    try self.emitLoad(.w32, reg, reg, @offsetOf(boxy_runtime.TypeDesc, "size"));
-                    try self.emitCmpImm(reg, std.math.maxInt(u32));
-                    open = try self.codegen.emitCondJump(condCode(.equal));
-                }
-                for (operands.items, 0..) |operand, i| {
-                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(operand));
-                    try self.emitStore(.w64, frame_ptr, words + @as(i32, @intCast(i * 8)), reg);
-                }
-            }
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try builder.addMemArg(frame_ptr, site_slot);
-            try builder.addImmArg(@intCast(operands.items.len));
-            try builder.addLeaArg(frame_ptr, words);
-            try builder.addMemArg(frame_ptr, result_slot);
-            try self.callBoxyRuntime(&builder, "roc_desc_site_publish");
-            if (open) |jump| try self.codegen.patchJump(jump, self.codegen.currentOffset());
-            try self.codegen.patchJump(hit, self.codegen.currentOffset());
-            try self.bindAssignedLocal(dst, self.stackLocationForLayout(self.localLayout(dst), result_slot));
-        }
-
         fn generateDyn(self: *Self, target_or_null: ?LocalId, op: LIR.DynOp) Allocator.Error!void {
             try self.spillAllVectorLocals();
             if (op == .frame_alloc) return self.generateDynFrameAlloc();
@@ -17758,198 +18042,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer builder.deinit();
             switch (op) {
                 .frame_alloc => unreachable, // handled above
-                .desc_list => |d| {
-                    try self.addWordArg(&builder, d.elem);
-                    try self.callBoxyRuntime(&builder, "roc_desc_list");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_box => |d| {
-                    try self.addWordArg(&builder, d.payload);
-                    try self.callBoxyRuntime(&builder, "roc_desc_box");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_recursive_box => |d| {
-                    try self.addWordArg(&builder, d.payload);
-                    try self.callBoxyRuntime(&builder, "roc_desc_recursive_box");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_recursive_open => |d| {
-                    const vars = try self.emitLocalArray(d.vars, .words);
-                    try self.addWordArg(&builder, d.key);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.vars).len));
-                    try builder.addLeaArg(frame_ptr, vars);
-                    try self.callBoxyRuntime(&builder, "roc_desc_recursive_open");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_recursive_close => |d| {
-                    const vars = try self.emitLocalArray(d.vars, .words);
-                    try self.addWordArg(&builder, d.shell);
-                    try self.addWordArg(&builder, d.desc);
-                    try self.addWordArg(&builder, d.key);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.vars).len));
-                    try builder.addLeaArg(frame_ptr, vars);
-                    try self.callBoxyRuntime(&builder, "roc_desc_recursive_close");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_note => |d| {
-                    const vars = try self.emitLocalArray(d.vars, .words);
-                    try self.addWordArg(&builder, d.desc);
-                    try builder.addImmArg(@intCast(d.ty));
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.vars).len));
-                    try builder.addLeaArg(frame_ptr, vars);
-                    try self.callBoxyRuntime(&builder, "roc_desc_note");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_presence_slot => |d| {
-                    try self.addWordArg(&builder, d.missing);
-                    try self.addWordArg(&builder, d.present);
-                    try self.addWordArg(&builder, d.payload);
-                    try self.callBoxyRuntime(&builder, "roc_desc_presence_slot");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_record => |d| {
-                    const names = self.store.getLocalSpan(d.names);
-                    const descs = self.store.getLocalSpan(d.descs);
-                    if (names.len != descs.len) base.invariant("LIR/codegen invariant violated: desc_record has {d} names for {d} descriptors", .{ names.len, descs.len });
-                    const entry_size: i32 = @sizeOf(boxy_runtime.compose.FieldInput);
-                    const fields = self.codegen.allocStackSlot(@intCast(@max(names.len, 1) * entry_size));
+                .table_entry => |entry| {
                     const reg = try self.allocTempGeneral();
-                    for (0..names.len) |i| {
-                        const entry = fields + @as(i32, @intCast(i)) * entry_size;
-                        try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(names, i)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.FieldInput, "name"), reg);
-                        try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(descs, i)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.FieldInput, "desc"), reg);
-                    }
-                    self.codegen.freeGeneral(reg);
-                    try builder.addImmArg(@intCast(names.len));
-                    try builder.addLeaArg(frame_ptr, fields);
-                    if (d.ext) |ext| {
-                        try self.addWordArg(&builder, ext);
-                        try self.callBoxyRuntime(&builder, "roc_desc_record_extended");
-                    } else {
-                        try self.callBoxyRuntime(&builder, "roc_desc_record");
-                    }
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_declared_record => |d| {
-                    const names = self.store.getLocalSpan(d.names);
-                    const descs = self.store.getLocalSpan(d.descs);
-                    const padding = self.store.getU32Span(d.padding);
-                    if (names.len + padding.len != descs.len) base.invariant("LIR/codegen invariant violated: desc_declared_record has {d} names and {d} padding fields for {d} descriptors", .{ names.len, padding.len, descs.len });
-                    const entry_size: i32 = @sizeOf(boxy_runtime.compose.DeclaredFieldInput);
-                    const fields = self.codegen.allocStackSlot(@intCast(@max(descs.len, 1) * entry_size));
-                    const reg = try self.allocTempGeneral();
-                    var next_name: usize = 0;
-                    var next_padding: usize = 0;
-                    for (0..descs.len) |i| {
-                        const entry = fields + @as(i32, @intCast(i)) * entry_size;
-                        const is_padding = next_padding < padding.len and GuardedList.at(padding, next_padding) == i;
-                        if (is_padding) {
-                            next_padding += 1;
-                            try self.codegen.emit.movRegImm64(reg, 0);
-                        } else {
-                            try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(names, next_name)));
-                            next_name += 1;
-                        }
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.DeclaredFieldInput, "name"), reg);
-                        try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(descs, i)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.DeclaredFieldInput, "desc"), reg);
-                        try self.codegen.emit.movRegImm64(reg, @intFromBool(is_padding));
-                        try self.emitStore(.w32, frame_ptr, entry + @offsetOf(boxy_runtime.compose.DeclaredFieldInput, "is_padding"), reg);
-                    }
-                    self.codegen.freeGeneral(reg);
-                    try builder.addImmArg(@intCast(descs.len));
-                    try builder.addLeaArg(frame_ptr, fields);
-                    try self.callBoxyRuntime(&builder, "roc_desc_declared_record");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_tuple => |d| {
-                    const elems = try self.emitLocalArray(d.elems, .words);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.elems).len));
-                    try builder.addLeaArg(frame_ptr, elems);
-                    try self.callBoxyRuntime(&builder, "roc_desc_tuple");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_args => |d| {
-                    const elems = try self.emitLocalArray(d.elems, .words);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.elems).len));
-                    try builder.addLeaArg(frame_ptr, elems);
-                    try self.callBoxyRuntime(&builder, "roc_desc_args");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_tag_union => |d| {
-                    const names = self.store.getLocalSpan(d.names);
-                    const counts = self.store.getU32Span(d.payload_counts);
-                    if (names.len != counts.len) base.invariant("LIR/codegen invariant violated: desc_tag_union has {d} names for {d} payload counts", .{ names.len, counts.len });
-                    const payloads = try self.emitLocalArray(d.payloads, .words);
-                    const payload_total = self.store.getLocalSpan(d.payloads).len;
-                    const VariantInput = boxy_runtime.compose.VariantInput;
-                    const entry_size: i32 = @sizeOf(VariantInput);
-                    const variants = self.codegen.allocStackSlot(@intCast(@max(names.len, 1) * entry_size));
-                    const reg = try self.allocTempGeneral();
-                    var next: usize = 0;
-                    for (0..names.len) |i| {
-                        const count = GuardedList.at(counts, i);
-                        const entry = variants + @as(i32, @intCast(i)) * entry_size;
-                        try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(names, i)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(VariantInput, "name"), reg);
-                        try self.codegen.emitLoadImm(reg, count);
-                        try self.emitStore(.w32, frame_ptr, entry + @offsetOf(VariantInput, "payload_count"), reg);
-                        try self.emitLeaStack(reg, payloads + @as(i32, @intCast(next * 8)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(VariantInput, "payloads"), reg);
-                        next += count;
-                    }
-                    self.codegen.freeGeneral(reg);
-                    if (next != payload_total) base.invariant("LIR/codegen invariant violated: desc_tag_union payload counts cover {d} of its {d} payloads", .{ next, payload_total });
-                    try builder.addImmArg(@intCast(names.len));
-                    try builder.addLeaArg(frame_ptr, variants);
-                    if (d.ext) |ext| {
-                        try self.addWordArg(&builder, ext);
-                        try self.callBoxyRuntime(&builder, "roc_desc_tag_union_extended");
-                    } else {
-                        try self.callBoxyRuntime(&builder, "roc_desc_tag_union");
-                    }
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_nominal => |d| {
-                    try self.addWordArg(&builder, d.backing);
-                    try self.addWordArg(&builder, d.name);
-                    if (d.methods) |methods| try self.addWordArg(&builder, methods) else try builder.addImmArg(0);
-                    try builder.addImmArg(@intFromBool(d.inspect_opaque));
-                    try self.callBoxyRuntime(&builder, "roc_desc_nominal");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .dict_compose => |d| {
-                    const fn_slot = self.codegen.allocStackSlot(8);
-                    try self.emitProcAddressToSlot(d.worker, fn_slot);
-                    const captures = try self.emitLocalArray(d.captures, .words);
-                    try builder.addMemArg(frame_ptr, fn_slot);
-                    try builder.addImmArg(self.erased_capture_prefix);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.captures).len));
-                    try builder.addLeaArg(frame_ptr, captures);
-                    try self.callBoxyRuntime(&builder, "roc_desc_dict_compose");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .dict_patch => |d| {
-                    try self.addWordArg(&builder, d.dict);
-                    try builder.addImmArg(self.erased_capture_prefix);
-                    try builder.addImmArg(@intCast(d.index));
-                    try self.addWordArg(&builder, d.value);
-                    try self.callBoxyRuntime(&builder, "roc_desc_dict_patch");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .dict_record => |d| {
-                    const methods = try self.emitLocalArray(d.methods, .words);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.methods).len));
-                    try builder.addLeaArg(frame_ptr, methods);
-                    try self.callBoxyRuntime(&builder, "roc_desc_dict_record");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .dict_method => |d| {
-                    const reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(d.dict));
-                    try self.emitLoad(.w64, reg, reg, @intCast(d.index * 8));
+                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(entry.table));
+                    try self.emitLoad(.w64, reg, reg, @intCast(LIR.tableEntryOffset(entry.index, 8)));
                     const slot = self.codegen.allocStackSlot(8);
                     try self.emitStore(.w64, frame_ptr, slot, reg);
                     self.codegen.freeGeneral(reg);
@@ -17957,51 +18053,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .copy => |c| {
                     const dst = try self.dynTarget(dst_local);
-                    try self.addWordArg(&builder, c.desc);
-                    try addTargetArg(&builder, dst);
-                    try self.addBytesArg(&builder, c.src);
-                    try self.callBoxyRuntime(&builder, "roc_desc_copy");
+                    try self.emitDescCopy(c.desc, dst, c.src);
                     try self.finishTarget(dst_local, dst);
                 },
-                .field_addr => |f| {
-                    try self.addWordArg(&builder, f.desc);
-                    try self.addBytesArg(&builder, f.base);
-                    try builder.addImmArg(f.field_index);
-                    try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
-                    try self.bindComponentAddress(dst_local);
+                .field_addr => |f| switch (f.field_index) {
+                    .immediate => |index| try self.emitDynFieldAddr(dst_local, f.desc, f.base, index),
+                    .local => {
+                        try self.addWordArg(&builder, f.desc);
+                        try self.addBytesArg(&builder, f.base);
+                        try self.addIndexArg(&builder, f.field_index);
+                        try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
+                        try self.bindComponentAddress(dst_local);
+                    },
                 },
-                .field_addr_named => |f| {
-                    try self.addWordArg(&builder, f.desc);
-                    try self.addBytesArg(&builder, f.base);
-                    try self.addWordArg(&builder, f.name);
-                    try self.callBoxyRuntime(&builder, "roc_desc_field_addr_named");
-                    try self.bindComponentAddress(dst_local);
-                },
-                .list_item_addr => |e| {
-                    try self.addWordArg(&builder, e.elem_desc);
-                    try self.addBytesArg(&builder, e.list);
-                    try self.addWordArg(&builder, e.index);
-                    try self.callBoxyRuntime(&builder, "roc_desc_list_item_addr");
-                    try self.bindComponentAddress(dst_local);
-                },
+                .list_item_addr => |e| try self.emitDynListItemAddr(dst_local, e),
                 .box_payload_addr => |b| {
                     try self.addWordArg(&builder, b.desc);
                     try self.addBytesArg(&builder, b.box);
                     try self.callBoxyRuntime(&builder, "roc_desc_box_payload_addr");
                     try self.bindComponentAddress(dst_local);
                 },
-                .tag_discriminant => |t| {
-                    try self.addWordArg(&builder, t.desc);
-                    try self.addBytesArg(&builder, t.base);
-                    try self.callBoxyRuntime(&builder, "roc_desc_tag_discriminant");
-                    try self.bindReturnedScalar(dst_local, 4);
-                },
-                .tag_discriminant_of => |t| {
-                    try self.addWordArg(&builder, t.desc);
-                    try self.addWordArg(&builder, t.name);
-                    try self.callBoxyRuntime(&builder, "roc_desc_tag_discriminant_of");
-                    try self.bindReturnedScalar(dst_local, 4);
-                },
+                .tag_discriminant => |t| try self.emitDynTagDiscriminant(dst_local, t),
                 .tag_payload_addr => |t| {
                     try self.addWordArg(&builder, t.desc);
                     try self.addBytesArg(&builder, t.base);
@@ -18020,15 +18092,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.finishTarget(dst_local, dst);
                 },
                 .record_update => |u| {
-                    const names = try self.emitLocalArray(u.names, .words);
                     const values = try self.emitLocalArray(u.values, .bytes);
                     const dst = try self.dynTarget(dst_local);
                     try self.addWordArg(&builder, u.base_desc);
                     try self.addBytesArg(&builder, u.base);
                     try self.addWordArg(&builder, u.desc);
                     try addTargetArg(&builder, dst);
+                    try self.addWordArg(&builder, u.plan);
                     try builder.addImmArg(@intCast(self.store.getLocalSpan(u.values).len));
-                    try builder.addLeaArg(frame_ptr, names);
                     try builder.addLeaArg(frame_ptr, values);
                     try self.callBoxyRuntime(&builder, "roc_desc_update_record");
                     try self.finishTarget(dst_local, dst);
@@ -18037,7 +18108,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const payloads = try self.emitLocalArray(t.payloads, .bytes);
                     const dst = try self.dynTarget(dst_local);
                     try self.addWordArg(&builder, t.desc);
-                    try self.addWordArg(&builder, t.name);
+                    try self.addIndexArg(&builder, t.discriminant);
                     try addTargetArg(&builder, dst);
                     try builder.addImmArg(@intCast(self.store.getLocalSpan(t.payloads).len));
                     try builder.addLeaArg(frame_ptr, payloads);
@@ -18102,14 +18173,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const dst = try self.dynTarget(dst_local);
                     try addTargetArg(&builder, dst);
                     try self.addWordArg(&builder, i.desc);
+                    try self.addWordArg(&builder, i.names);
                     try self.addBytesArg(&builder, i.value);
                     try self.callBoxyRuntime(&builder, "roc_desc_inspect");
                     try self.finishTarget(dst_local, dst);
                 },
                 .adapt => |a| {
                     const dst = try self.dynTarget(dst_local);
-                    try self.addWordArg(&builder, a.from);
-                    try self.addWordArg(&builder, a.to);
+                    try self.addWordArg(&builder, a.plan);
                     try addTargetArg(&builder, dst);
                     try self.addBytesArg(&builder, a.src);
                     try self.callBoxyRuntime(&builder, "roc_desc_adapt");
@@ -18149,7 +18220,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(reg);
                         try builder.addMemArg(frame_ptr, slot);
                         try builder.addMemArg(frame_ptr, drop_slot);
+                        const copy_slot = self.codegen.allocStackSlot(8);
+                        const copy_reg = try self.allocTempGeneral();
+                        try self.emitBuiltinAddress(copy_reg, .hot_reload_erased_callable_copy);
+                        try self.emitStore(.w64, frame_ptr, copy_slot, copy_reg);
+                        self.codegen.freeGeneral(copy_reg);
+                        try builder.addMemArg(frame_ptr, copy_slot);
                     } else {
+                        try builder.addImmArg(0);
                         try builder.addImmArg(0);
                         try builder.addImmArg(0);
                     }
@@ -18225,6 +18303,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// list operation.
         fn boxyListOp(op: lir.LowLevel) ?BoxyListOp {
             return switch (op) {
+                .boxed_sequence_pack, .boxed_sequence_unpack => null,
                 .list_capacity => .capacity,
                 .list_slack_unique => .slack_unique,
                 .list_owned_unique => .owned_unique,
@@ -18256,7 +18335,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_take_first => .take_first,
                 .list_take_last => .take_last,
                 .list_reverse => .reverse,
-                .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetched, .list_prefetch, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_map_prepare_reuse, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => null,
+                .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetched, .list_prefetch, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_map_prepare_reuse, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => null,
             };
         }
 
@@ -18273,6 +18352,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const extra = self.store.stmtRowOrDefault(assign.extra);
 
             switch (assign.op) {
+                .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // these operations never carry a list element descriptor
                 .list_prefetch => return,
                 .list_len => {
                     const reg = try self.allocTempGeneral();
@@ -18293,7 +18373,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.freeGenerals(.{ temp, to, from });
                     return self.finishTarget(dst_local, dst);
                 },
-                .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_capacity, .list_get_unsafe, .list_prefetched, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+                .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_capacity, .list_get_unsafe, .list_prefetched, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
             }
             const list_op = boxyListOp(assign.op) orelse base.invariant(
                 "LIR/codegen invariant violated: low-level {s} has no element-descriptor form",
@@ -18307,6 +18387,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitStore(.w64, frame_ptr, slot, reg);
                 self.codegen.freeGeneral(reg);
                 return self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
+            }
+            if (list_op == .get_unsafe or list_op == .map_extract_unsafe) {
+                return self.emitDynListGetUnsafe(dst_local, elem_desc, GuardedList.at(all_args, 0), GuardedList.at(all_args, 1));
             }
 
             const Request = BoxyListOpRequest;
@@ -20822,16 +20905,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stmt = self.store.getCFStmt(stmt_id);
                     switch (stmt) {
                         .dyn => |dyn_stmt| {
-                            const op = self.store.stmtRow(dyn_stmt.data);
-                            if (dyn_stmt.composition_cache) |cache|
-                                try self.generateCachedComposition(dyn_stmt.target.?, op, cache)
-                            else
-                                try self.generateDyn(dyn_stmt.target, op);
+                            try self.generateDyn(dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
                             try work.append(wa, .{ .node = dyn_stmt.next });
                         },
                         .assign_ref => |assign| {
-                            const value_loc = try self.generateRefOp(assign.op, self.localLayout(assign.target));
-                            try self.bindAssignedLocal(assign.target, value_loc);
+                            if (assign.op.kind == .field and self.localDyn(assign.op.source) != null) {
+                                try self.generateDyn(assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .field_index = .{ .immediate = assign.op.index } } });
+                            } else if (assign.op.kind == .local and self.localDyn(assign.target) != null) {
+                                try self.generateDyn(assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.localDyn(assign.target).?.desc } });
+                            } else {
+                                const value_loc = try self.generateRefOp(assign.op, self.localLayout(assign.target));
+                                try self.bindAssignedLocal(assign.target, value_loc);
+                            }
                             try work.append(wa, .{ .node = assign.next });
                         },
 
@@ -20923,6 +21008,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.localLayout(assign_stmt.target),
                                 assign.capture_layout,
                                 assign.on_drop,
+                                assign.on_copy,
                                 assign.reuse,
                                 assign.reuse_unique,
                             );
@@ -22135,9 +22221,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call one of the host's fixed runtime symbols: by its in-process
         /// address under native execution, by relocation everywhere else.
-        /// Load `site`, a unit-local expect site id, into `dst` as an
-        /// `abs32s` field against `expect_site_base_symbol` whose bytes hold
-        /// the id.
+        /// Load `site`, a unit-local expect site id, into `dst` as a field
+        /// against `expect_site_base_symbol` whose bytes hold the id: an
+        /// `abs32s` immediate on x86_64, an `abs64_field` literal in the
+        /// instruction stream on arm64.
         fn emitRelocatableExpectSite(self: *Self, dst: GeneralReg, site: u32) Allocator.Error!void {
             switch (isa) {
                 .x86_64 => {
@@ -22150,7 +22237,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .kind = .abs32s,
                     } });
                 },
-                .aarch64 => base.invariant("LirCodeGen invariant violated: relocatable expect sites in aarch64 code; only Linux x86_64 test units relocate them", .{}),
+                .aarch64 => {
+                    const start = self.codegen.currentOffset();
+                    // ldr dst, #8; b #12; .quad site
+                    try self.codegen.emit.ldrLiteral64(dst, 8);
+                    try self.codegen.emit.b(12);
+                    try self.codegen.emit.literal64(site);
+                    try self.codegen.relocations.append(self.allocator, .{ .linked_data = .{
+                        .offset = @intCast(start + 8),
+                        .symbol = try self.codegen.symbols.intern(self.allocator, relocation_mod.expect_site_base_symbol, .shared),
+                        .kind = .abs64_field,
+                    } });
+                },
             }
         }
 
@@ -23512,19 +23610,52 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return false;
         }
 
-        /// Offset within a reference's instruction of the 4-byte relative
-        /// displacement field `normalizeExcerptRefSite` clears: what a unit
-        /// image records for a reference it resolves (`UnitImage.CodeEdge`).
-        pub fn codeRefFieldOffset(form: CodeRefForm) usize {
+        /// The fields a unit image records for a reference at `site` of
+        /// `form` to `target_offset` that the assembly resolved in place
+        /// (`UnitImage.CodeEdge`): the reference's own field, or for an
+        /// AArch64 call through its veneer, the branch to the veneer and
+        /// the veneer's address sequence.
+        pub fn codeRefEdges(self: *const Self, site: usize, form: CodeRefForm, target_offset: usize) CodeRefEdges {
             switch (isa) {
-                .aarch64 => unreachable, // unit images are built for x86_64 targets only (boxy_unit.producesImage), and only their builder asks
-                .x86_64 => return switch (form) {
-                    .call => 1,
-                    .addr => 3,
-                    .inline_call => unreachable, // only aarch64 direct calls record the inline-call form
+                .aarch64 => switch (form) {
+                    .addr => return .one(.{ .site = site, .target = target_offset, .kind = .pc_sequence, .addend = 0 }),
+                    .inline_call => return .one(.{ .site = site, .target = target_offset, .kind = if (self.codegen.directCallBranches(site)) .branch26 else .pc_sequence, .addend = 0 }),
+                    .call => {
+                        const veneer = self.codegen.callVeneerTaken(site, target_offset) orelse return .one(.{ .site = site, .target = target_offset, .kind = .branch26, .addend = 0 });
+                        return .{ .edges = .{
+                            .{ .site = site, .target = veneer, .kind = .branch26, .addend = 0 },
+                            .{ .site = veneer, .target = target_offset, .kind = .pc_sequence, .addend = 0 },
+                        }, .len = 2 };
+                    },
                 },
+                // A call's and a LEA's displacement is their last 4 bytes,
+                // counting from the end of the instruction.
+                .x86_64 => return .one(.{
+                    .site = site + switch (form) {
+                        .call => @as(usize, 1),
+                        .addr => 3,
+                        .inline_call => unreachable, // only aarch64 direct calls record the inline-call form
+                    },
+                    .target = target_offset,
+                    .kind = .pc32,
+                    .addend = -4,
+                }),
             }
         }
+
+        /// The one or two fields of a resolved code reference.
+        pub const CodeRefEdges = struct {
+            edges: [2]UnitImage.CodeEdge,
+            len: u8,
+
+            fn one(edge: UnitImage.CodeEdge) CodeRefEdges {
+                return .{ .edges = .{ edge, undefined }, .len = 1 };
+            }
+
+            pub fn slice(self: *const CodeRefEdges) []const UnitImage.CodeEdge {
+                return self.edges[0..self.len];
+            }
+        };
 
         /// Remove placement-specific stub displacements using producer records.
         /// Clear the placement-specific displacement of a reference at

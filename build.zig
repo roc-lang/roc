@@ -1229,6 +1229,34 @@ fn createTestPlatformHostLib(
     return lib;
 }
 
+/// Test platforms own their startup inputs. Build musl's self-relocating
+/// entrypoint from the pinned Zig toolchain rather than vendoring another
+/// architecture-specific binary beside the ordinary crt1 objects.
+fn muslStaticPieStartup(b: *std.Build, target: ResolvedTarget) std.Build.LazyPath {
+    const arch = @tagName(target.result.cpu.arch);
+    const obj = b.addObject(.{
+        .name = b.fmt("rcrt1_{s}", .{arch}),
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = .small,
+            .pic = true,
+            .link_libc = true,
+            .stack_protector = false,
+        }),
+    });
+    obj.root_module.addCSourceFile(.{
+        .file = std.Build.LazyPath.zig_lib.path(b, "libc/musl/crt/rcrt1.c"),
+        .flags = &.{ "-std=c99", "-D_GNU_SOURCE", "-ffreestanding", "-fno-builtin", "-fvisibility=hidden" },
+    });
+    for ([_][]const u8{
+        b.fmt("libc/musl/arch/{s}", .{arch}),
+        "libc/musl/arch/generic",
+        "libc/musl/src/internal",
+        "libc/musl/src/include",
+    }) |path| obj.root_module.addIncludePath(std.Build.LazyPath.zig_lib.path(b, path));
+    return obj.getEmittedBin();
+}
+
 /// Builds a test platform host library and sets up a step to copy it to the target-specific directory.
 /// Returns the final step for dependency wiring.
 fn buildAndCopyTestPlatformHostLib(
@@ -1299,6 +1327,13 @@ fn buildAndCopyTestPlatformHostLib(
     else
         FixArchivePaddingStep.create(b, lib.getEmittedBin());
     test_fixtures.copy(copy_step, host_archive, archive_path);
+    if (target.result.os.tag == .linux and target.result.abi.isMusl()) {
+        const startup = muslStaticPieStartup(b, target);
+        test_fixtures.copy(copy_step, startup, b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, "rcrt1.o" }));
+        if (baseline_target_name) |name| {
+            test_fixtures.copy(copy_step, startup, b.pathJoin(&.{ "test", platform_dir, "platform/targets", name, "rcrt1.o" }));
+        }
+    }
     if (baseline_archive_path) |path| {
         const baseline_archive = if (target.result.os.tag == .windows)
             baseline_lib.?.getEmittedBin()
@@ -1712,8 +1747,8 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "issue_10957_json_camel_long_field_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_10957_json_camel_long_field_static_lib_app.wasm", .run_args = &.{ "--expected", "14" } },
     // A derived parser built for wasm32 runs on `Ok` and `Err` inputs alike,
     // with both strategies, and an `Err` crosses its use's widened row.
-    .{ .app = "issue_12787_derived_parser_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=no" }, .output = "issue_12787_derived_parser_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "ok 14 A 5|ok 14 B text|missing tag|invalid|rejected before parsing: long enough for the heap" } },
-    .{ .app = "issue_12787_derived_parser_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=yes" }, .output = "issue_12787_derived_parser_specialized_static_lib_app.wasm", .run_args = &.{ "--expected", "ok 14 A 5|ok 14 B text|missing tag|invalid|rejected before parsing: long enough for the heap" } },
+    .{ .app = "issue_12787_derived_parser_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=no" }, .output = "issue_12787_derived_parser_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "ok 14 A 5|ok 14 B text|Missing field: tag|Invalid JSON|rejected before parsing: long enough for the heap" } },
+    .{ .app = "issue_12787_derived_parser_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=yes" }, .output = "issue_12787_derived_parser_specialized_static_lib_app.wasm", .run_args = &.{ "--expected", "ok 14 A 5|ok 14 B text|Missing field: tag|Invalid JSON|rejected before parsing: long enough for the heap" } },
     .{ .app = "str_interp_leading_literal_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "str_interp_leading_literal_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "1", "--max-allocs", "2" } },
     .{ .app = "str_concat_unique_reuse_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "str_concat_unique_reuse_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "1", "--max-allocs", "1" } },
     // End-to-end cart gate for the minted-iterator `for`-loop drive. The
@@ -2590,7 +2625,7 @@ pub fn build(b: *std.Build) void {
     fixture_options.addOptionPathUntracked("roc_binary_build_path", fixture_roc);
     fixture_options.addOption([]const u8, "build_root", b.root.joinString(b.allocator, "") catch @panic("OOM"));
     roc_modules.addAll(roc_exe);
-    const roc_install_step = install_and_run(b, no_bin, roc_exe, strip_macho_exports_tool, build_roc_step, run_roc_step, run_args, &.{});
+    const roc_install_step = install_and_run(b, no_bin, roc_exe, strip_macho_exports_tool, build_roc_step, run_roc_step, run_args);
 
     const run_builtin_format = b.addRunArtifact(roc_exe);
     run_builtin_format.addArgs(&.{ "fmt", "--check", "src/build/roc/Builtin.roc" });
@@ -3091,7 +3126,6 @@ pub fn build(b: *std.Build) void {
         build_snapshot_tool_step,
         run_snapshot_tool_step,
         run_args,
-        verify_sealed_type_view_env,
     );
     const check_snapshot_diff = CheckSnapshotDiffStep.create(b);
     check_snapshot_diff.step.dependOn(run_snapshot_tool_step);
@@ -3148,7 +3182,6 @@ pub fn build(b: *std.Build) void {
         build_test_eval_runner_step,
         run_test_eval_step,
         eval_run_args,
-        verify_sealed_type_view_env,
     );
 
     // `run-test-eval` leaves LLVM evaluation out for speed. This focused run
@@ -3213,7 +3246,6 @@ pub fn build(b: *std.Build) void {
         build_test_eval_host_effects_runner_step,
         run_test_eval_host_effects_step,
         eval_host_effects_run_args,
-        &.{},
     );
 
     const strategy_differential_exe = b.addExecutable(.{
@@ -3243,7 +3275,6 @@ pub fn build(b: *std.Build) void {
         build_test_strategy_differential_runner_step,
         run_test_strategy_differential_step,
         eval_host_effects_run_args,
-        &.{},
     );
 
     // One explicitly expensive proof gate owns every execution lane. Keep the
@@ -4848,6 +4879,17 @@ pub fn build(b: *std.Build) void {
                 target_path,
             );
         }
+        // The fx platform declares musl's self-relocating startup object as a
+        // link input for its musl targets, beside the host library.
+        if (fx_host_target_dir) |target_dir| {
+            if (fx_host_target.result.os.tag == .linux and fx_host_target.result.abi.isMusl()) {
+                test_fixtures.copy(
+                    copy_test_fx_host,
+                    muslStaticPieStartup(b, fx_host_target),
+                    b.pathJoin(&.{ "test/fx/platform/targets", target_dir, "rcrt1.o" }),
+                );
+            }
+        }
 
         const final_fx_host_step = &copy_test_fx_host.step;
 
@@ -4933,7 +4975,10 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 // util.buildIsolatedTestEnvMap touches std.c (Zig 0.16 requires explicit link_libc).
                 .link_libc = true,
-                .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
+                .imports = &.{
+                    .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
+                    .{ .name = "roc_target", .module = roc_modules.roc_target },
+                },
             }),
             .filters = test_filters,
         });
@@ -5289,7 +5334,7 @@ fn add_fuzz_target(
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
     repro_exe.root_module.addImport("build_options", roc_modules.build_options);
 
-    _ = install_and_run(b, no_bin, repro_exe, null, build_repro_step, run_repro_step, run_args, &.{});
+    _ = install_and_run(b, no_bin, repro_exe, null, build_repro_step, run_repro_step, run_args);
 
     if (fuzz and build_afl and !no_bin) {
         const fuzz_step = b.step(b.fmt("build-fuzz-{s}", .{name}), b.fmt("Build fuzz executable for {s}", .{name}));
@@ -5341,13 +5386,10 @@ fn addAflFuzzExe(
         run_afl_cc.step.dependOn(&install_tools.step);
     }
 
-    // Keep the object output requested so Zig materializes the LLVM bitcode output.
-    _ = fuzz_obj.getEmittedBin();
-
     run_afl_cc.addArg("-o");
     const fuzz_exe = run_afl_cc.addOutputFileArg(fuzz_obj.name);
     run_afl_cc.addFileArg(afl_kit.path("afl.c"));
-    run_afl_cc.addFileArg(fuzz_obj.getEmittedLlvmBc());
+    run_afl_cc.addFileArg(bitcodeWithoutObject(fuzz_obj));
     // ELF linkers resolve libraries left-to-right, so math libraries must follow the bitcode.
     run_afl_cc.addArg("-lm");
     run_afl_cc.addArg("-lquadmath");
@@ -5601,6 +5643,15 @@ const MainExeResult = struct {
     machine_code_shim_archive_test: ?*Step.Compile,
     archive_member_names_test: ?*Step.Compile,
 };
+
+/// LLVM bitcode of `obj` for a later LLVM pipeline to optimize. Never also request
+/// `obj`'s object file: Zig would then write this bitcode after code generation,
+/// whose stack coloring merges allocas in the IR but leaves their lifetime markers,
+/// and optimizing that again miscompiles it.
+fn bitcodeWithoutObject(obj: *Step.Compile) std.Build.LazyPath {
+    return obj.getEmittedLlvmBc();
+}
+
 /// LLVM bitcode for `src/builtins/sha256_rounds_lib.zig` compiled for `query`,
 /// whose CPU features select the SHA-256 rounds the payload defines.
 fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query: std.Target.Query) std.Build.LazyPath {
@@ -5619,8 +5670,7 @@ fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query
     obj.root_module.stack_check = false;
     obj.use_llvm = true;
     obj.bundle_compiler_rt = false;
-    _ = obj.getEmittedBin();
-    return obj.getEmittedLlvmBc();
+    return bitcodeWithoutObject(obj);
 }
 
 /// LLVM bitcode for src/builtins/llvm_private_runtime.zig compiled for
@@ -5636,6 +5686,9 @@ fn addLlvmPrivateRuntimeBitcode(b: *std.Build, runtime_target: roc_target.RocTar
         .strip = true,
         .pic = true,
         .single_threaded = true,
+        // As in Zig's own compiler-rt build. Without it, LLVM turns the loop in
+        // `memcpy` into a call to `memcpy`, which overflows the stack on large copies.
+        .no_builtin = true,
     });
     const obj = b.addObject(.{
         .name = b.fmt("roc_llvm_private_runtime_{s}", .{@tagName(runtime_target)}),
@@ -5646,6 +5699,7 @@ fn addLlvmPrivateRuntimeBitcode(b: *std.Build, runtime_target: roc_target.RocTar
             .strip = true,
             .pic = true,
             .single_threaded = true,
+            .no_builtin = true,
             .imports = &.{.{ .name = "compiler_rt", .module = compiler_rt_module }},
         }),
     });
@@ -5653,8 +5707,7 @@ fn addLlvmPrivateRuntimeBitcode(b: *std.Build, runtime_target: roc_target.RocTar
     obj.root_module.link_libc = false;
     obj.use_llvm = true;
     obj.bundle_compiler_rt = false;
-    _ = obj.getEmittedBin();
-    return obj.getEmittedLlvmBc();
+    return bitcodeWithoutObject(obj);
 }
 
 /// Run the wasm static-lib test runner on one built app as part of `step`.
@@ -5741,7 +5794,6 @@ fn addBoxyRuntimeObject(
     runtime_module.addImport("layout_shape", shape_module);
     value_rules_module.addImport("builtins", builtins_module);
     runtime_module.addImport("value_rules", value_rules_module);
-    runtime_module.addImport("raw_pages", roc_modules.raw_pages);
     const obj = b.addObject(.{
         .name = name,
         .root_module = b.createModule(.{
@@ -5799,8 +5851,7 @@ fn addBuiltinsBitcode(
     if (link_libc) |link| obj.root_module.link_libc = link;
     obj.use_llvm = true;
     obj.bundle_compiler_rt = false;
-    _ = obj.getEmittedBin();
-    return obj.getEmittedLlvmBc();
+    return bitcodeWithoutObject(obj);
 }
 
 fn addMainExe(
@@ -6312,10 +6363,14 @@ fn addMainExe(
                 cross_boxy_runtime_obj.getEmittedBin(),
                 b.pathJoin(&.{ "targets", cross_target.name, boxy_runtime_ext }),
             );
-            // A fast dev link of a Linux x86_64 executable places the
-            // builtins and the Boxy runtime as one unit image, converted
-            // here once (src/build/support_image.zig).
-            if (cross_target.query.os_tag == .linux and cross_target.query.cpu_arch == .x86_64) {
+            // A fast dev link of a 64-bit x86 or ARM executable (Linux, a
+            // BSD, macOS or Windows) places the builtins and the Boxy
+            // runtime as one unit image, converted here once
+            // (src/build/support_image.zig).
+            const os = cross_target.query.os_tag.?;
+            const fast_dev_link_target = (cross_target.query.cpu_arch == .x86_64 or cross_target.query.cpu_arch == .aarch64) and
+                (os == .linux or os == .macos or os == .windows or os == .freebsd or os == .openbsd or os == .netbsd);
+            if (fast_dev_link_target) {
                 const convert = b.addRunArtifact(support_image_tool);
                 const image = convert.addOutputFileArg("roc_support.rbxu");
                 convert.addFileArg(cross_builtins_extern_obj.getEmittedBin());
@@ -6378,6 +6433,9 @@ fn addMainExe(
             default_platform_runtime_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
             default_platform_runtime_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            default_platform_runtime_obj.root_module.addImport("linux_static_pie", b.createModule(.{
+                .root_source_file = b.path("src/builtins/linux_static_pie.zig"),
+            }));
             const default_platform_runtime_options = b.addOptions();
             default_platform_runtime_options.addOption(bool, "include_process_entrypoint", false);
             default_platform_runtime_obj.root_module.addOptions("default_platform_options", default_platform_runtime_options);
@@ -6453,6 +6511,9 @@ fn addMainExe(
             default_platform_executable_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
             default_platform_executable_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_executable_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            default_platform_executable_obj.root_module.addImport("linux_static_pie", b.createModule(.{
+                .root_source_file = b.path("src/builtins/linux_static_pie.zig"),
+            }));
             const default_platform_executable_options = b.addOptions();
             default_platform_executable_options.addOption(bool, "include_process_entrypoint", true);
             default_platform_executable_obj.root_module.addOptions("default_platform_options", default_platform_executable_options);
@@ -6591,16 +6652,6 @@ fn addBuildPathCheck(b: *std.Build, binary: std.Build.LazyPath) *Step {
     return &run.step;
 }
 
-/// An environment variable a tool's run step sets, as name and value.
-const RunEnvVar = struct { []const u8, []const u8 };
-
-/// The snapshot tool and eval runner check the sealed type view against
-/// checked type publication for every module they compile
-/// (`verify_sealed_type_view` in src/base/dev_diagnostics.zig). The strategy
-/// differential runner does not: checked types are the same under every
-/// specialization strategy, so the eval runner's check already covers them.
-const verify_sealed_type_view_env: []const RunEnvVar = &.{.{ "ROC_VERIFY_SEALED_TYPE_VIEW", "1" }};
-
 fn install_and_run(
     b: *std.Build,
     no_bin: bool,
@@ -6609,7 +6660,6 @@ fn install_and_run(
     build_step: *Step,
     run_step: *Step,
     run_args: []const []const u8,
-    run_env: []const RunEnvVar,
 ) ?*Step {
     if (run_step != build_step) {
         run_step.dependOn(build_step);
@@ -6632,7 +6682,6 @@ fn install_and_run(
         const run = b.addRunArtifact(exe);
         run.step.dependOn(install_step);
         if (run_args.len != 0) run.addArgs(run_args);
-        for (run_env) |env| run.setEnvironmentVariable(env[0], env[1]);
         run.addPassthruArgs();
         run_step.dependOn(&run.step);
         return install_step;

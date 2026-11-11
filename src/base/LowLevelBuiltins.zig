@@ -192,6 +192,7 @@ pub fn strOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.str_static_small_word_eq, BuiltinFn.str_static_small_word_eq },
         .{ LowLevel.str_static_small_word_caseless_eq, BuiltinFn.str_static_small_word_caseless_eq },
         .{ LowLevel.str_concat, BuiltinFn.str_concat },
+        .{ LowLevel.str_append, BuiltinFn.str_append },
         .{ LowLevel.str_contains, BuiltinFn.str_contains },
         .{ LowLevel.str_trim, BuiltinFn.str_trim },
         .{ LowLevel.str_trim_start, BuiltinFn.str_trim_start },

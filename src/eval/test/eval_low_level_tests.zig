@@ -2,6 +2,41 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+/// A closed erased forwarder defers two scalar tuples. The corresponding LIR
+/// producer test pins their complete packet widths at both target word sizes.
+fn pendingPacketBoundarySource(comptime fields: usize, comptime scalar: enum { u16, u32 }) []const u8 {
+    const name = switch (scalar) {
+        .u16 => "U16",
+        .u32 => "U32",
+    };
+    const conversion = switch (scalar) {
+        .u16 => "to_u16_wrap",
+        .u32 => "to_u32_wrap",
+    };
+    const tuples = comptime blk: {
+        var ty: []const u8 = "(";
+        var value: []const u8 = "(";
+        var different: []const u8 = "(";
+        for (0..fields) |index| {
+            const separator = if (index == 0) "" else ", ";
+            ty = ty ++ separator ++ name;
+            value = value ++ separator ++ "value";
+            different = different ++ separator ++ if (index + 1 == fields) "value.plus_wrap(1)" else "value";
+        }
+        break :blk .{ .ty = ty ++ ")", .value = value ++ ")", .different = different ++ ")" };
+    };
+    return "{\n" ++
+        "Packet : " ++ tuples.ty ++ "\n" ++
+        "equal : Packet, Packet -> Bool\nequal = |a, b| a == b\n" ++
+        "forward : Box((Packet, Packet -> Bool)), Packet, Packet -> Bool\n" ++
+        "forward = |boxed, a, b| Box.unbox(boxed)(a, b)\n" ++
+        "units = List.repeat(65.U16, 64)\n" ++
+        "value = List.len(units)." ++ conversion ++ "()\n" ++
+        "first = " ++ tuples.value ++ "\nsecond = " ++ tuples.value ++ "\n" ++
+        "different = " ++ tuples.different ++ "\nboxed = Box.box(equal)\n" ++
+        "(forward(boxed, first, second), forward(boxed, first, different), units.get(0))\n}";
+}
+
 const wide_utf_le_test_prefix =
     \\{
     \\utf16_bytes : List(U16) -> List(U8)
@@ -4722,6 +4757,54 @@ pub const tests = [_]TestCase{
             \\}
         ++ "\n}",
         .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        // Boxy's Try equality defers a pair of heap strings. On wasm32 the
+        // pending cell must include the target's complete inline storage and
+        // header, including the fields that retain spare heap packets.
+        .name = "pending calls - inline packet preserves unrelated live list",
+        .source =
+        \\{
+        \\    units = List.repeat(65.U16, 64)
+        \\    first : Try(Str, U64)
+        \\    first = Ok(Str.repeat("A", 64))
+        \\    second : Try(Str, U64)
+        \\    second = Ok(Str.repeat("A", 64))
+        \\    equal = first == second
+        \\    (equal, units.get(0))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, Ok(65))" },
+    },
+    .{
+        .name = "pending calls - target-width boundary 60 bytes",
+        .source = pendingPacketBoundarySource(15, .u16),
+        .expected = .{ .inspect_str = "(True, False, Ok(65))" },
+    },
+    .{
+        .name = "pending calls - target-width boundary 64 bytes",
+        .source = pendingPacketBoundarySource(16, .u16),
+        .expected = .{ .inspect_str = "(True, False, Ok(65))" },
+    },
+    .{
+        .name = "pending calls - target-width boundary 68 bytes",
+        .source = pendingPacketBoundarySource(17, .u16),
+        .expected = .{ .inspect_str = "(True, False, Ok(65))" },
+    },
+    .{
+        .name = "pending calls - target-width boundary 120 bytes",
+        .source = pendingPacketBoundarySource(15, .u32),
+        .expected = .{ .inspect_str = "(True, False, Ok(65))" },
+    },
+    .{
+        .name = "pending calls - target-width boundary 128 bytes",
+        .source = pendingPacketBoundarySource(16, .u32),
+        .expected = .{ .inspect_str = "(True, False, Ok(65))" },
+    },
+    .{
+        .name = "pending calls - target-width boundary 136 bytes",
+        .source = pendingPacketBoundarySource(17, .u32),
+        .expected = .{ .inspect_str = "(True, False, Ok(65))" },
     },
     .{
         .name = "wide UTF decoding - UTF-16 sliced input LE",

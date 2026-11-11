@@ -1,4 +1,5 @@
-//! Direct file storage for checked modules, Boxy objects and Boxy test outcomes.
+//! Direct file storage for checked modules, Boxy objects, dev link hosts and
+//! test outcomes.
 //! Each identity names one file. Writers stage complete bytes beside it and
 //! atomically rename them into place; readers own an open file or mapping.
 
@@ -17,12 +18,13 @@ pub const Family = enum {
     canonicalized,
     pairing,
     boxy_object,
-    /// One module's `roc test` outcomes under `--specialize=no`.
-    test_outcomes,
     /// A platform host linked once for fast dev links of its executables.
     prelinked_host,
     /// The host executable a composed `.boxy` dev run launches.
     run_host,
+    /// The silently passing test roots of one checked module under one
+    /// execution mode (`cli/test_outcome_file.zig`).
+    test_outcomes,
 };
 
 /// Explicit producer identity for one file.

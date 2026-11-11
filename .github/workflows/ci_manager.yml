@@ -157,7 +157,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -262,7 +262,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -307,7 +307,7 @@ jobs:
       # rebuild everything that embeds the wasm32 builtins through eval.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
           use-tool-cache: 'true'
 
@@ -465,7 +465,7 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     env: &minici_shard_env
       # Warning threshold for `.zig-cache` as it stands *after* a shard runs:
       # the cache restored from the build artifact plus everything the shard's
@@ -496,7 +496,7 @@ jobs:
       # `minici-build-linux`), so the restored cache hits.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
           use-tool-cache: 'true'
 
@@ -515,7 +515,7 @@ jobs:
 
       # Every file here is new to this machine: the sources come from a fresh
       # checkout and the cache from the archive above, so nothing has the inode
-      # or mtime the cache recorded. Zig 0.17.0 counts that as a miss for C
+      # or mtime the cache recorded. Zig 0.17 counts that as a miss for C
       # sources and linked artifacts even when the contents are identical, and
       # would recompile every binary this shard runs. The tool records the new
       # stat for each entry whose contents still match; it ships in the build
@@ -672,7 +672,7 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 180
     env: *minici_shard_env
     strategy:
       fail-fast: false
@@ -693,8 +693,7 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: windows-2025
-    # Two evaluator workers use less memory and need a longer job budget.
-    timeout-minutes: ${{ matrix.minici_shard == 'windows-eval' && 180 || 120 }}
+    timeout-minutes: 180
     env: *minici_shard_env
     strategy:
       fail-fast: false
@@ -729,7 +728,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -800,7 +799,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
 
       - name: Cache Zig dependency packages

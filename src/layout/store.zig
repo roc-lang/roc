@@ -139,16 +139,22 @@ pub const Store = struct {
     // Recursive layout graphs need a representation-complete key because their
     // ordinary layout keys necessarily contain provisional cycle indices.
     // These keys identify a node by its position in its reduced recursive
-    // group (see `RecursiveGraphAnalysis`), so exactly the nodes describing
-    // the same infinite runtime representation share a layout.
-    /// The recursive-graph key of every layout committed as part of a
-    /// recursive graph, in commit order. A key is recorded only together with
-    /// the layout its commit creates, so each layout has at most one key and
-    /// a key never names a layout that existed before its commit. Content
-    /// digests read these keys, so a viewed store carries them.
+    // group (see `RecursiveGraphAnalysis`), so nodes describing the same
+    // infinite logical graph share a layout. Graphs that differ only in
+    // their recursion boxes meet at `recursive_commit_layouts`.
+    /// The recursive-graph key of every node committed as part of a
+    /// recursive graph, with the layout it committed to, in commit order.
+    /// Keys identify logical graphs, not layouts: graphs that differ only in
+    /// whether a recursion box is explicit or inserted by the commit have
+    /// different keys and the same layout, so one layout can have several
+    /// keys. Only commits read them, so a viewed store has none.
     recursive_layout_keys: collections.SafeList(RecursiveLayoutKey),
     /// Position in `recursive_layout_keys` of each key, looked up by key.
     interned_recursive_graphs: RecursiveGraphIndex,
+    /// Every layout a commit with recursive nodes created, by content digest,
+    /// so a later such commit reuses the layout for the same representation
+    /// rather than building a second one (see `commitWorkingGraph`).
+    recursive_commit_layouts: std.AutoHashMapUnmanaged(digest_mod.Digest, Idx),
     // Every recursive group settled by a commit, so a graph committed later
     // that unrolls one (possibly against `committed` leaves) or ties a copy
     // whose references lead back into one resolves to that group's keys.
@@ -200,6 +206,7 @@ pub const Store = struct {
             .scratch_intern_key = .empty,
             .recursive_layout_keys = .{},
             .interned_recursive_graphs = .empty,
+            .recursive_commit_layouts = .empty,
             .recursive_digests = recursive_digest.Settled.init(allocator, recursive_digest_domain),
             .target_usize = target_usize,
             .digest_cache = try digest_mod.DigestCache.create(allocator),
@@ -382,6 +389,7 @@ pub const Store = struct {
         self.scratch_field_offsets.deinit(self.allocator);
         self.recursive_layout_keys.deinit(self.allocator);
         self.interned_recursive_graphs.deinit(self.allocator);
+        self.recursive_commit_layouts.deinit(self.allocator);
         self.recursive_digests.deinit();
         self.digest_cache.destroy(self.allocator);
         self.commit_scratch.promote(self.allocator).deinit();
@@ -769,6 +777,26 @@ pub const Store = struct {
         return self.internStructShape(metrics, fields);
     }
 
+    /// Describe a capture's owned fields after a non-owning runtime prefix.
+    /// Static callable callbacks must skip the same prefix as their entrypoint.
+    pub fn putPrefixedCaptureLayout(self: *Self, capture: Idx, prefix_size: u32) std.mem.Allocator.Error!Idx {
+        if (prefix_size == 0) return capture;
+        var fields = std.ArrayList(StructField).empty;
+        defer fields.deinit(self.allocator);
+        var remaining = prefix_size;
+        while (remaining != 0) {
+            const width: u32 = if (remaining >= 16) 16 else 1;
+            try fields.append(self.allocator, .{
+                .index = @intCast(fields.items.len),
+                .layout = if (width == 16) .u128 else .u8,
+                .is_padding = true,
+            });
+            remaining -= width;
+        }
+        try fields.append(self.allocator, .{ .index = @intCast(fields.items.len), .layout = capture });
+        return self.putNominalStructFields(fields.items);
+    }
+
     /// Insert a tuple layout from concrete element layouts. The shared layout
     /// commit sorts by descending sort key, then original tuple index.
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
@@ -930,7 +958,7 @@ pub const Store = struct {
         return Layout.tagUnion(self.tagUnionVariantsSortKey(variant_layouts, discriminant_size), .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
-    /// One committed recursive layout and its recursive-graph key.
+    /// One recursive-graph key and the layout it committed to.
     pub const RecursiveLayoutKey = struct {
         key: RecursiveGraphAnalysis.RecursiveKey,
         layout: Idx,
@@ -978,7 +1006,7 @@ pub const Store = struct {
         return entries[position].layout;
     }
 
-    /// Record the key of a layout this commit created.
+    /// Record the layout a new recursive-graph key committed to.
     fn recordRecursiveLayoutKey(self: *Self, key: RecursiveGraphAnalysis.RecursiveKey, layout_idx: Idx) std.mem.Allocator.Error!void {
         const position: u32 = @intCast(self.recursive_layout_keys.len());
         try self.interned_recursive_graphs.ensureUnusedCapacityContext(self.allocator, 1, .{ .entries = self.recursive_layout_keys.items.items });
@@ -986,7 +1014,7 @@ pub const Store = struct {
         self.interned_recursive_graphs.putAssumeCapacityNoClobberContext(position, {}, .{ .entries = self.recursive_layout_keys.items.items });
     }
 
-    /// Every committed recursive layout with its key, in commit order.
+    /// Every recursive-graph key with its layout, in commit order.
     pub fn recursiveLayoutKeys(self: *const Self) []const RecursiveLayoutKey {
         return self.recursive_layout_keys.items.items;
     }
@@ -1206,6 +1234,7 @@ pub const Store = struct {
         try working.fields.ensureTotalCapacity(scratch, graph.fields.items.len);
         try working.refs.ensureTotalCapacity(scratch, graph.refs.items.len);
         var pending_recursive = std.AutoHashMap(RecursiveGraphAnalysis.RecursiveKey, GraphRef).init(scratch);
+        var has_recursive_node = false;
 
         for (graph.nodes.items, 0..) |node, i| {
             switch (node) {
@@ -1229,63 +1258,19 @@ pub const Store = struct {
             const node_id = try working.reserveNode(scratch);
             const local: GraphRef = .{ .local = node_id };
             mapping[i] = local;
-            if (analysis.keys[i]) |key| try pending_recursive.put(key, local);
+            if (analysis.keys[i]) |key| {
+                try pending_recursive.put(key, local);
+                has_recursive_node = true;
+            }
         }
 
-        const initialized = try scratch.alloc(bool, working.nodes.items.len);
-        @memset(initialized, false);
-        var fields = std.ArrayList(graph_mod.Field).empty;
-        var refs = std.ArrayList(GraphRef).empty;
-
-        for (graph.nodes.items, 0..) |node, i| {
-            const working_node_id = switch (mapping[i]) {
-                .canonical => continue,
-                .local => |node_id| node_id,
-            };
-            const working_index = @backingInt(working_node_id);
-            if (initialized[working_index]) continue;
-            initialized[working_index] = true;
-
-            const translated_node: graph_mod.Node = switch (node) {
-                .committed => unreachable, // the mapping loop above sends committed nodes to canonical refs
-                .pending => base.invariant("layout.Store invariant violated: commitGraph received a reserved node that was never filled", .{}),
-                .nominal => |child| .{ .nominal = translateGraphRef(mapping, child) },
-                .box => |child| .{ .box = translateGraphRef(mapping, child) },
-                .list => |child| .{ .list = translateGraphRef(mapping, child) },
-                .closure => |child| .{ .closure = translateGraphRef(mapping, child) },
-                .erased_callable => .erased_callable,
-                .struct_ => |span| blk: {
-                    fields.clearRetainingCapacity();
-                    try fields.ensureTotalCapacity(scratch, span.len);
-                    for (graph.getFields(span)) |field| {
-                        fields.appendAssumeCapacity(.{
-                            .index = field.index,
-                            .child = translateGraphRef(mapping, field.child),
-                            .is_padding = field.is_padding,
-                        });
-                    }
-                    var translated = try working.appendFields(scratch, fields.items);
-                    if (span.order == .declared) translated = working.declaredOrder(translated);
-                    break :blk .{ .struct_ = translated };
-                },
-                .tag_union => |span| blk: {
-                    refs.clearRetainingCapacity();
-                    try refs.ensureTotalCapacity(scratch, span.len);
-                    for (graph.getRefs(span)) |child| {
-                        refs.appendAssumeCapacity(translateGraphRef(mapping, child));
-                    }
-                    break :blk .{ .tag_union = try working.appendRefs(scratch, refs.items) };
-                },
-            };
-            working.setNode(working_node_id, translated_node);
-        }
+        try translateGraphNodes(scratch, graph, mapping, &working);
 
         const value_layouts = try self.allocator.alloc(Idx, node_count);
         errdefer self.allocator.free(value_layouts);
 
-        const layouts_before_commit = self.layouts.len();
         const working_layouts: []const Idx = if (working.nodes.items.len != 0)
-            try self.commitGraphUncached(scratch, &working)
+            try self.commitWorkingGraph(scratch, &working, has_recursive_node)
         else
             &.{};
 
@@ -1301,9 +1286,6 @@ pub const Store = struct {
             if (self.recursiveGraphLayout(key)) |existing| {
                 std.debug.assert(existing == value_layouts[i]);
             } else {
-                // A new key names a layout this commit created, so no
-                // digest taken before this commit depends on it.
-                std.debug.assert(@backingInt(value_layouts[i]) >= layouts_before_commit);
                 try self.recordRecursiveLayoutKey(key, value_layouts[i]);
             }
         }
@@ -1317,6 +1299,145 @@ pub const Store = struct {
             .value_layouts = value_layouts,
             .digests = try self.allocator.dupe(?graph_mod.Digest, analysis.digests),
         };
+    }
+
+    /// Fill every reserved node of `destination` from the `source` nodes
+    /// `mapping` sends to it, with children translated through `mapping`. Several
+    /// source nodes may map to one target node; the first fills it. Callers
+    /// map `committed` source nodes to canonical refs.
+    fn translateGraphNodes(
+        scratch: Allocator,
+        source: *const LayoutGraph,
+        mapping: []const GraphRef,
+        destination: *LayoutGraph,
+    ) Allocator.Error!void {
+        const initialized = try scratch.alloc(bool, destination.nodes.items.len);
+        @memset(initialized, false);
+        var fields = std.ArrayList(graph_mod.Field).empty;
+        var refs = std.ArrayList(GraphRef).empty;
+
+        for (source.nodes.items, 0..) |node, i| {
+            const destination_node_id = switch (mapping[i]) {
+                .canonical => continue,
+                .local => |node_id| node_id,
+            };
+            const destination_index = @backingInt(destination_node_id);
+            if (initialized[destination_index]) continue;
+            initialized[destination_index] = true;
+
+            const translated_node: graph_mod.Node = switch (node) {
+                .committed => unreachable, // callers map committed nodes to canonical refs
+                .pending => base.invariant("layout.Store invariant violated: commitGraph received a reserved node that was never filled", .{}),
+                .nominal => |child| .{ .nominal = translateGraphRef(mapping, child) },
+                .box => |child| .{ .box = translateGraphRef(mapping, child) },
+                .list => |child| .{ .list = translateGraphRef(mapping, child) },
+                .closure => |child| .{ .closure = translateGraphRef(mapping, child) },
+                .erased_callable => .erased_callable,
+                .struct_ => |span| blk: {
+                    fields.clearRetainingCapacity();
+                    try fields.ensureTotalCapacity(scratch, span.len);
+                    for (source.getFields(span)) |field| {
+                        fields.appendAssumeCapacity(.{
+                            .index = field.index,
+                            .child = translateGraphRef(mapping, field.child),
+                            .is_padding = field.is_padding,
+                        });
+                    }
+                    var translated = try destination.appendFields(scratch, fields.items);
+                    if (span.order == .declared) translated = destination.declaredOrder(translated);
+                    break :blk .{ .struct_ = translated };
+                },
+                .tag_union => |span| blk: {
+                    refs.clearRetainingCapacity();
+                    try refs.ensureTotalCapacity(scratch, span.len);
+                    for (source.getRefs(span)) |child| {
+                        refs.appendAssumeCapacity(translateGraphRef(mapping, child));
+                    }
+                    break :blk .{ .tag_union = try destination.appendRefs(scratch, refs.items) };
+                },
+            };
+            destination.setNode(destination_node_id, translated_node);
+        }
+    }
+
+    /// Commit a working graph, returning each node's value layout.
+    ///
+    /// Distinct logical graphs can describe one layout: a graph whose
+    /// recursion box is explicit and one whose box the commit inserts have
+    /// different recursive-graph keys and the same runtime representation.
+    /// Structural interning gives such acyclic layouts one index, but a
+    /// cyclic layout is built in raw slots of its own, so a commit with
+    /// recursive nodes checks the content digest of every layout it created
+    /// against those of earlier recursive commits and against each other.
+    /// A node whose layout duplicates another is redirected to that layout
+    /// (or to the node that made it) and the graph is committed again
+    /// without the duplicates, so every representation keeps one layout
+    /// index, which is what lets equal content digests stand for equal
+    /// layouts. The layouts of the first attempt that the second does not
+    /// reuse stay in the store unreferenced.
+    fn commitWorkingGraph(
+        self: *Self,
+        scratch: Allocator,
+        working: *const LayoutGraph,
+        has_recursive_node: bool,
+    ) Allocator.Error![]const Idx {
+        const layouts_before = self.layouts.len();
+        const first = try self.commitGraphUncached(scratch, working);
+        if (!has_recursive_node) return first;
+
+        const node_count = working.nodes.items.len;
+        const redirect = try scratch.alloc(?GraphRef, node_count);
+        @memset(redirect, null);
+        var has_duplicate = false;
+        var created = std.AutoHashMap(digest_mod.Digest, u32).init(scratch);
+        for (first, 0..) |layout_idx, i| {
+            if (@backingInt(layout_idx) < layouts_before) continue;
+            const digest = try self.contentDigest(layout_idx);
+            if (self.recursive_commit_layouts.get(digest)) |existing| {
+                redirect[i] = .{ .canonical = existing };
+                has_duplicate = true;
+                continue;
+            }
+            const entry = try created.getOrPut(digest);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @intCast(i);
+            } else if (first[entry.value_ptr.*] != layout_idx) {
+                redirect[i] = .{ .local = @fromBackingInt(entry.value_ptr.*) };
+                has_duplicate = true;
+            }
+        }
+
+        const committed = if (!has_duplicate) first else blk: {
+            // A redirect target is a layout an earlier commit created or
+            // the first node with its digest, which is never redirected.
+            const mapping = try scratch.alloc(GraphRef, node_count);
+            var deduplicated = LayoutGraph{};
+            for (redirect, mapping) |redirected, *mapped| {
+                if (redirected == null) mapped.* = .{ .local = try deduplicated.reserveNode(scratch) };
+            }
+            for (redirect, mapping) |redirected, *mapped| {
+                mapped.* = translateGraphRef(mapping, redirected orelse continue);
+            }
+            try translateGraphNodes(scratch, working, mapping, &deduplicated);
+            const second = try self.commitGraphUncached(scratch, &deduplicated);
+            const layouts = try scratch.alloc(Idx, node_count);
+            for (mapping, layouts) |mapped, *layout_idx| layout_idx.* = switch (mapped) {
+                .canonical => |canonical| canonical,
+                .local => |node_id| second[@backingInt(node_id)],
+            };
+            break :blk layouts;
+        };
+
+        for (committed) |layout_idx| {
+            if (@backingInt(layout_idx) < layouts_before) continue;
+            const entry = try self.recursive_commit_layouts.getOrPut(self.allocator, try self.contentDigest(layout_idx));
+            if (entry.found_existing) {
+                std.debug.assert(entry.value_ptr.* == layout_idx);
+            } else {
+                entry.value_ptr.* = layout_idx;
+            }
+        }
+        return committed;
     }
 
     /// Commit a graph of uncommitted nodes, returning each node's value
@@ -1719,8 +1840,14 @@ pub const Store = struct {
                     switch (self_finalizer.graph.getNode(child_id)) {
                         .nominal => |child| current = child,
                         .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {
-                            self_finalizer.raw_used[@backingInt(child_id)] = true;
-                            return self_finalizer.raw_layouts[@backingInt(child_id)];
+                            // A finished node's raw slot is used only if a
+                            // reference read it while the node was unfinished;
+                            // later references take its value layout, so the
+                            // node keeps exactly one layout.
+                            const index = @backingInt(child_id);
+                            if (self_finalizer.finalize_state[index] == .done) return self_finalizer.value_layouts[index];
+                            self_finalizer.raw_used[index] = true;
+                            return self_finalizer.raw_layouts[index];
                         },
                     }
                 }

@@ -3,7 +3,7 @@
 const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
-const hoist_roots = @import("../hoist_roots.zig");
+const hoist_roots = @import("can").HoistRoots;
 
 test "hoist roots consume transitive producer callable observations" {
     const leaves = [_][]const u8{

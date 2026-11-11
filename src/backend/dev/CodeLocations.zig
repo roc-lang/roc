@@ -17,6 +17,23 @@ const FailureMeaning = lir.LIR.FailureMeaning;
 
 const Self = @This();
 
+/// Diagnostic address map for an in-process native allocation profile.
+/// Printed before execution; it carries no cache identity or ownership rule.
+pub fn dumpAllocationMap(self: Self, address: usize) void {
+    if (!base.dev_diagnostics.isSet(.profile_allocations) or self.bytes.len == 0) return;
+    for (0..self.count(.lines)) |index| {
+        const start = lineStart(self, index);
+        const line = self.lineEntryAt(start) orelse continue;
+        if (line.loc.file == base.SourceLoc.no_file) continue;
+        const region_index = self.lastAtOrBefore(self.count(.regions), start, regionStart) orelse continue;
+        var end = wordAt(self.bytes, self.regionRow(region_index) + @sizeOf(u32));
+        if (index + 1 < self.count(.lines)) end = @min(end, lineStart(self, index + 1));
+        if (end <= start) continue;
+        const file = self.sourceFile(line.loc.file);
+        std.debug.print("alloc-code start={x} end={x} file={s} line={d}\n", .{ address + start, address + end, file.name, line.loc.line });
+    }
+}
+
 const header_size = 4 * @sizeOf(u32);
 const region_size = 2 * @sizeOf(u32);
 const line_size = 6 * @sizeOf(u32);
@@ -81,7 +98,7 @@ pub fn encode(allocator: Allocator, input: Input) Allocator.Error![]u8 {
     for (input.sites) |site| {
         const row: struct { tag: u32, module: [32]u8, first: u32, second: u32 } = switch (site.meaning) {
             .checked_error => .{ .tag = 0, .module = @splat(0), .first = 0, .second = 0 },
-            .literal_rejection => |literal| .{ .tag = 1, .module = literal.module, .first = literal.checked_expr, .second = @backingInt(literal.kind) },
+            .literal_rejection => |literal| .{ .tag = 1, .module = literal.module, .first = literal.node, .second = @backingInt(literal.kind) },
             .exhaustiveness => |exhaustiveness| .{
                 .tag = 2,
                 .module = exhaustiveness.module,
@@ -183,7 +200,7 @@ pub fn failureMeaningAt(self: Self, return_offset: u32) ?FailureMeaning {
         0 => .checked_error,
         1 => .{ .literal_rejection = .{
             .module = module,
-            .checked_expr = first,
+            .node = first,
             .kind = std.enums.fromInt(lir.LIR.LiteralRejectionKind, second).?,
         } },
         2 => .{ .exhaustiveness = .{

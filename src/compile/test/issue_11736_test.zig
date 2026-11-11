@@ -1,11 +1,12 @@
 //! Regression for a rejected platform value whose nominal backing holds a tag alias.
 
 const std = @import("std");
+const can = @import("can");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 
-const RequirementTestError = compile_build.InitError || compile_build.BuildRootError ||
+const RequirementTestError = std.mem.Allocator.Error || compile_build.InitError || compile_build.BuildRootError ||
     std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.CreateDirPathError ||
     error{ TestExpectedEqual, TestUnexpectedResult };
 
@@ -173,17 +174,21 @@ fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile
         // checker's own diagnostic, so every pairing is cacheable.
         try std.testing.expectEqual(@as(u32, if (iteration == 0) 1 else 0), coord.platform_pairing_count);
         const platform = coord.executableRootCheckedArtifact();
+        const bodies = platform.bodies();
+        try bodies.demandIndex();
         for (platform.resolved_value_refs.records) |ref| {
             if (ref.ref != .platform_required_checked_error) continue;
-            const expr = platform.checked_bodies.stored_exprs.items[@backingInt(ref.expr)];
-            try std.testing.expect(expr.data == .runtime_error);
-            try std.testing.expect(expr.diverges and expr.diverges_without_inline_expects);
-            try std.testing.expect(!expr.evaluation_may_be_elided_for_inspect);
+            try std.testing.expect(bodies.exprData(ref.expr) == .runtime_error);
+            try std.testing.expect(try bodies.exprDiverges(ref.expr, .run));
+            try std.testing.expect(try bodies.exprDiverges(ref.expr, .omit));
+            try std.testing.expect(!try bodies.exprEvaluationMayBeElidedForInspect(ref.expr));
         }
         var divergent_statements: usize = 0;
-        for (platform.checked_bodies.stored_statements.items) |statement| {
-            if (statement.diverges) {
-                try std.testing.expect(statement.diverges_without_inline_expects);
+        for (0..bodies.nodeCount()) |raw| {
+            if (bodies.index().nodeKind(@intCast(raw)) != .statement) continue;
+            const statement: can.CIR.Statement.Idx = @fromBackingInt(@intCast(raw));
+            if (try bodies.statementDiverges(statement, .run)) {
+                try std.testing.expect(try bodies.statementDiverges(statement, .omit));
                 divergent_statements += 1;
             }
         }

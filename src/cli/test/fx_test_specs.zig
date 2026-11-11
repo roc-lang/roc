@@ -96,6 +96,21 @@ pub const inline_list_slow_arms_test = TestSpec{
 /// the compiled binary's IO behavior, not build-time features.
 pub const io_spec_tests = [_]TestSpec{
     .{
+        .roc_file = "test/fx/host_constant_boxed_sequence.roc",
+        .io_spec = "1>[1, 2, 3]|1>[4, 5]|1>[93]|1>[93]",
+        .description = "Constant boxed iterators and streams survive storage and host round trips (issue #12887)",
+    },
+    .{
+        .roc_file = "test/fx/host_release_boxed_sequence.roc",
+        .io_spec = "0<abcdefghijklmnopqrstuvwxyz0123456789|1>drops primitive=2 nested_record=0 nested_str=0 recursive_tree=0 tree_child_boxes=0 boxed_capture=0 transition_outer=0 transition_inner=0 transition_nonnull=0",
+        .description = "Host release destroys boxed iterator and stream captures exactly once (issue #12887)",
+    },
+    .{
+        .roc_file = "test/fx/host_boxed_sequence_boundary.roc",
+        .io_spec = "0<abcdefghijklmnopqrstuvwxyz0123456789|1>iter 36 36|1>stream 36 36",
+        .description = "Boxed iterators and streams retain captured state across a shared host round trip (issue #12887)",
+    },
+    .{
         .roc_file = "test/fx/var_reassign_in_nested_block_expr.roc",
         .io_spec = "1>in_call_arg: 8|1>in_operand: 9|1>in_record: 8|1>bound_first: 8|1>constant: 8|1>branch_constant: 9|1>list_constant: 3|1>zero_call: 1|1>zero_operand: 1|1>zero_record: 0|1>statement: 8|1>loop: 5|1>list: 3|1>left|1>right|1>ordered: 23|1>early: 7",
         .description = "Nested mutable variable versions remain in scope through operands and compile-time evaluation (issue #11821)",
@@ -314,7 +329,7 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Nominal record declared-order + unnamed padding matches the host C struct layout",
     },
     // The same for generic nominals: their records are built by one body whose
-    // field offsets a descriptor composed at runtime has to give, and a padding
+    // field offsets a type table descriptor has to give, and a padding
     // type can be the nominal's own type parameter.
     .{
         .roc_file = "test/fx/host_interop_generic_padding.roc",
@@ -337,6 +352,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/dict_pseudo_seed_repro.roc",
         .io_spec = "1>b",
         .description = "Regression test: compiled Dict operations call the hasher builtins",
+    },
+    .{
+        .roc_file = "test/fx/boxy_procedure_aliases.roc",
+        .io_spec = "1>direct|1>passed|1>42|1>computed!",
+        .description = "Exact procedure aliases forward across modules while computed callables retain their evaluated values",
     },
     .{
         .roc_file = "test/fx/issue_10038_top_level_dict.roc",

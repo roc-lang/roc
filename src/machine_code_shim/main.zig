@@ -65,8 +65,15 @@ const DevProgram = struct {
     local_refs: std.atomic.Value(usize),
     /// Whether the image's static data holds pointers to its own code.
     static_code_references: bool,
+    /// The image's function table, registered with the process while the
+    /// program is loaded (`registerFunctionTable`).
+    function_table: ?*anyopaque,
 
     fn deinit(self: *DevProgram) void {
+        if (comptime builtin.os.tag == .windows) {
+            if (self.function_table) |table| _ = unwind_tables.RtlDeleteFunctionTable(table);
+        }
+        self.function_table = null;
         self.entrypoints = &.{};
         self.code = &.{};
         self.executable = &.{};
@@ -95,6 +102,7 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
     UnresolvedSymbol,
     VirtualProtectFailed,
     FlushInstructionCacheFailed,
+    FunctionTableRegistrationFailed,
 };
 
 const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError;
@@ -319,6 +327,7 @@ fn loadDevProgram(
     try applyDataRelocations(view, &relocation_context);
     try applyComposedRelocations(view);
     try finishDirectImageRelocation(view);
+    const function_table = try registerFunctionTable(view);
 
     return .{
         .entrypoints = view.entrypoints,
@@ -330,8 +339,31 @@ fn loadDevProgram(
         .descriptor_offset = descriptor_offset,
         .local_refs = std.atomic.Value(usize).init(1),
         .static_code_references = view.static_code_references,
+        .function_table = function_table,
     };
 }
+
+/// Register a composed image's function table with the process, so the
+/// unwinder knows the image's functions: Windows finds a function's unwind
+/// information only through a registered table. The table's addresses count
+/// from the start of the image's code. Only an image composed from COFF
+/// unit images, which runs only on Windows, has one.
+fn registerFunctionTable(view: *const RunImage.ProgramView) LoadDevProgramError!?*anyopaque {
+    if (view.function_table.len == 0) return null;
+    if (comptime builtin.os.tag != .windows) return error.InvalidDevRunImage;
+    // The shim runs on Windows only on 64-bit x86 and ARM.
+    const entry_size: usize = if (builtin.cpu.arch == .aarch64) 8 else 12;
+    if (view.function_table.len % entry_size != 0 or @intFromPtr(view.function_table.ptr) % 4 != 0) return error.InvalidDevRunImage;
+    const count = std.math.cast(u32, view.function_table.len / entry_size) orelse return error.InvalidDevRunImage;
+    const table: *anyopaque = @ptrCast(@constCast(view.function_table.ptr));
+    if (unwind_tables.RtlAddFunctionTable(table, count, @intFromPtr(view.code.ptr)) == 0) return error.FunctionTableRegistrationFailed;
+    return table;
+}
+
+const unwind_tables = struct {
+    extern "ntdll" fn RtlAddFunctionTable(table: *anyopaque, count: u32, base_address: u64) callconv(.winapi) u8;
+    extern "ntdll" fn RtlDeleteFunctionTable(table: *anyopaque) callconv(.winapi) u8;
+};
 
 /// Fill a composed image's host sites and rebase its absolute addresses into
 /// itself: each host import is resolved once by name and its sites filled,
@@ -358,6 +390,18 @@ fn applyComposedRelocations(view: *const RunImage.ProgramView) LoadDevProgramErr
                 const field = try composedField(view, site.offset, 8);
                 std.mem.writeInt(u64, field[0..8], @bitCast(@as(i64, @intCast(address)) + site.addend), .little);
             },
+            .branch26 => {
+                const field = try composedField(view, site.offset, 4);
+                if (!backend.dev.UnitImage.applySite(field, .branch26, stub_address + site.addend, @intFromPtr(field.ptr))) return error.BranchOutOfRange;
+            },
+            .page21 => {
+                const field = try composedField(view, site.offset, 4);
+                if (!backend.dev.UnitImage.applySite(field, .page21, stub_address + site.addend, @intFromPtr(field.ptr))) return error.BranchOutOfRange;
+            },
+            .pageoff12 => {
+                const field = try composedField(view, site.offset, 4);
+                if (!backend.dev.UnitImage.applySite(field, .pageoff12, stub_address + site.addend, @intFromPtr(field.ptr))) return error.BranchOutOfRange;
+            },
         };
     }
     for (view.rebases) |rebase| {
@@ -371,7 +415,7 @@ fn applyComposedRelocations(view: *const RunImage.ProgramView) LoadDevProgramErr
 fn composedField(view: *const RunImage.ProgramView, offset: u64, width: usize) RunImage.ImageError![]u8 {
     if (offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
     const address = @intFromPtr(view.code.ptr) +% @as(usize, @intCast(offset));
-    for ([_][]u8{ view.executable, view.mutable_data }) |region| {
+    for ([_][]u8{ view.executable, view.writable_data }) |region| {
         const start = @intFromPtr(region.ptr);
         if (address >= start and address - start <= region.len and width <= region.len - (address - start)) {
             return region[address - start ..][0..width];
@@ -448,15 +492,17 @@ fn validateDirectImageLayout(view: *const RunImage.ProgramView) RunImage.ImageEr
     if (view.executable.len == 0 or view.executable.len % view.page_size != 0) return error.InvalidDevRunImage;
     if (!rangeContains(view.executable, view.code)) return error.InvalidDevRunImage;
     if (!rangeContains(view.executable, view.function_stubs)) return error.InvalidDevRunImage;
+    if (!rangeContains(view.executable, view.function_table)) return error.InvalidDevRunImage;
+    if (view.function_table.len != 0 and @intFromPtr(view.function_table.ptr) < @intFromPtr(view.code.ptr)) return error.InvalidDevRunImage;
     if (view.data.len > 0 and @intFromPtr(view.data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
-    if (view.mutable_data.len != 0) {
-        if (@intFromPtr(view.mutable_data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
+    if (view.writable_data.len != 0) {
+        if (@intFromPtr(view.writable_data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
         for ([_][]const u8{ view.executable, view.data }) |readonly| {
             if (readonly.len == 0) continue;
-            const mutable_start = @intFromPtr(view.mutable_data.ptr);
+            const writable_start = @intFromPtr(view.writable_data.ptr);
             const readonly_start = @intFromPtr(readonly.ptr);
-            if (mutable_start < readonly_start + std.mem.alignForward(usize, readonly.len, view.page_size) and
-                readonly_start < mutable_start + std.mem.alignForward(usize, view.mutable_data.len, view.page_size)) return error.InvalidDevRunImage;
+            if (writable_start < readonly_start + std.mem.alignForward(usize, readonly.len, view.page_size) and
+                readonly_start < writable_start + std.mem.alignForward(usize, view.writable_data.len, view.page_size)) return error.InvalidDevRunImage;
         }
     }
     for (view.code_symbols) |symbol| {
@@ -478,8 +524,8 @@ fn rangeContains(outer: []const u8, inner: []const u8) bool {
 fn prepareDirectImageForRelocation(view: *const RunImage.ProgramView) ipc.platform.MemoryProtectError!void {
     try ipc.platform.protectMappedMemory(view.executable.ptr, view.executable.len, .read_write);
     try protectDataPages(view, .read_write);
-    if (view.mutable_data.len != 0) {
-        try ipc.platform.protectMappedMemory(view.mutable_data.ptr, std.mem.alignForward(usize, view.mutable_data.len, view.page_size), .read_write);
+    if (view.writable_data.len != 0) {
+        try ipc.platform.protectMappedMemory(view.writable_data.ptr, std.mem.alignForward(usize, view.writable_data.len, view.page_size), .read_write);
     }
 }
 
@@ -591,8 +637,38 @@ fn resolveShimFunction(name: []const u8) ?usize {
     }
     if (resolveRuntimeSymbol(name)) |address| return address;
     if (resolveHostedSymbol(name)) |address| return address;
-    return resolvePackageSymbol(name);
+    if (resolvePackageSymbol(name)) |address| return address;
+    return resolveSystemSymbol(name);
 }
+
+/// A function of the system libraries the support image's builtins call,
+/// looked up by name in this process: libSystem on macOS, kernel32 and
+/// ntdll on Windows. A Linux support image calls none.
+fn resolveSystemSymbol(name: []const u8) ?usize {
+    var buffer: [256]u8 = undefined;
+    if (name.len >= buffer.len) return null;
+    @memcpy(buffer[0..name.len], name);
+    buffer[name.len] = 0;
+    const name_z: [*:0]const u8 = buffer[0..name.len :0];
+    if (builtin.os.tag == .macos) {
+        // `RTLD_DEFAULT`: every image the process has loaded.
+        const default_handle: ?*anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -2))));
+        return @intFromPtr(std.c.dlsym(default_handle, name_z) orelse return null);
+    }
+    if (builtin.os.tag == .windows) {
+        for ([_][*:0]const u16{ std.unicode.utf8ToUtf16LeStringLiteral("kernel32.dll"), std.unicode.utf8ToUtf16LeStringLiteral("ntdll.dll") }) |module_name| {
+            const module = system_libraries.GetModuleHandleW(module_name) orelse continue;
+            if (system_libraries.GetProcAddress(module, name_z)) |address| return @intFromPtr(address);
+        }
+        return null;
+    }
+    return null;
+}
+
+const system_libraries = struct {
+    extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn GetProcAddress(module: *anyopaque, name: [*:0]const u8) callconv(.winapi) ?*anyopaque;
+};
 
 /// An object-cache entry linked into this executable, by its C-ABI entry
 /// name, which the generated platform shim recorded next to its address.
@@ -937,6 +1013,12 @@ pub fn roc_hot_reload_retain_current(return_address: usize) ?*anyopaque {
 pub fn roc_hot_reload_release_retained(code_ref: ?*anyopaque) void {
     const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return));
     releaseDevProgramRef(program);
+}
+
+/// Retain the same code image when its closure's private captures are copied.
+pub fn roc_hot_reload_retain_existing(code_ref: ?*anyopaque) void {
+    const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return));
+    acquireDevProgramRef(program);
 }
 
 comptime {

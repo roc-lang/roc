@@ -15,6 +15,12 @@ pub const LowLevel = enum(u16) {
     str_static_small_word_eq,
     str_static_small_word_caseless_eq,
     str_concat,
+    /// `str_concat` for a piece a generated rendering joins onto the string
+    /// it is building: the same result and the same ownership effect, reached
+    /// through a backend entry point that is a bare call into the shared
+    /// concatenation routine, with no small-string fast path for the
+    /// optimizer to copy at each of the many sites a rendering has.
+    str_append,
     str_contains,
     str_trim,
     str_trim_start,
@@ -632,6 +638,10 @@ pub const LowLevel = enum(u16) {
     /// retains nested payload children, and releases the consumed input.
     box_prepare_update,
     erased_capture_load,
+    /// Pack an erased step and its length hint into one opaque sequence handle.
+    boxed_sequence_pack,
+    /// Unpack a sequence's record while borrowing the owning handle.
+    boxed_sequence_unpack,
 
     // Compiler-internal pointer operations, introduced by the TRMC pass
     // (src/lir/trmc.zig). Never produced by user code or canonicalization.
@@ -1036,6 +1046,7 @@ pub const LowLevel = enum(u16) {
     /// The properties of every operation that is not a numeric conversion.
     const explicit_op_info: ExplicitOpInfo = .{
         .str_concat = byType(.runtimeUniqueness(arg_0)),
+        .str_append = byType(.runtimeUniqueness(arg_0)),
 
         // Trimming a shared string returns a seamless slice of it rather
         // than copying, so the result's outermost allocation is the
@@ -1243,6 +1254,8 @@ pub const LowLevel = enum(u16) {
         // closure, not through an explicit refcounted argument, so the
         // result cannot name a lender to borrow from.
         .erased_capture_load = byType(.retainsResult()),
+        .boxed_sequence_pack = byType(.allocatesConsumingArgs(arg_0)),
+        .boxed_sequence_unpack = byType(.retainsResultBorrowingArgs(arg_0)),
 
         .box_alloc_zeroed = byType(.allocates()),
 
@@ -1453,6 +1466,13 @@ pub const LowLevel = enum(u16) {
         return self.arcBorrowedResultVariant() != null;
     }
 
+    /// Whether this operation joins two strings into one: `str_concat`, the
+    /// join a program spells, or `str_append`, the join generated renderings
+    /// use. Both have the same result and ownership effect.
+    pub fn isStrJoin(self: LowLevel) bool {
+        return self == .str_concat or self == .str_append;
+    }
+
     /// Whether this primitive can consume borrowed string views directly,
     /// without first materializing them into RocStr values.
     pub fn acceptsStrViewArgs(self: LowLevel) bool {
@@ -1482,6 +1502,16 @@ pub const LowLevel = enum(u16) {
 test "LowLevel declares no list_split_first or list_split_last op" {
     try std.testing.expect(!@hasField(LowLevel, "list_split_first"));
     try std.testing.expect(!@hasField(LowLevel, "list_split_last"));
+}
+
+test "str_append has str_concat's ownership effect" {
+    try std.testing.expect(LowLevel.str_append.isStrJoin());
+    try std.testing.expect(LowLevel.str_concat.isStrJoin());
+    try std.testing.expect(!LowLevel.str_reserve.isStrJoin());
+    try std.testing.expectEqual(LowLevel.str_concat.rcEffect(), LowLevel.str_append.rcEffect());
+    try std.testing.expectEqual(LowLevel.str_concat.elementDemand(0), LowLevel.str_append.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.str_concat.elementDemand(1), LowLevel.str_append.elementDemand(1));
+    try std.testing.expectEqual(LowLevel.str_concat.typeOnlyOperands(), LowLevel.str_append.typeOnlyOperands());
 }
 
 test "elementDemand gives every operation an entry for every argument" {

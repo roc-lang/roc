@@ -447,13 +447,14 @@ pub const LiteralRejectionKind = enum(u8) {
     interpolation,
 };
 
-/// The source literal a literal-rejection crash reports: the checked
-/// expression, in its owning module, whose `from_numeral`, `from_quote`, or
+/// The source literal a literal-rejection crash reports: the literal, in its
+/// owning module, whose `from_numeral`, `from_quote`, or
 /// `from_interpolation` conversion returned `Err`.
 pub const LiteralRejectionSite = struct {
     owner: LoweringModuleId,
-    /// The literal's `CheckedExprId` in `owner`.
-    checked_expr: u32,
+    /// The literal's CIR node in `owner`: an expression, or a custom literal
+    /// pattern.
+    node: u32,
     kind: LiteralRejectionKind,
 };
 
@@ -519,12 +520,25 @@ pub const Local = struct {
     layout_idx: layout.Idx,
     /// Set exactly for a local of `dynamic` layout.
     dyn: ?DynLocal = null,
+    /// Checked, closed-row product structure, independent of runtime offsets.
+    /// Present only for descriptor-sized records/tuples. Field layouts may
+    /// themselves be dynamic; their descriptors are explicit producer data.
+    product: StmtRowId(ProductShape) = .none,
+};
+
+/// Closed product ownership metadata. Physical offsets remain descriptor-defined.
+pub const ProductShape = struct {
+    /// Layout indices in semantic field order (not runtime offset order).
+    layouts: U32Span,
+    /// First ownership slot per field, followed by the total slot count.
+    slots: U32Span,
+    /// One descriptor per field, in the same order as `layouts`.
+    descriptors: LocalSpan,
 };
 
 /// What a `dynamic` local's value is (design.md "Dynamic Values In LIR"):
-/// bytes the runtime type descriptor in `desc` describes, which the local
-/// addresses. `desc` is a local of `opaque_ptr` layout holding the
-/// descriptor; it is defined before the dynamic local is.
+/// bytes described by the runtime descriptor in `desc`, a local defined
+/// before the dynamic local's storage is allocated or addressed.
 pub const DynLocal = struct {
     desc: LocalId,
     storage: DynStorage,
@@ -536,7 +550,7 @@ pub const DynStorage = enum(u32) {
     /// The procedure's dynamic frame region. The backend reserves
     /// `desc.size` bytes at `desc.alignment` for the local when it executes
     /// the procedure's `dyn` `frame_alloc` statement, which follows every
-    /// descriptor composition the region's sizes read. Writing such a local
+    /// descriptor read the region's sizes depend on. Writing such a local
     /// (the target of a call or `dyn` operation, a join parameter a jump
     /// assigns, a `set_local` target) writes its bytes there.
     frame,
@@ -928,6 +942,14 @@ pub const SetLocalWriteMode = enum {
 pub const ErasedCallableOnDrop = union(enum) {
     none,
     rc_helper: layout.RcHelperKey,
+
+    /// The producer's matching retain plan for an independently copied capture.
+    pub fn copyCallback(self: ErasedCallableOnDrop) ErasedCallableOnDrop {
+        return switch (self) {
+            .none => .none,
+            .rc_helper => |key| .{ .rc_helper = .{ .op = .incref, .layout_idx = key.layout_idx } },
+        };
+    }
 };
 
 /// Concrete callable ABI used to enter a LIR procedure.
@@ -1016,6 +1038,9 @@ pub const TailGroupId = enum(u32) { _ };
 pub const TailCalls = struct {
     head: CFStmtId,
     loop: JoinPointId,
+    /// The statement the loop begins at, when it is not the body's first:
+    /// the statements before it run once per call.
+    entry: ?CFStmtId = null,
 };
 
 /// Which tail-recursion rewrite the TRMC pass (src/lir/trmc.zig) applied to a
@@ -1214,14 +1239,7 @@ pub const max_cf_stmt_count: u32 = std.math.maxInt(u32) - 1;
 /// The fields of a `LiteralValue.static_data` read set only for a
 /// compile-time list of copies of one value, stored out of line.
 pub const LiteralExtra = struct {
-    /// The argument-free procedure that builds the same list fresh. ARC
-    /// chooses one form per read—the static datum when nothing the value
-    /// reaches needs it unique, the fresh build when its birth lets ARC
-    /// prove a mutating consumer's argument unique—and clears this, so no
-    /// consumer after ARC sees it set.
-    fresh_alternative: ?LirProcSpecId = null,
-    /// The list's item count, which the read's value has in either form ARC
-    /// chooses. Range proving binds it as the list's length.
+    /// The statically known list length, for range proofs.
     list_len: ?u64 = null,
 };
 
@@ -1289,6 +1307,10 @@ pub const PackedErasedFnData = struct {
     capture: ?LocalId,
     capture_layout: ?layout.Idx,
     on_drop: ErasedCallableOnDrop,
+    /// Explicit retain callback for copying the inline capture.
+    on_copy: ErasedCallableOnDrop = .none,
+    /// Frozen callbacks see the runtime prefix too, without a hot-reload adapter.
+    frozen_capture_layout: ?layout.Idx = null,
     /// Optional local containing a consumed erased callable allocation to
     /// repack. The local itself is present statically, but its runtime value
     /// may be null when an ABI caller declined to transfer ownership.
@@ -1302,13 +1324,22 @@ pub const PackedErasedFnData = struct {
     reuse_unique: bool = false,
 };
 
+/// The byte offset of word `index` of a type table whose words are
+/// `ptr_bytes` wide. The table's producer writes
+/// each word here and every consumer of `DynOp.table_entry` reads it here, so
+/// this is the one place the table format names a word's position.
+pub fn tableEntryOffset(index: u32, ptr_bytes: u32) u32 {
+    return index * ptr_bytes;
+}
+
 /// One operation of a `CFStmt.dyn` statement, stored out of line (design.md
 /// "Dynamic Values In LIR", "Type Descriptors", "Dictionaries").
 ///
-/// Descriptor, name, and dictionary operands are locals of `opaque_ptr`
-/// layout: a static descriptor or name is a `static_data` read, and a
-/// composed one is the target of a composition operation. Descriptors and
-/// names are immortal and never reference counted.
+/// Descriptor, plan, and type table operands are locals of `opaque_ptr`
+/// layout: a `static_data` read, or a word of the procedure's type table
+/// (`table_entry`). Descriptors, plans, and tables are immortal static data
+/// and never reference counted. A field or variant is named by its position
+/// (`DynIndex`), never by its name.
 ///
 /// Ownership: an operation that defines a `view` target borrows the target
 /// from its `base` operand, as an `assign_ref` of a component does; `copy`
@@ -1317,9 +1348,7 @@ pub const PackedErasedFnData = struct {
 /// into the target, as `assign_struct`, `assign_tag`, and `assign_list` do;
 /// `eq`, `hash`, `inspect`, and `tag_discriminant` borrow their value
 /// operands; `call_erased` consumes `args` and borrows `closure`, or
-/// consumes one unit of it when the call is owned (`reuse_closure`);
-/// `dict_compose` and `dict_record` hold their operands as an aggregate
-/// holds its fields; `dict_patch` borrows its immortal operands.
+/// consumes one unit of it when the call is owned (`reuse_closure`).
 pub const DynOp = union(enum) {
     /// Allocate the procedure's dynamic frame region and set the address of
     /// every `frame` dynamic local. Exactly one per procedure with such
@@ -1327,85 +1356,28 @@ pub const DynOp = union(enum) {
     /// use of those locals. Has no target.
     frame_alloc,
 
-    // -- Descriptor composition (targets: `opaque_ptr`) --
+    // -- Type tables --
 
-    desc_list: struct { elem: LocalId },
-    desc_box: struct { payload: LocalId },
-    /// A structural record of the named fields; `names` and `descs` are
-    /// parallel, in any order (the runtime orders by name). `ext`, for an
-    /// open row, is the descriptor of the row's remainder, whose fields
-    /// join the named ones.
-    desc_record: struct { names: LocalSpan, descs: LocalSpan, ext: ?LocalId = null },
-    /// A padded nominal's backing record, laid out in declared order. `descs`
-    /// has every field in that order, `padding` the positions in it of the
-    /// unnamed fields, ascending, and `names` the labels of the others in
-    /// their order.
-    desc_declared_record: struct { names: LocalSpan, descs: LocalSpan, padding: U32Span },
-    desc_tuple: struct { elems: LocalSpan },
-    /// An optional record field's presence slot over `payload`: the tag
-    /// union `[missing, present(payload)]`, marked as a presence slot.
-    desc_presence_slot: struct { missing: LocalId, present: LocalId, payload: LocalId },
-    /// A tag union. `names` has one entry per variant; `payload_counts`
-    /// (parallel) says how many of `payloads`, in order, belong to it.
-    /// `ext`, for an open row, is the descriptor of the row's remainder,
-    /// whose variants join the named ones.
-    desc_tag_union: struct { names: LocalSpan, payload_counts: U32Span, payloads: LocalSpan, ext: ?LocalId = null },
-    /// The packed erased-call argument record of `elems`, in declaration
-    /// order (`layout.erased_call_abi.plan`).
-    desc_args: struct { elems: LocalSpan },
-    /// A nominal type over `backing`. `methods` is null or a local holding a
-    /// `Methods` record of override callables.
-    desc_nominal: struct { backing: LocalId, name: LocalId, methods: ?LocalId, inspect_opaque: bool },
-    /// The box a recursive type's committed layout puts around a component
-    /// that leads back into the type, over the component's descriptor.
-    desc_recursive_box: struct { payload: LocalId },
-    /// Begin composing the descriptor of a member of a recursive type: the
-    /// descriptor interned under `key` (a static word naming the member's
-    /// type) and the descriptors `vars` of its type variables, when an
-    /// earlier composition finished it, and otherwise a placeholder that the
-    /// member's components refer to, only through `desc_recursive_box`,
-    /// until `desc_recursive_close` fills it.
-    desc_recursive_open: struct { key: LocalId, vars: LocalSpan },
-    /// Fill the placeholder `shell` (a `desc_recursive_open` target) with the
-    /// member's composed descriptor `desc` and intern it under `key` and
-    /// `vars`, unless the open found it finished. Target: `shell`'s value.
-    desc_recursive_close: struct { shell: LocalId, desc: LocalId, key: LocalId, vars: LocalSpan },
-    /// Record that `desc` describes the program's type `ty` with its type
-    /// variables described by `vars`, so that compile-time evaluation can
-    /// name the type of a descriptor a stored function value captured
-    /// (design.md "Stored Function Values"). Only a compile-time program
-    /// that stores function values has one. Target: `desc`'s value.
-    desc_note: struct { desc: LocalId, ty: u32, vars: LocalSpan },
-
-    // -- Dictionaries (targets: `opaque_ptr`, except `dict_method`) --
-
-    /// A dictionary callable composed at runtime: an immortal erased callable
-    /// of `worker` capturing `captures` (descriptors and dictionaries, in the
-    /// worker's capture order), interned by worker and capture identities.
-    dict_compose: struct { worker: LirProcSpecId, captures: LocalSpan },
-    /// Fill capture word `index` of `dict`, a `dict_compose` result that held
-    /// a null word there, with `value`, a dictionary that captures `dict`: a
-    /// recursive requirement's dictionaries capture one another. The word
-    /// isn't part of `dict`'s identity, and the same composition always fills
-    /// it with the same value. Target: `dict`.
-    dict_patch: struct { dict: LocalId, index: u32, value: LocalId },
-    /// A dictionary record of several method callables, interned.
-    dict_record: struct { methods: LocalSpan },
-    /// The callable of method `index` of a dictionary record. Target:
-    /// `erased_callable`, borrowed from the immortal dictionary.
-    dict_method: struct { dict: LocalId, index: u32 },
+    /// Word `index` of the type table at `table` (an `opaque_ptr` local),
+    /// read at `tableEntryOffset(index, pointer width)`. A table is
+    /// immutable static data, so every read of a word yields the same value:
+    /// a descriptor, a plan, or another table (target `opaque_ptr`), an
+    /// immortal dictionary or literal thunk (target `erased_callable`), or a
+    /// field's or variant's position (target `u32`, the word's low 32 bits
+    /// on a little-endian target, whatever its pointer width). The target
+    /// holds the word as a `static_data` literal read holds its value: image
+    /// data, whose reference counting `immortal_locals` elides.
+    table_entry: struct { table: LocalId, index: u32 },
 
     // -- Values --
 
     /// Copy `desc.size` bytes from `src` to the target. Reference counts are
     /// separate (`incref`/`decref` of the target as of any alias).
     copy: struct { src: LocalId, desc: LocalId },
-    /// Field `field_index` of the record or tuple `base` described by
-    /// `desc`. The target is a `view` dynamic local, or a closed local the
-    /// field's bytes are loaded into.
-    field_addr: struct { base: LocalId, desc: LocalId, field_index: u32 },
-    /// The field named `name` of the record `base` described by `desc`.
-    field_addr_named: struct { base: LocalId, desc: LocalId, name: LocalId },
+    /// Field `field_index` (its semantic index) of the record or tuple
+    /// `base` described by `desc`. The target is a `view` dynamic local, or
+    /// a closed local the field's bytes are loaded into.
+    field_addr: struct { base: LocalId, desc: LocalId, field_index: DynIndex },
     /// Element `index` (a `u64` local) of the list `list`, whose elements
     /// `elem_desc` describes. The caller has checked the bound.
     list_item_addr: struct { list: LocalId, elem_desc: LocalId, index: LocalId },
@@ -1413,8 +1385,6 @@ pub const DynOp = union(enum) {
     box_payload_addr: struct { box: LocalId, desc: LocalId },
     /// The discriminant (target: `u32`) of the tag union `base`.
     tag_discriminant: struct { base: LocalId, desc: LocalId },
-    /// The discriminant (target: `u32`) tag `name` has under `desc`.
-    tag_discriminant_of: struct { desc: LocalId, name: LocalId },
     /// Payload `payload_index` of the active tag in `base`, selected by its
     /// stored discriminant. The producer has established that this tag holds
     /// the target's payload type (a matched arm or a known constructor).
@@ -1423,12 +1393,14 @@ pub const DynOp = union(enum) {
     /// semantic index order.
     record: struct { desc: LocalId, fields: LocalSpan },
     /// Build the record `desc` describes from the record `base`, which
-    /// `base_desc` describes: each field named in `names` takes the
-    /// corresponding one of `values`, and every other field `base`'s field
-    /// of the same name. `base` and `values` are consumed.
-    record_update: struct { base: LocalId, base_desc: LocalId, desc: LocalId, names: LocalSpan, values: LocalSpan },
-    /// Build tag `name` of the tag union `desc` describes from `payloads`.
-    tag: struct { desc: LocalId, name: LocalId, payloads: LocalSpan },
+    /// `base_desc` describes, by the update plan `plan` (an `opaque_ptr`
+    /// local; `boxy_runtime.desc.update_value_flag`): each field the plan
+    /// gives a value takes that one of `values`, and every other field the
+    /// base's field the plan names. `base` and `values` are consumed.
+    record_update: struct { base: LocalId, base_desc: LocalId, desc: LocalId, plan: LocalId, values: LocalSpan },
+    /// Build the variant whose discriminant is `discriminant` of the tag
+    /// union `desc` describes from `payloads`.
+    tag: struct { desc: LocalId, discriminant: DynIndex, payloads: LocalSpan },
     /// Build a list of `elems`, whose elements `elem_desc` describes.
     list: struct { elem_desc: LocalId, elems: LocalSpan },
     /// Box `payload`, which `desc` describes.
@@ -1447,7 +1419,10 @@ pub const DynOp = union(enum) {
     /// layout) honoring nominal overrides.
     hash: struct { hasher: LocalId, value: LocalId, desc: LocalId },
     /// `Str.inspect` rendering (target: `Str`) honoring nominal overrides.
-    inspect: struct { value: LocalId, desc: LocalId },
+    /// `names` (an `opaque_ptr` local) is the names block of `desc`'s type,
+    /// which holds its labels and tag names (`boxy_runtime.desc.Names`;
+    /// null for a type with neither).
+    inspect: struct { value: LocalId, desc: LocalId, names: LocalId },
     /// Call the erased callable `closure` in the uniform erased-callable ABI:
     /// `args` holds the complete packed argument block, or is null for no
     /// arguments. A single argument may supply the block directly: its bytes
@@ -1497,15 +1472,25 @@ pub const DynOp = union(enum) {
     /// argument for its capture record), or the address when the procedure
     /// holds no unit of them.
     view: struct { address: LocalId, owner: ?LocalId = null },
-    /// The value `src` (borrowed), which `from` describes, rebuilt as the
-    /// owned value `to` describes. The descriptors describe one type whose
-    /// record fields may differ in storage (design.md "Field Kinds"): a
-    /// field `to` stores in a presence slot is wrapped `#Present`, and a
-    /// presence slot `to` stores inline is unwrapped; the program crashes
-    /// when that slot is `#Missing`. A tag row `to` widens is re-tagged by
-    /// name under `to` (design.md "Sealed Result Rows"); a conversion
-    /// between two closed types is a static conversion worker instead.
-    adapt: struct { src: LocalId, from: LocalId, to: LocalId },
+    /// The value `src` (borrowed) rebuilt as an owned value by the coercion
+    /// plan `plan` (an `opaque_ptr` local; `boxy_runtime.desc.AdaptPlan`),
+    /// which converts between two descriptors of one type whose record
+    /// fields may differ in storage (design.md "Field Kinds"): a field the
+    /// destination stores in a presence slot is wrapped `#Present`, and a
+    /// presence slot it stores inline is unwrapped; the program crashes
+    /// when that slot is `#Missing`. A tag row the destination widens is
+    /// re-tagged by the plan's discriminants (design.md "Sealed Result
+    /// Rows"); a conversion between two closed types is a static conversion
+    /// worker instead.
+    adapt: struct { src: LocalId, plan: LocalId },
+};
+
+/// An integer operand of a dynamic operation: a value lowering knows, or a
+/// `u32` local holding a type table word (design.md "Type Tables"), for a
+/// position a generic body's instantiation fixes.
+pub const DynIndex = union(enum) {
+    immediate: u32,
+    local: LocalId,
 };
 
 /// The fields of `CFStmt.decref_if_initialized` other than its condition,
@@ -1622,13 +1607,11 @@ pub const CFStmt = union(enum) {
         /// Source region of the `?` expression, for failure reporting.
         region: base.Region,
     },
-    /// An operation on dynamic values, descriptors, or dictionaries
+    /// An operation on dynamic values, descriptors, or type tables
     /// (`DynOp`). `target` is null only for `frame_alloc`.
     dyn: struct {
         target: ?LocalId,
         data: StmtRowId(DynOp),
-        /// Distinct zero-initialized writable static slot for this composition.
-        composition_cache: ?StaticDataId = null,
         next: CFStmtId,
     },
     /// Compiler-generated impossible execution path. This is terminal.
@@ -1762,10 +1745,10 @@ pub const ComptimeValueRef = struct {
 pub const FailureMeaning = union(enum) {
     /// Code checking rejected and already reported.
     checked_error,
-    /// A literal conversion rejecting the literal at `checked_expr`.
+    /// A literal conversion rejecting the literal at CIR node `node`.
     literal_rejection: struct {
         module: [32]u8,
-        checked_expr: u32,
+        node: u32,
         kind: LiteralRejectionKind,
     },
     /// An exhaustiveness failure at a checked site.
@@ -1808,7 +1791,8 @@ pub const ProcShapes = packed struct(u16) {
     interned_call_result: bool = false,
     /// A direct call whose result is a string.
     str_call: bool = false,
-    /// A local assigned static data or a packed byte literal.
+    /// A local assigned static data (a static-data literal, or a word of a
+    /// type table) or a packed byte literal.
     static_literal: bool = false,
     /// A box allocation.
     box_box: bool = false,

@@ -89,6 +89,7 @@ pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
 pub const boxyTemplateWorkerIdentity = postcheck.Boxy.Lower.templateWorkerIdentity;
 /// What reading a `.boxy` program's function values takes after lowering.
 pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
+pub const BoxyFunctionMetadata = postcheck.Boxy.StoredFn;
 /// The names the modules of one link give their workers and nominal types.
 pub const BoxyModuleNames = postcheck.Boxy.Types.ModuleNames;
 
@@ -107,10 +108,7 @@ pub const StaticDataRequest = postcheck.Common.StaticDataRequest;
 pub const SpecializationStrategy = base.SpecializationStrategy;
 
 /// Root checked module plus the checked imports visible to post-check lowering.
-pub const CheckedModuleSet = struct {
-    root: checked.LoweringModuleView,
-    imports: []const checked.ImportedModuleView = &.{},
-};
+pub const CheckedModuleSet = postcheck.Common.CheckedModules;
 
 /// Root requests that determine which checked definitions become LIR roots.
 pub const RootRequestSet = struct {
@@ -178,8 +176,8 @@ pub const TargetConfig = struct {
     /// compile-time roots it demands (design.md "Demand-Driven Compile-Time
     /// Evaluation").
     demand_driven_comptime_roots: bool = false,
-    /// Test/check commands validate all pending initializers, even without readers.
-    validate_all_comptime_roots: bool = false,
+    /// Validate every compile-time root, as an explicit test run does.
+    validate_every_comptime_root: bool = false,
     /// For `.boxy`: the module whose object this lowering emits, with every
     /// other module's worker an imported symbol (design.md "Per-Module
     /// Output"); null lowers everything the roots reach as one program.
@@ -190,9 +188,8 @@ pub const TargetConfig = struct {
     /// With `boxy_compile_time`, the roots hold function values
     /// (`postcheck.Boxy.Lower.Input.stored_functions`).
     boxy_stored_functions: bool = false,
-    /// The consumer reads composition sites
-    /// (`postcheck.Boxy.Lower.Input.composition_sites`).
-    boxy_composition_sites: bool = true,
+    /// Content identity of a compiler-only module unit's function/type metadata.
+    boxy_function_unit: ?[32]u8 = null,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
     inline_mode: InlineMode = .none,
@@ -1380,8 +1377,6 @@ pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
 pub const ComptimeRootGraph = postcheck.ComptimeRootGraph;
 /// See `postcheck.Common.ComptimeRootRead`.
 pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
-/// A checked compile-time root named in a `ComptimeDemand`.
-pub const ComptimeDemandRoot = postcheck.Monotype.Solve.EntryRoot;
 /// A root of a prepared Monotype program.
 pub const MonotypeRoot = postcheck.Monotype.Ast.Root;
 /// Source identity of a literal demand, before the producer is released.
@@ -1412,6 +1407,7 @@ pub fn prepareCheckedModulesMonotype(
     target: TargetConfig,
 ) LowerResourceError!PreparedMonotype {
     if (target.specialization_strategy != .lss) checkedPipelineInvariant("Monotype preparation requires LSS");
+    try modules.demandBodyIndexes();
     try verifyCheckedBoundary(modules, target);
     try requireHostedProceduresBound(modules, target);
 
@@ -1456,15 +1452,14 @@ pub fn prepareCheckedModulesMonotype(
         if (target.work_metrics) |metrics| metrics.monotype_runs += 1;
         break :monotype try postcheck.Monotype.Lower.run(
             allocator,
-            checkedModules(modules),
+            modules,
             rootRequests(roots, layout_requests, static_data_requests),
             .{
-                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
                 .post_check_executor = target.post_check_executor,
-                .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
-                .validate_all_comptime_roots = target.validate_all_comptime_roots,
+                .validate_every_comptime_root = target.validate_every_comptime_root,
                 .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
                 .literal_roots = target.literal_roots,
                 .replay_interface_summaries = target.replay_interface_summaries,
@@ -1493,13 +1488,10 @@ pub fn prepareCheckedModulesMonotype(
         const omitted: u32 = @intCast(roots.requests.len - root_count);
         for (test_plan_metadata) |*metadata| metadata.request_index -= omitted;
     }
-    // Initializer validation belongs to finalization, not the retained runtime consumer.
-    var retained_target = target;
-    retained_target.validate_all_comptime_roots = false;
     return .{
         .allocator = allocator,
         .program = mono,
-        .target = retained_target,
+        .target = target,
         .root_count = root_count,
         .test_plan_metadata = test_plan_metadata,
         .comptime_demand = if (target.comptime_value_reads) comptime_demand else null,
@@ -1753,13 +1745,14 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
-        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
         .host_boundary_digests = target.host_boundary_digests,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
         .parallel_metrics = parallel_metrics,
         .completed_scalar_values = target.completed_scalar_values,
         .completed_erased_members = consumer.completed_erased_members,
+        .erased_capture_prefix = target.erased_capture_prefix,
     });
     if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
@@ -1928,8 +1921,7 @@ fn finishLoweredOutput(
 
     try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items});
 
-    // ARC settled every read that named a fresh form, so a fresh-form
-    // procedure no read chose is now unreferenced.
+    // Retain only procedures and data referenced after ARC.
     if (frozen.*) |*data| {
         try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
     } else {
@@ -1944,6 +1936,7 @@ fn finishLoweredOutput(
 
     try LirDump.run(&lowered.lir_result);
     if (SpecCensus.enabled()) try SpecCensus.runLir(allocator, &lowered.lir_result);
+    ProcCensus.run(&lowered.lir_result, target.specialization_strategy);
 
     if (root_count != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
@@ -1991,19 +1984,19 @@ pub const PreparedBoxy = struct {
         const allocator = self.allocator;
         var boxy_timing_scope = PipelineStageScope.begin(target.timing, .boxy_lowering);
         var output = try postcheck.Boxy.run(allocator, .{
-            .modules = checkedModules(self.modules),
+            .modules = self.modules,
             .roots = rootRequests(self.roots, self.layout_requests, self.static_data_requests),
             .target_usize = target.target_usize,
             .inline_expects = switch (target.inline_expects) {
                 .run => .run,
                 .omit => .omit,
             },
-            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
             .list_in_place_map = target.list_in_place_map,
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,
             .stored_functions = target.boxy_stored_functions,
-            .composition_sites = target.boxy_composition_sites,
+            .function_unit = target.boxy_function_unit,
             .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
         });
         boxy_timing_scope.end();
@@ -2013,7 +2006,7 @@ pub const PreparedBoxy = struct {
             runtime_schemas: postcheck.SolvedLirLower.RuntimeSchemaStore,
         } = .{
             .lir_result = output.lir_result,
-            .runtime_schemas = postcheck.SolvedLirLower.RuntimeSchemaStore.init(allocator),
+            .runtime_schemas = output.runtime_schemas,
         };
         defer lowered.runtime_schemas.deinit();
         var frozen: ?LirProgram.FrozenStaticData = .{ .allocator = allocator, .exports = output.static_data };
@@ -2140,13 +2133,6 @@ fn hostedProceduresBound(
         if (!bound) return false;
     }
     return true;
-}
-
-fn checkedModules(modules: CheckedModuleSet) postcheck.Common.CheckedModules {
-    return .{
-        .root = modules.root,
-        .imports = modules.imports,
-    };
 }
 
 fn rootRequests(
@@ -2378,7 +2364,6 @@ test "adopting completed compile-time values drops their initializers and identi
         .bytes = try allocator.alloc(u8, 0),
         .alignment = 1,
         .relocations = try allocator.alloc(LirProgram.StaticDataRelocation, 0),
-        .empty_list_capacities = try allocator.alloc(LirProgram.EmptyListCapacity, 0),
     };
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 
@@ -2402,6 +2387,42 @@ test "adopting completed compile-time values drops their initializers and identi
 /// function type or an erased callable, and the request and solved type
 /// digests. Never enabled by default; it only reads the finished stores, and a
 /// compiler built without developer diagnostics carries none of it.
+/// Print the procedures of every lowered LIR program (`ROC_PROC_CENSUS`):
+/// one `proc-census: program` line per program, numbered in lowering order,
+/// then one `proc-census:   proc` line per procedure with its debug name, so
+/// procedures one compilation compiles in more than one program can be
+/// counted. Selected at compile time, so a compiler that does not read
+/// developer diagnostics carries none of it.
+const ProcCensus = if (!base.dev_diagnostics.available) struct {
+    fn enabled() bool {
+        return false;
+    }
+
+    fn run(_: *const LirProgram.Result, _: SpecializationStrategy) void {}
+} else struct {
+    var programs: std.atomic.Value(u32) = .init(0);
+
+    fn enabled() bool {
+        return base.dev_diagnostics.isSet(.proc_census);
+    }
+
+    fn run(result: *const LirProgram.Result, strategy: SpecializationStrategy) void {
+        if (!enabled()) return;
+        const store = &result.store;
+        const program = programs.fetchAdd(1, .monotonic);
+        var with_body: usize = 0;
+        for (0..store.procSpecCount()) |index| {
+            if (store.getProcSpecImmediate(@fromBackingInt(@intCast(index))).body != null) with_body += 1;
+        }
+        std.debug.print("proc-census: program {d} ({s}): {d} procedures, {d} roots\n", .{ program, @tagName(strategy), with_body, result.root_procs.items.len });
+        for (0..store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+            if (store.getProcSpecImmediate(proc_id).body == null) continue;
+            std.debug.print("proc-census:   {d} {s}\n", .{ program, store.procDebugName(proc_id) orelse "?" });
+        }
+    }
+};
+
 const SpecCensus = if (!base.dev_diagnostics.available) struct {
     fn enabled() bool {
         return false;
@@ -2482,7 +2503,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             .name = root.canonical_names.moduleNameText(root.module_identity.display_module_name),
             .kind = @tagName(root.module_identity.kind),
             .names = &root.canonical_names,
-            .types = root.checked_types.view(),
+            .types = root.typesView(),
             .templates = &root.checked_procedure_templates,
             .env = root.moduleEnvConst(),
         });
@@ -2535,7 +2556,10 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     try stack.appendSlice(allocator, alias.args);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try stack.append(allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try stack.append(allocator, field.ty);
+                    }
                     try stack.append(allocator, record.ext);
                 },
                 .tuple => |elems| try stack.appendSlice(allocator, elems),
@@ -2545,7 +2569,10 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     try stack.append(allocator, func.ret);
                 },
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try stack.appendSlice(allocator, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try stack.appendSlice(allocator, tag.args);
+                    }
                     try stack.append(allocator, tag_union.ext);
                 },
             }
@@ -2802,7 +2829,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     callable_name = defName(info, proc_base);
                     if (callable_kind_is_template and sub < info.templates.templates.items.len) {
                         const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
-                        if (@backingInt(source_fn_ty) < info.types.stored_payloads.len) {
+                        if (info.types.containsId(source_fn_ty)) {
                             poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
                         }
                     }

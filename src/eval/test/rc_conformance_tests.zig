@@ -59,6 +59,19 @@ const Exemption = struct {
 /// Static data has a constant refcount, which no op can move.
 const cases = [_]Case{
     .{
+        .name = "boxed sequence packing and unpacking preserve shared captures",
+        .source =
+        \\{
+        \\    text = Str.concat("an iterator capture that cannot fit in a small string", "!")
+        \\    original = Box.box(text.iter_utf8())
+        \\    repacked = Box.box(Box.unbox(original))
+        \\    first = List.from_iter(Box.unbox(repacked))
+        \\    second = List.from_iter(Box.unbox(original))
+        \\    first.len() + second.len()
+        \\}
+        ,
+    },
+    .{
         // A parsed prefix's `rest` is a slice of its argument, so each of
         // these hands back part of an allocation it borrowed or took.
         .name = "numeric prefix parsers slice unique and shared inputs",
@@ -762,6 +775,57 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "list keep_while and keep_until return a prefix of their input",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique_some = List.keep_while(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() > 33,
+        \\    )
+        \\    unique_until = List.keep_until(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() < 33,
+        \\    )
+        \\    unique_none = List.keep_while(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |_| False,
+        \\    )
+        \\    unique_all = List.keep_until(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |_| False,
+        \\    )
+        \\    shared_some = List.keep_while(shared, |text| text.count_utf8_bytes() > 33)
+        \\    shared_all = List.keep_while(shared, |_| True)
+        \\    shared_none = List.keep_until(shared, |_| True)
+        \\    List.len(unique_some)
+        \\        + List.len(unique_until)
+        \\        + List.len(unique_none)
+        \\        + List.len(unique_all)
+        \\        + List.len(shared_some)
+        \\        + List.len(shared_all)
+        \\        + List.len(shared_none)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         .name = "boxed values are allocated, read, and updated",
         .source =
         \\{
@@ -1208,7 +1272,7 @@ var shared_builtins: ?eval.BuiltinModules = null;
 
 fn sharedPrePublishedBuiltin(allocator: Allocator) SweepError!helpers.PrePublishedBuiltin {
     if (shared_builtins == null) {
-        shared_builtins = try eval.BuiltinModules.init(allocator);
+        shared_builtins = try eval.BuiltinModules.init(allocator, std.testing.io);
     }
     return .{
         .env = shared_builtins.?.builtin_module.env,

@@ -6,6 +6,7 @@
 //! clean up any surviving runtime allocations at the end of a run.
 
 const std = @import("std");
+const dev_diagnostics = @import("base").dev_diagnostics;
 const Allocator = std.mem.Allocator;
 const builtins = @import("builtins");
 const crash_boundary_mod = @import("crash_boundary.zig");
@@ -15,6 +16,51 @@ const JmpBuf = crash_boundary_mod.JmpBuf;
 const longjmp = crash_boundary_mod.longjmp;
 
 const RuntimeHostEnv = @This();
+
+/// Diagnostic only: a bounded stack prefix, with exact call/byte totals for
+/// that prefix. This does not change allocation policy or generated code.
+const AllocationProfile = struct {
+    const Counts = struct { calls: usize = 0, bytes: usize = 0 };
+    entry_frame: usize = 0,
+    sites: std.AutoHashMapUnmanaged([16]usize, Counts) = .empty,
+};
+
+/// Set the live root frame bounding allocation stack walks when profiling is enabled.
+pub fn beginAllocationProfile(self: *RuntimeHostEnv, frame: usize) void {
+    if (dev_diagnostics.isSet(.profile_allocations)) self.allocation_profile.entry_frame = frame;
+}
+
+fn profileAllocation(self: *RuntimeHostEnv, bytes: usize, frame: usize) void {
+    if (comptime !dev_diagnostics.available) return;
+    if (comptime @import("builtin").cpu.arch != .x86_64 or @import("builtin").os.tag != .linux) return;
+    if (self.allocation_profile.entry_frame == 0) return;
+    var stack: [16]usize = @splat(0);
+    var fp = frame;
+    var depth: usize = 0;
+    // The root caller supplies the live stack bound. Native generated code
+    // and builtins preserve frame pointers, as for compile-time failures.
+    while (depth < stack.len and fp % @alignOf(usize) == 0 and fp >= frame and fp + 2 * @sizeOf(usize) <= self.allocation_profile.entry_frame) : (depth += 1) {
+        const record: *const [2]usize = @ptrFromInt(fp);
+        stack[depth] = record[1];
+        if (record[0] <= fp) break;
+        fp = record[0];
+    }
+    const entry = self.allocation_profile.sites.getOrPut(self.allocator, stack) catch oom("allocation profiling");
+    if (!entry.found_existing) entry.value_ptr.* = .{};
+    entry.value_ptr.calls += 1;
+    entry.value_ptr.bytes += bytes;
+}
+
+/// Print accumulated allocation counts and bytes by stack, labeled with `root`,
+/// when allocation profiling is enabled. Retains the recorded counts.
+pub fn dumpAllocationProfile(self: *RuntimeHostEnv, root: usize) void {
+    if (comptime !dev_diagnostics.available) return;
+    if (!dev_diagnostics.isSet(.profile_allocations)) return;
+    var entries = self.allocation_profile.sites.iterator();
+    while (entries.next()) |entry| {
+        std.debug.print("alloc-stack root={d} calls={d} bytes={d} frames={any}\n", .{ root, entry.value_ptr.calls, entry.value_ptr.bytes, entry.key_ptr.* });
+    }
+}
 
 /// Bookkeeping stored at the start of every block handed to Roc code: a free
 /// or reallocation reads the block's size and alignment back from the block
@@ -203,15 +249,14 @@ roc_ops: ?RocOps = null,
 jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
-/// Whether this run's crash is a caught stack overflow, which depends on the
-/// executing thread's stack rather than on the program alone.
-stack_overflowed: bool = false,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
 /// The most recently allocated live block; blocks link through their headers.
 live_blocks: ?*Header = null,
 live_count: usize = 0,
 live_set: LiveSet = if (std.debug.runtime_safety) .empty else {},
 allocation_call_count: u32 = 0,
+requested_bytes: if (dev_diagnostics.available) usize else void = if (dev_diagnostics.available) 0 else {},
+allocation_profile: if (dev_diagnostics.available) AllocationProfile else void = if (dev_diagnostics.available) .{} else {},
 event_callback: ?EventCallback = null,
 expect_passed: []u64 = &.{},
 expect_failed: []u64 = &.{},
@@ -221,6 +266,7 @@ pub fn init(allocator: std.mem.Allocator) RuntimeHostEnv {
 }
 
 pub fn deinit(self: *RuntimeHostEnv) void {
+    if (dev_diagnostics.available) self.allocation_profile.sites.deinit(self.allocator);
     self.resetObservation();
     self.freeRemainingAllocations();
     // Runtime byte leak checking is handled by the live block list itself, so
@@ -234,7 +280,6 @@ pub fn resetObservation(self: *RuntimeHostEnv) void {
     for (self.events.items) |*event| event.deinit(self.allocator);
     self.events.clearAndFree(self.allocator);
     self.termination = .returned;
-    self.stack_overflowed = false;
     self.active_jmp_buf = null;
 }
 
@@ -242,6 +287,7 @@ pub fn resetObservation(self: *RuntimeHostEnv) void {
 pub fn resetAllocationTracker(self: *RuntimeHostEnv) void {
     self.freeRemainingAllocations();
     self.allocation_call_count = 0;
+    if (dev_diagnostics.available) self.requested_bytes = 0;
 }
 
 /// Public function `checkForLeaks`.
@@ -341,7 +387,6 @@ pub const CrashBoundary = crash_boundary_mod.CrashBoundary(RuntimeHostEnv, true)
 /// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
 /// so callers report it as this run's ordinary crash outcome.
 pub fn noteStackOverflow(self: *RuntimeHostEnv) void {
-    self.stack_overflowed = true;
     self.noteCrash(crash_boundary_mod.STACK_OVERFLOW_MESSAGE);
 }
 
@@ -420,6 +465,8 @@ fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void 
 fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
+    if (dev_diagnostics.available) self.requested_bytes += length;
+    if (dev_diagnostics.isSet(.profile_allocations)) self.profileAllocation(length, @frameAddress());
     return @ptrCast(self.allocateBlock(length, alignment).payload());
 }
 
@@ -437,6 +484,8 @@ fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) vo
 fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
+    if (dev_diagnostics.available) self.requested_bytes += new_length;
+    if (dev_diagnostics.isSet(.profile_allocations)) self.profileAllocation(new_length, @frameAddress());
     const old_header = self.liveHeader(ptr, "realloc of untracked memory");
     old_header.expectAlignment(alignment, "realloc");
     const new_header = self.allocateBlock(new_length, alignment);

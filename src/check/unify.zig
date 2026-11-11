@@ -115,6 +115,11 @@ const RawMismatchEvidence = struct {
     /// The row whose own repeated label failed to relate to its other
     /// occurrence (design.md "Row Union Normalization").
     repeated_label_row: ?Var = null,
+    /// The declaration of a body-local type two of whose applications failed
+    /// to relate at a context argument (design.md "Body-Local Types Stay In
+    /// Their Context"): values of two instantiations of the functions its
+    /// identity depends on met.
+    local_context: ?types_mod.NominalDecl.Idx = null,
 };
 
 /// Exact checker evidence produced when a fresh record construction omits a
@@ -201,6 +206,18 @@ pub const Env = struct {
     /// Links a deferred requirement callable to its copy before the unifier
     /// relates it (design.md "Whole-use replay").
     deferred_callables: ?DeferredCallableHook = null,
+    /// Names the context variable of a body-local type a var is, for a
+    /// reported mismatch's `local_type_escape`.
+    context_variable_probe: ?ContextVariableProbe = null,
+};
+
+/// Lets the unifier ask the checker whether a var is a context variable of a
+/// body-local type (design.md "Body-Local Type Context"), without the unifier
+/// itself depending on the CIR.
+pub const ContextVariableProbe = struct {
+    ctx: *const anyopaque,
+    /// The context variable's own annotation variable, or null.
+    contextVariable: *const fn (ctx: *const anyopaque, var_: Var) ?Var,
 };
 
 /// Lets the unifier have the checker link a `deferred_callable`
@@ -426,6 +443,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             .actual = env.types.resolveThroughAliases(b).desc.content,
         };
         const method_conflict = try snapshotMismatchMethodConflict(env);
+        const local_type_escape = localTypeEscapeCause(env, a, b);
         const problem_idx = try env.problems.appendProblem(.{ .type_mismatch = .{
             .types = .{
                 .expected_var = a,
@@ -437,6 +455,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             .evidence = evidence,
             .leaf = leaf,
             .method_conflict = method_conflict,
+            .local_type_escape = local_type_escape,
         } });
         try env.types.poisonOnMismatch(a, b);
         try poisonMethodConflictReceivers(env);
@@ -517,6 +536,25 @@ pub fn snapshotMismatchEvidence(env: *const Env) std.mem.Allocator.Error!TypeMis
         try snapshotRawRecordEvidence(env, record)
     else
         .none;
+}
+
+/// The body-local type whose escape a failed relation follows from (design.md
+/// "Body-Local Types Stay In Their Context"): two of its applications
+/// disagreed at a context argument, or a root operand or the failed leaf pair
+/// holds one of its context variables, which only a value of it that left its
+/// functions' bodies could have carried outside them.
+pub fn localTypeEscapeCause(env: *const Env, a: Var, b: Var) ?problem_mod.LocalTypeEscapeCause {
+    const evidence = env.unify_scratch.mismatch_evidence;
+    if (evidence.local_context) |decl| return .{ .context_argument = decl };
+    const probe = env.context_variable_probe orelse return null;
+    for ([_]Var{ a, b }) |operand| {
+        if (probe.contextVariable(probe.ctx, operand)) |variable| return .{ .context_variable = variable };
+    }
+    const leaf = evidence.leaf orelse return null;
+    for ([_]Var{ leaf.expected, leaf.actual }) |operand| {
+        if (probe.contextVariable(probe.ctx, operand)) |variable| return .{ .context_variable = variable };
+    }
+    return null;
 }
 
 /// Snapshot the pair whose relation failed, before the top-level operands are
@@ -1040,6 +1078,10 @@ const Unifier = struct {
             },
             .record_repeated_label_row => |row| {
                 self.scratch.mismatch_evidence.repeated_label_row = row;
+                return error.TypeMismatch;
+            },
+            .record_local_context => |decl| {
+                self.scratch.mismatch_evidence.local_context = decl;
                 return error.TypeMismatch;
             },
         }
@@ -1749,13 +1791,19 @@ const Unifier = struct {
         }
 
         try self.scheduleMerge(vars.*, vars.b.desc.content);
+        // A body-local declaration's trailing context arguments (design.md
+        // "Body-Local Type Context") name the instantiation of the enclosing
+        // functions its values belong to.
+        const decl_idx = self.types_store.lookupNominalDecl(a_type);
+        const context_len: u32 = if (decl_idx) |idx| self.types_store.getNominalDecl(idx).flags.context_len else 0;
+        const declared_len = a_type.args.len() - context_len;
         var i: u32 = a_type.args.len();
         while (i > 0) {
             i -= 1;
             try self.scheduleGuardedPair(
                 self.types_store.getVarAt(a_type.args, i),
                 self.types_store.getVarAt(b_type.args, i),
-                .propagate,
+                if (i < declared_len) .propagate else .{ .record_local_context = decl_idx.? },
             );
         }
     }
@@ -4065,6 +4113,9 @@ const MismatchHandling = union(enum) {
     /// A row's repeated label failed to relate to its other occurrence: the
     /// whole relation stops and reports the row.
     record_repeated_label_row: Var,
+    /// A context argument of two applications of this body-local declaration
+    /// failed to relate.
+    record_local_context: types_mod.NominalDecl.Idx,
 };
 
 const SameAliasAfterArgs = struct {

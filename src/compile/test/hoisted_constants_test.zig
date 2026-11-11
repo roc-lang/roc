@@ -44,7 +44,6 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         Issue806MissingStackProbe,
         Issue806UnsafeLargeStackCallArgument,
         Issue806UnsafeLargeStackCallReturn,
-        Issue806UnsafeLargeStackClosureCapture,
         Issue806UnsafeLargeStackJoinParam,
         Issue806UnsafeLargeStackPatternPayload,
         Issue806UnsafeLargeStackReturn,
@@ -57,8 +56,7 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         OutOfMemory,
         PatternExtractionMissingCheckedRootPattern,
         PatternExtractionMissingSourcePattern,
-        PatternExtractionRootValueWasNotSyntheticLookup,
-        PatternExtractionRootWasNotSyntheticMatch,
+        PatternExtractionResultWasNotHoisted,
         PathOutsideWorkspace,
         RootDidNotStoreConstNode,
         StaticDataInitializerCountMismatch,
@@ -82,7 +80,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
     defer shared_test_builtins_mutex.unlock(std.testing.io);
 
     if (shared_test_builtins == null) {
-        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator, std.testing.io);
     }
 
     return &shared_test_builtins.?;
@@ -296,7 +294,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectRootRequestBefore(app_artifact, top_b.id, ordinary_call.root);
     try expectRootRequestBefore(app_artifact, top_b.id, block_value.root);
     try expectRootRequestBefore(app_artifact, indirect_local.root, indirect_top.id);
-    try expectPatternExtractionSyntheticRegions(app_artifact);
+    try expectPatternExtractionRoots(app_artifact);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
@@ -925,7 +923,7 @@ test "a restored list of boxed capturing closures that read their own constant i
     , expectRestoredSelfReadingClosuresStatic);
 }
 
-test "an empty compile-time list rebuilds with the capacity it was evaluated with" {
+test "an empty compile-time list reads immutable data without a capacity request" {
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -937,15 +935,14 @@ test "an empty compile-time list rebuilds with the capacity it was evaluated wit
         \\}
     , struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
-            try expectLowLevelPresent(result, .list_with_capacity);
-            try expectIntLiteralPresent(result, 64);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            try expectLowLevelAbsent(result, .list_with_capacity);
             return 0;
         }
     }.inspect);
 }
 
-test "a compile-time record of an empty list and a scalar lowers as its constructor" {
+test "a compile-time record of an empty list and a scalar reads immutable data" {
     // The record is read whole: a field projection of a completed record
     // is its own compile-time root, evaluated from the frozen record,
     // whose empty list carries no capacity.
@@ -962,18 +959,16 @@ test "a compile-time record of an empty list and a scalar lowers as its construc
         \\}
     , struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
-            try expectLowLevelPresent(result, .list_with_capacity);
-            try expectIntLiteralPresent(result, 8);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            try expectLowLevelAbsent(result, .list_with_capacity);
             return 0;
         }
     }.inspect);
 }
 
 test "an empty list with capacity in a record frozen into static data is the empty list" {
-    // The record's initializer restores the list as `list_with_capacity(4)`.
-    // Static data is never appended to in place, so it freezes as the empty
-    // list rather than as a pointer into the readonly image.
+    // The completed empty list has no backing allocation or runtime capacity
+    // request, including when stored inside a record.
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1049,7 +1044,7 @@ test "an empty list with capacity in a record frozen into static data is the emp
         .{ .target_usize = base.target.TargetUsize.u64 },
     );
     defer lowered.deinit();
-    try expectLowLevelPresent(&lowered.lir_result, .list_with_capacity);
+    try expectLowLevelAbsent(&lowered.lir_result, .list_with_capacity);
 
     const exports = try static_data_exports.buildStaticData(
         gpa,
@@ -1068,7 +1063,6 @@ test "an empty list with capacity in a record frozen into static data is the emp
     const layouts = &lowered.lir_result.layouts;
     var frozen_lists: usize = 0;
     for (lowered.lir_result.static_data_values.items, 0..) |value, index| {
-        if (value.initializer == null) continue;
         const record = layouts.getLayout(value.layout_idx);
         if (record.tag != .struct_) continue;
         const struct_idx = record.getStruct().idx;
@@ -1170,29 +1164,70 @@ fn reachableStatementCount(result: *lir.Program.Result) HoistedConstantsTestErro
     return statement_count;
 }
 
-fn expectLowLevelPresent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
-    for (result.store.getCFStmts()) |stmt| {
-        if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return;
-    }
-    return error.StaticDataLiteralNotFound;
-}
-
 fn expectLowLevelAbsent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
     for (result.store.getCFStmts()) |stmt| {
         if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return error.UnexpectedLowLevel;
     }
 }
 
-fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) HoistedConstantsTestError!void {
-    for (result.store.getCFStmts()) |stmt| {
-        if (stmt != .assign_literal) continue;
-        switch (stmt.assign_literal.value) {
-            .i128_literal => |id| if (result.store.stmtRow(id).value == value) return,
-            .i64_literal => |literal| if (literal.value == value) return,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => {},
+test "Boxy recursive callable evaluation templates instantiate their open result row" {
+    try @import("lower_to_lir_harness.zig").expectLowersToLirWithOptions(
+        \\pick : U64 -> [A, B]
+        \\pick = {
+        \\    z = 0
+        \\    |n| if n == z { A } else if n == 1 { B } else { pick(n - 2) }
+        \\}
+        \\main! = |args| {
+        \\    echo!(Str.inspect(pick(args.len())))
+        \\    echo!(Str.inspect(pick(args.len() + 1)))
+        \\    Ok({})
+        \\}
+    , .{ .specialization_strategy = .boxy });
+}
+
+test "computed callable aliases retain evaluation requests while proven forwards omit them" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "Aliases.roc", .data =
+        \\module [computed, alias, forwarded]
+        \\make : () -> (U64 -> U64)
+        \\make = || |n| n + 1
+        \\direct : U64 -> U64
+        \\direct = |n| n
+        \\computed = make()
+        \\alias = computed
+        \\forwarded = direct
+    });
+    const cwd = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(cwd);
+    const path = try tmp.dir.realPathFileAlloc(io, "Aliases.roc", gpa);
+    defer gpa.free(path);
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var build = try @import("../compile_build.zig").BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+        defer build.deinit();
+        build.setSpecializationStrategy(strategy);
+        try build.build(path);
+        const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+        var evaluated: usize = 0;
+        var forwarded: usize = 0;
+        for (artifact.callable_eval_templates.templates.items) |template| {
+            const requested = for (artifact.root_requests.compile_time_requests) |request| {
+                if (request.compile_time_root == template.root) break true;
+            } else false;
+            if (template.forwarded_lookup != null) {
+                forwarded += 1;
+                try std.testing.expect(!requested);
+            } else {
+                evaluated += 1;
+                try std.testing.expect(requested);
+                try std.testing.expect(!artifact.compile_time_roots.root(template.root).needsEvaluation(strategy));
+            }
         }
+        try std.testing.expectEqual(@as(usize, 2), evaluated);
+        try std.testing.expectEqual(@as(usize, 1), forwarded);
     }
-    return error.StaticDataLiteralNotFound;
 }
 
 test "callable binding with alias annotation is const-evaluated" {
@@ -2653,14 +2688,13 @@ fn rootSourceMatches(
         .statement => |statement| statement == b.statement,
         .required_binding => |required_binding| required_binding == b.required_binding,
         .hoisted => |hoisted| hoisted.index == b.hoisted.index and hoisted.expr == b.hoisted.expr,
+        .literal => |literal| std.meta.eql(literal, b.literal),
     };
 }
 
-fn expectPatternExtractionSyntheticRegions(
+fn expectPatternExtractionRoots(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) HoistedConstantsTestError!void {
-    const ModuleEnv = can.ModuleEnv;
-    const module_env = artifact.moduleEnvConst();
     var extraction_count: usize = 0;
 
     for (artifact.compile_time_roots.roots) |root| {
@@ -2675,149 +2709,23 @@ fn expectPatternExtractionSyntheticRegions(
 
         try std.testing.expectEqual(extraction.result_pattern, root.source_pattern orelse return error.PatternExtractionMissingSourcePattern);
         const checked_result_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedRootPattern;
+        try std.testing.expectEqual(extraction.result_pattern, checked_result_pattern);
 
-        const synthetic_match = artifact.checked_bodies.expr(root.expr);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern)),
-            synthetic_match.source_region,
-        );
+        // The root evaluates the match of its base expression against the
+        // scrutinee pattern that lowering builds from this description.
+        try std.testing.expectEqual(extraction.base_expr, root.rootExpr());
+        try std.testing.expectEqual(@as(?can.CIR.Expr.Idx, null), root.evaluatedExpr());
+        const parts = root.bodyParts();
+        try std.testing.expectEqual(@as(?can.CIR.Expr.Idx, extraction.base_expr), parts.expr);
+        try std.testing.expectEqual(@as(?can.CIR.Pattern.Idx, extraction.scrutinee_pattern), parts.pattern);
 
-        const match_data = switch (synthetic_match.data) {
-            .match_ => |match_| match_,
-            .pending,
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .str,
-            .bytes_literal,
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            .list,
-            .empty_list,
-            .tuple,
-            .if_,
-            .call,
-            .record,
-            .empty_record,
-            .block,
-            .tag,
-            .nominal,
-            .zero_argument_tag,
-            .closure,
-            .lambda,
-            .binop,
-            .unary_minus,
-            .unary_not,
-            .field_access,
-            .dispatch_call,
-            .interpolation,
-            .structural_eq,
-            .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
-            .tuple_access,
-            .runtime_error,
-            .crash,
-            .dbg,
-            .expect_err,
-            .expect,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            .return_,
-            .row_coerce,
-            .for_,
-            .hosted_lambda,
-            .run_low_level,
-            => return error.PatternExtractionRootWasNotSyntheticMatch,
-        };
-        const checked_base_expr = artifact.checked_bodies.expr(match_data.cond);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.base_expr)),
-            checked_base_expr.source_region,
-        );
-        try std.testing.expectEqual(@as(usize, 1), match_data.branches.len);
-        try std.testing.expect(!match_data.is_try_suffix);
-        try std.testing.expect(!match_data.skip_exhaustiveness);
-
-        const branch = match_data.branches[0];
-        const branch_patterns = branch.patternsSlice(&artifact.checked_bodies);
-        try std.testing.expectEqual(@as(usize, 1), branch_patterns.len);
-        const checked_scrutinee_pattern = artifact.checked_bodies.pattern(branch_patterns[0].pattern);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern)),
-            checked_scrutinee_pattern.source_region,
-        );
-        try std.testing.expect(!branch_patterns[0].degenerate);
-        try std.testing.expectEqual(@as(usize, 0), branch_patterns[0].binderRemapsSlice(&artifact.checked_bodies).len);
-        try std.testing.expectEqual(@as(?check.CheckedArtifact.CheckedExprId, null), branch.guard);
-
-        const synthetic_lookup = artifact.checked_bodies.expr(branch.value);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.result_pattern)),
-            synthetic_lookup.source_region,
-        );
-        const lookup = switch (synthetic_lookup.data) {
-            .lookup_local => |lookup| lookup,
-            .pending,
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .str,
-            .bytes_literal,
-            .lookup_external,
-            .lookup_required,
-            .list,
-            .empty_list,
-            .tuple,
-            .match_,
-            .if_,
-            .call,
-            .record,
-            .empty_record,
-            .block,
-            .tag,
-            .nominal,
-            .zero_argument_tag,
-            .closure,
-            .lambda,
-            .binop,
-            .unary_minus,
-            .unary_not,
-            .field_access,
-            .dispatch_call,
-            .interpolation,
-            .structural_eq,
-            .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
-            .tuple_access,
-            .runtime_error,
-            .crash,
-            .dbg,
-            .expect_err,
-            .expect,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            .return_,
-            .row_coerce,
-            .for_,
-            .hosted_lambda,
-            .run_low_level,
-            => return error.PatternExtractionRootValueWasNotSyntheticLookup,
-        };
-        try std.testing.expectEqual(checked_result_pattern, lookup.pattern);
-        try std.testing.expect(lookup.resolved != null);
+        // The extracted value is the hoisted constant of the result pattern.
+        const result_const = artifact.hoisted_constants.lookupByPattern(extraction.result_pattern) orelse
+            return error.PatternExtractionResultWasNotHoisted;
+        try std.testing.expectEqual(root.id, result_const.root);
     }
 
     try std.testing.expect(extraction_count >= 4);
-}
-
-fn expectRegionEqual(expected: base.Region, actual: base.Region) HoistedConstantsTestError!void {
-    try std.testing.expectEqual(expected.start.offset, actual.start.offset);
-    try std.testing.expectEqual(expected.end.offset, actual.end.offset);
 }
 
 fn writeEchoPlatform(dir: anytype) HoistedConstantsTestError!void {
@@ -2926,15 +2834,17 @@ fn countStoredHoistedI64(
     return count;
 }
 
+/// The hoisted constant roots that evaluate a match: a source `match`
+/// expression, or the match of a pattern extraction.
 fn countHoistedMatchRoots(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) usize {
+    const store = &artifact.moduleEnvConst().store;
     var count: usize = 0;
     for (artifact.compile_time_roots.roots) |root| {
         if (root.kind != .hoisted_constant) continue;
-        if (std.meta.activeTag(artifact.checked_bodies.expr(root.expr).data) == .match_) {
-            count += 1;
-        }
+        const evaluates_match = if (root.evaluatedExpr()) |evaluated| store.getExpr(evaluated) == .e_match else root.hoisted_body.? == .pattern_extraction;
+        if (evaluates_match) count += 1;
     }
     return count;
 }

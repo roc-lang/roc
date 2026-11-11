@@ -573,7 +573,7 @@ fn runCheck(
 /// Run a block's top-level expects the way `roc test` runs them, and return
 /// null when every one passes, or an owned message naming each that failed.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
-    var run = test_helpers.devEvalTopLevelExpects(allocator, source, &.{}, prePublishedBuiltin()) catch |err| {
+    var run = test_helpers.devEvalTopLevelExpects(allocator, std.testing.io, source, &.{}, prePublishedBuiltin()) catch |err| {
         return try dupeErr(allocator, "devEvalTopLevelExpects: {s}", .{@errorName(err)});
     };
     defer run.deinit(allocator);
@@ -903,7 +903,7 @@ test "Builtin.roc doc code blocks check and evaluate" {
     // Load and publish the Builtin module once. Every block's check phase (in
     // this parent process) and eval phase (in a forked child, via copy-on-write)
     // borrows it read-only instead of re-creating the view and re-publishing it.
-    var builtins_instance = try eval_mod.BuiltinModules.init(allocator);
+    var builtins_instance = try eval_mod.BuiltinModules.init(allocator, std.testing.io);
     defer builtins_instance.deinit();
     shared_builtins = &builtins_instance;
     defer shared_builtins = null;

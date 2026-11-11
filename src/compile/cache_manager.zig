@@ -157,7 +157,7 @@ pub const CacheManager = struct {
 
     fn familyFor(kind: Kind) artifacts.Family {
         return switch (kind) {
-            .checked, .inference => .checked,
+            .checked => .checked,
             .canonicalized => .canonicalized,
         };
     }
@@ -214,51 +214,6 @@ pub const CacheManager = struct {
         self.recordStoreFor(kind, size);
     }
 
-    pub const StagedPart = struct {
-        stage: artifacts.Staging,
-        len: usize,
-    };
-
-    pub fn stageCheckedPart(self: *Self, key: [32]u8, stream: CoreCtx.FileStream, size: usize, scope: []const u8, name: []const u8) ?StagedPart {
-        if (comptime threading.is_freestanding) return null;
-        if (!self.config.enabled) return null;
-        const store = self.storeHandle() orelse {
-            self.recordStoreFailure();
-            return null;
-        };
-        var stage = store.reserve(identity(.checked, key, scope)) catch {
-            self.recordStoreFailure();
-            return null;
-        };
-        self.roc_ctx.writeFileStream(stage.path, stream) catch |err| {
-            self.verboseLog(self.allocator, "Failed to stage checked cache part for {s}: {}\n", .{ name, err });
-            stage.deinit();
-            self.recordStoreFailure();
-            return null;
-        };
-        return .{ .stage = stage, .len = size };
-    }
-
-    pub fn readStagedPart(self: *Self, part: StagedPart, allocator: Allocator) ?[]u8 {
-        const bytes = self.roc_ctx.readFile(part.stage.path, allocator) catch {
-            self.recordStoreFailure();
-            return null;
-        };
-        if (bytes.len != part.len) {
-            allocator.free(bytes);
-            self.recordStoreFailure();
-            return null;
-        }
-        return bytes;
-    }
-
-    pub fn discardStagedPart(self: *Self, part: StagedPart) void {
-        if (comptime threading.is_freestanding) return;
-        self.roc_ctx.deleteFile(part.stage.path) catch {};
-        var stage = part.stage;
-        stage.deinit();
-    }
-
     pub fn loadRawBytes(self: *Self, key: [32]u8, scope: []const u8) ?[]const u8 {
         return self.loadFamilyBytes(.checked, key, scope);
     }
@@ -284,10 +239,6 @@ pub const CacheManager = struct {
 
     pub fn loadRawBytesMappedIn(self: *Self, allocator: Allocator, kind: Kind, key: [32]u8, scope: []const u8) ?CacheModule.CacheData {
         return self.loadFamilyMapped(allocator, kind, familyFor(kind), key, scope);
-    }
-
-    pub fn loadFamilyMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8) ?CacheModule.CacheData {
-        return self.loadMapped(allocator, kind, family, key, scope, true);
     }
 
     /// File a copy of the file at `source_path` as `family`'s entry for
@@ -336,15 +287,15 @@ pub const CacheManager = struct {
         return artifact;
     }
 
-    fn loadMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8, counted: bool) ?CacheModule.CacheData {
+    pub fn loadFamilyMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8) ?CacheModule.CacheData {
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
         const store = self.storeHandle() orelse {
-            if (counted) self.recordMissFor(kind);
+            self.recordMissFor(kind);
             return null;
         };
         var artifact = (store.acquire(identity(family, key, scope)) catch null) orelse {
-            if (counted) self.recordMissFor(kind);
+            self.recordMissFor(kind);
             return null;
         };
         defer artifact.deinit();
@@ -353,7 +304,7 @@ pub const CacheManager = struct {
             if (size != 0) {
                 const region = std.posix.mmap(null, size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE }, artifact.file.handle, 0) catch null;
                 if (region) |mapped| {
-                    if (counted) self.recordHitFor(kind, size);
+                    self.recordHitFor(kind, size);
                     return .{ .mapped = .{ .region = mapped, .file_len = size } };
                 }
             }
@@ -367,7 +318,7 @@ pub const CacheManager = struct {
             allocator.free(bytes);
             return null;
         }
-        if (counted) self.recordHitFor(kind, size);
+        self.recordHitFor(kind, size);
         return .{ .allocated = bytes };
     }
 

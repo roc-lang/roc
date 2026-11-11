@@ -25,7 +25,7 @@ main! = |json| {
 			token : Token,
 			wildcard_optional : Try(Str, _),
 		},
-		[InvalidJson(Str), MissingRequiredField(Str)],
+		[InvalidJson(Str)],
 	)
 	decoded_result = Json.parse(json)
 
@@ -47,10 +47,10 @@ main! = |json| {
 	null_string_result : Try(Str, [InvalidJson(Str)])
 	null_string_result = Json.parse("null")
 
-	strict_trailing_comma_result : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	strict_trailing_comma_result : Try({ foo : Str }, [InvalidJson(Str)])
 	strict_trailing_comma_result = Json.parse("{\"foo\":\"comma\",}")
 
-	lenient_trailing_comma_result : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	lenient_trailing_comma_result : Try({ foo : Str }, [InvalidJson(Str)])
 	lenient_trailing_comma_result = Json.parse_trailing_commas("{\"foo\":\"comma\",}")
 
 	strict_tag_trailing_comma_result : Try([Active, Paused], [InvalidJson(Str)])
@@ -59,25 +59,25 @@ main! = |json| {
 	lenient_tag_trailing_comma_result : Try([Active, Paused], [InvalidJson(Str)])
 	lenient_tag_trailing_comma_result = Json.parse_trailing_commas("{\"Active\":{},}")
 
-	unknown_array_result : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	unknown_array_result : Try({ foo : Str }, [InvalidJson(Str)])
 	unknown_array_result = Json.parse("{\"foo\":\"array\",\"skip\":[1,2]}")
 
-	strict_unknown_array_trailing_comma_result : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	strict_unknown_array_trailing_comma_result : Try({ foo : Str }, [InvalidJson(Str)])
 	strict_unknown_array_trailing_comma_result = Json.parse("{\"foo\":\"array\",\"skip\":[1,2,]}")
 
-	lenient_unknown_array_trailing_comma_result : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	lenient_unknown_array_trailing_comma_result : Try({ foo : Str }, [InvalidJson(Str)])
 	lenient_unknown_array_trailing_comma_result = Json.parse_trailing_commas("{\"foo\":\"array\",\"skip\":[1,2,]}")
 
-	invalid_unknown_scalar_result : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	invalid_unknown_scalar_result : Try({ foo : Str }, [InvalidJson(Str)])
 	invalid_unknown_scalar_result = Json.parse("{\"foo\":\"ok\",\"skip\":not-json}")
 
-	invalid_unknown_array_scalar_result : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	invalid_unknown_array_scalar_result : Try({ foo : Str }, [InvalidJson(Str)])
 	invalid_unknown_array_scalar_result = Json.parse("{\"foo\":\"ok\",\"skip\":[not-json]}")
 
-	invalid_u64_plus_result : Try({ n : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	invalid_u64_plus_result : Try({ n : U64 }, [InvalidJson(Str)])
 	invalid_u64_plus_result = Json.parse("{\"n\":+1}")
 
-	invalid_u64_leading_zero_result : Try({ n : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	invalid_u64_leading_zero_result : Try({ n : U64 }, [InvalidJson(Str)])
 	invalid_u64_leading_zero_result = Json.parse("{\"n\":01}")
 
 	invalid_missing_tag_payload_result : Try([Active, Paused], [InvalidJson(Str)])
@@ -86,7 +86,7 @@ main! = |json| {
 	# The known field's value contains \n, \", and \uXXXX escapes. The other
 	# fields are unknown, so the decoder skips them; their values contain
 	# escaped quotes, escaped backslashes, and a surrogate pair.
-	escaped_string_result : Try({ note : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	escaped_string_result : Try({ note : Str }, [InvalidJson(Str)])
 	escaped_string_result = Json.parse("{\"note\":\"roc\\nsays \\\"kree\\\" caf\\u00e9\",\"keeper\":{\"bio\":\"tends the \\\"Roc\\\" egg\",\"links\":[\"https:\\/\\/roc.example\\/1\",\"wing\\tspan\"]},\"bird\":\"\\ud83e\\udd85\"}")
 
 	match decoded_result {
@@ -213,7 +213,7 @@ invalid_string_score = |string_result|
 		Err(InvalidJson(_)) => 43
 	}
 
-escaped_string_score : Try({ note : Str }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+escaped_string_score : Try({ note : Str }, [InvalidJson(Str)]) -> U64
 escaped_string_score = |escaped_result|
 	match escaped_result {
 		Ok(decoded) =>
@@ -232,15 +232,14 @@ null_string_score = |string_result|
 		Err(InvalidJson(_)) => 47
 	}
 
-strict_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+strict_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
 strict_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 53
-		Err(_) => 999999
 	}
 
-lenient_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+lenient_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
 lenient_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(record) =>
@@ -267,7 +266,7 @@ lenient_tag_trailing_comma_score = |tag_result|
 		Err(_) => 999999
 	}
 
-unknown_array_score : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+unknown_array_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
 unknown_array_score = |record_result|
 	match record_result {
 		Ok(record) =>
@@ -279,15 +278,14 @@ unknown_array_score = |record_result|
 		Err(_) => 999999
 	}
 
-strict_unknown_array_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+strict_unknown_array_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
 strict_unknown_array_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 73
-		Err(_) => 999999
 	}
 
-lenient_unknown_array_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+lenient_unknown_array_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
 lenient_unknown_array_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(record) =>
@@ -299,36 +297,32 @@ lenient_unknown_array_trailing_comma_score = |record_result|
 		Err(_) => 999999
 	}
 
-invalid_unknown_scalar_score : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+invalid_unknown_scalar_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
 invalid_unknown_scalar_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 83
-		Err(_) => 999999
 	}
 
-invalid_unknown_array_scalar_score : Try({ foo : Str }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+invalid_unknown_array_scalar_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
 invalid_unknown_array_scalar_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 89
-		Err(_) => 999999
 	}
 
-invalid_u64_plus_score : Try({ n : U64 }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+invalid_u64_plus_score : Try({ n : U64 }, [InvalidJson(Str)]) -> U64
 invalid_u64_plus_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 97
-		Err(_) => 999999
 	}
 
-invalid_u64_leading_zero_score : Try({ n : U64 }, [InvalidJson(Str), MissingRequiredField(Str)]) -> U64
+invalid_u64_leading_zero_score : Try({ n : U64 }, [InvalidJson(Str)]) -> U64
 invalid_u64_leading_zero_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 101
-		Err(_) => 999999
 	}
 
 invalid_missing_tag_payload_score : Try([Active, Paused], [InvalidJson(Str)]) -> U64

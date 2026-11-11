@@ -9,6 +9,7 @@ fn scalar(comptime T: type, comptime lang: Language) []const u8 {
     if (T == void) return if (lang == .c) "void" else "()";
     if (T == anyopaque) return if (lang == .c) "void" else "core::ffi::c_void";
     if (T == usize) return if (lang == .c) "size_t" else "usize";
+    if (T == isize) return if (lang == .c) "intptr_t" else "isize";
     if (T == u8) return if (lang == .c) "uint8_t" else "u8";
     if (T == Ops) return if (lang == .c) "struct RocOps" else "RocHost";
     return switch (@typeInfo(T)) {
@@ -105,7 +106,7 @@ fn output(comptime lang: Language) []const u8 {
     var result: []const u8 = lock(builtins.str.RocStr, "RocStr", "CanonicalStr", &.{ "bytes", "capacity_or_alloc_ptr", "length" }, lang) ++
         lock(builtins.list.RocList, if (lang == .c) "RocList" else "RocList<u8>", "CanonicalList", &.{ "elements", "length", "capacity_or_alloc_ptr" }, lang);
     if (lang == .c) {
-        result = result ++ lock(builtins.erased_callable.Payload, "RocErasedCallablePayload", "CanonicalCallablePayload", &.{ "callable_fn_ptr", "on_drop" }, lang);
+        result = result ++ lock(builtins.erased_callable.Payload, "RocErasedCallablePayload", "CanonicalCallablePayload", &.{ "callable_fn_ptr", "on_drop", "on_copy", "capture_size" }, lang);
         for (@typeInfo(builtins.host_abi.ExternHostFns).@"struct".decl_names) |decl_name| {
             const T = @field(builtins.host_abi.ExternHostFns, decl_name);
             result = result ++ "ROC_STATIC_ASSERT(__builtin_types_compatible_p(__typeof__(&" ++ decl_name ++ "), " ++ declaration(T, "", lang) ++ "), \"runtime symbol signature mismatch\");\n";

@@ -92,6 +92,8 @@ pub const Problem = union(enum) {
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
+    polymorphic_recursion: PolymorphicRecursion,
+    local_type_escape: LocalTypeEscape,
     row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
@@ -189,9 +191,18 @@ pub const PlatformDefNotFound = struct {
     ctx: enum { not_found, found_but_not_exported },
 };
 
-/// Hosted functions cannot accept or return unboxed functions.
+/// A use of a generic definition that is on a recursion cycle and gives the
+/// definition different types from the ones it was itself used at (design.md
+/// "Polymorphic Recursion").
+pub const PolymorphicRecursion = struct {
+    region: base.Region,
+};
+
+/// Host-visible callable values must be directly boxed.
 pub const HostedUnboxedFunction = struct {
     region: base.Region,
+    path: ExtraStringIdx,
+    kind: enum { function, iter, stream },
 };
 
 /// Every function the host provides is effectful, so a hosted declaration
@@ -427,7 +438,7 @@ pub const InvalidNominalDeclRecursion = struct {
     type_name: Ident.Idx,
     kind: Kind,
 
-    pub const Kind = enum { infinite, anonymous, growing_args };
+    pub const Kind = enum { infinite, anonymous, growing_args, reordered_args };
 };
 
 // generic errors //
@@ -440,6 +451,26 @@ pub const VarWithSnapshot = struct {
 
     /// If this type was found in a top-level def, the name of that def
     def_name: ?Ident.Idx,
+};
+
+/// A binding whose type contains a type declared in a function body that
+/// depends on a type variable of a function whose body the binding is not
+/// inside, so values of that type would leave the only place its
+/// instantiations can be told apart (design.md "Body-Local
+/// Types Stay In Their Context").
+pub const LocalTypeEscape = struct {
+    /// The binding's name.
+    region: base.Region,
+    def_name: ?Ident.Idx,
+    /// The binding's type.
+    def_snapshot: SnapshotContentIdx,
+    /// The body-local type and its declaration's header.
+    type_name: Ident.Idx,
+    type_region: base.Region,
+    /// The type variable the body-local type depends on, and the binding
+    /// that introduces it.
+    var_name: Ident.Idx,
+    owner_name: ?Ident.Idx,
 };
 
 /// One label repeated along a row's extension chain, whose occurrences cannot
@@ -504,31 +535,14 @@ pub const UnsetOfRequiredField = struct {
     field_name: Ident.Idx,
 };
 
-/// A derived parser's error-row demand failed against a closed row. The
-/// program is correctly rejected, but the diagnostic must point at the
-/// expression that introduced the parser relation (the call that fixes the
-/// record type), not at the unified variables' regions inside the generic
-/// helper (design.md "Derived Parser Required-Field Error Composition").
+/// Parser operations must agree on the format-owned error type. Locate the
+/// mismatch at the codec relation, not inside a generic helper.
 pub const DerivedParserErrorRow = struct {
     region: base.Region,
-    reason: enum {
-        /// The record has required fields, so its compiler-derived parser can
-        /// fail with `MissingRequiredField(Str)`, which the row does not list.
-        required_field,
-        /// A nested custom parser's error tags do not fit the enclosing row.
-        nested_row,
-    },
-    /// Snapshot of the record type whose derived parser needs the tag
-    /// (`required_field` only).
-    record_snapshot: ?SnapshotContentIdx,
-    /// Snapshot of the tags the parser can produce (`nested_row` only).
-    tags_snapshot: ?SnapshotContentIdx,
-    /// Snapshot of the closed error row the tags had to fit in.
+    /// Snapshot of the selected operation's error type.
+    tags_snapshot: SnapshotContentIdx,
+    /// Snapshot of the enclosing parser's error type.
     row_snapshot: SnapshotContentIdx,
-    /// Comma-joined names of the required fields (`required_field` only).
-    required_fields: ?ExtraStringIdx,
-    /// How many required fields `required_fields` joins.
-    required_field_count: u32,
 };
 
 /// A compiler-derived parser or encoder was requested for a record inferred
@@ -635,6 +649,20 @@ pub const UnusedValue = struct {
 
 // type mismatch //
 
+/// Why a failed relation follows from a body-local type leaving the
+/// functions its identity depends on.
+pub const LocalTypeEscapeCause = union(enum) {
+    /// Two applications of the declaration disagreed at a context argument:
+    /// values of two instantiations of its functions met.
+    context_argument: types_mod.NominalDecl.Idx,
+    /// A root operand, a side of the failed leaf pair, or a failed
+    /// requirement's dispatcher was this context variable (its annotation's
+    /// variable) in a relation checked after the binding owning it, which
+    /// only a value of the type that left that binding's body could carry
+    /// there.
+    context_variable: Var,
+};
+
 /// These two variables mismatch. This should usually be cast into a more
 /// specific error depending on context.
 pub const TypeMismatch = struct {
@@ -661,6 +689,10 @@ pub const TypeMismatch = struct {
     /// Set when the relation failed because it required one type to have two
     /// different methods of the same name.
     method_conflict: ?MethodConflict = null,
+    /// The body-local type whose escape this failure follows from, withdrawn
+    /// once the escape rule reports that type (design.md "Body-Local Types
+    /// Stay In Their Context").
+    local_type_escape: ?LocalTypeEscapeCause = null,
     /// How the report suggests turning the actual value into the expected
     /// builtin `Str`.
     str_conversion: StrConversion = .none,
@@ -840,6 +872,16 @@ pub const StaticDispatch = union(enum) {
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
     undetermined_type: UndeterminedType,
+    local_value_method: LocalValueMethod,
+};
+
+/// A dispatch selected an associated binding of a type declared in a function
+/// body that is a value of that body, not a local procedure: nothing
+/// dispatches to such a binding (design.md "Methods Never Capture").
+pub const LocalValueMethod = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
 };
 
 /// A requirement failed on a type that never resolved to a concrete type: a
@@ -931,6 +973,9 @@ pub const DispatcherNotNominal = struct {
     /// Set when the obligation is a copy a use made out of another
     /// definition's type.
     copied: ?CopiedRequirement = null,
+    /// Set when the dispatcher is a context variable of a body-local type
+    /// (`TypeMismatch.local_type_escape`).
+    local_type_escape: ?LocalTypeEscapeCause = null,
 };
 
 /// Error when you try to static dispatch but the dispatcher does not have that method
@@ -961,6 +1006,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// Set when the obligation is a copy a use made out of another
     /// definition's type.
     copied: ?CopiedRequirement = null,
+    /// Set when the dispatcher is a context variable of a body-local type
+    /// (`TypeMismatch.local_type_escape`).
+    local_type_escape: ?LocalTypeEscapeCause = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };

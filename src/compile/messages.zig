@@ -164,6 +164,7 @@ pub const CanonicalizeTask = struct {
 
 /// Task to type-check a canonicalized module
 pub const TypeCheckTask = struct {
+    typing_context: ?*@import("checked_cache_entry.zig").Context = null,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier within the package
@@ -196,10 +197,6 @@ pub const TypeCheckTask = struct {
     /// an app root's entrypoint contract with its platform is enforced, and
     /// participates in the checked-artifact cache identity.
     validation: can.Can.Validation = .checking,
-    /// The source-pin validation input canonicalization reported against.
-    /// Inference admission keys it, as checked-entry admission does, because
-    /// a reused inference result replaces the canonicalized environment.
-    source_pin_validation: [32]u8,
 };
 
 /// The platform root's requirement surface, borrowed from its completed
@@ -338,6 +335,8 @@ pub const TypeCheckedPublication = CheckedArtifact.CheckedModuleArtifact;
 /// now or retained until platform/app relation construction. Selected roots
 /// are evaluated when the coordinator finishes the checked program.
 pub const OwnedSemanticModuleData = struct {
+    typing_metadata: ?@import("checked_cache_entry.zig").Metadata = null,
+    typing_reused: bool = false,
     /// The coordinator retains this input until it accepts the publication.
     module_env: *ModuleEnv,
     publication: TypeCheckedPublication,
@@ -345,6 +344,8 @@ pub const OwnedSemanticModuleData = struct {
     pending_evaluation: ?*PendingEvaluationState = null,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
+        if (self.typing_metadata) |metadata| metadata.deinit(self.module_env.gpa);
+        self.typing_metadata = null;
         if (self.pending_evaluation) |state| state.deinit();
         self.pending_evaluation = null;
         if (!self.publication_owned) return;
@@ -354,11 +355,6 @@ pub const OwnedSemanticModuleData = struct {
 
 /// Result of successfully type-checking a module
 pub const TypeCheckedResult = struct {
-    /// A hit republishes against current artifacts without invoking inference.
-    inference_reused: bool = false,
-    owner_bindings: u32 = 0,
-    reference_bindings: u32 = 0,
-    diagnostics_replayed: u32 = 0,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier
@@ -371,7 +367,8 @@ pub const TypeCheckedResult = struct {
     semantic: *OwnedSemanticModuleData,
     /// Any reports generated during type checking
     reports: std.ArrayList(Report),
-    /// Timing: nanoseconds spent type checking
+    checking_work: @import("compile_package.zig").CheckingWork = .{},
+    /// Checking, restoration and publication time, excluding local CTFE.
     type_check_ns: u64,
     /// Timing: nanoseconds spent on diagnostics
     check_diagnostics_ns: u64,
@@ -384,11 +381,22 @@ pub const PendingEvaluationState = struct {
     import_mapping: @import("types").import_mapping.ImportMapping,
     imported_envs: []const *ModuleEnv,
     reported_problem_count: usize,
+    /// How many of `problems` checking reported, and the snapshots and regions
+    /// they render with, for the module's checked cache entry. Its problem
+    /// columns are unused: the entry takes them from `problems`.
+    checking: check.CheckedReports = .{},
+    /// Owns `checking`'s columns when this compilation captured them; a
+    /// reopened module borrows them from the entry it was loaded from.
+    checking_arena: ?*@import("base").SingleThreadArena = null,
 
     pub fn deinit(self: *PendingEvaluationState) void {
         self.problems.deinit();
         self.import_mapping.deinit();
         self.allocator.free(self.imported_envs);
+        if (self.checking_arena) |arena| {
+            arena.deinit();
+            self.allocator.destroy(arena);
+        }
         self.allocator.destroy(self);
     }
 };

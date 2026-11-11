@@ -67,8 +67,7 @@ pub const InsertOptions = struct {
     /// else emits only atomic count updates and skips the analysis.
     thread_confined_rc: bool = false,
     /// Prove values unique so a mutation can skip its runtime refcount check,
-    /// and a read of static data can take its fresh form. Optimized builds
-    /// and the tests of the analysis enable this; off, every mutation keeps
+    /// preserving static values as immutable. Off, every mutation keeps
     /// its check, which answers the same question at runtime.
     prove_uniqueness: bool = true,
     /// Select consuming Box.unbox when its lender is dead. Compiled backends
@@ -564,11 +563,16 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // would retain each unit where the variant takes it, so borrowing saves
     // no caller any work and would only emit a second body. A position that
     // lends the return, or holds a demand hole, keeps its borrowed mode.
+    // Exported workers additionally own positions with a field-take benefit:
+    // their importers cannot demand an owned variant. The producer commits
+    // this convention independently of callers, which retain kept arguments.
     for (0..store.procSpecCount()) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         if (solution.isPinnedProc(proc)) continue;
         const sig = solution.sigOf(proc);
-        var mask = dismantles.ownedOnlyParamTotals(proc) & sig.borrowed_params;
+        var mask = dismantles.ownedOnlyParamTotals(proc);
+        if (store.getProcSpecImmediate(proc).exported) mask |= dismantles.ownedOnlyParamBenefits(proc);
+        mask &= sig.borrowed_params;
         if (sig.ret_mode == .borrowed) mask &= ~sig.ret_lenders;
         if (mask == 0) continue;
         const params = store.getLocalSpan(store.getProcSpecImmediate(proc).args);
@@ -579,22 +583,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         if (mask != 0) solution.ownParams(proc, mask);
     }
 
-    // Committed takes carry field uniqueness to the locals they define;
-    // the solver settled without them, so re-derive against the takes.
-    var take_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, store.cfStmtCount());
-    defer take_stmts.deinit(store.allocator);
-    var take_iter = dismantles.takes.keyIterator();
-    var any_take = false;
-    while (take_iter.next()) |stmt| {
-        take_stmts.set(@backingInt(stmt.*));
-        any_take = true;
-    }
-    if (any_take and options.prove_uniqueness) {
-        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes, uniqueness_options);
-    }
-
     const base_proc_count = store.procSpecCount();
-    try recordProcedureFacts(store, &solution);
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
@@ -620,6 +609,26 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         source_start = end;
     }
     if (!std.meta.eql(source_prefix, store.captureBodyPrefix())) arcInvariant("ARC source preparation mutated coordinator storage");
+    var projection_decisions = try CompleteProjectionDecisions.init(store.allocator, store.cfStmtCount(), sources);
+    defer projection_decisions.deinit(store.allocator);
+    inserter.projection_decisions = &projection_decisions;
+
+    // Committed takes carry field uniqueness to the locals they define;
+    // the solver settled without them, so re-derive against the takes and
+    // the complete projections emission retains.
+    var take_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, store.cfStmtCount());
+    defer take_stmts.deinit(store.allocator);
+    var take_iter = dismantles.takes.keyIterator();
+    var any_take = false;
+    while (take_iter.next()) |stmt| {
+        take_stmts.set(@backingInt(stmt.*));
+        any_take = true;
+    }
+    if (any_take and options.prove_uniqueness) {
+        const planned: arc_solve.PlannedTakes = .{ .takes = &take_stmts, .retaining_projections = &projection_decisions.retaining };
+        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = planned }, options.consume_dead_boxes, uniqueness_options);
+    }
+    try recordProcedureFacts(store, &solution);
 
     var variants = VariantTable{
         .map = std.AutoHashMap(VariantSelector, LIR.LirProcSpecId).init(store.allocator),
@@ -699,7 +708,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
     }
 
-    if (builtin.mode == .debug) {
+    if (builtin.mode == .debug or @import("base").dev_diagnostics.isSet(.verify_arc)) {
         const all_sigs = try store.allocator.alloc(arc_sig.RcSig, store.procSpecCount());
         defer store.allocator.free(all_sigs);
         for (all_sigs, 0..) |*sig, proc_index| {
@@ -945,6 +954,9 @@ const SourceCache = struct {
     local_index: collections.DenseMap(LIR.LocalId, u32) = undefined,
     domain: ProcArcDomain = undefined,
     liveness: SourceLiveness = undefined,
+    /// The procedure's complete projection reads whose target every emission
+    /// binds owned, decided against the frozen liveness.
+    projection_decisions: []const CompleteProjectionDecision = &.{},
     failed: bool = false,
     completed: bool = false,
     phase: ArcTaskPhase = .source,
@@ -971,8 +983,123 @@ const SourceCache = struct {
         preparer.join_bodies = preparer.solution.joinBodiesOf(self.proc);
         try preparer.prepareSourceLiveness();
         self.liveness.freeze();
+        self.projection_decisions = try preparer.decideCompleteProjections(arena, env.scratch);
     }
 };
+
+/// Whether emission retains the projected value of one complete projection
+/// read whose target every emission binds owned: true when the root's
+/// ownership place is used after the read, so the root keeps its unit. One
+/// answer per source read contract, since an emission with an outcome
+/// convention also uses its restituted parameters at restitution boundaries.
+const CompleteProjectionDecision = struct {
+    stmt: LIR.CFStmtId,
+    retains: bool,
+    retains_restituting: bool,
+};
+
+/// Every source procedure's `CompleteProjectionDecision`s, by statement.
+/// Uniqueness settles against them and emission follows them, so the
+/// decision is made exactly once.
+const CompleteProjectionDecisions = struct {
+    decided: std.bit_set.DynamicBitSetUnmanaged = .{},
+    retains: std.bit_set.DynamicBitSetUnmanaged = .{},
+    retains_restituting: std.bit_set.DynamicBitSetUnmanaged = .{},
+    /// Retained under some contract: the projected value may have a second
+    /// owner.
+    retaining: std.bit_set.DynamicBitSetUnmanaged = .{},
+
+    fn init(allocator: Allocator, stmt_count: usize, sources: []const SourceCache) Allocator.Error!CompleteProjectionDecisions {
+        var self: CompleteProjectionDecisions = .{};
+        errdefer self.deinit(allocator);
+        self.decided = try .initEmpty(allocator, stmt_count);
+        self.retains = try .initEmpty(allocator, stmt_count);
+        self.retains_restituting = try .initEmpty(allocator, stmt_count);
+        self.retaining = try .initEmpty(allocator, stmt_count);
+        for (sources) |source| for (source.projection_decisions) |decision| {
+            const index = @backingInt(decision.stmt);
+            self.decided.set(index);
+            self.retains.setValue(index, decision.retains);
+            self.retains_restituting.setValue(index, decision.retains_restituting);
+            self.retaining.setValue(index, decision.retains or decision.retains_restituting);
+        };
+        return self;
+    }
+
+    fn deinit(self: *CompleteProjectionDecisions, allocator: Allocator) void {
+        self.decided.deinit(allocator);
+        self.retains.deinit(allocator);
+        self.retains_restituting.deinit(allocator);
+        self.retaining.deinit(allocator);
+    }
+
+    /// The decision for a read under the given signature's contract, or null
+    /// for a read whose target only some emissions bind owned.
+    fn retainsUnder(self: *const CompleteProjectionDecisions, stmt: LIR.CFStmtId, sig: arc_sig.RcSig) ?bool {
+        const index = @backingInt(stmt);
+        if (!self.decided.isSet(index)) return null;
+        return if (sig.outcomes.isEmpty()) self.retains.isSet(index) else self.retains_restituting.isSet(index);
+    }
+};
+
+/// The locals whose solved borrowed binding one emission of `source_proc`
+/// with signature `emit_sig` binds owned instead.
+fn installOwnedBindingOverrides(
+    owned_binding_override: *OwnedSet,
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    dismantles: *const arc_dismantle.Dismantles,
+    domain: *const ProcArcDomain,
+    source_proc: LIR.LirProcSpecId,
+    emit_sig: arc_sig.RcSig,
+) ResourceError!void {
+    // Variant parameter positions demanded owned override the solved
+    // borrowed binding for this emission only; positions the demand
+    // vector seeds unique are read through `isLocalUniqueHere`.
+    // A parameter whose binding is solved borrowed but whose emitted
+    // signature owns the position: a demanded variant, or a base whose
+    // signature owns a totally taken position.
+    const emit_params_for_overrides = store.getLocalSpan(store.getProcSpecImmediate(source_proc).args);
+    for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
+        const param = GuardedList.at(emit_params_for_overrides, position);
+        if (arc_sig.paramBit(position) == null) break;
+        if (solution.isBorrowed(param) and emit_sig.paramMode(position) == .owned) {
+            try owned_binding_override.set(param);
+        }
+    }
+    // A recursive tail argument can borrow across frame replacement only
+    // from a borrowed entry parameter of this exact emission. Otherwise
+    // its solved carrier must materialize a unit for the mandatory owned
+    // callee variant. Re-evaluate the recorded anchor against `emit_sig`
+    // so an owned variant recursively calls the matching owned variant.
+    for (solution.tailCallsOf(source_proc)) |*tail_call| {
+        for (0..arc_sig.tracked_param_count) |position| {
+            const carrier = tail_call.carrier(position) orelse continue;
+            if (tail_call.argumentOutlivesScc(position, emit_sig)) continue;
+            try owned_binding_override.set(carrier);
+        }
+    }
+    for (domain.frame_locals) |local| {
+        if (dismantles.isTakeBinding(local)) try owned_binding_override.set(local);
+    }
+    // A projected container solved borrowed in the unconditional base
+    // signature becomes an owned binding exactly when the explicit
+    // dismantle plan says its read moves the unit of a parameter
+    // overridden to owned. This is part of the mandatory field-take
+    // variant, not optional inlining or specialization.
+    var binding_override_changed = true;
+    while (binding_override_changed) {
+        binding_override_changed = false;
+        for (domain.resource_locals) |local| {
+            if (owned_binding_override.contains(local)) continue;
+            const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
+            if (owned_binding_override.contains(root)) {
+                try owned_binding_override.set(local);
+                binding_override_changed = true;
+            }
+        }
+    }
+}
 
 /// Every pointer retained by planning refers to this fixed owner or its arena,
 /// never a worker scratch allocation or a callback stack frame.
@@ -1045,52 +1172,7 @@ const EmissionOwner = struct {
         const owned_binding_override = &self.owned_binding_override;
         inserter.owned_binding_override = owned_binding_override;
 
-        // Variant parameter positions demanded owned override the solved
-        // borrowed binding for this emission only; positions the demand
-        // vector seeds unique are read through `isLocalUniqueHere`.
-        // A parameter whose binding is solved borrowed but whose emitted
-        // signature owns the position: a demanded variant, or a base whose
-        // signature owns a totally taken position.
-        const emit_params_for_overrides = store.getLocalSpan(emit_args);
-        for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
-            const param = GuardedList.at(emit_params_for_overrides, position);
-            if (arc_sig.paramBit(position) == null) break;
-            if (solution.isBorrowed(param) and emit_sig.paramMode(position) == .owned) {
-                try owned_binding_override.set(param);
-            }
-        }
-        // A recursive tail argument can borrow across frame replacement only
-        // from a borrowed entry parameter of this exact emission. Otherwise
-        // its solved carrier must materialize a unit for the mandatory owned
-        // callee variant. Re-evaluate the recorded anchor against `emit_sig`
-        // so an owned variant recursively calls the matching owned variant.
-        for (solution.tailCallsOf(source_proc)) |*tail_call| {
-            for (0..arc_sig.tracked_param_count) |position| {
-                const carrier = tail_call.carrier(position) orelse continue;
-                if (tail_call.argumentOutlivesScc(position, emit_sig)) continue;
-                try owned_binding_override.set(carrier);
-            }
-        }
-        for (domain.frame_locals) |local| {
-            if (dismantles.isTakeBinding(local)) try owned_binding_override.set(local);
-        }
-        // A projected container solved borrowed in the unconditional base
-        // signature becomes an owned binding exactly when the explicit
-        // dismantle plan says its read moves the unit of a parameter
-        // overridden to owned. This is part of the mandatory field-take
-        // variant, not optional inlining or specialization.
-        var binding_override_changed = true;
-        while (binding_override_changed) {
-            binding_override_changed = false;
-            for (domain.frame_locals) |local| {
-                if (owned_binding_override.contains(local)) continue;
-                const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
-                if (owned_binding_override.contains(root)) {
-                    try owned_binding_override.set(local);
-                    binding_override_changed = true;
-                }
-            }
-        }
+        try installOwnedBindingOverrides(owned_binding_override, store, solution, dismantles, domain, source_proc, emit_sig);
         domain.installOwnedOnlyResidualDomains(solution, dismantles, owned_binding_override);
 
         const join_bodies = solution.joinBodiesOf(source_proc);
@@ -1748,6 +1830,8 @@ const Inserter = struct {
     /// Field takes solved against the ownership-neutral bodies; consulted by
     /// statement id, so base and variant emissions share one solve.
     dismantles: *const arc_dismantle.Dismantles = undefined,
+    /// Complete projection reads decided at source preparation.
+    projection_decisions: *const CompleteProjectionDecisions = undefined,
     /// Temporaries synthesized while dismantling containers in the proc
     /// currently being emitted; appended to its frame locals afterward. A
     /// lane buffer grown in `lane_allocator`.
@@ -2252,32 +2336,11 @@ const Inserter = struct {
                     .next = next,
                 } }, origin);
             },
-            // A read with a fresh form settles here: the reads whose birth
-            // some uniqueness verdict rests on call the fresh procedure, and
-            // every other one keeps the static datum, its fresh procedure
-            // leaving with the next reachability pass.
-            .assign_literal => |assign| if (self.store.literalExtra(assign.value).fresh_alternative != null and self.solution.fresh_reads.isSet(@backingInt(at)))
-                try self.store.addCFStmt(.{ .assign_call = .{
-                    .target = assign.target,
-                    .proc = self.store.literalExtra(assign.value).fresh_alternative.?,
-                    .args = LIR.LocalSpan.empty(),
-                    .next = next,
-                } }, origin)
-            else blk: {
-                var value = assign.value;
-                if (value == .static_data) {
-                    var copies = self.store.stmtRowOrDefault(value.static_data.copies);
-                    if (copies.fresh_alternative != null) {
-                        copies.fresh_alternative = null;
-                        value.static_data.copies = try self.store.addOptionalStmtRow(LIR.LiteralExtra, copies);
-                    }
-                }
-                break :blk try self.store.addCFStmt(.{ .assign_literal = .{
-                    .target = assign.target,
-                    .value = value,
-                    .next = next,
-                } }, origin);
-            },
+            .assign_literal => |assign| try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = assign.target,
+                .value = assign.value,
+                .next = next,
+            } }, origin),
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
                 if (step.replaces_frame) {
@@ -2335,6 +2398,8 @@ const Inserter = struct {
                             .capture = assign.capture,
                             .capture_layout = assign.capture_layout,
                             .on_drop = assign.on_drop,
+                            .on_copy = assign.on_copy,
+                            .frozen_capture_layout = assign.frozen_capture_layout,
                             .reuse = assign.reuse,
                             .reuse_unique = step.reuse_unique,
                         }),
@@ -2415,16 +2480,31 @@ const Inserter = struct {
                     },
                     .construct => {
                         const operands = try self.dynOperands(op);
-                        next = try self.retainLocalsExceptPositions(operands, step.transfer_positions.of(u32, &self.arc_plans.positions), .{ .stmt = at, .reason = .stored_in_aggregate }, next);
+                        const transferred = step.transfer_positions.of(u32, &self.arc_plans.positions);
                         if (op == .closure and op.closure.reuse != null) {
+                            // The capture record is retained after the
+                            // closure takes it, like any construction's
+                            // operand. A reuse allocation still read
+                            // afterwards (through views of its capture
+                            // record) is retained before: the closure
+                            // repacks the allocation in place when it finds
+                            // it unique, so the retain that keeps it must
+                            // already be counted then.
+                            if (operands.len != 2) arcInvariant("ARC closure repack has operands other than its capture record and reuse allocation");
+                            const capture_transferred = std.mem.findScalar(u32, transferred, 0) != null;
+                            const reuse_transferred = std.mem.findScalar(u32, transferred, 1) != null;
+                            if (!capture_transferred) next = try self.retainLocalIfRc(op.closure.capture, .{ .stmt = at, .reason = .stored_in_aggregate }, next);
                             var repack = op;
                             repack.closure.reuse_unique = step.reuse_unique;
-                            break :blk try self.store.addCFStmt(.{ .dyn = .{
+                            const closure_stmt = try self.store.addCFStmt(.{ .dyn = .{
                                 .target = dyn_stmt.target,
                                 .data = try self.store.addStmtRow(LIR.DynOp, repack),
                                 .next = next,
                             } }, origin);
+                            if (reuse_transferred) break :blk closure_stmt;
+                            break :blk try self.retainLocalIfRc(op.closure.reuse.?, .{ .stmt = at, .reason = .stored_in_aggregate }, closure_stmt);
                         }
+                        next = try self.retainLocalsExceptPositions(operands, transferred, .{ .stmt = at, .reason = .stored_in_aggregate }, next);
                     },
                 }
                 break :blk try self.addWithNext(stmt, next, origin);
@@ -2645,6 +2725,7 @@ const Inserter = struct {
                     } else if (complete_take_root) |root| {
                         transfer = try self.transferForCompleteProjectionBind(
                             &segment.owned,
+                            segment.cursor,
                             assign.target,
                             root,
                             assign.next,
@@ -2797,7 +2878,6 @@ const Inserter = struct {
                         assign.target,
                         assign.next,
                         true,
-                        borrowed_variant != null and !use_borrowed,
                     );
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.preserve_consumed_args = transfer.preserve_consumed_args;
@@ -4407,7 +4487,10 @@ const Inserter = struct {
     /// id on purpose: rebinding a name kills only that name's own binding,
     /// never the unit of a value the name merely borrowed (audited for
     /// issue 9703's keying class—see the layer comment above).
-    fn takeRebindTarget(_: *const Inserter, owned: *OwnedSet, target: LIR.LocalId) ResourceError!bool {
+    /// Bindings include scalar results and descriptor words; only a binding
+    /// with refcounted content can have a previous ownership unit.
+    fn takeRebindTarget(self: *const Inserter, owned: *OwnedSet, target: LIR.LocalId) ResourceError!bool {
+        if (!self.localContainsRefcounted(target)) return false;
         if (!owned.contains(target)) return false;
         try owned.unset(target);
         return true;
@@ -4469,22 +4552,121 @@ const Inserter = struct {
         return release_old_target;
     }
 
+    /// Decides each complete projection read of the source procedure whose
+    /// target every emission binds owned (see `CompleteProjectionDecision`),
+    /// in the base emission's binding overrides. An ownership variant only
+    /// adds overrides, each of which cuts a borrowed local out of a place
+    /// and leaves a use only where the base place already has one, so a
+    /// place unused in the base emission is unused in every variant of the
+    /// same contract. Uniqueness settles against these decisions before any
+    /// emission runs.
+    fn decideCompleteProjections(self: *Inserter, allocator: Allocator, scratch: Allocator) ResourceError![]const CompleteProjectionDecision {
+        const proc = self.current_source_proc;
+        var override_domain = self.current_domain.?.*;
+        override_domain.set_allocator = scratch;
+        var overrides = OwnedSet.init(&override_domain);
+        defer overrides.deinit();
+        const base_sig = self.solution.sigOf(proc);
+        try installOwnedBindingOverrides(&overrides, self.store, self.solution, self.dismantles, self.current_domain.?, proc, base_sig);
+        self.owned_binding_override = &overrides;
+
+        const Pending = struct { decision: CompleteProjectionDecision, next: LIR.CFStmtId, unit: LIR.LocalId };
+        var pending = std.ArrayList(Pending).empty;
+        // The parameters some restitution boundary of this procedure hands
+        // back; only their places gain uses under the outcome contract.
+        var restituted: arc_sig.ParamMask = 0;
+        for (self.solution.procStatements(proc)) |stmt| {
+            restituted |= self.solution.restitutionParamsAt(stmt);
+            const root = self.dismantles.completeTakeRoot(stmt) orelse continue;
+            const assign = self.store.getCFStmtImmediate(stmt).assign_ref;
+            if (self.isBindingBorrowed(assign.target)) continue;
+            try pending.append(scratch, .{
+                .decision = .{ .stmt = stmt, .retains = false, .retains_restituting = false },
+                .next = assign.next,
+                .unit = self.unitOf(root),
+            });
+        }
+        if (pending.items.len == 0) return &.{};
+
+        self.emission_allocator = scratch;
+        self.place_query_seen = .{};
+        self.place_query_visited = .empty;
+        self.place_query_stack = .empty;
+        self.place_query_uses = .empty;
+        // The path query follows loop edges itself and stops at a rebind of
+        // each exact place definition.
+        self.current_sig = base_sig;
+        self.current_sig.outcomes = .empty;
+        self.place_use_facts = null;
+        for (pending.items) |*entry| entry.decision.retains = try self.ownershipPlaceUsedInPath(entry.next, entry.unit);
+        // Both contracts share one statement graph, and the outcome contract
+        // adds only uses of the restituted parameters at restitution
+        // boundaries, so a read whose place holds no restituted parameter
+        // has one answer under both.
+        var restituted_places = std.ArrayList(LIR.LocalId).empty;
+        const available = self.solution.availableOutcomeSpanOf(proc);
+        if (!available.isEmpty() and restituted != 0) {
+            const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(proc).args);
+            for (0..GuardedList.borrowLen(params)) |position| {
+                const bit = arc_sig.paramBit(position) orelse break;
+                if ((restituted & bit) == 0) continue;
+                try restituted_places.append(scratch, self.ownershipPlaceLeader(GuardedList.at(params, position)));
+            }
+        }
+        var any_restituting = false;
+        for (pending.items) |*entry| {
+            entry.decision.retains_restituting = entry.decision.retains;
+            if (entry.decision.retains) continue;
+            const place = self.ownershipPlaceLeader(entry.unit);
+            for (restituted_places.items) |restituted_place| {
+                if (restituted_place == place) any_restituting = true;
+            }
+        }
+        if (any_restituting) {
+            self.current_sig.outcomes = available;
+            self.place_use_facts = null;
+            for (pending.items) |*entry| {
+                if (entry.decision.retains) continue;
+                const place = self.ownershipPlaceLeader(entry.unit);
+                for (restituted_places.items) |restituted_place| {
+                    if (restituted_place != place) continue;
+                    entry.decision.retains_restituting = try self.ownershipPlaceUsedInPath(entry.next, entry.unit);
+                    break;
+                }
+            }
+        }
+        const decisions = try allocator.alloc(CompleteProjectionDecision, pending.items.len);
+        for (decisions, pending.items) |*decision, entry| decision.* = entry.decision;
+        return decisions;
+    }
+
     /// An owned read of a complete aggregate projection. If the root's unit
-    /// is present and its liveness group has no later use on this path, move
-    /// that unit into the target. Otherwise preserve the root and retain the
-    /// projected value exactly like an ordinary fresh bind.
+    /// is present and its ownership place has no later use on this path,
+    /// move that unit into the target. Otherwise preserve the root and retain
+    /// the projected value exactly like an ordinary fresh bind. A read whose
+    /// target every emission binds owned follows its decision from source
+    /// preparation; a read whose target only emissions owning the root bind
+    /// owned is decided here, in this emission's overrides.
     fn transferForCompleteProjectionBind(
         self: *Inserter,
         owned: *OwnedSet,
+        stmt: LIR.CFStmtId,
         target: LIR.LocalId,
         root: LIR.LocalId,
         next: LIR.CFStmtId,
     ) ResourceError!AliasBindTransfer {
         const release_old_target = try self.takeRebindTarget(owned, target);
         const unit = self.unitOf(root);
-        // The path query follows loop edges itself and stops at a rebind of
-        // this exact place definition.
-        const root_used = try self.ownershipPlaceUsedInPath(next, unit);
+        const root_used = if (self.projection_decisions.retainsUnder(stmt, self.current_sig)) |retains| decided: {
+            if (builtin.mode == .debug) {
+                const used_here = try self.ownershipPlaceUsedInPath(next, unit);
+                if (used_here and !retains) arcInvariant("ARC emission used a complete projection's root that source preparation decided unused");
+                if (self.current_proc == self.current_source_proc and used_here != retains) {
+                    arcInvariant("ARC base emission disagreed with its complete projection decision");
+                }
+            }
+            break :decided retains;
+        } else try self.ownershipPlaceUsedInPath(next, unit);
         const has_unit = owned.contains(unit);
         const restitution = if (root_used)
             try self.carriedRootRestitution(target, unit, next)
@@ -4600,6 +4782,12 @@ const Inserter = struct {
         next: LIR.CFStmtId,
     ) ResourceError!AliasBindTransfer {
         if (target == value) return .{ .retain_target = false, .release_old_target = false };
+        // A join parameter holding a demand hole carries no unit
+        // (`arc_solve.joinParamCarriesUnit`), so rebinding it transfers none.
+        if (self.layouts.layoutHoldsHole(self.store.getLocal(target).layout_idx)) {
+            std.debug.assert(self.isBindingBorrowed(target));
+            return .{ .retain_target = false, .release_old_target = false };
+        }
         const move_value = try self.canMoveAliasBindValue(owned, value, target, next);
         const release_old_target = try self.takeRebindTarget(owned, target);
         if (move_value) _ = try self.takeUnit(owned, value);
@@ -4871,8 +5059,8 @@ const Inserter = struct {
 
     /// Low-level ops: `RcEffect` masks say which positions the op consumes
     /// or retains; this decides which of those transfers move existing units
-    /// and which pay retains. Borrowed-result variants may also retain a
-    /// borrowed input to supply the unit required by the selected owned op.
+    /// and which pay retains. An input with no owned unit, including a
+    /// dynamic view, must be retained for each consuming position.
     /// `want_unique` gates the uniqueness-claim scan, whose result only affects
     /// materialized statements.
     fn transferForLowLevel(
@@ -4884,7 +5072,6 @@ const Inserter = struct {
         target: LIR.LocalId,
         next: LIR.CFStmtId,
         want_unique: bool,
-        supply_missing_consumed_args: bool,
     ) ResourceError!LowLevelTransfer {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
@@ -4909,15 +5096,36 @@ const Inserter = struct {
             next,
             target,
         );
-        if (supply_missing_consumed_args) {
+        {
             const locals = self.store.getLocalSpan(args);
             for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
                 const bit = argMaskBit(position);
                 if (((rc_effect.consume_args & ~operand_take_mask) & bit) == 0) continue;
                 if (!self.ownsUnit(owned, GuardedList.at(locals, position))) {
-                    // The solved signature borrowed this argument. Retaining it
-                    // here supplies the unit consumed by the owned operation.
+                    // A borrowed binding has no unit to transfer. In
+                    // particular a dynamic view stays borrowed from its
+                    // backing storage even at its last consuming use.
+                    // Supply the operation's unit without taking the
+                    // container's own stored unit.
                     preserve_consumed_args |= bit;
+                }
+            }
+            // One unit moves into one consuming position. When the same
+            // unit reaches several consuming positions, the first moves it
+            // and each later one is retained before the operation.
+            const transferring = rc_effect.consume_args & ~operand_take_mask & ~preserve_consumed_args;
+            for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
+                const bit = argMaskBit(position);
+                if ((transferring & bit) == 0) continue;
+                const local = GuardedList.at(locals, position);
+                if (!self.localContainsRefcounted(local)) continue;
+                const unit = self.unitOf(local);
+                for (0..position) |earlier| {
+                    const earlier_bit = argMaskBit(earlier);
+                    if ((transferring & earlier_bit) == 0) continue;
+                    if (self.unitOf(GuardedList.at(locals, earlier)) != unit) continue;
+                    preserve_consumed_args |= bit;
+                    break;
                 }
             }
         }
@@ -7269,20 +7477,24 @@ const Inserter = struct {
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
+        std.debug.assert(self.store.getLocal(source).layout_idx == layout_idx);
         const atomicity = self.rcAtomicity(local);
-        const info = self.layouts.getStructInfo(self.layouts.getLayout(layout_idx));
+        const fields = arc_dismantle.ProductFields.of(self.store, self.layouts, source) orelse arcInvariant("residual product has no ownership shape");
         var tail = next;
-        var index = info.fields.len;
+        var index = fields.len();
         while (index > 0) {
             index -= 1;
-            const field = info.fields.get(@intCast(index));
+            const field = fields.at(@intCast(index));
             if (field.is_padding) continue;
             if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-            const first = slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index);
+            const first = slot_base + fields.slotBase(field.index);
             var coverage: SlotCoverage = .{};
             self.residualCoverage(container, residual_mask, field.layout, first, &coverage);
             if (!coverage.residual) continue;
-            const temp = try self.store.addLocal(.{ .layout_idx = field.layout });
+            const temp = try self.store.addLocal(.{
+                .layout_idx = field.layout,
+                .dyn = if (self.layouts.getLayout(field.layout).tag == .dynamic) .{ .desc = field.desc.?, .storage = .view } else null,
+            });
             try self.dismantle_temps.append(self.lane_allocator, temp);
             const read_op: LIR.RefOp = LIR.RefOp.field(source, @intCast(field.index));
             if (coverage.absent) {
@@ -7300,13 +7512,10 @@ const Inserter = struct {
                 } }, self.dismantleOrigin(cause, local));
                 continue;
             }
-            const rc = self.rcHelperForLayout(.decref, field.layout);
-            if (self.layouts.rcHelperPlan(rc) == .noop) {
-                arcInvariant("ARC dismantle selected a noop RC helper for a refcounted residual field");
-            }
+            const rc = self.rcHelperForLocal(.decref, temp);
             tail = try self.store.addCFStmt(.{ .decref = .{
                 .value = temp,
-                .rc = try self.store.addRcHelperRef(LIR.RcHelper.fromConcrete(rc)),
+                .rc = try self.store.addRcHelperRef(rc),
                 .atomicity = atomicity,
                 .next = tail,
             } }, self.rcOrigin(cause, .decref, local));
@@ -7634,6 +7843,61 @@ test "arc insertion boundary exists" {
     std.testing.refAllDecls(@This());
 }
 
+test "RC exported field-take convention owns conditional partial consumers" {
+    for ([_]bool{ false, true }) |exported| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const pair_layout = try f.layouts.putStructFields(&.{
+            .{ .index = 0, .layout = f.list_i64 },
+            .{ .index = 1, .layout = f.list_i64 },
+        });
+        const pair = try f.local(pair_layout);
+        const condition = try f.local(.i64);
+        const field = try f.local(f.list_i64);
+        const changed = try f.local(f.list_i64);
+        const empty = try f.local(f.list_i64);
+        const consuming = try f.assignRefField(field, pair, 0, try f.assignLowLevel(
+            changed,
+            &.{field},
+            LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+            try f.ret(changed),
+        ));
+        const untouched = try f.assignList(empty, &.{}, try f.ret(empty));
+        const proc = try f.addProc(&.{ pair, condition }, try f.switchStmt(condition, consuming, untouched, null), f.list_i64);
+        f.store.getProcSpecPtr(proc).exported = exported;
+        try insert(&f.store, &f.layouts, .{ .specialize = false });
+
+        const borrowed: u64 = if (exported) 0 else 1;
+        try testing.expectEqual(borrowed, f.store.getProcSpecImmediate(proc).rc_borrowed_params);
+        try testing.expectEqual(@as(usize, if (exported) 0 else 1), f.countRc(field, .incref));
+        try testing.expectEqual(@as(usize, 1), f.store.procSpecCount());
+        // Certification is explicit so the ReleaseFast unit test checks both
+        // paths, including the untouched residual field and early return.
+        var diag: arc_certify.Diagnostic = .{};
+        const sigs = [_]arc_sig.RcSig{.{ .borrowed_params = @intCast(borrowed) }};
+        try arc_certify.certifyStore(testing.allocator, &f.store, &f.layouts, .{ .sigs = &sigs }, &.{}, &diag);
+    }
+}
+
+test "RC exported field-take convention preserves a borrowed result lender" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const pair_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = f.list_i64 },
+        .{ .index = 1, .layout = f.list_i64 },
+    });
+    const pair = try f.local(pair_layout);
+    const field = try f.local(f.list_i64);
+    const proc = try f.addProc(&.{pair}, try f.assignRefField(field, pair, 0, try f.ret(field)), f.list_i64);
+    f.store.getProcSpecPtr(proc).exported = true;
+    try insert(&f.store, &f.layouts, .{ .specialize = false });
+    const emitted = f.store.getProcSpecImmediate(proc);
+    try testing.expectEqual(@as(u64, 1), emitted.rc_borrowed_params);
+    try testing.expect(emitted.rc_ret_borrowed);
+    try testing.expectEqual(@as(u64, 1), emitted.rc_ret_lenders);
+    try f.expectRc(field, 0, 0, 0);
+}
+
 test "RC list metadata through aliases does not preserve a consumed buffer" {
     try testListObservationAfterReserve(.list_len);
     try testListObservationAfterReserve(.list_capacity);
@@ -7641,6 +7905,49 @@ test "RC list metadata through aliases does not preserve a consumed buffer" {
 
 test "RC list payload through aliases preserves a consumed buffer" {
     try testListObservationAfterReserve(.list_get_unsafe);
+}
+
+test "RC one unit consumed at two low-level positions is retained for the second" {
+    try expectRepeatedConsumedOperandRetained(false);
+    try expectRepeatedConsumedOperandRetained(true);
+}
+
+/// `List.concat(xs, xs)` lowered to `list_concat` directly, with `xs` at
+/// its last use in both consuming positions. With `through_field`, `xs` is an
+/// alias of a field read of a dying pair, as when a matched record's field
+/// is concatenated with itself.
+fn expectRepeatedConsumedOperandRetained(through_field: bool) (Allocator.Error || ResourceError || ArcTest.ExpectError)!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const elem = try f.local(.i64);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const field = try f.local(f.list_i64);
+    const operand = try f.local(f.list_i64);
+    const result = try f.local(f.list_i64);
+    const ret = try f.ret(result);
+    const concat = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .list_concat,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_concat.rcEffect()),
+        .args = try f.span(&.{ operand, operand }),
+        .next = ret,
+    } }, .test_fixture);
+    const body = if (through_field) blk: {
+        const alias = try f.assignRefLocal(operand, field, concat);
+        const read = try f.assignRefField(field, pair, 0, alias);
+        const build_pair = try f.assignStruct(pair, &.{ first, second }, read);
+        const build_second = try f.assignList(second, &.{elem}, build_pair);
+        const build_first = try f.assignList(first, &.{elem}, build_second);
+        break :blk try f.assignI64(elem, 3, build_first);
+    } else blk: {
+        const build = try f.assignList(operand, &.{elem}, concat);
+        break :blk try f.assignI64(elem, 3, build);
+    };
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+    try f.expectRc(operand, 1, 0, 0);
 }
 
 fn testListObservationAfterReserve(op: LIR.LowLevel) (Allocator.Error || error{TestExpectedEqual})!void {
@@ -12318,6 +12625,35 @@ test "uniqueness: freshly built list consumed by a checked op elides the check" 
     // The list is born unique and its single unit moves into the op, so the
     // op's runtime count check on argument 0 is redundant.
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: an alias whose source's borrowed view is read afterwards keeps its runtime check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const view = try f.local(f.list_i64);
+    const alias = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const len = try f.local(.i64);
+
+    // elem = 5; list = []; view = list; alias = list;
+    // appended = checked_op(alias, elem); len = list_len(view); ret len
+    const ret = try f.ret(len);
+    const read_view = try f.assignLowLevel(len, &.{view}, .{}, ret);
+    const append = try f.assignLowLevel(appended, &.{ alias, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_view);
+    const alias_assign = try f.assignRefLocal(alias, list, append);
+    const view_assign = try f.assignRefLocal(view, list, alias_assign);
+    const list_assign = try f.assignList(list, &.{}, view_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    // The view borrows the list's place and is read after the alias binds,
+    // so the alias holds a retained second unit of the list and the op must
+    // keep its runtime count check.
+    try testing.expectEqual(@as(usize, 1), f.countRc(alias, .incref));
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
 }
 
 test "uniqueness: a cached proc's supplied facts reach its callers" {
@@ -18089,6 +18425,125 @@ const DynFixture = struct {
     }
 };
 
+test "ARC dynamic product takes independently stored fields and preserves aliases" {
+    for ([_]bool{ false, true }) |keep_record| {
+        var d = try DynFixture.init();
+        defer d.deinit();
+        const record_desc = try d.desc();
+        const field_desc = try d.desc();
+        const param = try d.value(record_desc, .param);
+        const field = try d.value(field_desc, .frame);
+        const result = try d.value(field_desc, .result);
+        const product = try d.f.store.addStmtRow(LIR.ProductShape, .{
+            .layouts = try d.f.store.addU32Span(&.{ @backingInt(d.dynamic), @backingInt(d.dynamic) }),
+            .slots = try d.f.store.addU32Span(&.{ 0, 1, 2 }),
+            .descriptors = try d.f.span(&.{ field_desc, field_desc }),
+        });
+        d.f.store.getLocalPtr(param).product = product;
+        const ret = try d.f.ret(if (keep_record) param else result);
+        const append = try d.f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+        const read = try d.f.assignRefField(field, param, 0, append);
+        const proc = try d.proc(&.{ record_desc, field_desc, param }, read, d.dynamic, if (keep_record) param else result);
+        try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
+        try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
+        // Whole decref is forbidden after taking a field; the untouched field
+        // is separately projected and released. A kept record stays intact.
+        try d.f.expectRc(param, 0, 0, 0);
+        var diag: arc_certify.Diagnostic = .{};
+        const sigs = [_]arc_sig.RcSig{.{}};
+        arc_certify.certifyStore(testing.allocator, &d.f.store, &d.f.layouts, .{ .sigs = &sigs }, &.{proc}, &diag) catch |err| {
+            std.debug.print("dynamic product certification failed: {any}\n", .{diag});
+            return err;
+        };
+    }
+}
+
+test "ARC erased argument products take fields and preserve prefix and scalar reads" {
+    for ([_]bool{ false, true }) |keep_record| {
+        var d = try DynFixture.init();
+        defer d.deinit();
+        const table = try d.desc();
+        const record_desc = try d.desc();
+        const field_desc = try d.desc();
+        const word_desc = try d.desc();
+        const scalar_desc = try d.desc();
+        const param = try d.value(record_desc, .param);
+        const field = try d.value(field_desc, .frame);
+        const result = try d.value(field_desc, .result);
+        const prefix = try d.f.local(.opaque_ptr);
+        const scalar = try d.f.local(.u64);
+        const product = try d.f.store.addStmtRow(LIR.ProductShape, .{
+            .layouts = try d.f.store.addU32Span(&.{ @backingInt(layout_mod.Idx.opaque_ptr), @backingInt(layout_mod.Idx.u64), @backingInt(d.dynamic), @backingInt(d.dynamic) }),
+            // The ABI prefix has no ownership slot; the scalar field has
+            // one (non-refcounted) slot, as productShapeFields publishes.
+            .slots = try d.f.store.addU32Span(&.{ 0, 0, 1, 2, 3 }),
+            .descriptors = try d.f.span(&.{ word_desc, scalar_desc, field_desc, field_desc }),
+        });
+        d.f.store.getLocalPtr(param).product = product;
+        const ret = try d.f.ret(if (keep_record) param else result);
+        // Independent parameter bytes survive a field take. Neither of these
+        // non-owning reads may require restoring the field that was moved.
+        const read_scalar = try d.f.assignRefField(scalar, param, 1, ret);
+        const read_prefix = try d.f.assignRefField(prefix, param, 0, read_scalar);
+        const append = try d.f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_prefix);
+        const read = try d.f.assignRefField(field, param, 2, append);
+        // Descriptors come from a captured table; the packed record remains
+        // the erased worker's only explicit argument.
+        var body = read;
+        const descriptors = [_]LIR.LocalId{ record_desc, field_desc, word_desc, scalar_desc };
+        var index = descriptors.len;
+        while (index > 0) {
+            index -= 1;
+            body = try d.op(descriptors[index], .{ .table_entry = .{ .table = table, .index = @intCast(index) } }, body);
+        }
+        const proc = try d.proc(&.{ table, param }, body, d.dynamic, if (keep_record) param else result);
+        d.f.store.getProcSpecPtr(proc).abi = .erased_record;
+        d.f.store.getProcSpecPtr(proc).erased_capture_arg = table;
+        try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
+        try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
+        try d.f.expectRc(param, 0, 0, 0);
+        try d.f.expectRc(prefix, 0, 0, 0);
+        try d.f.expectRc(scalar, 0, 0, 0);
+        try d.expectDynamicRcShape();
+        var diag: arc_certify.Diagnostic = .{};
+        const sigs = [_]arc_sig.RcSig{.all_owned};
+        arc_certify.certifyStore(testing.allocator, &d.f.store, &d.f.layouts, .{ .sigs = &sigs }, &.{proc}, &diag) catch |err| {
+            std.debug.print("erased argument product certification failed: {any}\n", .{diag});
+            return err;
+        };
+    }
+}
+
+test "ARC places no reference counts around a callable read from a type table" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const erased_callable = try d.f.layouts.insertErasedCallable();
+    const table = try d.desc();
+    const callable = try d.f.local(erased_callable);
+    const first = try d.f.local(.u64);
+    const second = try d.f.local(.u64);
+    const ret = try d.f.ret(second);
+    const second_call = try d.op(second, .{ .call_erased = .{ .closure = callable, .args = null } }, ret);
+    const first_call = try d.op(first, .{ .call_erased = .{ .closure = callable, .args = null } }, second_call);
+    const body = try d.op(callable, .{ .table_entry = .{ .table = table, .index = 0 } }, first_call);
+    const proc = try d.proc(&.{table}, body, .u64, null);
+    try testing.expect(d.f.store.getProcSpec(proc).shapes.static_literal);
+    try d.run(&.{proc});
+    // ARC owns the word as it owns a static-data literal read: no retain
+    // around its uses, one release where it dies, which names image data.
+    try d.f.expectRc(callable, 0, 1, 0);
+    var immortal = try @import("immortal_locals.zig").compute(testing.allocator, &d.f.store);
+    defer immortal.deinit(testing.allocator);
+    try testing.expect(immortal.contains(callable));
+    try testing.expectEqual(@as(usize, 1), try @import("immortal_locals.zig").elide(testing.allocator, &d.f.store));
+    var walk = try body_clone.ReachableStmts.initWithAllocator(&d.f.store, d.f.store.getProcSpec(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| switch (d.f.store.getCFStmt(stmt_id)) {
+        .incref, .decref, .decref_if_initialized, .free => return error.TestUnexpectedResult,
+        .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
+    };
+}
+
 test "ARC dyn copy of an owned dynamic parameter into the result moves its unit" {
     var d = try DynFixture.init();
     defer d.deinit();
@@ -18167,7 +18622,7 @@ test "ARC dyn field view returned through a copy is retained and its base releas
     const result = try d.value(field_desc, .result);
     const ret = try d.f.ret(result);
     const copy = try d.op(result, .{ .copy = .{ .src = view, .desc = field_desc } }, ret);
-    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = 0 } }, copy);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = .{ .immediate = 0 } } }, copy);
     const proc = try d.proc(&.{ desc, field_desc, param }, read, d.dynamic, result);
     try d.run(&.{proc});
     // The field borrows from the record until one retain gives the result
@@ -18175,6 +18630,34 @@ test "ARC dyn field view returned through a copy is retained and its base releas
     try testing.expectEqual(@as(usize, 1), d.f.countRc(view, .incref) + d.f.countRc(result, .incref));
     try d.f.expectRc(param, 0, 1, 0);
     try testing.expectEqual(@as(usize, 0), d.f.countRc(view, .decref) + d.f.countRc(result, .decref));
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn field views supply ownership to consuming low-level operations" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const field_desc = try d.desc();
+    const elem_desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const view = try d.value(field_desc, .view);
+    const result = try d.value(field_desc, .result);
+    const ret = try d.f.ret(result);
+    // Both consuming positions read the same borrowed field. Each must get
+    // its own unit, while the container keeps its original field unit.
+    const concat = try d.f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .list_concat,
+        .rc_effect = try d.f.store.addRcEffect(LIR.LowLevel.list_concat.rcEffect()),
+        .extra = try d.f.store.addStmtRow(LIR.LowLevelExtra, .{ .dyn_elem_desc = true }),
+        .args = try d.f.span(&.{ view, view, elem_desc }),
+        .next = ret,
+    } }, .test_fixture);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = .{ .immediate = 0 } } }, concat);
+    const proc = try d.proc(&.{ desc, field_desc, elem_desc, param }, read, d.dynamic, result);
+    try d.run(&.{proc});
+    try d.f.expectRc(view, 2, 0, 0);
+    try d.f.expectRc(param, 0, 1, 0);
     try d.expectDynamicRcShape();
 }
 
@@ -18186,7 +18669,7 @@ test "ARC dyn eq and inspect borrow their operand" {
     const equal = try d.f.local(.bool);
     const text = try d.f.local(.str);
     const ret = try d.f.ret(text);
-    const inspect = try d.op(text, .{ .inspect = .{ .value = param, .desc = desc } }, ret);
+    const inspect = try d.op(text, .{ .inspect = .{ .value = param, .desc = desc, .names = desc } }, ret);
     const eq = try d.op(equal, .{ .eq = .{ .lhs = param, .rhs = param, .desc = desc } }, inspect);
     const proc = try d.proc(&.{ desc, param }, eq, .str, null);
     try d.run(&.{proc});

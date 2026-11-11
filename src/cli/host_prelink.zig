@@ -1,4 +1,5 @@
-//! The pre-linked host of a fast dev link (Linux x86_64 executables).
+//! The pre-linked host of a fast dev link of an ELF executable: Linux or a
+//! BSD, x86_64 or AArch64.
 //!
 //! A platform's host is linked once, with the existing embedded LLD flags,
 //! from the platform's link inputs plus one generated object, and filed in
@@ -6,7 +7,7 @@
 //! app code to be appended, and a side table describing what the patch link
 //! needs of them (`patch_link.zig`).
 //!
-//! The generated object (`linkObject`) carries no code. It defines every
+//! A fixed executable's generated object (`linkObject`) carries no code. It defines every
 //! `provides` symbol as an absolute address in the app region, at a fixed
 //! window per symbol (`provideAddress`), so the host's references to the app
 //! resolve at prelink time to bytes each build fills in: a jump to the entry
@@ -16,6 +17,10 @@
 //! spare entries for the app's segments. The table keeps the distance from
 //! its file offset to its address that the first segment has, so every
 //! kernel computes `AT_PHDR` for it correctly.
+//! PIE executables and shared libraries instead use section-backed windows
+//! (`linkPositionIndependentObject`): an absolute symbol cannot follow the
+//! load base. Their records retain runtime relocation metadata separately
+//! from artifact identity; PIE still has executable startup and no exports.
 //!
 //! Nothing in the host link is compiler-owned code: the builtins and the
 //! Boxy runtime are part of the app region (design.md "Sealed Roc Object
@@ -26,6 +31,43 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
+
+/// ELF artifact identity, independent of whether its load addresses slide.
+pub const Kind = enum(u32) {
+    executable,
+    pie,
+    shared,
+
+    pub fn positionIndependent(self: Kind) bool {
+        return self != .executable;
+    }
+};
+
+/// Whether a `provides` symbol is a procedure or a value.
+pub const ProvideKind = enum(u8) { procedure = 0, data = 1 };
+
+/// One section-backed `provides` symbol (ELF PIE/shared, Mach-O or COFF).
+/// Its kind and layout size are known before the host is looked up.
+pub const Provide = struct {
+    /// The C name, without any Mach-O underscore.
+    name: []const u8,
+    kind: ProvideKind,
+    /// A data symbol's layout size; 0 for a procedure.
+    size: u64,
+
+    /// The bytes the symbol's window takes.
+    pub fn windowSize(self: Provide) u64 {
+        return switch (self.kind) {
+            .procedure => procedure_window,
+            .data => std.mem.alignForward(u64, self.size, window_align),
+        };
+    }
+};
+
+/// A section-backed procedure window: room for a long jump and a trap.
+pub const procedure_window: u64 = 16;
+/// The alignment of every section-backed window.
+pub const window_align: u64 = 16;
 
 /// The address the app region starts at. The host must end below it, and
 /// app code reaches host code with 32-bit displacements, so the app region
@@ -57,8 +99,8 @@ const reserve_section_name = ".roc_phdrs";
 
 /// The generated object of a host link: the reserved program header table
 /// and an absolute definition of every name in `provides`, which must be
-/// sorted and distinct.
-pub fn linkObject(allocator: Allocator, provides: []const []const u8) Allocator.Error![]u8 {
+/// sorted and distinct. `arm64` selects the AArch64 machine over x86_64.
+pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const []const u8) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.appendNTimes(allocator, 0, 64);
@@ -122,7 +164,154 @@ pub fn linkObject(allocator: Allocator, provides: []const []const u8) Allocator.
     ehdr[5] = 1;
     ehdr[6] = 1;
     std.mem.writeInt(u16, ehdr[16..18], ET_REL, .little);
-    std.mem.writeInt(u16, ehdr[18..20], EM_X86_64, .little);
+    std.mem.writeInt(u16, ehdr[18..20], if (arm64) EM_AARCH64 else EM_X86_64, .little);
+    std.mem.writeInt(u32, ehdr[20..24], 1, .little);
+    std.mem.writeInt(u64, ehdr[40..48], shoff, .little);
+    std.mem.writeInt(u16, ehdr[52..54], 64, .little);
+    std.mem.writeInt(u16, ehdr[58..60], 64, .little);
+    std.mem.writeInt(u16, ehdr[60..62], headers.len, .little);
+    std.mem.writeInt(u16, ehdr[62..64], headers.len - 1, .little);
+    return try out.toOwnedSlice(allocator);
+}
+
+/// The section of a position-independent host's procedure windows.
+const procedure_section_name = ".rocprov";
+/// The section of a position-independent host's value windows.
+const value_section_name = ".rocprovd";
+
+/// The generated object of a position-independent host link: the reserved program
+/// header table, a window section defining each provide (`provides`, sorted
+/// and distinct, with their layouts), as a Mach-O or COFF host's object
+/// does, and one absolute word against the reserve, whose relocation gives
+/// the image a dynamic relocation table for the patch link to extend.
+/// `arm64` selects the AArch64 machine over x86_64.
+pub fn linkPositionIndependentObject(allocator: Allocator, arm64: bool, provides: []const Provide) Allocator.Error![]u8 {
+    var procedure_size: u64 = 0;
+    var value_size: u64 = 0;
+    for (provides) |provide| switch (provide.kind) {
+        .procedure => procedure_size += provide.windowSize(),
+        .data => value_size += provide.windowSize(),
+    };
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendNTimes(allocator, 0, 64);
+    const reserve_offset = out.items.len;
+    const reserve_size = phdr_capacity * phdr_size;
+    try out.appendNTimes(allocator, 0, reserve_size);
+    while (out.items.len % 16 != 0) try out.append(allocator, 0);
+    const procedure_offset = out.items.len;
+    if (arm64) {
+        var word: u64 = 0;
+        while (word < procedure_size) : (word += 4) {
+            var bytes: [4]u8 = undefined;
+            std.mem.writeInt(u32, &bytes, arm64_brk, .little);
+            try out.appendSlice(allocator, &bytes);
+        }
+    } else {
+        try out.appendNTimes(allocator, x86_64_int3, @intCast(procedure_size));
+    }
+    while (out.items.len % 16 != 0) try out.append(allocator, 0);
+    const value_offset = out.items.len;
+    try out.appendNTimes(allocator, 0, @intCast(value_size));
+    while (out.items.len % 8 != 0) try out.append(allocator, 0);
+    const anchor_offset = out.items.len;
+    try out.appendNTimes(allocator, 0, 8);
+    const rela_offset = out.items.len;
+    {
+        // The anchor word: the reserve's address, through the reserve's
+        // section symbol (index 1).
+        var entry: [24]u8 = @splat(0);
+        const r_type: u64 = if (arm64) R_AARCH64_ABS64 else R_X86_64_64;
+        std.mem.writeInt(u64, entry[8..16], (@as(u64, 1) << 32) | r_type, .little);
+        try out.appendSlice(allocator, &entry);
+    }
+
+    var strtab: std.ArrayList(u8) = .empty;
+    defer strtab.deinit(allocator);
+    try strtab.append(allocator, 0);
+    const symtab_offset = out.items.len;
+    try out.appendNTimes(allocator, 0, 24);
+    {
+        var entry: [24]u8 = @splat(0);
+        entry[4] = (STB_LOCAL << 4) | STT_SECTION;
+        std.mem.writeInt(u16, entry[6..8], 1, .little);
+        try out.appendSlice(allocator, &entry);
+    }
+    var procedure_at: u64 = 0;
+    var value_at: u64 = 0;
+    for (provides) |provide| {
+        var entry: [24]u8 = @splat(0);
+        std.mem.writeInt(u32, entry[0..4], @intCast(strtab.items.len), .little);
+        try strtab.appendSlice(allocator, provide.name);
+        try strtab.append(allocator, 0);
+        const size = provide.windowSize();
+        switch (provide.kind) {
+            .procedure => {
+                entry[4] = (STB_GLOBAL << 4) | STT_FUNC;
+                std.mem.writeInt(u16, entry[6..8], 2, .little);
+                std.mem.writeInt(u64, entry[8..16], procedure_at, .little);
+                procedure_at += size;
+            },
+            .data => {
+                entry[4] = (STB_GLOBAL << 4) | STT_OBJECT;
+                std.mem.writeInt(u16, entry[6..8], 3, .little);
+                std.mem.writeInt(u64, entry[8..16], value_at, .little);
+                value_at += size;
+            },
+        }
+        std.mem.writeInt(u64, entry[16..24], size, .little);
+        try out.appendSlice(allocator, &entry);
+    }
+    const symtab_size = out.items.len - symtab_offset;
+    const strtab_offset = out.items.len;
+    try out.appendSlice(allocator, strtab.items);
+    const shstrtab = "\x00" ++ reserve_section_name ++ "\x00" ++ procedure_section_name ++ "\x00" ++ value_section_name ++ "\x00.rocanchor\x00.rela.rocanchor\x00.symtab\x00.strtab\x00.shstrtab\x00";
+    const name_reserve = 1;
+    const name_procedures = name_reserve + reserve_section_name.len + 1;
+    const name_values = name_procedures + procedure_section_name.len + 1;
+    const name_anchor = name_values + value_section_name.len + 1;
+    const name_rela = name_anchor + ".rocanchor".len + 1;
+    const name_symtab = name_rela + ".rela.rocanchor".len + 1;
+    const name_strtab = name_symtab + ".symtab".len + 1;
+    const name_shstrtab = name_strtab + ".strtab".len + 1;
+    const shstrtab_offset = out.items.len;
+    try out.appendSlice(allocator, shstrtab);
+    while (out.items.len % 8 != 0) try out.append(allocator, 0);
+    const shoff = out.items.len;
+    const ObjectHeader = struct { name: u32, type: u32, flags: u64, offset: u64, size: u64, link: u32, info: u32, addralign: u64, entsize: u64 };
+    const symtab_index = 6;
+    const headers = [_]ObjectHeader{
+        std.mem.zeroes(ObjectHeader),
+        .{ .name = name_reserve, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_GNU_RETAIN, .offset = reserve_offset, .size = reserve_size, .link = 0, .info = 0, .addralign = 8, .entsize = 0 },
+        .{ .name = name_procedures, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_EXECINSTR | SHF_GNU_RETAIN, .offset = procedure_offset, .size = procedure_size, .link = 0, .info = 0, .addralign = window_align, .entsize = 0 },
+        .{ .name = name_values, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_WRITE | SHF_GNU_RETAIN, .offset = value_offset, .size = value_size, .link = 0, .info = 0, .addralign = window_align, .entsize = 0 },
+        .{ .name = name_anchor, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_WRITE | SHF_GNU_RETAIN, .offset = anchor_offset, .size = 8, .link = 0, .info = 0, .addralign = 8, .entsize = 0 },
+        .{ .name = name_rela, .type = SHT_RELA, .flags = SHF_INFO_LINK, .offset = rela_offset, .size = 24, .link = symtab_index, .info = 4, .addralign = 8, .entsize = 24 },
+        .{ .name = name_symtab, .type = SHT_SYMTAB, .flags = 0, .offset = symtab_offset, .size = symtab_size, .link = 7, .info = 2, .addralign = 8, .entsize = 24 },
+        .{ .name = name_strtab, .type = SHT_STRTAB, .flags = 0, .offset = strtab_offset, .size = strtab.items.len, .link = 0, .info = 0, .addralign = 1, .entsize = 0 },
+        .{ .name = name_shstrtab, .type = SHT_STRTAB, .flags = 0, .offset = shstrtab_offset, .size = shstrtab.len, .link = 0, .info = 0, .addralign = 1, .entsize = 0 },
+    };
+    for (headers) |header| {
+        var entry: [64]u8 = undefined;
+        std.mem.writeInt(u32, entry[0..4], header.name, .little);
+        std.mem.writeInt(u32, entry[4..8], header.type, .little);
+        std.mem.writeInt(u64, entry[8..16], header.flags, .little);
+        std.mem.writeInt(u64, entry[16..24], 0, .little);
+        std.mem.writeInt(u64, entry[24..32], header.offset, .little);
+        std.mem.writeInt(u64, entry[32..40], header.size, .little);
+        std.mem.writeInt(u32, entry[40..44], header.link, .little);
+        std.mem.writeInt(u32, entry[44..48], header.info, .little);
+        std.mem.writeInt(u64, entry[48..56], header.addralign, .little);
+        std.mem.writeInt(u64, entry[56..64], header.entsize, .little);
+        try out.appendSlice(allocator, &entry);
+    }
+    const ehdr = out.items[0..64];
+    @memcpy(ehdr[0..4], "\x7fELF");
+    ehdr[4] = 2;
+    ehdr[5] = 1;
+    ehdr[6] = 1;
+    std.mem.writeInt(u16, ehdr[16..18], ET_REL, .little);
+    std.mem.writeInt(u16, ehdr[18..20], if (arm64) EM_AARCH64 else EM_X86_64, .little);
     std.mem.writeInt(u32, ehdr[20..24], 1, .little);
     std.mem.writeInt(u64, ehdr[40..48], shoff, .little);
     std.mem.writeInt(u16, ehdr[52..54], 64, .little);
@@ -134,13 +323,26 @@ pub fn linkObject(allocator: Allocator, provides: []const []const u8) Allocator.
 
 /// Everything a pre-linked host is a function of, as content.
 pub const KeyInput = struct {
+    /// The record format the host is filed in (`format_version` here, or
+    /// the Mach-O record's).
+    record_version: u32,
     target: []const u8,
     /// The link ABI the host links with (`linker.TargetAbi`).
     link_abi: []const u8,
     /// Sorted, distinct.
     provides: []const []const u8,
+    /// Each section-backed provide's kind and layout size, in provides order;
+    /// empty for a fixed ELF executable, whose windows do not depend on layout.
+    provide_layouts: []const Provide = &.{},
     /// The symbols kept for the app region; sorted, distinct.
     keep: []const []const u8,
+    /// Whether the host is linked as a shared library rather than an
+    /// executable.
+    shared: bool = false,
+    /// Opt-in PIE executable; startup inputs must relocate the image.
+    pie: bool = false,
+    /// For a shared library, the symbols it exports; sorted, distinct.
+    exports: []const []const u8 = &.{},
     /// The platform's link items as its header names them, relative to its
     /// target directory, in order, with the app's position.
     link_items: []const []const u8,
@@ -156,7 +358,7 @@ pub fn key(input: KeyInput) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update("roc-prelinked-host-v1");
     hasher.update(&build_options.compiler_compatibility_hash);
-    hashU64(&hasher, format_version);
+    hashU64(&hasher, input.record_version);
     hashU64(&hasher, app_base);
     hashU64(&hasher, provide_window);
     hashU64(&hasher, phdr_capacity);
@@ -164,7 +366,15 @@ pub fn key(input: KeyInput) [32]u8 {
     hashBytes(&hasher, input.target);
     hashBytes(&hasher, input.link_abi);
     hashList(&hasher, input.provides);
+    hashU64(&hasher, input.provide_layouts.len);
+    for (input.provide_layouts) |layout| {
+        hasher.update(&.{@backingInt(layout.kind)});
+        hashU64(&hasher, layout.size);
+    }
     hashList(&hasher, input.keep);
+    hasher.update(&.{@intFromBool(input.shared)});
+    hasher.update(&.{@intFromBool(input.pie)});
+    hashList(&hasher, input.exports);
     hashList(&hasher, input.link_items);
     if (input.bundle_hash) |bundle| {
         hasher.update(&.{1});
@@ -194,7 +404,7 @@ fn hashList(hasher: *std.crypto.hash.sha2.Sha256, list: []const []const u8) void
 }
 
 /// The record format; bumped whenever `finish`'s output changes.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 6;
 const magic = "RHST".*;
 /// The offset of the host's bytes in a record, so they can be copied by
 /// file range from a page boundary.
@@ -239,6 +449,22 @@ const Header = extern struct {
     provide_count: u32,
     strings_offset: u32,
     strings_size: u32,
+    /// Artifact identity (`Kind`). PIE and shared hosts both have section
+    /// windows and dynamic relocations, but only shared hosts are libraries.
+    kind: u32,
+    windows_offset: u32,
+    /// The `.dynamic` section's offset in the host's bytes.
+    dynamic_offset: u64,
+    /// The dynamic relocation table: its address, its offset in the host's
+    /// bytes, its size and its section's index.
+    rela_vaddr: u64,
+    rela_offset: u64,
+    rela_size: u64,
+    rela_section: u32,
+    /// The `.dynamic` entries holding the table's address and size.
+    rela_entry: u32,
+    relasz_entry: u32,
+    reserved1: u32 = 0,
     total_size: u64,
     /// BLAKE3 of the host's bytes: what identifies the host in a link's
     /// build id, whatever compiler or key produced it.
@@ -258,9 +484,15 @@ pub const FinishError = Allocator.Error || error{
 /// platform's inputs into a host record. `keep` is the sorted list of
 /// symbols the app region may import; the record holds the address of each
 /// one the host defines.
-pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, keep: []const []const u8) FinishError![]align(16) u8 {
+///
+/// Position-independent hosts, linked from `linkPositionIndependentObject`,
+/// record section-backed windows and the dynamic relocations the patch link
+/// extends. `layouts` is in provides order and empty for fixed executables.
+pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, keep: []const []const u8, kind: Kind, layouts: []const Provide) FinishError![]align(16) u8 {
     if (exe.len < 64 or !std.mem.eql(u8, exe[0..4], "\x7fELF") or exe[4] != 2 or exe[5] != 1) return error.UnexpectedHostLayout;
-    if (readU16(exe, 16) != ET_EXEC or readU16(exe, 18) != EM_X86_64) return error.UnexpectedHostLayout;
+    const machine = readU16(exe, 18);
+    const expected_type: u16 = if (kind.positionIndependent()) ET_DYN else ET_EXEC;
+    if (readU16(exe, 16) != expected_type or (machine != EM_X86_64 and machine != EM_AARCH64)) return error.UnexpectedHostLayout;
     const phoff = readU64(exe, 32);
     const shoff = readU64(exe, 40);
     const phentsize = readU16(exe, 54);
@@ -276,8 +508,10 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
     // must keep its distance from offset to address.
     var first_delta: ?u64 = null;
     var host_end: u64 = 0;
+    var dynamic: ?[2]u64 = null;
     for (0..phnum) |index| {
         const at: usize = @intCast(phoff + index * phdr_size);
+        if (readU32(exe, at) == PT_DYNAMIC) dynamic = .{ readU64(exe, at + 8), readU64(exe, at + 32) };
         if (readU32(exe, at) != PT_LOAD) continue;
         const offset = readU64(exe, at + 8);
         const vaddr = readU64(exe, at + 16);
@@ -295,6 +529,9 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
     var build_id_size: u32 = 0;
     var symtab_index: u32 = 0;
     var debug_indices = [_]u32{ 0, 0, 0 };
+    // Section-backed windows, by their address and file offset.
+    var procedure_section: ?[2]u64 = null;
+    var value_section: ?[2]u64 = null;
     for (0..shnum) |index| {
         const at: usize = @intCast(shoff + index * 64);
         const name_offset = readU32(exe, at);
@@ -307,6 +544,10 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         if (std.mem.eql(u8, name, reserve_section_name)) {
             if (size != phdr_capacity * phdr_size or addr != offset + delta) return error.UnexpectedHostLayout;
             reserve_offset = offset;
+        } else if (std.mem.eql(u8, name, procedure_section_name)) {
+            procedure_section = .{ addr, offset };
+        } else if (std.mem.eql(u8, name, value_section_name)) {
+            value_section = .{ addr, offset };
         } else if (std.mem.eql(u8, name, ".note.gnu.build-id")) {
             const note = sliceAt(exe, offset, size) orelse return error.UnexpectedHostLayout;
             if (note.len < 12) return error.UnexpectedHostLayout;
@@ -395,6 +636,67 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         try strings.append(allocator, 0);
     }
 
+    // A position-independent host: each provide's window and dynamic relocation
+    // table and the `.dynamic` entries naming it.
+    const windows = try allocator.alloc(Window, if (kind.positionIndependent()) provides.len else 0);
+    defer allocator.free(windows);
+    var dynamic_info: DynamicInfo = .{};
+    if (kind.positionIndependent()) {
+        std.debug.assert(layouts.len == provides.len);
+        var procedure_at: u64 = 0;
+        var value_at: u64 = 0;
+        for (layouts, windows) |layout, *window| {
+            const section = switch (layout.kind) {
+                .procedure => procedure_section,
+                .data => value_section,
+            } orelse return error.UnexpectedHostLayout;
+            const within = switch (layout.kind) {
+                .procedure => procedure_at,
+                .data => value_at,
+            };
+            const size = layout.windowSize();
+            window.* = .{ .vaddr = section[0] + within, .offset = section[1] + within, .size = size, .kind = @backingInt(layout.kind) };
+            switch (layout.kind) {
+                .procedure => procedure_at += size,
+                .data => value_at += size,
+            }
+        }
+        const dynamic_section = dynamic orelse return error.UnexpectedHostLayout;
+        const entries = sliceAt(exe, dynamic_section[0], dynamic_section[1]) orelse return error.UnexpectedHostLayout;
+        dynamic_info.offset = dynamic_section[0];
+        var rela_entry: ?u32 = null;
+        var relasz_entry: ?u32 = null;
+        var at: usize = 0;
+        while (at + 16 <= entries.len) : (at += 16) {
+            const tag = readU64(entries, at);
+            const value = readU64(entries, at + 8);
+            const entry: u32 = @intCast(at / 16);
+            if (tag == DT_NULL) break;
+            if (tag == DT_RELA) {
+                rela_entry = entry;
+                dynamic_info.rela_vaddr = value;
+            } else if (tag == DT_RELASZ) {
+                relasz_entry = entry;
+                dynamic_info.rela_size = value;
+            } else if (tag == DT_RELAENT) {
+                if (value != 24) return error.UnexpectedHostLayout;
+            } else if (tag == DT_RELR or tag == DT_REL or tag == DT_TEXTREL) {
+                return error.UnexpectedHostLayout;
+            }
+        }
+        // The generated object's anchor word makes LLD write a table.
+        dynamic_info.rela_entry = rela_entry orelse return error.UnexpectedHostLayout;
+        dynamic_info.relasz_entry = relasz_entry orelse return error.UnexpectedHostLayout;
+        for (0..shnum) |index| {
+            const at_header: usize = @intCast(shoff + index * 64);
+            if (readU32(exe, at_header + 4) == SHT_RELA and readU64(exe, at_header + 16) == dynamic_info.rela_vaddr) {
+                dynamic_info.rela_section = @intCast(index);
+                dynamic_info.rela_offset = readU64(exe, at_header + 24);
+            }
+        }
+        if (dynamic_info.rela_section == 0) return error.UnexpectedHostLayout;
+    }
+
     // The host's bytes end with its string table, so a link appends the
     // app's names to it in place; the section header table moves to the
     // record, since every link writes its own.
@@ -427,6 +729,9 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
     end += symbols.items.len * @sizeOf(HostSymbol);
     const provides_offset = end;
     end += provide_names.len * @sizeOf(u32);
+    end = std.mem.alignForward(u64, end, 8);
+    const windows_offset = end;
+    end += windows.len * @sizeOf(Window);
     const strings_offset = end;
     end += strings.items.len;
     const total = std.mem.alignForward(u64, end, 16);
@@ -459,6 +764,15 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         .provide_count = @intCast(provide_names.len),
         .strings_offset = @intCast(strings_offset),
         .strings_size = @intCast(strings.items.len),
+        .kind = @backingInt(kind),
+        .windows_offset = @intCast(windows_offset),
+        .dynamic_offset = dynamic_info.offset,
+        .rela_vaddr = dynamic_info.rela_vaddr,
+        .rela_offset = dynamic_info.rela_offset,
+        .rela_size = dynamic_info.rela_size,
+        .rela_section = dynamic_info.rela_section,
+        .rela_entry = dynamic_info.rela_entry,
+        .relasz_entry = dynamic_info.relasz_entry,
         .total_size = total,
         .host_digest = @splat(0),
     };
@@ -472,8 +786,31 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
     @memcpy(out[@intCast(symbols_offset)..][0 .. symbols.items.len * @sizeOf(HostSymbol)], std.mem.sliceAsBytes(symbols.items));
     @memcpy(out[@intCast(provides_offset)..][0 .. provide_names.len * @sizeOf(u32)], std.mem.sliceAsBytes(provide_names));
     @memcpy(out[@intCast(strings_offset)..][0..strings.items.len], strings.items);
+    @memcpy(out[@intCast(windows_offset)..][0 .. windows.len * @sizeOf(Window)], std.mem.sliceAsBytes(windows));
     return out;
 }
+
+/// What a position-independent host's patch link reads of its dynamic relocations.
+const DynamicInfo = struct {
+    offset: u64 = 0,
+    rela_vaddr: u64 = 0,
+    rela_offset: u64 = 0,
+    rela_size: u64 = 0,
+    rela_section: u32 = 0,
+    rela_entry: u32 = 0,
+    relasz_entry: u32 = 0,
+};
+
+/// A section-backed window of one provide, in name order.
+pub const Window = extern struct {
+    vaddr: u64,
+    /// The window's offset in the host's bytes.
+    offset: u64,
+    size: u64,
+    /// The provide's `ProvideKind`.
+    kind: u32,
+    reserved: u32 = 0,
+};
 
 /// Why bytes are not a host record this compiler wrote.
 pub const ReadError = error{InvalidRecord};
@@ -498,7 +835,21 @@ pub const View = struct {
         if (header.sht_offset % 8 != 0 or header.sht_offset + @as(u64, header.shnum) * 64 > bytes.len) return error.InvalidRecord;
         if (header.build_id_offset + header.build_id_size > header.host_size) return error.InvalidRecord;
         if (header.host_end_vaddr > app_base) return error.InvalidRecord;
+        const kind = std.enums.fromInt(Kind, header.kind) orelse return error.InvalidRecord;
+        if (kind.positionIndependent()) {
+            if (header.windows_offset % 8 != 0 or @as(u64, header.windows_offset) + @as(u64, header.provide_count) * @sizeOf(Window) > bytes.len) return error.InvalidRecord;
+            if (header.dynamic_offset >= header.host_size or header.rela_offset + header.rela_size > header.host_size or header.rela_section >= header.shnum) return error.InvalidRecord;
+        }
+        if (header.host_size < 64) return error.InvalidRecord;
+        const machine = readU16(bytes[host_offset..], 18);
+        if (machine != EM_X86_64 and machine != EM_AARCH64) return error.InvalidRecord;
+        if (readU16(bytes[host_offset..], 16) != @as(u16, if (kind.positionIndependent()) ET_DYN else ET_EXEC)) return error.InvalidRecord;
         return .{ .bytes = bytes, .header = header };
+    }
+
+    /// Whether the host is an AArch64 executable rather than an x86_64 one.
+    pub fn arm64(self: View) bool {
+        return readU16(self.host(), 18) == EM_AARCH64;
     }
 
     /// The host executable's bytes, ending with its string table when it
@@ -521,6 +872,25 @@ pub const View = struct {
     }
     pub fn provideCount(self: View) usize {
         return self.header.provide_count;
+    }
+    /// Whether the host is a shared library.
+    pub fn shared(self: View) bool {
+        return self.header.kind == @backingInt(Kind.shared);
+    }
+    /// Whether runtime startup must apply load-base relocations.
+    pub fn positionIndependent(self: View) bool {
+        return self.header.kind != @backingInt(Kind.executable);
+    }
+    /// Whether provides occupy typed host sections rather than fixed app windows.
+    pub fn hasWindowSections(self: View) bool {
+        return self.positionIndependent();
+    }
+    /// Section-backed windows, one per provide in name order; empty for
+    /// a fixed executable, whose windows are `provideAddress`.
+    pub fn windows(self: View) []const Window {
+        if (!self.hasWindowSections()) return &.{};
+        const start: [*]const Window = @ptrCast(@alignCast(self.bytes.ptr + self.header.windows_offset));
+        return start[0..self.header.provide_count];
     }
     /// The address of the kept symbol `wanted`, when the host defines it.
     pub fn findSymbol(self: View, wanted: []const u8) ?u64 {
@@ -617,24 +987,46 @@ const PT_LOAD = 1;
 const PT_PHDR = 6;
 const ET_REL = 1;
 const ET_EXEC = 2;
+const ET_DYN = 3;
+const PT_DYNAMIC = 2;
+const DT_NULL = 0;
+const DT_RELA = 7;
+const DT_RELASZ = 8;
+const DT_RELAENT = 9;
+const DT_REL = 17;
+const DT_TEXTREL = 22;
+const DT_RELR = 36;
 const EM_X86_64 = 62;
+const EM_AARCH64 = 183;
 const SHT_PROGBITS = 1;
 const SHT_SYMTAB = 2;
 const SHT_STRTAB = 3;
+const SHT_RELA = 4;
 const SHT_NOBITS = 8;
+const R_X86_64_64 = 1;
+const R_AARCH64_ABS64 = 257;
+const x86_64_int3: u8 = 0xcc;
+const arm64_brk: u32 = 0xd420_0000;
+const SHF_WRITE = 0x1;
 const SHF_ALLOC = 0x2;
+const SHF_EXECINSTR = 0x4;
+const SHF_INFO_LINK = 0x40;
 const SHF_GNU_RETAIN = 0x200000;
 const SHN_ABS = 0xfff1;
 const STB_LOCAL = 0;
 const STB_GLOBAL = 1;
 const STB_WEAK = 2;
 const STT_NOTYPE = 0;
+const STT_OBJECT = 1;
+const STT_FUNC = 2;
+const STT_SECTION = 3;
 const STV_HIDDEN = 2;
 
 test "the host link object defines each provide at its window" {
     const allocator = std.testing.allocator;
-    const object = try linkObject(allocator, &.{ "roc_answer", "roc_main" });
+    const object = try linkObject(allocator, false, &.{ "roc_answer", "roc_main" });
     defer allocator.free(object);
+    try std.testing.expectEqual(@as(u16, EM_X86_64), readU16(object, 18));
     try std.testing.expectEqual(@as(u16, 5), readU16(object, 60));
     const shoff = readU64(object, 40);
     const symtab: usize = @intCast(shoff + 2 * 64);
@@ -642,10 +1034,42 @@ test "the host link object defines each provide at its window" {
     try std.testing.expectEqual(@as(usize, 3 * 24), entries.len);
     try std.testing.expectEqual(provideAddress(1), readU64(entries, 2 * 24 + 8));
     try std.testing.expectEqual(@as(u16, SHN_ABS), readU16(entries, 24 + 6));
+    const aarch64 = try linkObject(allocator, true, &.{ "roc_answer", "roc_main" });
+    defer allocator.free(aarch64);
+    try std.testing.expectEqual(@as(u16, EM_AARCH64), readU16(aarch64, 18));
+    try std.testing.expectEqualSlices(u8, object[20..], aarch64[20..]);
+}
+
+test "a position-independent host object defines section windows and anchors a relocation" {
+    const UnitImage = @import("backend").dev.UnitImage;
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |arm64| {
+        const object = try linkPositionIndependentObject(allocator, arm64, &.{
+            .{ .name = "roc_config", .kind = .data, .size = 24 },
+            .{ .name = "roc_main", .kind = .procedure, .size = 0 },
+        });
+        defer allocator.free(object);
+        try std.testing.expectEqual(@as(u16, if (arm64) EM_AARCH64 else EM_X86_64), readU16(object, 18));
+        // The object is an ELF relocatable the image converter reads: the
+        // windows are its exports, the anchor its one absolute word.
+        const image = try UnitImage.build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
+        defer allocator.free(image);
+        const view = try UnitImage.View.init(image);
+        const main_window = view.findExport("roc_main").?;
+        try std.testing.expectEqual(@backingInt(UnitImage.SymbolType.func), main_window.type);
+        try std.testing.expectEqual(@as(u32, procedure_window), main_window.size);
+        const config_window = view.findExport("roc_config").?;
+        try std.testing.expectEqual(@backingInt(UnitImage.Region.data), config_window.region);
+        try std.testing.expectEqual(@as(u32, 32), config_window.size);
+        try std.testing.expectEqual(@as(usize, 0), view.imports().len);
+        const sites = view.localSites();
+        try std.testing.expectEqual(@as(usize, 1), sites.len);
+        try std.testing.expectEqual(@backingInt(UnitImage.SiteKind.abs64), sites[0].kind);
+    }
 }
 
 test "a host key is a function of contents, not of where they are" {
-    const input: KeyInput = .{ .target = "x64musl", .link_abi = "musl", .provides = &.{"roc_main"}, .keep = &.{"roc_alloc"}, .link_items = &.{ "crt1.o", "libhost.a" }, .bundle_hash = null, .input_digests = &.{ @splat(1), @splat(2) } };
+    const input: KeyInput = .{ .record_version = format_version, .target = "x64musl", .link_abi = "musl", .provides = &.{"roc_main"}, .keep = &.{"roc_alloc"}, .link_items = &.{ "crt1.o", "libhost.a" }, .bundle_hash = null, .input_digests = &.{ @splat(1), @splat(2) } };
     const baseline = key(input);
     try std.testing.expectEqual(baseline, key(input));
     var changed = input;
@@ -654,4 +1078,13 @@ test "a host key is a function of contents, not of where they are" {
     var bundled = input;
     bundled.bundle_hash = "abc";
     try std.testing.expect(!std.mem.eql(u8, &baseline, &key(bundled)));
+    var sized = input;
+    sized.provide_layouts = &.{.{ .name = "roc_main", .kind = .procedure, .size = 0 }};
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &key(sized)));
+    var pie = sized;
+    pie.pie = true;
+    var shared = sized;
+    shared.shared = true;
+    try std.testing.expect(!std.mem.eql(u8, &key(sized), &key(pie)));
+    try std.testing.expect(!std.mem.eql(u8, &key(shared), &key(pie)));
 }

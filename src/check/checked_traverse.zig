@@ -98,6 +98,26 @@ pub fn BoolPredicateTraversal(comptime Key: type, comptime Context: type) type {
             }
         }
 
+        /// Call `sink.decided(key, value)` for every node whose result the
+        /// last `visit`, which returned `root_result`, proved on its own.
+        /// A node completed true reaches a true node through completed
+        /// children, so it is true wherever the walk starts. When the root is
+        /// false the walk reached every node reachable from it and found no
+        /// true one, so every node it reached is false. A node completed
+        /// false under a true root may have been cut short by a cycle back to
+        /// a node still active, so it is not reported.
+        pub fn reportDecided(self: *const Self, root_result: bool, sink: anytype) void {
+            std.debug.assert(self.frames.items.len == 0);
+            var it = self.memo.iterator();
+            while (it.next()) |entry| {
+                const value = switch (entry.value_ptr.*) {
+                    .active => unreachable, // every frame completes before visit returns
+                    .complete => |value| value,
+                };
+                if (value or !root_result) sink.decided(entry.key_ptr.*, value);
+            }
+        }
+
         /// The memoized or immediate result of `key`, or null after pushing
         /// its frame.
         fn begin(self: *Self, key: Key) Allocator.Error!?bool {
@@ -177,7 +197,6 @@ pub fn checkedTypeSliceContainsIdentityVariables(
 pub fn checkedTypePayloadIdentityVariableChildren(
     comptime pending_policy: PendingPolicy,
     children: anytype,
-    pool_owner: anytype,
     root: anytype,
     payload: anytype,
     context: anytype,
@@ -199,7 +218,10 @@ pub fn checkedTypePayloadIdentityVariableChildren(
             try children.addSlice(alias.args);
         },
         .record => |record| {
-            for (record.fields) |field| try children.add(field.ty);
+            for (0..record.fields.len()) |field_index| {
+                const field = record.fields.get(field_index);
+                try children.add(field.ty);
+            }
             try children.add(record.ext);
         },
         .tuple => |items| try children.addSlice(items),
@@ -209,7 +231,10 @@ pub fn checkedTypePayloadIdentityVariableChildren(
             try children.add(function.ret);
         },
         .tag_union => |tag_union| {
-            for (tag_union.tags) |tag| try children.addSlice(tag.argsSlice(pool_owner));
+            for (0..tag_union.tags.len()) |tag_index| {
+                const tag = tag_union.tags.get(tag_index);
+                try children.addSlice(tag.args);
+            }
             try children.add(tag_union.ext);
         },
     }

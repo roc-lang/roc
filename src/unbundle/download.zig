@@ -345,6 +345,7 @@ fn getLoopbackHttp(
         // Populated by `bodyReaderDecompressing`.
         .interface = undefined,
         .max_head_len = read_buffer.len,
+        .side = .response,
     };
     const head_bytes = reader.receiveHead() catch return error.HttpError;
     const head = std.http.Client.Response.Head.parse(head_bytes) catch return error.HttpError;

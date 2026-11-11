@@ -646,8 +646,12 @@ pub const RocStr = extern struct {
         return update_mode == .InPlace or self.isUnique();
     }
 
-    /// Returns true when this string owns a big-string allocation whose extent
-    /// matches the visible value, so allocation-resize/reuse paths are safe.
+    /// Returns true when this string is a big string holding the only
+    /// reference to its allocation, so allocation-resize/reuse paths are safe.
+    /// The allocation can extend past the visible value: a string shortened
+    /// in place keeps its capacity, and the first piece `strSplitOn` makes
+    /// keeps the input's whole allocation while the later pieces are seamless
+    /// slices of it.
     pub inline fn canReuseAllocation(self: RocStr, update_mode: UpdateMode) bool {
         return !self.isSmallStr() and !self.isSeamlessSlice() and self.isExclusive(update_mode);
     }

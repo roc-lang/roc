@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {
@@ -406,7 +406,7 @@ fn writeFailureMeaning(writer: *Writer, meaning: lir.LIR.FailureMeaning) Allocat
         .literal_rejection => |literal| {
             try writer.byte(1);
             try writer.raw(&literal.module);
-            try writer.word(literal.checked_expr);
+            try writer.word(literal.node);
             try writer.byte(@backingInt(literal.kind));
         },
         .exhaustiveness => |exhaustiveness| {
@@ -441,7 +441,7 @@ fn readFailureMeaning(reader: *Reader) ReadError!lir.LIR.FailureMeaning {
         0 => .checked_error,
         1 => .{ .literal_rejection = .{
             .module = (try reader.raw(32))[0..32].*,
-            .checked_expr = try reader.word(),
+            .node = try reader.word(),
             .kind = std.enums.fromInt(lir.LIR.LiteralRejectionKind, try reader.byte()) orelse return error.MalformedPieces,
         } },
         2 => .{ .exhaustiveness = .{
@@ -471,7 +471,6 @@ fn writeData(writer: *Writer, data: []const CodeExcerpt.DataItem) Allocator.Erro
         try writer.str(item.bytes);
         try writer.word(item.alignment);
         try writer.word(item.symbol_offset);
-        try writer.byte(@intFromBool(item.is_mutable));
         try writer.byte(@intFromBool(item.program_local_name));
         try writer.word(@intCast(item.relocations.len));
         for (item.relocations) |relocation| {
@@ -491,7 +490,6 @@ fn readData(a: Allocator, reader: *Reader) ReadError![]CodeExcerpt.DataItem {
         const item_bytes = try a.dupe(u8, try reader.str());
         const alignment = try reader.word();
         const symbol_offset = try reader.word();
-        const is_mutable = try reader.flag();
         const program_local_name = try reader.flag();
         const relocations = try a.alloc(CodeExcerpt.DataRelocation, try reader.word());
         for (relocations) |*relocation| {
@@ -507,13 +505,11 @@ fn readData(a: Allocator, reader: *Reader) ReadError![]CodeExcerpt.DataItem {
                 .external = external,
             };
         }
-        if (is_mutable and (relocations.len != 0 or !std.mem.allEqual(u8, item_bytes, 0))) return error.MalformedPieces;
         item.* = .{
             .name = name,
             .bytes = item_bytes,
             .alignment = alignment,
             .symbol_offset = symbol_offset,
-            .is_mutable = is_mutable,
             .program_local_name = program_local_name,
             .relocations = relocations,
         };

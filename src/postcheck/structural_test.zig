@@ -90,18 +90,18 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
     const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn lookupExprMonoType");
 
-    try expectContains(lower_call, "if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {");
+    try expectContains(lower_call, "if (try self.indirectCalleeMonoType(ExprSite.read(call.func), call.args, expected_ret_ty)) |fn_ty| {");
     try expectContains(lower_call, "const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
-    try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
+    try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.sourceFnTy(self.view))") == null);
 
     try expectContains(type_node_step, ".lookup_required => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved))");
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| {\n                frame.cursor = 3;\n                return try self.lookupExprAtTypeStep(expr.ty, resolved, ty);");
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
     try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(");
-    try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                (try self.evidenceForUseSite(record.expr)).vector,");
-    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference)");
+    try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                (try self.evidenceForUseSite(record.lookupExpr())).vector,");
+    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.lookupExpr(), proc.root_evidence, record.recursive_reference)");
     try expectContains(lower_source, "fn lowerCallableEvalBindingValueAtNode(");
     try expectContains(lower_source, "try self.restoreConstFnAt(view, fn_id, .{ .node = request_fn_node }, null)");
     try expectContains(lower_source, "try body_ctx.graphFunctionNode(&.{}, request_fn_node)");
@@ -213,11 +213,13 @@ test "post-check expression forms do not reintroduce checked-only syntax" {
 }
 
 test "a checked row coercion has one post-check form at every stage" {
-    // design.md "Row Coercion Primitive": the checked `row_coerce` becomes the
-    // Monotype `row_widen`, which every later stage keeps as a value-only
-    // boundary. Neither form is a return: `row_widen` has no target field,
-    // because this expression's own type is the destination row.
-    try std.testing.expect(@hasField(check.CheckedArtifact.CheckedExprData, "row_coerce"));
+    // design.md "Row Coercion Primitive": a checked row coercion
+    // (`CheckedBodies.rowCoercion`) becomes the Monotype `row_widen`, which
+    // every later stage keeps as a value-only boundary. Neither form is a
+    // return: `row_widen` has no target field, because this expression's own
+    // type is the destination row.
+    try std.testing.expect(@hasDecl(check.CheckedModule.CheckedBodies, "rowCoercion"));
+    try std.testing.expect(!@hasField(check.CheckedBodies.ExprData, "row_coerce"));
     try std.testing.expect(@hasField(Mono.ExprData, "row_widen"));
     try std.testing.expect(@hasField(Lifted.ExprData, "row_widen"));
     try std.testing.expect(!@hasField(Mono.RowWiden, "target"));
@@ -473,7 +475,7 @@ test "Monotype direct uninhabited calls lower argument through graph cell" {
         "fn stepUninhabitedCall(",
         "const SpanMode = enum",
     );
-    try expectContains(direct_call, "uninhabitedScrutineeStep(self, task.checked_args[task.uninhabited_index], uninhabited_cell)");
+    try expectContains(direct_call, "uninhabitedScrutineeStep(self, ExprSite.read(task.checked_args[task.uninhabited_index]), uninhabited_cell)");
     try expectNotContains(direct_call, "activeTypeFromNode");
 }
 
@@ -509,7 +511,7 @@ test "Monotype expanded record-rest statements retain graph provenance" {
         "fn beginExpandedPatternStatement(",
         "fn checkedStatementHasRuntimeEffect(",
     );
-    try expectContains(record_rest, "const value_node = try self.lowerExprTypeNode(expr)");
+    try expectContains(record_rest, "const value_node = try self.lowerExprTypeNode(ExprSite.read(expr))");
     try expectContains(record_rest, "addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null)");
     try expectContains(record_rest, "self.graph.recordFieldNode(value_node, name)");
     try expectContains(record_rest, "self.lowerPatternAtNode(child, field_node)");
@@ -524,8 +526,8 @@ test "Monotype gates divergent relations and crash dispatches before type instan
     const lower_source = @embedFile("monotype/lower.zig");
     const divergent_call = sourceSliceBetween(
         lower_source,
-        "if (self.divergentCallOperand(call)) |operand| {",
-        "if (call.direct_target) |target| {",
+        "if (try self.divergentCallOperand(call)) |operand| {",
+        "if (call.directTarget(self.view)) |target| {",
     );
     try expectContains(divergent_call, "divergentStep(self, operand, .{ .at_cell = task.divergent_ret_cell })");
     try expectNotContains(divergent_call, "lowerTypeView");
@@ -554,7 +556,7 @@ test "Monotype gates divergent relations and crash dispatches before type instan
         "fn stepAtTypeCell(",
         "fn stepLowerExpr(",
     );
-    try expectContains(contextual_step, "if (task.diverges)");
+    try expectContains(contextual_step, "const diverges = task.diverges orelse try self.checkedExprDivergesInLoweredRuntime(checked_expr);");
     try expectContains(contextual_step, "divergentStep(self, checked_expr, .{ .at_cell = task.cell })");
 
     const result_lookup = sourceSliceBetween(
@@ -570,7 +572,7 @@ test "Monotype gates divergent relations and crash dispatches before type instan
         "fn stepRelate(",
         "fn finishRelate(",
     );
-    try expectContains(relation_gate, "if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return self.finishRelate(task);");
+    try expectContains(relation_gate, "if (try self.checkedExprDivergesInLoweredRuntime(checked_expr)) return self.finishRelate(task);");
     try expectNotContains(relation_gate, "checkedTypeContainsError");
 }
 
@@ -736,7 +738,7 @@ test "Monotype indirect calls retain graph-native function provenance" {
     try expectContains(call_source, "instantiateCallNodeFromCallerAtNode");
     try expectContains(call_source, "const fn_nodes = try self.graph.functionNodes(fn_node)");
     try expectContains(call_source, "hostedEvidenceTask(.{ .prepare_span = .{");
-    try expectContains(call_source, "requestLowerChild(self, call.func, DraftTypeCell.fromGraphNode(task.fn_node))");
+    try expectContains(call_source, "requestLowerChild(self, ExprSite.read(call.func), DraftTypeCell.fromGraphNode(task.fn_node))");
     try expectContains(call_source, ".prepared_span = .{ .exprs = call.args, .nodes = task.fn_nodes.args }");
     try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(task.fn_nodes.ret)");
     try expectNotContains(lower_source, "instantiateCallTypeFromCallerAtType");
@@ -748,7 +750,7 @@ test "Monotype indirect calls retain graph-native function provenance" {
     try std.testing.expect(direct_prepare < direct_complete);
     const prepare_source = sourceSliceBetween(lower_source, "fn stepPrepareArgs(", "fn stepRelate(");
     try expectContains(prepare_source, "if (direct_call) {");
-    try expectContains(prepare_source, ".relate = .{ .expr = task.checked_exprs[task.index], .expected_node = task.nodes[task.index] }");
+    try expectContains(prepare_source, ".relate = .{ .expr = ExprSite.read(task.checked_exprs[task.index]), .expected_node = task.nodes[task.index] }");
     try expectContains(prepare_source, ".draft_nested = .{ .ctx = self, .expr = expr, .request_fn_node = request_fn_node }");
 }
 
@@ -1174,7 +1176,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn inspectCall(self: *BodyContext",
         "fn stepInspectBody(",
     );
-    try expectContains(inspect_call, ".sealed = try self.functionType(&.{call.value_ty}, str_ty)");
+    try expectContains(inspect_call, ".sealed = try self.functionType(&.{ str_ty, call.value_ty }, str_ty)");
     try expectNotContains(inspect_call, "oneArgFnTypeCell");
     const to_inspect = sourceSliceBetween(
         lower_source,
@@ -1483,11 +1485,11 @@ test "Monotype consumes producer-recorded runtime-mode divergence and explicit u
     try expectContains(lower_source, "exprDiverges(expr_id, self.checkedInlineExpectMode())");
     try expectNotContains(lower_source, "reached code after checked control transfer");
     try expectNotContains(lower_source, "checkedAnyExprDivergesInLoweredRuntime");
-    try std.testing.expect(@hasField(check.CheckedModule.StoredCheckedExpr, "diverges_without_inline_expects"));
-    try std.testing.expect(@hasField(check.CheckedModule.StoredCheckedStatement, "diverges_without_inline_expects"));
+    try std.testing.expect(@hasField(check.CheckedModule.InlineExpectMode, "omit"));
+    try std.testing.expect(@hasDecl(check.CheckedModule.CheckedBodies, "statementDiverges"));
     try expectContains(lower_source, "exprEvaluationMayBeElidedForInspect");
     try expectNotContains(lower_source, "exprIsSideEffectFreeCallableSyntax");
-    try std.testing.expect(@hasField(check.CheckedModule.StoredCheckedExpr, "evaluation_may_be_elided_for_inspect"));
+    try std.testing.expect(@hasDecl(check.CheckedModule.CheckedBodies, "exprEvaluationMayBeElidedForInspect"));
 }
 
 test "Monotype inspect-only lowering is gated by explicit demand" {
@@ -2029,7 +2031,6 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
         "constEmit",
         "constNameStore",
         "constTypeStore",
-        "constEmptyListData",
         "finishConstRestoreLayer",
         "finishConstRestoreData",
         // Each scope's emission primitives into its own expression store

@@ -341,7 +341,8 @@ pub const ObjectFileCompiler = struct {
         /// from the start of its text), owned by the caller, when non-null.
         code_locations: ?*[]const u8,
     ) CompilationError![]align(UnitImage.alignment.toByteUnits()) u8 {
-        std.debug.assert(target.toOsTag() == .linux and target.toCpuArch() == .x86_64);
+        std.debug.assert(target.toCpuArch() == .x86_64 or target.toCpuArch() == .aarch64);
+        std.debug.assert(@import("mod.zig").imageOs(target.toOsTag()));
         var patched: PatchedRefs = .{};
         defer patched.deinit(self.allocator);
         var composed = try self.composeObject(&.{pieces}, target, .{
@@ -735,7 +736,6 @@ fn compileWithCodeGen(
                 .alignment = item.alignment,
                 .is_global = exported,
                 .is_exported = exported,
-                .is_mutable = datum.item.is_mutable,
                 .relocations = relocations,
             };
         }
@@ -1129,7 +1129,6 @@ fn appendStaticDataExports(
 /// Whether an export is stored as zero-fill: bytes that are all zero and stay
 /// zero after linking, which excludes anything a relocation writes into.
 pub fn isZeroFillExport(data_export: StaticDataExport) bool {
-    std.debug.assert(!data_export.is_mutable or (data_export.relocations.len == 0 and std.mem.allEqual(u8, data_export.bytes, 0)));
     if (data_export.bytes.len == 0 or data_export.relocations.len != 0) return false;
     return std.mem.allEqual(u8, data_export.bytes, 0);
 }
@@ -1495,12 +1494,12 @@ fn composeWithCodeGen(
         for (canonical.set.excerpts, starts) |excerpt, start| {
             if (excerpt.symbolic_refs.len != 0) patched.incomplete = true;
             for (excerpt.refs) |ref| {
-                const field = CodeGen.codeRefFieldOffset(switch (ref.form) {
+                const edges = final.codeRefEdges(start + ref.site, switch (ref.form) {
                     .call => .call,
                     .inline_call => .inline_call,
                     .addr => .addr,
-                });
-                patched.edges.append(allocator, .{ .site = start + ref.site + field, .target = starts[ref.target] + ref.delta }) catch return CompilationError.OutOfMemory;
+                }, starts[ref.target] + ref.delta);
+                patched.edges.appendSlice(allocator, edges.slice()) catch return CompilationError.OutOfMemory;
             }
         }
     }
@@ -1548,7 +1547,6 @@ fn composeWithCodeGen(
                 .alignment = item.alignment,
                 .is_global = exported,
                 .is_exported = exported,
-                .is_mutable = datum.item.is_mutable,
                 .relocations = relocations,
             };
         }

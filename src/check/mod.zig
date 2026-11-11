@@ -21,20 +21,30 @@ pub const exhaustive = @import("exhaustive.zig");
 pub const ExhaustivenessContext = @import("exhaustiveness_context.zig");
 pub const TypedCIR = @import("typed_cir.zig");
 pub const CheckedIds = @import("checked_ids.zig");
+pub const CheckedTypeIds = @import("checked_type_ids.zig");
 pub const CanonicalNames = @import("canonical_names.zig");
 /// Checked boundary names exported under the post-check-facing name.
 pub const CheckedNames = CanonicalNames;
 pub const CanonicalTypeKeys = @import("canonical_type_keys.zig");
 pub const StaticDispatchRegistry = @import("static_dispatch_registry.zig");
 pub const CheckedTraverse = @import("checked_traverse.zig");
-pub const HoistRoots = @import("hoist_roots.zig");
+pub const CheckedReachability = @import("checked_reachability.zig");
+pub const HoistRoots = @import("can").HoistRoots;
 pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
 pub const CheckedArtifact = @import("checked_artifact.zig");
+/// The reader over a checked module's bodies.
+pub const CheckedBodies = @import("checked_bodies.zig");
+/// The body facts a checked module computes on first demand.
+pub const BodyAnalyses = @import("body_analyses.zig");
 /// Import-facing checking identities and explicit binding to current owners.
 pub const CheckingDependencies = @import("checking_dependencies.zig");
 pub const CheckingInterface = @import("checking_interface.zig");
-pub const InferenceOutput = @import("inference_output.zig");
+/// The reports a checked module's checking and evaluation produced, stored
+/// with its checked cache entry.
+pub const CheckedReports = @import("checked_reports.zig");
+/// Pre-evaluation inputs stored in the combined checking entry.
+pub const CheckingReuse = @import("checking_reuse.zig");
 /// Comptime layout fingerprint for a registered serialization root (recurses into
 /// nested aggregates and `SerializedElement`s), so every admitted blob invalidates on
 /// any layout change, not just a top-level one.
@@ -53,7 +63,8 @@ test "check tests" {
     std.testing.refAllDecls(@import("callable_checking.zig"));
     std.testing.refAllDecls(@import("checking_dependencies.zig"));
     std.testing.refAllDecls(@import("checking_interface.zig"));
-    std.testing.refAllDecls(@import("inference_output.zig"));
+    std.testing.refAllDecls(@import("checked_reports.zig"));
+    std.testing.refAllDecls(@import("checking_reuse.zig"));
     std.testing.refAllDecls(@import("Check.zig"));
     std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("exhaustiveness_context.zig"));
@@ -65,7 +76,6 @@ test "check tests" {
     std.testing.refAllDecls(@import("report.zig"));
     std.testing.refAllDecls(@import("static_dispatch_registry.zig"));
     std.testing.refAllDecls(@import("checked_traverse.zig"));
-    std.testing.refAllDecls(@import("hoist_roots.zig"));
     std.testing.refAllDecls(@import("requirement_solution.zig"));
     std.testing.refAllDecls(@import("canonical_names.zig"));
     std.testing.refAllDecls(@import("canonical_type_keys.zig"));
@@ -73,7 +83,10 @@ test "check tests" {
     std.testing.refAllDecls(@import("const_store.zig"));
     std.testing.refAllDecls(@import("artifact_serialize.zig"));
     std.testing.refAllDecls(@import("checked_artifact.zig"));
+    std.testing.refAllDecls(@import("checked_bodies.zig"));
+    std.testing.refAllDecls(@import("body_analyses.zig"));
     std.testing.refAllDecls(@import("sealed_type_view.zig"));
+    std.testing.refAllDecls(@import("checked_type_ids.zig"));
     std.testing.refAllDecls(@import("evaluation_diagnostics.zig"));
     std.testing.refAllDecls(@import("checked_ids.zig"));
     std.testing.refAllDecls(@import("typed_cir.zig"));
@@ -86,6 +99,8 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/let_polymorphism_integration_test.zig"));
     std.testing.refAllDecls(@import("test/hoist_roots_test.zig"));
     std.testing.refAllDecls(@import("test/capturing_method_test.zig"));
+    std.testing.refAllDecls(@import("test/local_type_escape_test.zig"));
+    std.testing.refAllDecls(@import("test/local_value_method_test.zig"));
     std.testing.refAllDecls(@import("test/num_type_requirements_test.zig"));
     std.testing.refAllDecls(@import("test/custom_num_type_test.zig"));
     std.testing.refAllDecls(@import("test/builtin_low_level_types_test.zig"));
@@ -185,6 +200,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12794_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
     std.testing.refAllDecls(@import("test/frame_owned_judgment_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12887_test.zig"));
 
     // Cross-module monomorphization tests
     std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));

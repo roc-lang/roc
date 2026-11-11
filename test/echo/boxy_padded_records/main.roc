@@ -50,7 +50,7 @@ Chain := { x : U8, _ : U64, next : [End, Next(Box(Chain))] }
 
 Spacer := { x : U8, _ : [Nil, Cons(Spacer)], y : U8 }
 
-# Generic bodies compose these descriptors at runtime.
+# Generic bodies read these descriptors from their type tables.
 Slot(a) := { z : U32, _ : U32, a : a, y : U8 }.{
 	new : U32, a -> Slot(a)
 	new = |z, a| { z, a, y: 3 }

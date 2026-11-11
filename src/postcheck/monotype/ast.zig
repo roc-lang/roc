@@ -250,11 +250,11 @@ pub const FnDef = union(enum(u8)) {
     checked_generated: names.ProcTemplate,
     parser_runtime: struct {
         owner: names.ProcTemplate,
-        expr: checked.CheckedExprId,
+        expr: can.CIR.Expr.Idx,
     },
     encoder_for_runtime: struct {
         owner: names.ProcTemplate,
-        expr: checked.CheckedExprId,
+        expr: can.CIR.Expr.Idx,
     },
 };
 
@@ -893,7 +893,7 @@ fn writeMethodTarget(
             writeBytes(hasher, &site.bytes);
             return;
         },
-        .local_proc, .structural => {},
+        .local_proc, .structural, .callable_binding => {},
     }
     writeU32(hasher, target.module_idx);
     writeU32(hasher, @backingInt(target.def_idx));
@@ -911,6 +911,10 @@ fn writeMethodTarget(
         .local_proc => |local| {
             writeU32(hasher, @backingInt(local.binder));
             writeU32(hasher, @backingInt(local.expr));
+        },
+        .callable_binding => |binding| {
+            writeBytes(hasher, &binding.module.bytes);
+            writeU32(hasher, @backingInt(binding.template));
         },
         .structural => |kind| writeU8(hasher, @backingInt(kind)),
     }
@@ -1115,7 +1119,7 @@ pub const LocalIdentity = struct {
         _: u5 = 0,
     } = .{},
 
-    pub fn init(binder_id: ?checked.PatternBinderId, capture_id: ?checked.CaptureId, checked_capture_id: ?checked.CaptureId) LocalIdentity {
+    pub fn init(binder_id: ?check.CheckedBodies.BinderId, capture_id: ?checked.CaptureId, checked_capture_id: ?checked.CaptureId) LocalIdentity {
         var result: LocalIdentity = .{};
         result.setBinder(binder_id);
         result.setCaptureId(capture_id);
@@ -1123,7 +1127,7 @@ pub const LocalIdentity = struct {
         return result;
     }
 
-    pub fn binder(self: LocalIdentity) ?checked.PatternBinderId {
+    pub fn binder(self: LocalIdentity) ?check.CheckedBodies.BinderId {
         return if (self.present.binder) @fromBackingInt(self.binder_raw) else null;
     }
 
@@ -1142,7 +1146,7 @@ pub const LocalIdentity = struct {
         return if (self.present.checked_capture) @fromBackingInt(self.checked_capture_raw) else null;
     }
 
-    pub fn setBinder(self: *LocalIdentity, value: ?checked.PatternBinderId) void {
+    pub fn setBinder(self: *LocalIdentity, value: ?check.CheckedBodies.BinderId) void {
         self.present.binder = value != null;
         self.binder_raw = if (value) |id| @backingInt(id) else 0;
     }
@@ -1439,9 +1443,7 @@ pub const StaticDataCandidate = struct {
 
 /// What a static data candidate's value is built from.
 pub const StaticDataCandidateValue = union(enum) {
-    /// The value's construction: it lowers as runtime code where no target
-    /// storage holds the value, and the candidate's static initializer
-    /// freezes it.
+    /// Compiler-only data initializer. Runtime code reads its frozen value.
     runtime: ExprId,
     /// A non-empty list stored in a checked module's `ConstStore` whose items
     /// reach no function value, crash, or checked error. Static data freezes
@@ -1450,13 +1452,11 @@ pub const StaticDataCandidateValue = union(enum) {
     /// so no expression builds it or any of its items.
     stored: StoredStaticList,
 
-    /// The candidate's one subexpression: its construction, or the restored
-    /// item a stored list of one repeated value names. A stored list of
-    /// differing items has none.
+    /// The compiler-only initializer expression, when one is needed.
     pub fn subexpression(self: StaticDataCandidateValue) ?ExprId {
         return switch (self) {
             .runtime => |expr| expr,
-            .stored => |stored| stored.uniform_item,
+            .stored => null,
         };
     }
 
@@ -1465,7 +1465,7 @@ pub const StaticDataCandidateValue = union(enum) {
     pub fn subexpressionPtr(self: *StaticDataCandidateValue) ?*ExprId {
         return switch (self.*) {
             .runtime => |*expr| expr,
-            .stored => |*stored| if (stored.uniform_item) |*item| item else null,
+            .stored => null,
         };
     }
 };
@@ -1473,9 +1473,6 @@ pub const StaticDataCandidateValue = union(enum) {
 /// A stored list that static data freezes from its `ConstStore` node.
 pub const StoredStaticList = struct {
     item_count: u32,
-    /// The restored item of a list whose items are all one stored value,
-    /// which the list's fresh form repeats; null when they differ.
-    uniform_item: ?ExprId,
 };
 
 /// Explicit result relation between independently specialized Monotype graphs.
@@ -2565,8 +2562,10 @@ pub const ProgramBuilder = struct {
         return try self.addStringView(text, 0, @intCast(text.len));
     }
 
-    /// Restore a view, copying each owner-relative checked blob at most once.
-    pub fn addConstBlobView(self: *ProgramBuilder, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+    /// Restore a checked blob as a literal, copying each owner-relative
+    /// checked blob at most once.
+    pub fn addConstBlobView(self: *ProgramBuilder, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8) std.mem.Allocator.Error!StringLiteralId {
+        const len = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
         const key = ConstBlobKey{ .module_bytes = module_bytes, .data = data };
         const owner = self.const_blob_backings.get(key) orelse blk: {
             const created = try SharedLiteralBacking.init(self.allocator, bytes);
@@ -2576,9 +2575,8 @@ pub const ProgramBuilder = struct {
             };
             break :blk created;
         };
-        if (@as(u64, offset) + len > owner.bytes.len) Common.invariant("constant blob view exceeded its backing");
         const id: StringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.string_literals.len()))));
-        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes, .shared = owner, .offset = offset, .len = len });
+        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes, .shared = owner, .offset = 0, .len = len });
         owner.retain();
         return id;
     }
@@ -2630,7 +2628,7 @@ pub const ProgramBuilder = struct {
         self: *ProgramBuilder,
         symbol: Common.Symbol,
         ty: Type.TypeId,
-        binder: ?checked.PatternBinderId,
+        binder: ?check.CheckedBodies.BinderId,
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(self.locals.len()))));
         const checked_capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null;
@@ -2897,8 +2895,8 @@ test "restored constant blob views share storage across IR ownership transfers" 
     var program = ProgramBuilder.init(gpa);
     var program_alive = true;
     defer if (program_alive) program.deinit();
-    const a = try program.addConstBlobView(@splat(0), data, "abcdefgh", 0, 4);
-    const b = try program.addConstBlobView(@splat(0), data, "abcdefgh", 2, 6);
+    const a = try program.addConstBlobView(@splat(0), data, "abcdefgh");
+    const b = try program.addConstBlobView(@splat(0), data, "abcdefgh");
     const first = program.string_literals.get(@backingInt(a));
     const second = program.string_literals.get(@backingInt(b));
     try std.testing.expectEqual(first.backing.ptr, second.backing.ptr);
@@ -2906,7 +2904,7 @@ test "restored constant blob views share storage across IR ownership transfers" 
     defer cloned.deinit(gpa);
     program.deinit();
     program_alive = false;
-    try std.testing.expectEqualStrings("cdefgh", cloned.text());
+    try std.testing.expectEqualStrings("abcdefgh", cloned.text());
 }
 
 test "final Monotype capture identities preserve direct aliases" {
@@ -2914,7 +2912,7 @@ test "final Monotype capture identities preserve direct aliases" {
     defer program.deinit();
 
     const unit_ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(7));
+    const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(7));
     const first = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), unit_ty, binder);
     const second = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), unit_ty, binder);
     const uncaptured = try program.addLocal(@fromBackingInt(@intCast(3)), unit_ty);
@@ -3295,10 +3293,14 @@ test "codec function evidence identity excludes per-use replay addresses" {
     const allocator = std.testing.allocator;
     var types = checked.CheckedTypeStore{};
     defer types.deinit(allocator);
+    types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(allocator, std.testing.io, 0));
+    var key_names = check.CanonicalNames.CanonicalNameStore.init(allocator);
+    defer key_names.deinit();
+    types.key_names = &key_names;
     // Allocate distinct replay addresses with the same checked root key.
     var replay_types: [4]checked.CheckedTypeId = undefined;
     for (&replay_types) |*ty| {
-        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = @as([32]u8, @splat(2)) }, true);
+        ty.* = try types.reserveSyntheticTypeRoot(allocator);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
     var derivation_ids: [3]static_dispatch.GeneratedCodecDerivationId = undefined;
@@ -3312,9 +3314,9 @@ test "codec function evidence identity excludes per-use replay addresses" {
         .derivation = .encoder,
         .checked = .{ .recorded = .{
             .view = .{ .bytes = @as([32]u8, @splat(1)) },
-            .dispatcher_key = types.view().rootKey(replay_types[0]),
+            .dispatcher_key = try types.view().rootKey(replay_types[0]),
             .dispatcher_ty = replay_types[0],
-            .callable_key = types.view().rootKey(replay_types[1]),
+            .callable_key = try types.view().rootKey(replay_types[1]),
             .callable_ty = replay_types[1],
             .generated_codec_derivation = derivation_ids[0],
             .generated_codec_content = .{ .bytes = @as([32]u8, @splat(4)) },
@@ -3383,7 +3385,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     root_b.module.bytes[0] = 1;
     root_b.const_locator = .{
         .artifact = root_b.module,
-        .owner = .{ .hoisted_expr = .{ .module_idx = 1, .expr = @fromBackingInt(@intCast(2)) } },
+        .owner = .{ .hoisted_root = .{ .module_idx = 1, .root = @fromBackingInt(@intCast(2)) } },
         .template = @fromBackingInt(@intCast(3)),
         .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
     };

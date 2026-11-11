@@ -44,7 +44,7 @@ test "issue 10395: platform requirement record with a function field lowers to L
         \\    f14 : F64,
         \\}
         \\
-        \\Widget := { on : Event -> {} }
+        \\Widget := { on : Box((Event -> {})) }
         ,
     });
     try tmp_dir.dir.writeFile(std.testing.io, .{

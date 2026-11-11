@@ -18,7 +18,6 @@ const wasm32v1_builtins = @import("wasm32v1_builtins");
 
 const Allocator = std.mem.Allocator;
 const object_image = @import("object_image.zig");
-const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const ExecutableMemory = backend.ExecutableMemory;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const Interpreter = @import("interpreter.zig").Interpreter;
@@ -255,6 +254,18 @@ fn returnedResult(
     };
 }
 
+/// A root's `(ret_ptr, args_ptr)` entry wrapper, called on the evaluation
+/// stack.
+const EntryCall = struct {
+    entry: *const fn ([*]u8, ?*anyopaque) callconv(.c) void,
+    ret: [*]u8,
+    args: ?*anyopaque,
+
+    fn call(self: *EntryCall) void {
+        self.entry(self.ret, self.args);
+    }
+};
+
 /// Return the layout indices for `main_proc`'s arguments.
 pub fn mainProcArgLayouts(allocator: Allocator, store: *const lir.LirStore, main_proc: LirProcSpecId) Allocator.Error![]LayoutIdx {
     const proc = store.getProcSpec(main_proc);
@@ -418,21 +429,16 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         defer allocator.free(ret_buf);
         @memset(ret_buf, 0);
 
-        const composition = if (program.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null;
-        defer if (composition) |owned| owned.destroy();
-        const composing = if (composition) |owned| owned.enter() else null;
-        defer if (composing) |entered| BoxyInProcessState.leave(entered);
-
         var crash_boundary = runtime_env.enterCrashBoundary();
         defer crash_boundary.deinit();
-        if (crash_boundary.set() != 0) return crashResult(allocator, &runtime_env, null);
-
         const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
         defer builtins.in_process_host.leave(entered);
-        exec_mem.callRocABI(
-            @ptrCast(ret_buf.ptr),
-            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-        );
+        var root_call: EntryCall = .{
+            .entry = @ptrCast(@alignCast(exec_mem.entryPtr())),
+            .ret = ret_buf.ptr,
+            .args = if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+        };
+        if (try crash_boundary.run(EntryCall, &root_call, EntryCall.call) != 0) return crashResult(allocator, &runtime_env, null);
         switch (runtime_env.crashState()) {
             .did_not_crash => {},
             .crashed => return crashResult(allocator, &runtime_env, null),
@@ -660,21 +666,16 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     defer allocator.free(ret_buf);
     @memset(ret_buf, 0);
 
-    const composition = if (program.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null;
-    defer if (composition) |owned| owned.destroy();
-    const composing = if (composition) |owned| owned.enter() else null;
-    defer if (composing) |entered| BoxyInProcessState.leave(entered);
-
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
     defer builtins.in_process_host.leave(entered);
-    if (crash_boundary.set() != 0) return crashResult(allocator, &runtime_env, null);
-
-    entry(
-        ret_buf.ptr,
-        if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-    );
+    var root_call: EntryCall = .{
+        .entry = entry,
+        .ret = ret_buf.ptr,
+        .args = if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+    };
+    if (try crash_boundary.run(EntryCall, &root_call, EntryCall.call) != 0) return crashResult(allocator, &runtime_env, null);
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
         .crashed => return crashResult(allocator, &runtime_env, null),

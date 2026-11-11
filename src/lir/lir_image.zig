@@ -61,7 +61,17 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v58: procedure specs carry their link binding (`linked`, `exported`).
 /// v59: composition statements name mutable static cache slots.
 /// v60: active-tag payload addresses no longer carry a tag-name operand.
-pub const FORMAT_VERSION: u32 = 60;
+/// v61: layouts are digested by content and recursive layouts have one index.
+/// v62: dynamic operations include type table reads (`table_entry`).
+/// v63: no dynamic operation composes descriptors or dictionaries, and no
+///      statement names a composition cache slot.
+/// v64: static data rows carry no mutability flag.
+/// v65: dynamic operations name fields and variants by position, and
+///      coercions and record updates by plan, never by name.
+/// v66: `inspect` reads its type's names block.
+/// v67: dynamic product locals carry their checked ownership shape.
+/// v68: combined immutable constants and type-table capture representation.
+pub const FORMAT_VERSION: u32 = 68;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -304,7 +314,6 @@ pub const LayoutStoreImage = extern struct {
     struct_data: ArrayRef,
     tag_union_variants: TagUnionVariantsImage,
     tag_union_data: ArrayRef,
-    recursive_layout_keys: ArrayRef,
 
     fn fromStore(encoder: anytype, store: *const layout_mod.Store) @TypeOf(encoder).Error!LayoutStoreImage {
         return .{
@@ -317,7 +326,6 @@ pub const LayoutStoreImage = extern struct {
             .struct_data = try encoder.ref(store.struct_data.items.items),
             .tag_union_variants = try TagUnionVariantsImage.fromStore(encoder, &store.tag_union_variants),
             .tag_union_data = try encoder.ref(store.tag_union_data.items.items),
-            .recursive_layout_keys = try encoder.ref(store.recursive_layout_keys.items.items),
         };
     }
 
@@ -346,8 +354,9 @@ pub const LayoutStoreImage = extern struct {
             .interned_layouts = .empty,
             .interned_key_bytes = .empty,
             .scratch_intern_key = .empty,
-            .recursive_layout_keys = try safeListFromRef(layout_mod.Store.RecursiveLayoutKey, base_ptr, image_size, self.recursive_layout_keys),
+            .recursive_layout_keys = .{},
             .interned_recursive_graphs = .empty,
+            .recursive_commit_layouts = .empty,
             .recursive_digests = base.recursive_digest.Settled.init(allocator, layout_mod.Store.recursive_digest_domain),
             .target_usize = target_usize,
             .digest_cache = try layout_mod.DigestCache.create(allocator),
@@ -444,10 +453,13 @@ comptime {
     // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite`,
     // `stmt_source_rows`, `rc_effect_rows` and `facts` are transient worker state, not
     // serialized, and default to null or empty in views. The layout store's `digest_cache` is a memo
-    // each view starts empty, and its `commit_scratch` and
+    // each view starts empty; its interning caches, `recursive_layout_keys`,
+    // `interned_recursive_graphs`, `recursive_commit_layouts` and
+    // `recursive_digests` serve only commits,
+    // which a view never makes; and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 39);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 20);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 21);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -1079,7 +1091,7 @@ test "LIR image copies and round-trips every populated store field" {
     store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, source_allocator, 24, 0x90), .capacity = 24, .pointer_stability = .{} } } };
 
     // A layout Store with every serialized list populated distinctively. Only
-    // the ten array-backed fields are serialized; the interning caches are not
+    // the nine array-backed fields are serialized; the interning caches are not
     // read by `fromStore`, so they are left undefined here.
     var layouts = layout_mod.Store{
         .allocator = gpa,
@@ -1095,8 +1107,9 @@ test "LIR image copies and round-trips every populated store field" {
         .interned_layouts = undefined,
         .interned_key_bytes = undefined,
         .scratch_intern_key = undefined,
-        .recursive_layout_keys = try h.safeList(layout_mod.Store.RecursiveLayoutKey, source_allocator, 2, 0xa8),
+        .recursive_layout_keys = undefined,
         .interned_recursive_graphs = undefined,
+        .recursive_commit_layouts = undefined,
         .recursive_digests = undefined,
         .target_usize = target_usize,
         .digest_cache = undefined,
@@ -1171,10 +1184,6 @@ test "LIR image copies and round-trips every populated store field" {
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.tag_union_data.items.items),
         std.mem.sliceAsBytes(view.layouts.tag_union_data.items.items),
-    );
-    try h.expectBytesEq(
-        std.mem.sliceAsBytes(layouts.recursive_layout_keys.items.items),
-        std.mem.sliceAsBytes(view.layouts.recursive_layout_keys.items.items),
     );
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.struct_fields.field(.index)),
@@ -1341,31 +1350,4 @@ test "LIR image preserves the specialized runtime contract and rejects incompati
     header.format_version = FORMAT_VERSION;
     header.store.runtime_contract = 2;
     try std.testing.expectError(error.InvalidLirImage, viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator));
-}
-
-test "boxy composition slots survive LirImage transport with their initial state" {
-    const a = std.testing.allocator;
-    const memory = try a.alignedAlloc(u8, .@"16", 4096);
-    defer a.free(memory);
-    var fixed = std.heap.FixedBufferAllocator.init(memory);
-    const graph = [_]Program.StaticDataExport{.{
-        .symbol_name = "roc__boxy_site_test_0",
-        .value_id = null,
-        .bytes = &@as([8]u8, @splat(0)),
-        .alignment = 8,
-        .is_exported = false,
-        .is_mutable = true,
-    }};
-    const copied = try StaticDataImage.copy(fixed.allocator(), memory.ptr, memory.len, &graph);
-    const viewed = try StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 0, 0, 0, 8);
-    defer StaticDataImage.deinit(a, viewed);
-    try std.testing.expect(viewed[0].is_mutable);
-    try std.testing.expectEqualStrings(graph[0].symbol_name, viewed[0].symbol_name);
-    try std.testing.expectEqualSlices(u8, graph[0].bytes, viewed[0].bytes);
-    const rows = try sliceFromRef(StaticDataImage.Export, memory.ptr, fixed.end_index, copied);
-    rows[0].is_mutable = 2;
-    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 0, 0, 0, 8));
-    rows[0].is_mutable = 1;
-    @constCast(viewed[0].bytes)[0] = 1;
-    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 0, 0, 0, 8));
 }

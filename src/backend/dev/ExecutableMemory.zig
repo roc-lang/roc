@@ -320,7 +320,9 @@ pub const ExecutableMemory = struct {
     pub fn callRocABIAt(self: *const Self, entry_offset: usize, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
         const func: *const fn (*anyopaque, ?*anyopaque) callconv(.c) void =
             @ptrCast(@alignCast(self.memory.ptr + entry_offset));
-        func(ret_ptr, args_ptr);
+        // The host may have recorded its entry frame for failure walks.
+        // Keep that frame live while generated code runs or escapes.
+        @call(.never_tail, func, .{ ret_ptr, args_ptr });
     }
 };
 

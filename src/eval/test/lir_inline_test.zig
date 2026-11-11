@@ -131,7 +131,7 @@ fn sharedPrePublishedBuiltin() TestError!helpers.PrePublishedBuiltin {
     defer shared_test_builtins_mutex.unlock(std.testing.io);
 
     if (shared_test_builtins == null) {
-        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator, std.testing.io);
     }
 
     return .{
@@ -159,10 +159,6 @@ const LowerModuleOptions = struct {
     prove_ranges: bool = false,
     spec_constr_clone_inlining: lir.CheckedPipeline.SpecConstrCloneInlining = .all_calls,
     imports: []const helpers.ModuleSource = &.{},
-    /// TEMPORARY SCAFFOLDING: rewrites the root module's checked bodies after
-    /// checking and before lowering, for post-check forms no checker site emits
-    /// yet (design.md "Row Coercion Primitive"). Remove with its last user.
-    checked_body_edit: ?*const fn (*check.CheckedArtifact.CheckedBodyStore) void = null,
 };
 
 fn lowerModuleWithOptions(
@@ -171,9 +167,8 @@ fn lowerModuleWithOptions(
     inline_mode: lir.CheckedPipeline.InlineMode,
     options: LowerModuleOptions,
 ) TestError!LoweredSource {
-    var resources = try helpers.parseProgram(allocator, .module, source, options.imports, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    const resources = try helpers.parseProgram(allocator, .module, source, options.imports, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
-    if (options.checked_body_edit) |edit| edit(&resources.checked_artifact.checked_bodies);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
     const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
@@ -193,7 +188,7 @@ fn lowerModuleWithOptions(
     const main_request = for (resources.checked_artifact.root_requests.requests) |request| {
         switch (request.source) {
             .def => |def| if (def == main_def) break request,
-            .expr, .statement, .required_binding, .hoisted => {},
+            .expr, .statement, .required_binding, .hoisted, .literal => {},
         }
     } else return error.MissingRootProcedure;
     const published_roots = [_]check.CheckedArtifact.RootRequest{main_request};
@@ -224,6 +219,13 @@ fn lowerModuleWithOptions(
         },
     );
     errdefer lowered.deinit();
+
+    const static_data = try eval.buildStaticDataForWidth(allocator, .{
+        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .imports = import_views,
+    }, &lowered, lowered.target_usize, .{});
+    if (lowered.frozen_static_data) |*previous| previous.deinit();
+    lowered.frozen_static_data = .{ .allocator = allocator, .exports = static_data };
 
     return .{
         .resources = resources,
@@ -257,7 +259,7 @@ fn lowerMonotypeModuleWithOptions(
     source: []const u8,
     options: LowerMonotypeOptions,
 ) TestError!MonotypeSource {
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -314,7 +316,7 @@ fn monotypeCountersForModuleWithImports(
     source: []const u8,
     imports: []const helpers.ModuleSource,
 ) TestError!postcheck.Monotype.Lower.SpecializationCounters {
-    var resources = try helpers.parseProgram(allocator, .module, source, imports, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, imports, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -391,6 +393,7 @@ const StructuralJsonMonotypeStats = struct {
     functions: usize,
     definitions: usize,
     expressions: usize,
+    static_candidates: usize,
     locals: usize,
     template_misses: u64,
     nested_misses: u64,
@@ -423,7 +426,7 @@ fn structuralJsonSource(
     try source.appendSlice(allocator, "}\n\n");
     switch (operation) {
         .parse => try source.appendSlice(allocator,
-            \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+            \\main : Str -> Try(Shape, [InvalidJson(Str)])
             \\main = |json| Json.parse(json)
             \\
         ),
@@ -462,7 +465,7 @@ fn nestedOptionalStructuralJsonParserSource(
         \\
         \\Shape : { outer : Try({ mid : Try({ inner : Try(Fields, [Missing]) }, [Missing]) }, [Missing]) }
         \\
-        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main : Str -> Try(Shape, [InvalidJson(Str)])
         \\main = |json| Json.parse(json)
         \\
     );
@@ -480,10 +483,15 @@ fn structuralJsonMonotypeStatsForSource(
     });
     defer lowered.deinit(allocator);
 
+    var static_candidates: usize = 0;
+    for (lowered.mono.view().exprs) |expr| {
+        if (expr.data == .static_data_candidate) static_candidates += 1;
+    }
     return .{
         .functions = lowered.mono.view().fns.len,
         .definitions = lowered.mono.view().defs.len,
         .expressions = lowered.mono.view().exprs.len,
+        .static_candidates = static_candidates,
         .locals = lowered.mono.view().locals.len,
         .template_misses = counters.template_misses,
         .nested_misses = counters.nested_misses,
@@ -566,7 +574,7 @@ fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, pars
     for (0..parse_sites) |site| {
         const parse_fn = try std.fmt.allocPrint(
             allocator,
-            "\nparse_shape{d} : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])\nparse_shape{d} = |json| Json.parse(json)\n",
+            "\nparse_shape{d} : Str -> Try(Shape, [InvalidJson(Str)])\nparse_shape{d} = |json| Json.parse(json)\n",
             .{ site, site },
         );
         defer allocator.free(parse_fn);
@@ -588,7 +596,7 @@ fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, pars
         source,
         &.{},
         .native,
-        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
+        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -629,7 +637,7 @@ fn boxyStructuralJsonEncoderIncrefs(allocator: Allocator, field_count: usize) Te
         source_buf.items,
         &.{},
         .native,
-        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
+        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -694,6 +702,8 @@ fn runLoweredWithHostEvents(
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_data = try FrozenStaticData.init(allocator, lowered);
+    defer static_data.deinit();
     var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
     defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
@@ -704,6 +714,7 @@ fn runLoweredWithHostEvents(
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
+    static_data.install(&interpreter);
 
     const arg_layouts = try mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);
@@ -1040,7 +1051,7 @@ fn liftModuleAfterSpecConstr(
     allocator: Allocator,
     source: []const u8,
 ) TestError!LiftedSource {
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -1249,7 +1260,7 @@ fn expectInlinePlanDecision(
 /// Whether the inline plan inlines the function named `fn_name`.
 fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -1311,9 +1322,8 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     return decision orelse error.TestUnexpectedResult;
 }
 
-/// The static data a `.boxy` program froze (its descriptors, dictionaries,
-/// and name table), installed in an interpreter as every real pipeline
-/// installs it; a `.lss` program freezes none.
+/// Both strategies execute with the immutable values materialized for their
+/// lowered program, including stored builtin values and Boxy metadata.
 const FrozenStaticData = struct {
     data: ?eval.InterpreterStaticData,
 
@@ -1439,6 +1449,8 @@ const ProcShape = struct {
     list_reserve_for_append_count: usize = 0,
     str_count_utf8_bytes_count: usize = 0,
     str_concat_count: usize = 0,
+    str_append_count: usize = 0,
+    str_reserve_count: usize = 0,
     box_box_count: usize = 0,
     box_unbox_count: usize = 0,
     box_prepare_update_count: usize = 0,
@@ -2110,12 +2122,13 @@ test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
 test "issue 11910 boxy JSON record parser lowers each field's value parser once" {
     // The `Field`, `TryField`, and `TryFieldCaseless` events all select a
     // field and then parse its value; each field's value parser is one join
-    // they jump to. A field therefore adds two calls: the parser's
-    // constructor renaming its name, and the one call parsing its value.
+    // they jump to. A field adds three calls: construction-time renaming,
+    // the one value parser, and the format's missing_field on the cold
+    // absent-field path. No event duplicates the value parser.
     const allocator = std.testing.allocator;
     const four = (try boxyStructuralJsonParserCounts(allocator, 4, 1)).calls;
     const eight = (try boxyStructuralJsonParserCounts(allocator, 8, 1)).calls;
-    try std.testing.expectEqual(@as(usize, 2 * 4), eight - four);
+    try std.testing.expectEqual(@as(usize, 3 * 4), eight - four);
 }
 
 test "issue 11910 boxy JSON parses of one shape share its generated parser" {
@@ -2142,12 +2155,12 @@ test "boxy root that parses JSON directly receives its codec evidence" {
         \\    f1 : Str,
         \\}
         \\
-        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main : Str -> Try(Shape, [InvalidJson(Str)])
         \\main = |json| Json.parse(json)
     ,
         &.{},
         .native,
-        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
+        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -2187,18 +2200,18 @@ test "issue 10979 shared JSON record continuations preserve field semantics" {
         \\
         \\main : Bool
         \\main = {
-        \\    duplicate : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    duplicate : Try(Shape, [InvalidJson(Str)])
         \\    duplicate = Json.parse("{ \"f0\": \"first\", \"f1\": \"middle\", \"f0\": \"last\" }")
-        \\    missing : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing : Try(Shape, [InvalidJson(Str)])
         \\    missing = Json.parse("{ \"f0\": \"only\" }")
-        \\    invalid : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    invalid : Try(Shape, [InvalidJson(Str)])
         \\    invalid = Json.parse("{ \"f0\": \"started\", ")
         \\    duplicate_ok = match duplicate {
         \\        Ok(record) => record.f0 == "last" and record.f1 == "middle"
         \\        Err(_) => False
         \\    }
         \\    missing_ok = match missing {
-        \\        Err(MissingRequiredField(field)) => field == "f1"
+        \\        Err(InvalidJson(message)) => message == "Missing field: f1"
         \\        _ => False
         \\    }
         \\    invalid_ok = match invalid {
@@ -2282,9 +2295,9 @@ test "issue 10121 shared JSON helpers preserve optional nested round trips" {
         \\
         \\    ok_encoded = Json.to_str(ok_original)
         \\    missing_encoded = Json.to_str(missing_original)
-        \\    ok_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    ok_parsed : Try(Shape, [InvalidJson(Str)])
         \\    ok_parsed = Json.parse(ok_encoded)
-        \\    missing_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing_parsed : Try(Shape, [InvalidJson(Str)])
         \\    missing_parsed = Json.parse(missing_encoded)
         \\
         \\    ok_round_trips =
@@ -3272,7 +3285,7 @@ test "differently ordered source record rows produce normalized monotype rows" {
         \\main = choose(Bool.True)
     ;
 
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -4265,6 +4278,37 @@ test "issue 12609 lss runs imported lambdas a stored conditional, match, or bloc
     try std.testing.expectEqualStrings("(\"abab\", [1, 1], \"hi!\", \"ok?\")", output);
 }
 
+test "generated inspect renderings append onto one reserved accumulator" {
+    // A record, a tuple, a tag with payloads, and a nested list, each rendered
+    // by generated code: every piece is joined with `str_append`, each
+    // rendering of several pieces reserves its literal text first, and no
+    // `str_concat` is generated.
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\Shape : [Circle(F64), Rect(F64, F64), Dot]
+        \\
+        \\main : { name : Str, count : U64, shape : Shape, pair : (I64, Str), rows : List(List(U8)) } -> Str
+        \\main = |value| Str.inspect(value)
+    , .wrappers);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_concat_count"));
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_append_count") > 0);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_reserve_count") > 0);
+}
+
+test "a spelled Str.concat keeps str_concat beside a generated rendering" {
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\main : { left : Str, right : U64 } -> Str
+        \\main = |value| Str.concat(value.left, Str.inspect(value))
+    , .wrappers);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_concat_count"));
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_append_count") > 0);
+}
+
 test "issue 11170 boxy generic inspect preserves SIMD descriptor methods" {
     const allocator = std.testing.allocator;
     const source =
@@ -4987,6 +5031,56 @@ test "issue 11317 or-pattern captures reuse one closure with and without special
     }
 }
 
+test "issue 12705 an inline lambda calling a capturing local procedure gets one body per enclosing type" {
+    const allocator = std.testing.allocator;
+    // `h` captures `x`, so each instantiation of `f` has its own `h`. The
+    // inline lambda captures nothing itself, but it calls `h`, so each
+    // instantiation of `f` needs its own copy of the lambda too.
+    const source =
+        \\G := {}.{
+        \\    f : G, a -> (U64 -> U64)
+        \\    f = |_g, x| {
+        \\        h = |p| {
+        \\            _ = x
+        \\            p
+        \\        }
+        \\        |p| h(p)
+        \\    }
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| G.({}).f(1.U8)(n) + G.({}).f("s")(n)
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 4), lowered.mono.view().nested_defs.len);
+}
+
+test "a local procedure shares one body across enclosing types it does not capture" {
+    const allocator = std.testing.allocator;
+    // `h` captures only `x`, which is `U8` in both instantiations of `f`.
+    // `y` differs between them, but `h` never reads it.
+    const source =
+        \\G := {}.{
+        \\    f : G, a, b -> (U64 -> U64)
+        \\    f = |_g, x, y| {
+        \\        _ = y
+        \\        h = |p| {
+        \\            _ = x
+        \\            p
+        \\        }
+        \\        h
+        \\    }
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| G.({}).f(1.U8, "a")(n) + G.({}).f(1.U8, 2.U16)(n)
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), lowered.mono.view().nested_defs.len);
+}
+
 test "shared callees are lifted once and never gain spurious captures" {
     // A small diamond call graph: every function calls the one below it twice.
     // Capture collection reuses each callee's solved free set instead of
@@ -5117,6 +5211,8 @@ fn collectLirResultProcShape(
                 if (stmt.op == .list_reserve_for_append) shape.list_reserve_for_append_count += 1;
                 if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
                 if (stmt.op == .str_concat) shape.str_concat_count += 1;
+                if (stmt.op == .str_append) shape.str_append_count += 1;
+                if (stmt.op == .str_reserve) shape.str_reserve_count += 1;
                 if (stmt.op == .box_box) shape.box_box_count += 1;
                 if (stmt.op == .box_unbox or stmt.op == .box_unbox_borrowed) shape.box_unbox_count += 1;
                 if (stmt.op == .box_prepare_update) shape.box_prepare_update_count += 1;
@@ -9181,7 +9277,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     var mono_consumed = false;
     errdefer if (!mono_consumed) mono.deinit();
 
-    const shared_binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(7));
+    const shared_binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(7));
 
     const u32_ty = try mono.types.add(.{ .primitive = .u32 });
     const pair_span = try mono.types.addSpan(&.{ u32_ty, u32_ty });
@@ -9302,6 +9398,7 @@ test "issue 10181 explicit Str interpolation suffix checks cleanly" {
 
     const resources = try helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
         allocator,
+        std.testing.io,
         .module,
         source,
         &.{},
@@ -9325,7 +9422,7 @@ const dispatch_boundary_source =
 
 test "dispatch evidence boundary validator accepts a published artifact" {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
@@ -9348,7 +9445,7 @@ test "deeply nested tuple literal publishes evidence paths linear in its depth" 
     for (0..depth) |_| try source.appendSlice(allocator, ")");
     try source.appendSlice(allocator, "\n\nmain : Str\nmain = \"ok\"\n");
 
-    var resources = try helpers.parseProgram(allocator, .module, source.items, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source.items, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const templates = &resources.checked_artifact.checked_procedure_templates;
@@ -9390,21 +9487,22 @@ test "literal conversion ownership includes nested codec evidence" {
             .module,
             source,
             &.{},
-            .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
+            .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
         );
         defer helpers.cleanupParseAndCanonical(allocator, resources);
         const artifact = &resources.checked_artifact;
         try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
         try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
         var dependent_conversions: usize = 0;
-        for (artifact.checked_bodies.stored_exprs.items, 0..) |expr, expr_index| {
-            const expr_id: check.CheckedArtifact.CheckedExprId = @fromBackingInt(@intCast(expr_index));
-            const plan_id = switch (expr.data) {
-                .numeral => |numeral| numeral.plan orelse continue,
-                .str_from_quote => |quote| quote.plan orelse continue,
-                .pending,
+        const bodies = artifact.bodies();
+        for (0..bodies.nodeCount()) |raw| {
+            if (bodies.index().nodeKind(@intCast(raw)) != .expr) continue;
+            const expr_id: check.CheckedBodies.ExprId = @fromBackingInt(@intCast(raw));
+            const raw_expr = @backingInt(expr_id);
+            const plan_id, const conversion_root = switch (bodies.exprData(expr_id)) {
+                .numeral => .{ bodies.numeralPlan(raw_expr) orelse continue, bodies.literalConversionRoot(raw_expr) },
+                .str => if (bodies.quoteIsCustom(raw_expr)) .{ bodies.quotePlan(raw_expr) orelse continue, bodies.literalConversionRoot(raw_expr) } else continue,
                 .str_segment,
-                .str,
                 .bytes_literal,
                 .lookup_local,
                 .lookup_external,
@@ -9425,7 +9523,6 @@ test "literal conversion ownership includes nested codec evidence" {
                 .lambda,
                 .binop,
                 .unary_minus,
-                .unary_not,
                 .field_access,
                 .dispatch_call,
                 .interpolation,
@@ -9443,7 +9540,6 @@ test "literal conversion ownership includes nested codec evidence" {
                 .anno_only,
                 .break_,
                 .return_,
-                .row_coerce,
                 .for_,
                 .hosted_lambda,
                 .run_low_level,
@@ -9451,7 +9547,7 @@ test "literal conversion ownership includes nested codec evidence" {
             };
             const plan = artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
             try std.testing.expect(plan.resolution == .direct_parametric);
-            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr_id) == null);
+            try std.testing.expect(conversion_root == null);
             dependent_conversions += 1;
         }
         try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
@@ -9484,7 +9580,7 @@ test "custom literal field default gets an ordinary conversion root" {
         .module,
         source,
         &.{},
-        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
+        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -9494,8 +9590,9 @@ test "custom literal field default gets an ordinary conversion root" {
     // (design.md "Defaulted Fields").
     var numeral_roots: usize = 0;
     var quote_roots: usize = 0;
-    for (resources.checked_artifact.checked_bodies.default_exprs.items) |entry| {
-        const conversion = resources.checked_artifact.compile_time_roots.root(resources.checked_artifact.checked_bodies.literalConversionRoot(entry.checked_expr) orelse
+    const bodies = resources.checked_artifact.bodies();
+    for (bodies.defaultExprs()) |default_expr| {
+        const conversion = resources.checked_artifact.compile_time_roots.root(bodies.literalConversion(default_expr).conversion_root orelse
             return error.TestUnexpectedResult);
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
@@ -9510,57 +9607,7 @@ test "custom literal field default gets an ordinary conversion root" {
     // here as well as checking that both kinds of closed literal retain roots.
     const artifact = &resources.checked_artifact;
     try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
-    const expr_id = artifact.checked_bodies.default_exprs.items[0].checked_expr;
-    const plan_id = switch (artifact.checked_bodies.expr(expr_id).data) {
-        .numeral => |numeral| numeral.plan.?,
-        .str_from_quote => |quote| quote.plan.?,
-        .pending,
-        .str_segment,
-        .str,
-        .bytes_literal,
-        .lookup_local,
-        .lookup_external,
-        .lookup_required,
-        .list,
-        .empty_list,
-        .tuple,
-        .match_,
-        .if_,
-        .call,
-        .record,
-        .empty_record,
-        .block,
-        .tag,
-        .nominal,
-        .zero_argument_tag,
-        .closure,
-        .lambda,
-        .binop,
-        .unary_minus,
-        .unary_not,
-        .field_access,
-        .dispatch_call,
-        .interpolation,
-        .structural_eq,
-        .structural_hash,
-        .method_eq,
-        .type_dispatch_call,
-        .tuple_access,
-        .runtime_error,
-        .crash,
-        .dbg,
-        .expect_err,
-        .expect,
-        .ellipsis,
-        .anno_only,
-        .break_,
-        .return_,
-        .row_coerce,
-        .for_,
-        .hosted_lambda,
-        .run_low_level,
-        => return error.TestUnexpectedResult,
-    };
+    const plan_id = bodies.literalConversion(bodies.defaultExprs()[0]).plan orelse return error.TestUnexpectedResult;
     const plan = &artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
     const saved = plan.resolution;
     defer plan.resolution = saved;
@@ -9586,7 +9633,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
         \\    wrap(f)()
         \\}
     ;
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const artifact = &resources.checked_artifact;
@@ -9617,7 +9664,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     templates.dispatch_scopes[0].parent = saved_parent;
 
     const saved_scheme_root = templates.dispatch_scopes[0].scheme_root;
-    templates.dispatch_scopes[0].scheme_root = @fromBackingInt(@intCast(artifact.checked_types.payloadCount()));
+    templates.dispatch_scopes[0].scheme_root = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items.len);
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_scheme_root_out_of_bounds, failure.kind);
     templates.dispatch_scopes[0].scheme_root = saved_scheme_root;
@@ -9630,7 +9677,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
 
     const saved_relation_data = templates.specialization_interface_relations[0].data;
     templates.specialization_interface_relations[0].data = .{ .type_equality = .{
-        .left = @fromBackingInt(@intCast(artifact.checked_types.payloadCount())),
+        .left = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items.len),
         .right = templates.dispatch_scopes[0].scheme_root,
     } };
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
@@ -9699,7 +9746,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     const local_scope = local_record.dispatch_scope orelse return error.TestUnexpectedResult;
     const raw_local_scope = @backingInt(local_scope);
     const saved_scope_expr = templates.dispatch_scopes[raw_local_scope].checked_expr;
-    const next_expr = (@backingInt(saved_scope_expr) + 1) % artifact.checked_bodies.exprCount();
+    const next_expr = (@backingInt(saved_scope_expr) + 1) % artifact.bodies().nodeCount();
     templates.dispatch_scopes[raw_local_scope].checked_expr = @fromBackingInt(@intCast(next_expr));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
@@ -9734,7 +9781,7 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
         \\main : Str
         \\main = helper("hi")
     ;
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const templates = &resources.checked_artifact.checked_procedure_templates;
@@ -9772,30 +9819,36 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_out_of_bounds, failure.kind);
 }
 
-test "dispatch evidence boundary validator reports a removed dispatch plan by expression" {
+test "dispatch evidence boundary validator reports a removed dispatch plan by node" {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    var removed: ?check.CheckedArtifact.CheckedExprId = null;
-    for (resources.checked_artifact.checked_bodies.stored_exprs.items, 0..) |*expr, expr_index| {
-        if (std.meta.activeTag(expr.data) == .dispatch_call and expr.data.dispatch_call != null) {
-            expr.data = .{ .dispatch_call = null };
-            removed = @fromBackingInt(@intCast(expr_index));
-            break;
-        }
-    }
-    try std.testing.expect(removed != null);
+    const table = &resources.checked_artifact.static_dispatch_plans;
+    const bodies = resources.checked_artifact.bodies();
+    const removed: usize = for (table.by_node, 0..) |entry, i| {
+        if (bodies.index().nodeKind(entry.key) != .expr) continue;
+        if (bodies.exprData(@fromBackingInt(@intCast(entry.key))) == .dispatch_call) break i;
+    } else return error.TestUnexpectedResult;
+    const removed_node = table.by_node[removed].key;
+
+    const original_by_node = table.by_node;
+    const without_removed = try allocator.alloc(check.StaticDispatchRegistry.PlanKV, original_by_node.len - 1);
+    defer allocator.free(without_removed);
+    @memcpy(without_removed[0..removed], original_by_node[0..removed]);
+    @memcpy(without_removed[removed..], original_by_node[removed + 1 ..]);
+    table.by_node = without_removed;
+    defer table.by_node = original_by_node;
 
     const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.dispatch_expr_missing_plan, failure.kind);
-    try std.testing.expectEqual(removed.?, failure.expr.?);
+    try std.testing.expectEqual(removed_node, failure.node.?);
 }
 
 test "dispatch evidence boundary validator names the method of a dangling evidence node" {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const table = &resources.checked_artifact.static_dispatch_plans;
@@ -9829,7 +9882,7 @@ test "dispatch evidence boundary validator names the method of a dangling eviden
     try std.testing.expectEqualStrings(corrupted_method.?, named_method);
 }
 
-test "dispatch evidence boundary validator reports a site-evidence key outside the body store" {
+test "dispatch evidence boundary validator reports a site-evidence key outside the module's nodes" {
     const allocator = std.testing.allocator;
     // A where-constrained helper instantiated at a concrete type gives the
     // instantiation site a site-evidence entry to corrupt.
@@ -9845,12 +9898,12 @@ test "dispatch evidence boundary validator reports a site-evidence key outside t
         \\main : Str
         \\main = helper(Thing.Val("hi"))
     ;
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const table = &resources.checked_artifact.static_dispatch_plans;
     try std.testing.expect(table.site_evidence.len > 0);
-    table.site_evidence[0].key = @intCast(resources.checked_artifact.checked_bodies.exprCount());
+    table.site_evidence[0].key = @intCast(resources.checked_artifact.bodies().nodeCount());
 
     const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
@@ -9885,7 +9938,7 @@ test "compiler-generated dispatch classes lower via checked evidence" {
         \\    lhs = { speed: Speed.Mph($sum), label: "total" }
         \\    rhs = { speed: Speed.Mph(6), label: "total" }
         \\    other = { speed: Speed.Mph(7), label: "total" }
-        \\    parsed : Try({ names : Set(Str) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    parsed : Try({ names : Set(Str) }, [InvalidJson(Str)])
         \\    parsed = Json.parse("{ \"names\": [\"a\", \"b\"] }")
         \\    parsed_count = match parsed {
         \\        Ok(rec) => rec.names.len()
@@ -13237,7 +13290,7 @@ test "issue 11291 boxy imported nominal forwarding executes with exact backing d
     try std.testing.expectEqualStrings("[120, 121, 122]", output);
 }
 
-test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
+test "issue 11376: mixed-width products survive Boxy boundaries and copy-on-write" {
     const allocator = std.testing.allocator;
     const source =
         \\Pair := { a: U8, z: U64 }
@@ -13256,22 +13309,40 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
-        var found_packed = false;
-        for (result.store.getCFStmts()) |stmt| {
-            if (stmt == .assign_literal and stmt.assign_literal.value == .bytes_literal) {
-                if (stmt.assign_literal.value.bytes_literal.len == 2) found_packed = true;
-            }
-        }
-        try std.testing.expect(found_packed);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
-            // The descriptors, dictionaries, and name table a `.boxy` program froze.
-            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-            else
-                null;
-            defer if (static_data) |*data| data.deinit();
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
+            // The top-level list is now a frozen value, not a bytes_literal
+            // instruction. Pin the two packed, padded Pair elements themselves
+            // before checking that runtime copy-on-write leaves them unchanged.
+            var found_packed = false;
+            for (result.static_data_values.items, 0..) |slot, slot_index| {
+                const slot_layout = result.layouts.getLayout(slot.layout_idx);
+                if (slot_layout.tag != .list) continue;
+                const element = result.layouts.getListInfo(slot_layout);
+                if (element.elem_layout.tag != .struct_) continue;
+                const struct_idx = element.elem_layout.getStruct().idx;
+                if (result.layouts.getStructData(struct_idx).fields.count != 2) continue;
+                if (result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 0) != .u8 or
+                    result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 1) != .u64) continue;
+                const address = static_data.data.?.addresses[slot_index];
+                const list = (eval.Value{ .ptr = @ptrFromInt(address) }).read(@import("builtins").list.RocList);
+                try std.testing.expectEqual(@as(usize, 2), list.length);
+                try std.testing.expectEqual(@as(u32, 16), element.elem_size);
+                const a_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+                const z_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+                try std.testing.expect(a_offset < element.elem_size and z_offset + @sizeOf(u64) <= element.elem_size);
+                try std.testing.expect(a_offset < z_offset or a_offset >= z_offset + @sizeOf(u64));
+                for (0..list.length) |index| {
+                    const pair = eval.Value{ .ptr = list.bytes.? + index * element.elem_size };
+                    try std.testing.expectEqual(@as(u8, 3), pair.offset(a_offset).read(u8));
+                    try std.testing.expectEqual(@as(u64, 42), pair.offset(z_offset).read(u64));
+                }
+                found_packed = true;
+            }
+            try std.testing.expect(found_packed);
             var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
             defer static_strings.deinit();
             var interpreter = try eval.Interpreter.init(
@@ -13282,17 +13353,18 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
-            if (static_data) |*data| {
-                data.install(&interpreter);
-                data.ownByInterpreter(&interpreter);
+            static_data.install(&interpreter);
+            // Cover both elements and the bounds failure without depending
+            // on whether the constant list is a literal or frozen data.
+            for ([_]u64{ 131, 131, 0 }, 0..) |expected, position| {
+                var index: u64 = @intCast(position);
+                const evaluated = try interpreter.eval(.{
+                    .proc_id = try rootProc(&lowered.lowered),
+                    .arg_layouts = &.{.u64},
+                    .arg_ptr = @ptrCast(&index),
+                });
+                try std.testing.expectEqual(expected, evaluated.value.read(u64));
             }
-            var index: u64 = 1;
-            const evaluated = try interpreter.eval(.{
-                .proc_id = try rootProc(&lowered.lowered),
-                .arg_layouts = &.{.u64},
-                .arg_ptr = @ptrCast(&index),
-            });
-            try std.testing.expectEqual(@as(u64, 131), evaluated.value.read(u64));
         }
         try runtime_env.checkForLeaks();
     }
@@ -13306,6 +13378,9 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
 /// to emit.
 const stored_parser_gate_source =
     \\Format := [Default].{
+    \\    missing_field : Format, Str -> [FormatError]
+    \\    missing_field = |_, _| FormatError
+    \\
     \\    rename_field : Format, Str -> Str
     \\    rename_field = |_, name| name
     \\
@@ -13346,51 +13421,28 @@ const stored_parser_gate_source =
     \\
     \\State := [Present(Str), Done]
     \\
-    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError])
     \\parse_stored = {
     \\    Shape : { foo : Str }
     \\    Shape.parser_for(Format.Default)
     \\}
     \\
-    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError])
     \\main = |state| parse_stored(state)
 ;
 
 test "stored codec restore emits the same Monotype shape from Phase B" {
-    // This body's generation sits behind the graph freeze, in Phase B. No
-    // snapshot anywhere carries lowered output, so these are the numbers that
-    // stand in for "the sealed body is the body the eager restore used to
-    // emit". Measured on the compiler that still restored eagerly:
-    //   fns=10 defs=11 exprs=535 locals=108 template_misses=14 nested_misses=0
-    // and re-measured after the 2026-09-15 rebase onto upstream's codec
-    // contract machinery, which the eager restore no longer exists to be
-    // compared against, so the reference is this compiler itself:
-    //   fns=10 defs=11 exprs=597 locals=121 template_misses=14 nested_misses=0
-    // and again once a missing required field always constructs
-    // `MissingRequiredField` directly, with no remaining-state binding for an
-    // `invalid_value` call:
-    //   fns=10 defs=11 exprs=593 locals=119 template_misses=14 nested_misses=0
-    // and once a value whose closed or annotation-bounded row flows into an
-    // annotated result relates through a row coercion (design.md "Row
-    // Subsumption"), which lowers as a `row_widen` expression per such flow,
-    // except for a direct call, which is requested at the coercion's row and
-    // produces it with no `row_widen` (design.md "Closed Result Rows At
-    // Template Boundaries"). Every count is exact, including expressions and
-    // locals. The reserve-
-    // and-copy that Phase-B emission ends in is the same reserve-and-copy the
-    // eager restore already performed (it too filled a reservation with a
-    // lowered expression), so deferring orphans no expression the eager path
-    // kept and the predicted delta is zero. A window here would hide exactly
-    // the drift this gate exists to catch. Specialization misses may only
-    // fall: the eager restore keyed the callee spec as an open request, and
-    // Phase-B emission removes that cause.
+    // The format-owned missing_field callback contributes one method body;
+    // equal format errors propagate without generated row-injection branches.
+    // Exact counts pin the complete sealed body, including its reservations,
+    // so later changes cannot silently drop or duplicate generated operations.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
-    try std.testing.expectEqual(@as(usize, 10), stats.functions);
-    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 550), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 120), stats.locals);
-    try std.testing.expect(stats.template_misses <= 14);
+    try std.testing.expectEqual(@as(usize, 11), stats.functions);
+    try std.testing.expectEqual(@as(usize, 12), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 493), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 110), stats.locals);
+    try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
@@ -13402,6 +13454,9 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
 /// the case the two-phase restore exists for.
 const stored_parser_optional_gate_source =
     \\Format := [Default].{
+    \\    missing_field : Format, Str -> [FormatError]
+    \\    missing_field = |_, _| FormatError
+    \\
     \\    rename_field : Format, Str -> Str
     \\    rename_field = |_, name| name
     \\
@@ -13442,13 +13497,13 @@ const stored_parser_optional_gate_source =
     \\
     \\State := [Present(Str), Done]
     \\
-    \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError])
     \\parse_stored = {
     \\    Shape : { foo : Str, bar ?: Str }
     \\    Shape.parser_for(Format.Default)
     \\}
     \\
-    \\main : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError])
     \\main = |state| parse_stored(state)
 ;
 
@@ -13505,25 +13560,16 @@ const stored_encoder_optional_gate_source =
 ;
 
 test "stored parser restore lowers a shape with an optional field" {
-    // Not an equivalence gate: this program panicked before W2b
-    // ("resolved Monotype view requested for an unresolved instantiation
-    // node"), so there is no pre-W2b number to compare against. These are
-    // W2b's own, measured 2026-09-15, and they exist so a later change that
-    // silently drops or duplicates part of the generated optional-field
-    // parser is caught. That it lowers at all is the primary assertion.
-    // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
-    // machinery (exprs 669 -> 731, locals 127 -> 140), and again once a
-    // missing required field always constructs `MissingRequiredField`
-    // directly (exprs 731 -> 727, locals 140 -> 138), and again once a value
-    // whose annotation-bounded row flows into an annotated result lowers as a
-    // `row_widen` expression (exprs 727 -> 730).
+    // Optional fields add presence handling but no second missing_field
+    // specialization. This shares the required-record gate's method counts
+    // while pinning the optional field's complete generated operations.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
-    try std.testing.expectEqual(@as(usize, 10), stats.functions);
-    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 680), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 138), stats.locals);
-    try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
+    try std.testing.expectEqual(@as(usize, 11), stats.functions);
+    try std.testing.expectEqual(@as(usize, 12), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 623), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 128), stats.locals);
+    try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
@@ -13534,9 +13580,14 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     // an enclosing codec contract must not split those ordinary helpers.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
+    // Pin specialization, not expression/local bookkeeping within a worker.
     try std.testing.expectEqual(@as(usize, 23), stats.functions);
     try std.testing.expectEqual(@as(usize, 16), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 210), stats.expressions);
+    // Each of the two restored Values keeps its source static-data candidate,
+    // active-binding reservation, and deferred-use reservation. These six
+    // graph slots do not add helper workers; the counts above and below pin sharing.
+    try std.testing.expectEqual(@as(usize, 212), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 6), stats.static_candidates);
     try std.testing.expectEqual(@as(usize, 71), stats.locals);
     try std.testing.expectEqual(@as(u64, 18), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
@@ -13582,58 +13633,22 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
     }
 }
 
-/// TEMPORARY SCAFFOLDING for design.md "Row Coercion Primitive": no checker
-/// site emits `row_coerce` yet, so the row-coercion tests stamp one onto the
-/// checked body before lowering it. The source holds exactly one `match` whose
-/// every arm yields a tag (`B => B`, `Ok(v) => Ok(v)`); every other `match` in
-/// the source yields numbers. The stamp replaces that match with
-/// `row_coerce { value = cond }` and keeps the match's own, wider type, so the
-/// scrutinee's closed row is now used at the match's row. Delete this hook and
-/// drive the same cases from source once the local-value producer lands.
-///
-/// Derived per-expression data keyed on the replaced id stays consistent:
-/// divergence is stored on the expression itself, and the stamp requires the
-/// match's stored divergence to equal its scrutinee's (both columns), which is
-/// exactly what `row_coerce` divergence derives, so no ancestor's divergence
-/// changes either. The match's arms stay in the store unreferenced, and
-/// match-keyed exhaustiveness data stays behind on the replaced id; no
-/// `row_coerce` lowering reads either.
-fn stampRowCoerceOnIdentityMatch(bodies: *check.CheckedArtifact.CheckedBodyStore) void {
-    var stamped: usize = 0;
-    for (bodies.stored_exprs.items) |*expr| {
-        if (expr.data != .match_) continue;
-        const match = expr.data.match_;
-        if (match.branches.len == 0) continue;
-        const branches = bodies.match_branch_pool.items[match.branches.start..][0..match.branches.len];
-        const every_arm_yields_a_tag = for (branches) |branch| {
-            switch (bodies.stored_exprs.items[@backingInt(branch.value)].data) {
-                .tag, .zero_argument_tag, .nominal => {},
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => break false,
-            }
-        } else true;
-        if (!every_arm_yields_a_tag) continue;
-        const child = bodies.stored_exprs.items[@backingInt(match.cond)];
-        if (expr.diverges != child.diverges or expr.diverges_without_inline_expects != child.diverges_without_inline_expects) {
-            @panic("row coercion stamp target's stored divergence differs from its scrutinee's");
-        }
-        expr.data = .{ .row_coerce = .{ .value = match.cond } };
-        stamped += 1;
-    }
-    if (stamped != 1) @panic("expected exactly one identity match to stamp as a row coercion");
-}
-
-/// Lowers `source` with the row coercion stamped in under `strategy`.
-fn lowerStampedRowCoercion(allocator: Allocator, source: []const u8, strategy: base.SpecializationStrategy) TestError!LoweredSource {
-    return try lowerModuleWithOptions(allocator, source, .none, .{
+/// Lowers `source` under `strategy`, requiring checking to have recorded a row
+/// coercion in it (design.md "Row Subsumption"), so the lowering under test
+/// inserts the coercion.
+fn lowerRowCoercion(allocator: Allocator, source: []const u8, strategy: base.SpecializationStrategy) TestError!LoweredSource {
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
         .specialization_strategy = strategy,
-        .checked_body_edit = stampRowCoerceOnIdentityMatch,
     });
+    errdefer lowered.deinit(allocator);
+    try std.testing.expect(lowered.resources.checked_artifact.moduleEnvConst().row_coerced_results.items.items.len != 0);
+    return lowered;
 }
 
-fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]u64) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
+fn expectRowCoercionResults(source: []const u8, expectations: []const [2]u64) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
     const allocator = std.testing.allocator;
     for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
-        var lowered = try lowerStampedRowCoercion(allocator, source, strategy);
+        var lowered = try lowerRowCoercion(allocator, source, strategy);
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
@@ -13672,12 +13687,9 @@ test "row coercion: a closed tag row joins a wider row in both strategies" {
     // gives `x` and its constructor sites the joined numbering; a lowering
     // that numbered the value by `[B, C]` alone and read it at `[A, B, C]`
     // would read B as A (1) and C as B (2).
-    try expectStampedRowCoercionResults(
+    try expectRowCoercionResults(
         \\widen : [B, C] -> [A, B, C]
-        \\widen = |x| match x {
-        \\    B => B
-        \\    C => C
-        \\}
+        \\widen = |x| x
         \\
         \\main : U64 -> U64
         \\main = |mode| match widen(if mode == 0 { B } else { C }) {
@@ -13691,13 +13703,9 @@ test "row coercion: a closed tag row joins a wider row in both strategies" {
 test "row coercion: a Try error row joins inside the nominal in both strategies" {
     // The coercion crosses the `Try` nominal into its `Err` payload: `[E2, E3]`
     // joins `[E1, E2, E3]` while the `Ok` payload is unchanged.
-    try expectStampedRowCoercionResults(
+    try expectRowCoercionResults(
         \\widen : Try(U8, [E2, E3]) -> Try(U8, [E1, E2, E3])
-        \\widen = |x| match x {
-        \\    Ok(v) => Ok(v)
-        \\    Err(E2) => Err(E2)
-        \\    Err(E3) => Err(E3)
-        \\}
+        \\widen = |x| x
         \\
         \\main : U64 -> U64
         \\main = |mode| match widen(if mode == 0 { Err(E2) } else if mode == 1 { Err(E3) } else { Ok(7) }) {
@@ -13709,13 +13717,13 @@ test "row coercion: a Try error row joins inside the nominal in both strategies"
     , &.{ .{ 0, 2 }, .{ 1, 3 }, .{ 2, 0 } });
 }
 
-/// Lowers `source` with the row coercion stamped in, under both specialization
-/// strategies, and checks that `main(0)` crashes with `expected_message`
+/// Lowers `source` under both specialization strategies, requiring a recorded
+/// row coercion, and checks that `main(0)` crashes with `expected_message`
 /// without leaking.
-fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u8) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
+fn expectRowCoercionCrash(source: []const u8, expected_message: []const u8) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
     const allocator = std.testing.allocator;
     for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
-        var lowered = try lowerStampedRowCoercion(allocator, source, strategy);
+        var lowered = try lowerRowCoercion(allocator, source, strategy);
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
@@ -13753,12 +13761,9 @@ fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u
 test "row coercion: a refcounted Str payload moves through the join without leaking" {
     // The Str is built at runtime and is long enough for heap storage, so ARC
     // over the value's move into the destination actually runs.
-    try expectStampedRowCoercionResults(
+    try expectRowCoercionResults(
         \\widen : [Ok(Str), Err(U64)] -> [Bad, Ok(Str), Err(U64)]
-        \\widen = |x| match x {
-        \\    Ok(s) => Ok(s)
-        \\    Err(n) => Err(n)
-        \\}
+        \\widen = |x| x
         \\
         \\main : U64 -> U64
         \\main = |mode| match widen(if mode == 0 { Ok("heap allocated string payload number ${mode.to_str()}") } else { Err(mode) }) {
@@ -13770,12 +13775,9 @@ test "row coercion: a refcounted Str payload moves through the join without leak
 }
 
 test "row coercion: a refcounted List payload moves through the join without leaking" {
-    try expectStampedRowCoercionResults(
+    try expectRowCoercionResults(
         \\widen : [Some(List(U64)), Empty] -> [Bad, Some(List(U64)), Empty]
-        \\widen = |x| match x {
-        \\    Some(l) => Some(l)
-        \\    Empty => Empty
-        \\}
+        \\widen = |x| x
         \\
         \\main : U64 -> U64
         \\main = |mode| match widen(if mode == 0 { Some([mode, mode + 1, mode + 2]) } else { Empty }) {
@@ -13790,13 +13792,9 @@ test "row coercion: a row directly in a tag payload joins too" {
     // Inside the declared reach: the inner `[B, C]` joins `[A, B, C]` (every
     // inner variant changes index) while the outer row gains `Bad` (every
     // outer variant changes index).
-    try expectStampedRowCoercionResults(
+    try expectRowCoercionResults(
         \\widen : [Ok([B, C]), Err] -> [Bad, Ok([A, B, C]), Err]
-        \\widen = |x| match x {
-        \\    Ok(B) => Ok(B)
-        \\    Ok(C) => Ok(C)
-        \\    Err => Err
-        \\}
+        \\widen = |x| x
         \\
         \\main : U64 -> U64
         \\main = |mode| match widen(if mode == 0 { Ok(B) } else if mode == 1 { Ok(C) } else { Err }) {
@@ -13812,13 +13810,9 @@ test "row coercion: a row directly in a tag payload joins too" {
 test "row coercion: a generic payload crosses the join" {
     // `widen` is generic in its `Ok` payload and is used at Str and U64, so
     // `.boxy` lowers it once with a descriptor-carried payload.
-    try expectStampedRowCoercionResults(
+    try expectRowCoercionResults(
         \\widen : Try(a, [E2, E3]) -> Try(a, [E1, E2, E3])
-        \\widen = |x| match x {
-        \\    Ok(v) => Ok(v)
-        \\    Err(E2) => Err(E2)
-        \\    Err(E3) => Err(E3)
-        \\}
+        \\widen = |x| x
         \\
         \\main : U64 -> U64
         \\main = |mode| {
@@ -13837,8 +13831,8 @@ test "row coercion: a generic payload crosses the join" {
     , &.{ .{ 0, 2 }, .{ 1, 1003 }, .{ 2, 2036 } });
 }
 
-test "row coercion: a let-bound coercion inside a body" {
-    try expectStampedRowCoercionResults(
+test "row coercion: a coercion in a local function inside a body" {
+    try expectRowCoercionResults(
         \\classify : [A, B, C] -> U64
         \\classify = |v| match v {
         \\    A => 1
@@ -13848,20 +13842,18 @@ test "row coercion: a let-bound coercion inside a body" {
         \\
         \\main : U64 -> U64
         \\main = |mode| {
+        \\    widen : [B, C] -> [A, B, C]
+        \\    widen = |x| x
         \\    v : [B, C]
         \\    v = if mode == 0 { B } else { C }
-        \\    y : [A, B, C]
-        \\    y = match v {
-        \\        B => B
-        \\        C => C
-        \\    }
+        \\    y = widen(v)
         \\    classify(y)
         \\}
     , &.{ .{ 0, 2 }, .{ 1, 3 } });
 }
 
-test "row coercion: a coercion in a call argument" {
-    try expectStampedRowCoercionResults(
+test "row coercion: a coercion in a branch in result position" {
+    try expectRowCoercionResults(
         \\classify : [A, B, C] -> U64
         \\classify = |v| match v {
         \\    A => 1
@@ -13869,30 +13861,34 @@ test "row coercion: a coercion in a call argument" {
         \\    C => 3
         \\}
         \\
+        \\pick : [B, C], Bool -> [A, B, C]
+        \\pick = |v, first| if first { A } else { v }
+        \\
         \\main : U64 -> U64
         \\main = |mode| {
         \\    v : [B, C]
         \\    v = if mode == 0 { B } else { C }
-        \\    classify(match v {
-        \\        B => B
-        \\        C => C
-        \\    })
+        \\    classify(pick(v, mode == 5))
         \\}
-    , &.{ .{ 0, 2 }, .{ 1, 3 } });
+    , &.{ .{ 0, 2 }, .{ 1, 3 }, .{ 5, 1 } });
 }
 
 test "row coercion: a statically divergent child crashes" {
-    // The child is a `crash`, so the coercion diverges and is lowered by the
-    // divergent paths; the runtime result is the crash.
-    try expectStampedRowCoercionCrash(
-        \\widen : U64 -> [A, B, C]
-        \\widen = |_n| match (crash "row coercion child crashed") {
-        \\    B => B
-        \\    C => C
-        \\}
+    // The coerced call's argument is a `crash`, so the coercion diverges and
+    // is lowered by the divergent paths; the runtime result is the crash.
+    // The callback is a top-level function, so no caller holds an allocation
+    // when the callee crashes: a crash is fatal and releases nothing its
+    // callers own, so a closure value `.boxy` allocated in `main` would still
+    // be live.
+    try expectRowCoercionCrash(
+        \\pick : U64 -> [B, C]
+        \\pick = |n| if n == 0 { B } else { C }
+        \\
+        \\widen : (U64 -> [B, C]), U64 -> [A, B, C]
+        \\widen = |f, _n| f(crash "row coercion child crashed")
         \\
         \\main : U64 -> U64
-        \\main = |mode| match widen(mode) {
+        \\main = |mode| match widen(pick, mode) {
         \\    A => 1
         \\    B => 2
         \\    C => 3
@@ -13901,18 +13897,17 @@ test "row coercion: a statically divergent child crashes" {
 }
 
 test "row coercion: a child that crashes at runtime crashes" {
-    try expectStampedRowCoercionCrash(
+    // A callback parameter's result row is closed, so the call is the coerced
+    // child, and it crashes when evaluated.
+    try expectRowCoercionCrash(
         \\fail : U64 -> [B, C]
         \\fail = |_n| crash "row coercion callee crashed"
         \\
-        \\widen : U64 -> [A, B, C]
-        \\widen = |n| match fail(n) {
-        \\    B => B
-        \\    C => C
-        \\}
+        \\widen : (U64 -> [B, C]), U64 -> [A, B, C]
+        \\widen = |f, n| f(n)
         \\
         \\main : U64 -> U64
-        \\main = |mode| match widen(mode) {
+        \\main = |mode| match widen(fail, mode) {
         \\    A => 1
         \\    B => 2
         \\    C => 3
@@ -14104,10 +14099,13 @@ fn dictInsertLoopInterpreterPeakBytes(lowered: *const lir.CheckedPipeline.Lowere
     const allocator = peak_allocator.allocator();
     {
         const result = &lowered.lir_result;
+        var static_data = try FrozenStaticData.init(allocator, lowered);
+        defer static_data.deinit();
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
         defer interpreter.deinit();
+        static_data.install(&interpreter);
         var n = iterations;
         const evaluated = try interpreter.eval(.{
             .proc_id = try rootProc(lowered),
@@ -14287,10 +14285,13 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         const procs = try procsNamed(allocator, result, "pass");
         defer allocator.free(procs);
         try std.testing.expectEqual(@as(usize, 1), procs.len);
-        // The explicit parameter, the row variable's descriptor, and the
-        // descriptor of `[A, ..r]`, the dynamic composite its parameter and
-        // result share, which its caller prepares.
-        try std.testing.expectEqual(@as(usize, 3), result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args).len);
+        // Hidden descriptors live in the worker's type table, not separate
+        // arguments. The row-polymorphic worker receives its dynamic value
+        // and one table pointer; the closed workers above receive no table.
+        const args = result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args);
+        try std.testing.expectEqual(@as(usize, 2), args.len);
+        try std.testing.expectEqual(.dynamic, result.layouts.getLayout(result.store.getLocal(GuardedList.at(args, 0)).layout_idx).tag);
+        try std.testing.expectEqual(LayoutIdx.opaque_ptr, result.store.getLocal(GuardedList.at(args, 1)).layout_idx);
     }
     {
         const conversions = try procsNamed(allocator, result, "boxy.convert");

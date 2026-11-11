@@ -1,5 +1,7 @@
 ParserMissingRequiredFieldError :: [].{}
 
+# Required fields demand missing_field even though every existing operation
+# already agrees on the format error type.
 Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name

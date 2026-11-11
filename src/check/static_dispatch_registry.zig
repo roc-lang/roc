@@ -24,12 +24,8 @@ const CIR = can.CIR;
 const Var = types.Var;
 pub const NumericDefaultPhase = types.literal_defaulting.NumericDefaultPhase;
 const CheckedTypeId = checked_ids.CheckedTypeId;
-const CheckedExprId = checked_ids.CheckedExprId;
-const CheckedPatternId = checked_ids.CheckedPatternId;
-const CheckedStatementId = checked_ids.CheckedStatementId;
-const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
-const PatternBinderId = checked_ids.PatternBinderId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
+const CallableEvalTemplateId = checked_ids.CallableEvalTemplateId;
 
 const DispatchExprTag = enum {
     e_dispatch_call,
@@ -633,17 +629,33 @@ fn procedureRuntimeTargetForDef(
     def_idx: CIR.Def.Idx,
     method_owner: MethodOwner,
 ) ProcedureRuntimeTarget {
-    if (intrinsicForProcedureDef(module, def_idx)) |intrinsic| {
-        if (intrinsic.callsiteArity() != null) return .{ .intrinsic = intrinsic };
+    return procedureRuntimeTarget(
+        intrinsicForProcedureDef(module, def_idx),
+        iteratorProcedureForDef(module, def_idx),
+        module.moduleEnvConst().providedLowLevelForDef(def_idx),
+        method_owner,
+    );
+}
+
+/// The runtime category of a method of `method_owner` whose target is the
+/// procedure with these producer-recorded roles.
+pub fn procedureRuntimeTarget(
+    intrinsic: ?can.BuiltinLowLevel.IntrinsicId,
+    iterator_procedure: ?IteratorProcedureId,
+    provided_low_level: ?base.LowLevel,
+    method_owner: MethodOwner,
+) ProcedureRuntimeTarget {
+    if (intrinsic) |id| {
+        if (id.callsiteArity() != null) return .{ .intrinsic = id };
     }
-    if (iteratorProcedureForDef(module, def_idx)) |iterator| return if (iterator.participatesInRepresentationGraph())
+    if (iterator_procedure) |iterator| return if (iterator.participatesInRepresentationGraph())
         .{ .graph_participating = .{ .iterator_procedure = iterator } }
     else
         .{ .procedure = .{ .iterator_procedure = iterator } };
     if (std.meta.activeTag(method_owner) == .builtin and isIteratorOwner(method_owner.builtin)) {
         return .{ .graph_participating = .{} };
     }
-    if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| return .{ .low_level = op };
+    if (provided_low_level) |op| return .{ .low_level = op };
     return .{ .procedure = .{} };
 }
 
@@ -659,18 +671,32 @@ pub fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?
 
 /// Public `LocalProcedureMethodTarget` declaration.
 pub const LocalProcedureMethodTarget = struct {
-    binder: PatternBinderId,
-    expr: CheckedExprId,
+    binder: CIR.Pattern.Idx,
+    expr: CIR.Expr.Idx,
     /// Exact checked statement whose lexical position declares this target.
-    context_anchor: CheckedStatementId,
+    context_anchor: CIR.Statement.Idx,
     /// Exact generalized-local evidence scope owned by this target.
     dispatch_scope: ?DispatchScopeId = null,
+};
+
+/// The callable-eval template of a method bound to a computed callable, in
+/// the module that declares the method: the registry's own.
+pub const CallableBindingTarget = struct {
+    module: canonical.CheckedModuleDigest,
+    template: CallableEvalTemplateId,
 };
 
 /// Public `MethodTargetKind` declaration.
 pub const MethodTargetKind = union(enum(u8)) {
     procedure: ProcedureMethodTarget,
     local_proc: LocalProcedureMethodTarget,
+    /// A top-level method binding whose callable no procedure stands behind
+    /// (`to_inspect = make()`): its compile-time root evaluates the function
+    /// value, and a dispatch calls that value, as a call of the binding by
+    /// name does. The binding is a value, so it is monomorphic: the target
+    /// carries no scheme, no evidence, and no alias (design.md "Procedure
+    /// Aliases").
+    callable_binding: CallableBindingTarget,
     structural: StructuralKind,
 };
 
@@ -689,18 +715,54 @@ pub const MethodTarget = struct {
 };
 
 /// The exact procedure alias a method is bound to.
-pub const MethodAlias = union(enum(u8)) {
+pub const MethodAlias = struct {
+    /// The checked module that declares the alias binding: the module whose
+    /// registry holds the method. The procedure the alias chain reaches may
+    /// be another module's (`method = Other.function`).
+    module: canonical.CheckedModuleDigest,
+    binding: MethodAliasBinding,
+};
+
+/// The binding of an exact procedure alias, in its declaring module.
+pub const MethodAliasBinding = union(enum(u8)) {
     /// A top-level alias, by its checked binding pattern, which names its
     /// callable-eval template.
-    top_level: CheckedPatternId,
+    top_level: CIR.Pattern.Idx,
     /// A block-local alias: its checked lookup of the aliased procedure and
     /// the generalized-local evidence scope it owns.
     local: LocalMethodAlias,
 };
 
+/// What the value of a method bound by reference (`method = f`) reaches,
+/// following its exact procedure aliases. Publication resolves it from its
+/// resolved value references (`MethodRegistry.fromModule`'s
+/// `referenced_targets`).
+pub const ReferencedMethodTarget = union(enum) {
+    target: ReferencedTarget,
+    /// The chain reaches a binding checking rejected, so the method is a
+    /// rejected declaration: every dispatch to it is a checked error.
+    rejected,
+
+    pub const ReferencedTarget = struct {
+        kind: MethodTargetKind,
+        callable: ReferencedCallable,
+    };
+
+    /// The target's callable type. A procedure's is its template's checked
+    /// function root, in the store of the module that owns the template;
+    /// any other target's is a type of the registry's own module.
+    pub const ReferencedCallable = union(enum) {
+        template_root: CheckedTypeId,
+        source: Var,
+        /// The method binding's own type, for a structural declaration of
+        /// another module.
+        binding,
+    };
+};
+
 /// Public `LocalMethodAlias` declaration.
 pub const LocalMethodAlias = struct {
-    lookup: CheckedExprId,
+    lookup: CIR.Expr.Idx,
     dispatch_scope: ?DispatchScopeId = null,
 };
 
@@ -809,13 +871,20 @@ pub const MethodRegistry = struct {
         self.* = .{};
     }
 
+    /// `referenced_targets` resolves a method binding that is no procedure
+    /// of its own: `methodBindingTarget(binding, binding_expr, method_owner)`
+    /// returns the `ReferencedMethodTarget` its value reaches (through
+    /// references, or its own compile-time root for a computed callable), or
+    /// null for an associated value that is not a callable.
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
+        owner_artifact: canonical.CheckedModuleDigest,
         local_templates: *const ProcedureTemplateLookup,
         checked_types: anytype,
-        checked_bodies: anytype,
+        module_index: anytype,
+        referenced_targets: anytype,
     ) Allocator.Error!MethodRegistry {
         var entries = std.ArrayList(MethodRegistryEntry).empty;
         errdefer entries.deinit(allocator);
@@ -864,6 +933,7 @@ pub const MethodRegistry = struct {
                 continue;
             }
             var referenced_callable_var: ?Var = null;
+            var referenced_callable_ty: ?CheckedTypeId = null;
             var alias: ?MethodAlias = null;
             const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
                 .{ .structural = generated }
@@ -890,27 +960,42 @@ pub const MethodRegistry = struct {
             } else if (promotedProcedureTargetForMethodBinding(module, local_templates, entry.value)) |promoted| blk: {
                 referenced_callable_var = promoted.callable_var;
                 break :blk promoted.kind;
-            } else if (localProcedureTargetForMethodBinding(module, checked_bodies, entry.key.owner, entry.value)) |local|
+            } else if (localProcedureTargetForMethodBinding(module, module_index, entry.key.owner, entry.value)) |local|
                 .{ .local_proc = local }
-            else if (referencedProcedureTargetForMethodBinding(
-                module,
-                local_templates,
-                checked_bodies,
-                entry.value,
-                method_owner,
-            )) |referenced| blk: {
-                referenced_callable_var = referenced.callable_var;
-                if (std.meta.activeTag(referenced.kind) == .procedure) {
-                    alias = methodAliasForBinding(module, checked_bodies, entry.value);
-                }
-                break :blk referenced.kind;
+            else if (try referencedMethodTarget(module, referenced_targets, entry.value, method_owner)) |referenced| switch (referenced) {
+                // A method bound to a rejected binding is a rejected
+                // declaration, exactly like one whose own value checking
+                // rejected.
+                .rejected => {
+                    try entries.append(allocator, .{
+                        .key = method_key,
+                        .target = null,
+                        .inspect_override = null,
+                    });
+                    continue;
+                },
+                .target => |target| blk: {
+                    switch (target.callable) {
+                        .template_root => |root| referenced_callable_ty = root,
+                        .source => |source| referenced_callable_var = source,
+                        .binding => {},
+                    }
+                    if (std.meta.activeTag(target.kind) == .procedure) {
+                        alias = methodAliasForBinding(module, owner_artifact, module_index, entry.value);
+                    }
+                    break :blk target.kind;
+                },
             } else
                 // Associated values that resolve to neither a callable nor an
                 // explicitly structural declaration are checked field access,
                 // not static-dispatch resolutions.
                 continue;
-            const callable_var = referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind);
-            const callable_ty = try checked_types.publishMethodCallableType(allocator, module, names, callable_var);
+            const callable_ty = referenced_callable_ty orelse try checked_types.publishMethodCallableType(
+                allocator,
+                module,
+                names,
+                referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind),
+            );
 
             try entries.append(allocator, .{
                 .key = method_key,
@@ -923,9 +1008,10 @@ pub const MethodRegistry = struct {
                 },
                 // Inspection calls an override from rendering workers and
                 // generic code that never hold a local procedure's declaration
-                // context, so only a procedure can be one.
+                // context, so only a procedure or a stored top-level value
+                // can be one.
                 .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
-                    std.meta.activeTag(target_kind) == .procedure)
+                    (std.meta.activeTag(target_kind) == .procedure or std.meta.activeTag(target_kind) == .callable_binding))
                     try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
                 else
                     null,
@@ -959,7 +1045,7 @@ fn methodTargetCallableVar(
     target_kind: MethodTargetKind,
 ) Var {
     return switch (target_kind) {
-        .procedure => module.defType(def_idx),
+        .procedure, .callable_binding => module.defType(def_idx),
         .structural => ModuleEnv.varFrom(binding.type_node_idx),
         .local_proc => blk: {
             const raw_node = @backingInt(binding.type_node_idx);
@@ -1019,18 +1105,32 @@ fn methodBindingExpr(
 /// lookup chain reaching a procedure.
 fn methodAliasForBinding(
     module: TypedCIR.Module,
-    checked_bodies: anytype,
+    owner_artifact: canonical.CheckedModuleDigest,
+    module_index: anytype,
     binding: ModuleEnv.MethodBinding,
 ) MethodAlias {
     if (module.nodeTag(binding.type_node_idx) == .def) {
         const pattern = module.moduleEnvConst().store.getDef(binding.def_idx).pattern;
-        return .{ .top_level = checked_bodies.patternIdForSource(pattern) orelse
-            base.invariant("checked static dispatch registry invariant violated: a method alias binding pattern was not checked", .{}) };
+        if (!module_index.reachesPattern(pattern)) base.invariant("checked static dispatch registry invariant violated: a method alias binding pattern was not checked", .{});
+        return .{ .module = owner_artifact, .binding = .{ .top_level = pattern } };
     }
     const expr = methodBindingExpr(module, binding) orelse
         base.invariant("checked static dispatch registry invariant violated: a local method alias binding had no value", .{});
-    return .{ .local = .{ .lookup = checked_bodies.exprIdForSource(expr) orelse
-        base.invariant("checked static dispatch registry invariant violated: a local method alias lookup was not checked", .{}) } };
+    if (!module_index.reachesExpr(expr)) base.invariant("checked static dispatch registry invariant violated: a local method alias lookup was not checked", .{});
+    return .{ .module = owner_artifact, .binding = .{ .local = .{ .lookup = expr } } };
+}
+
+/// What a method binding that is no procedure of its own reaches: the
+/// procedure its references reach, its own computed callable, or null for an
+/// associated value that is not a callable.
+fn referencedMethodTarget(
+    module: TypedCIR.Module,
+    referenced_targets: anytype,
+    binding: ModuleEnv.MethodBinding,
+    method_owner: MethodOwner,
+) Allocator.Error!?ReferencedMethodTarget {
+    const expr_idx = methodBindingExpr(module, binding) orelse return null;
+    return try referenced_targets.methodBindingTarget(binding, expr_idx, method_owner);
 }
 
 fn unsupportedGeneratedMethodBinding(
@@ -1045,7 +1145,7 @@ fn unsupportedGeneratedMethodBinding(
 
 fn localProcedureTargetForMethodBinding(
     module: TypedCIR.Module,
-    checked_bodies: anytype,
+    module_index: anytype,
     owner_statement: CIR.Statement.Idx,
     binding: ModuleEnv.MethodBinding,
 ) ?LocalProcedureMethodTarget {
@@ -1065,25 +1165,24 @@ fn localProcedureTargetForMethodBinding(
 
     if (!localProcedureExpr(module, decl.expr)) return null;
 
-    const expr = checked_bodies.exprIdForSource(decl.expr) orelse return null;
-    const binder = checked_bodies.patternBinderForSource(decl.pattern) orelse {
+    if (!module_index.reachesExpr(decl.expr)) return null;
+    if (!module_index.reachesPattern(decl.pattern)) {
         base.invariant(
             "checked static dispatch registry invariant violated: local method pattern {d} has no checked binder",
             .{@backingInt(decl.pattern)},
         );
-    };
-
-    const context_anchor = checked_bodies.statementIdForSource(owner_statement) orelse {
+    }
+    if (!module_index.reachesStatement(owner_statement)) {
         base.invariant(
             "checked static dispatch registry invariant violated: local method owner statement {d} has no checked statement",
             .{@backingInt(owner_statement)},
         );
-    };
+    }
 
     return .{
-        .binder = binder,
-        .expr = expr,
-        .context_anchor = context_anchor,
+        .binder = decl.pattern,
+        .expr = decl.expr,
+        .context_anchor = owner_statement,
     };
 }
 
@@ -1124,92 +1223,6 @@ fn promotedProcedureTarget(
         } },
         .callable_var = module.exprType(expr),
     };
-}
-
-/// Resolve a function-typed associated value bound by reference
-/// (`method = top_level_fn`) to the referenced procedure. The reference chain
-/// is followed through top-level defs and associated declarations until it
-/// reaches a procedure-backed binding; a chain that never reaches one is an
-/// associated value, not a call target, and resolves to null.
-fn referencedProcedureTargetForMethodBinding(
-    module: TypedCIR.Module,
-    local_templates: *const ProcedureTemplateLookup,
-    checked_bodies: anytype,
-    binding: ModuleEnv.MethodBinding,
-    method_owner: MethodOwner,
-) ?ReferencedProcedureTarget {
-    const module_env = module.moduleEnvConst();
-    var expr_idx = methodBindingExpr(module, binding) orelse return null;
-    // Each hop follows one value binding, and a chain can visit each binding
-    // at most once before repeating, so the node count bounds the walk.
-    var remaining: usize = module.nodeCount();
-    while (remaining > 0) : (remaining -= 1) {
-        const expr_data = module.expr(expr_idx).data;
-        if (std.meta.activeTag(expr_data) != .e_lookup_local) return null;
-        const pattern_idx = expr_data.e_lookup_local.pattern_idx;
-        if (defForBoundPattern(module_env, pattern_idx)) |target_def_idx| {
-            if (local_templates.entryForDef(target_def_idx)) |template_entry| {
-                return .{
-                    .kind = switch (template_entry.kind) {
-                        .callable => .{ .procedure = .{
-                            .proc = .{ .artifact = template_entry.template.artifact, .proc_base = template_entry.template.proc_base },
-                            .template = template_entry.template,
-                            .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner),
-                        } },
-                        .structural => |kind| .{ .structural = kind },
-                    },
-                    .callable_var = module.defType(target_def_idx),
-                };
-            }
-            expr_idx = module_env.store.getDef(target_def_idx).expr;
-            continue;
-        }
-        if (statementDeclForBoundPattern(module, pattern_idx)) |decl| {
-            if (promotedProcedureTarget(module, local_templates, decl.pattern, decl.expr)) |promoted| return promoted;
-            if (localProcedureExpr(module, decl.expr)) {
-                const expr = checked_bodies.exprIdForSource(decl.expr) orelse return null;
-                const binder = checked_bodies.patternBinderForSource(decl.pattern) orelse return null;
-                return .{
-                    .kind = .{ .local_proc = .{
-                        .binder = binder,
-                        .expr = expr,
-                        .context_anchor = checked_bodies.statementIdForSource(decl.statement) orelse return null,
-                    } },
-                    .callable_var = module.exprType(decl.expr),
-                };
-            }
-            expr_idx = decl.expr;
-            continue;
-        }
-        return null;
-    }
-    return null;
-}
-
-fn defForBoundPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
-    for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
-        if (module_env.store.getDef(def_idx).pattern == pattern_idx) return def_idx;
-    }
-    return null;
-}
-
-const BoundDecl = struct {
-    statement: CIR.Statement.Idx,
-    pattern: CIR.Pattern.Idx,
-    expr: CIR.Expr.Idx,
-};
-
-fn statementDeclForBoundPattern(module: TypedCIR.Module, pattern_idx: CIR.Pattern.Idx) ?BoundDecl {
-    var raw_node: u32 = 0;
-    while (raw_node < module.nodeCount()) : (raw_node += 1) {
-        if (module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .statement_decl) continue;
-        const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
-        const statement_data = module.getStatement(statement);
-        if (std.meta.activeTag(statement_data) != .s_decl) continue;
-        const decl = statement_data.s_decl;
-        if (decl.pattern == pattern_idx) return .{ .statement = statement, .pattern = decl.pattern, .expr = decl.expr };
-    }
-    return null;
 }
 
 fn methodOwnerForRegistryEntry(
@@ -1419,13 +1432,21 @@ pub const StaticDispatchDispatcher = union(enum) {
 
 /// Public `StaticDispatchOperand` declaration.
 pub const StaticDispatchOperand = union(enum) {
-    checked_expr: CheckedExprId,
+    checked_expr: CIR.Expr.Idx,
     /// The literal segments of the checked interpolation expression, passed
     /// to `from_interpolation` as a `List(Str)`.
-    generated_interpolation_segments: CheckedExprId,
+    generated_interpolation_segments: CIR.Expr.Idx,
     generated_numeral: ModuleEnv.NumeralLiteral,
-    /// A string literal's post-escape contents, passed to `from_quote` as Str.
-    generated_quote: CheckedStringLiteralId,
+    /// The post-escape contents of the string literal at this CIR node (an
+    /// expression or a string literal pattern), passed to `from_quote` as Str
+    /// (`checked_bodies.CheckedBodies.quoteText`).
+    generated_quote: u32,
+    /// The value a custom literal pattern matches, read through the pattern
+    /// itself as its binder.
+    literal_pattern_value: CIR.Pattern.Idx,
+    /// A custom literal pattern's literal converted at the pattern's type
+    /// (`checked_bodies.CheckedBodies.literalConversion`).
+    literal_pattern_conversion: CIR.Pattern.Idx,
 };
 
 /// Public `StructuralKind` declaration.
@@ -1656,7 +1677,7 @@ pub const EvidenceNode = struct {
 /// order: a range into `StaticDispatchPlanTable.evidence_refs`. Sorted by key
 /// for binary search (transform D).
 pub const SiteEvidenceEntry = extern struct {
-    /// `@backingInt` of the site's `CheckedExprId`.
+    /// The CIR node of the instantiation site.
     key: u32,
     start: u32,
     len: u32,
@@ -1837,7 +1858,10 @@ pub const CheckedCallResolution = union(enum) {
 
 /// Public `StaticDispatchCallPlan` declaration.
 pub const StaticDispatchCallPlan = struct {
-    expr: CheckedExprId,
+    /// The CIR node of the dispatch site: a dispatching expression, a
+    /// literal expression, or a custom literal pattern (whose node keys both
+    /// its conversion plan and its equality plan).
+    node: u32,
     method: canonical.MethodNameId,
     dispatcher: StaticDispatchDispatcher,
     dispatcher_ty: CheckedTypeId,
@@ -1939,7 +1963,7 @@ pub const IteratorForPlanId = enum(u32) { _ };
 
 /// Public `IteratorDispatchOperand` declaration.
 pub const IteratorDispatchOperand = union(enum) {
-    checked_expr: CheckedExprId,
+    checked_expr: CIR.Expr.Idx,
     loop_iterator_state,
     /// The empty `List(item)` an interpolation's iterator is built from.
     interpolation_seed,
@@ -2017,13 +2041,13 @@ pub const IteratorForPlan = struct {
     };
 
     pub const ForLoop = struct {
-        iterable: CheckedExprId,
+        iterable: CIR.Expr.Idx,
         step_ty: CheckedTypeId,
         step_topology: IteratorStepTopology,
     };
 
     pub const Interpolation = struct {
-        expr: CheckedExprId,
+        expr: CIR.Expr.Idx,
         /// The empty `List(item)` the iterator is built from.
         seed_list_ty: CheckedTypeId,
     };
@@ -2094,8 +2118,10 @@ fn sortedPlanKVs(allocator: Allocator, entries: *std.ArrayListUnmanaged(PlanKV))
 /// (transform D). Reconstituted as plain slices on deserialize.
 pub const StaticDispatchPlanTable = struct {
     plans: []StaticDispatchCallPlan = &.{},
-    /// `CIR.Expr.Idx` -> `StaticDispatchPlanId`, sorted by key (transform D).
-    by_expr: []PlanKV = &.{},
+    /// The CIR node of a dispatching expression or of a custom literal
+    /// pattern's equality -> `StaticDispatchPlanId`, sorted by key
+    /// (transform D).
+    by_node: []PlanKV = &.{},
     /// `CIR.Node.Idx` -> `StaticDispatchPlanId`, sorted by key.
     numeral_by_node: []PlanKV = &.{},
     /// `CIR.Node.Idx` -> `StaticDispatchPlanId`, sorted by key.
@@ -2141,7 +2167,7 @@ pub const StaticDispatchPlanTable = struct {
 
     pub const Serialized = extern struct {
         plans: SerializedSlice(StaticDispatchCallPlan) = .{},
-        by_expr: SerializedSlice(PlanKV) = .{},
+        by_node: SerializedSlice(PlanKV) = .{},
         numeral_by_node: SerializedSlice(PlanKV) = .{},
         quote_by_node: SerializedSlice(PlanKV) = .{},
         iterator_for_plans: SerializedSlice(IteratorForPlan) = .{},
@@ -2176,7 +2202,7 @@ pub const StaticDispatchPlanTable = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         checked_types: anytype,
-        checked_bodies: anytype,
+        bodies: anytype,
         build_data: *PlanTableBuildData,
     ) Allocator.Error!StaticDispatchPlanTable {
         var plans = std.ArrayList(StaticDispatchCallPlan).empty;
@@ -2192,8 +2218,8 @@ pub const StaticDispatchPlanTable = struct {
         errdefer iter_operand_pool.deinit(allocator);
         // Each source node -> plan index is recorded as it is planned and
         // ordered by key once every plan is known.
-        var by_expr: std.ArrayListUnmanaged(PlanKV) = .empty;
-        defer by_expr.deinit(allocator);
+        var by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
+        defer by_node.deinit(allocator);
         var numeral_by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
         defer numeral_by_node.deinit(allocator);
         var quote_by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
@@ -2224,7 +2250,7 @@ pub const StaticDispatchPlanTable = struct {
         var iterator_for_by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
         defer iterator_for_by_node.deinit(allocator);
 
-        var constraint_index = try StaticDispatchConstraintIndex.fromModule(allocator, module, checked_bodies);
+        var constraint_index = try StaticDispatchConstraintIndex.fromModule(allocator, module, bodies);
         defer constraint_index.deinit(allocator);
 
         var node_idx: u32 = 0;
@@ -2237,9 +2263,9 @@ pub const StaticDispatchPlanTable = struct {
                 tag != .expr_method_eq) continue;
 
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            if (!bodies.index().reachesExpr(expr_idx)) continue;
             const expr = module.expr(expr_idx);
-            const checked_expr_data = checked_bodies.expr(checked_expr).data;
+            const checked_expr_data = bodies.exprData(expr_idx);
             const idents = module.identStoreConst();
             const plan_id: StaticDispatchPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(plans.items.len))));
             const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable; // the node-tag filter above admits only nodes that decode to these expression tags
@@ -2247,10 +2273,10 @@ pub const StaticDispatchPlanTable = struct {
                 .e_dispatch_call => {
                     const dispatch_call = expr.data.e_dispatch_call;
                     const explicit_args = module.sliceExpr(dispatch_call.args);
-                    const ar = try pushExprOperands(&operand_pool, allocator, checked_bodies, dispatch_call.receiver, explicit_args);
+                    const ar = try pushExprOperands(&operand_pool, allocator, bodies, dispatch_call.receiver, explicit_args);
 
                     try plans.append(allocator, .{
-                        .expr = checked_expr,
+                        .node = node_idx,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .{ .arg = 0 },
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(dispatch_call.receiver)),
@@ -2266,7 +2292,7 @@ pub const StaticDispatchPlanTable = struct {
                 .e_interpolation => {
                     const interpolation = expr.data.e_interpolation;
                     if (std.meta.activeTag(checked_expr_data) != .interpolation) continue;
-                    const args = [_]StaticDispatchOperand{.{ .generated_interpolation_segments = checked_expr }};
+                    const args = [_]StaticDispatchOperand{.{ .generated_interpolation_segments = expr_idx }};
                     const from_interpolation = try names.internMethodName("from_interpolation");
                     const constraint_fn_var = interpolation.constraint_fn_var orelse
                         base.invariant("checked static dispatch registry invariant violated: checked interpolation has no constraint function variable", .{});
@@ -2275,7 +2301,7 @@ pub const StaticDispatchPlanTable = struct {
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
                     try plans.append(allocator, .{
-                        .expr = checked_expr,
+                        .node = node_idx,
                         .method = from_interpolation,
                         .dispatcher = .type_only,
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatcher_var),
@@ -2325,7 +2351,7 @@ pub const StaticDispatchPlanTable = struct {
                         },
                         .item_ty = try checkedTypeIdForVar(allocator, module, checked_types, item_var),
                         .iterator_ty = iterator_ty,
-                        .site = .{ .interpolation = .{ .expr = checked_expr, .seed_list_ty = seed_list_ty } },
+                        .site = .{ .interpolation = .{ .expr = expr_idx, .seed_list_ty = seed_list_ty } },
                     });
                     try iterator_plan_sources.append(allocator, .{
                         .iter_dispatcher_var = seed_list_var,
@@ -2337,10 +2363,10 @@ pub const StaticDispatchPlanTable = struct {
                 },
                 .e_type_dispatch_call => {
                     const dispatch_call = expr.data.e_type_dispatch_call;
-                    const ar = try pushExprOperands(&operand_pool, allocator, checked_bodies, null, module.sliceExpr(dispatch_call.args));
+                    const ar = try pushExprOperands(&operand_pool, allocator, bodies, null, module.sliceExpr(dispatch_call.args));
 
                     try plans.append(allocator, .{
-                        .expr = checked_expr,
+                        .node = node_idx,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .type_only,
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchCallDispatcherVar(module.moduleEnvConst(), dispatch_call.owner)),
@@ -2355,10 +2381,10 @@ pub const StaticDispatchPlanTable = struct {
                 },
                 .e_method_eq => {
                     const eq = expr.data.e_method_eq;
-                    const ar = try pushExprOperands(&operand_pool, allocator, checked_bodies, eq.lhs, &.{eq.rhs});
+                    const ar = try pushExprOperands(&operand_pool, allocator, bodies, eq.lhs, &.{eq.rhs});
 
                     try plans.append(allocator, .{
-                        .expr = checked_expr,
+                        .node = node_idx,
                         .method = try names.internMethodIdent(idents, module.commonIdents().is_eq),
                         .dispatcher = .{ .arg = 0 },
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(eq.lhs)),
@@ -2381,7 +2407,7 @@ pub const StaticDispatchPlanTable = struct {
                     });
                 },
             }
-            try by_expr.append(allocator, .{ .key = @backingInt(expr_idx), .val = @backingInt(plan_id) });
+            try by_node.append(allocator, .{ .key = @backingInt(expr_idx), .val = @backingInt(plan_id) });
         }
 
         const module_env = module.moduleEnvConst();
@@ -2504,18 +2530,7 @@ pub const StaticDispatchPlanTable = struct {
                 .unresolved => base.invariant("unresolved numeral dispatch plan reached checked publication", .{}),
             }
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(numeral_plan.node_idx));
-            const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
-                checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
-                continue;
-            const checked_expr_data = checked_bodies.expr(checked_expr).data;
-            const checked_expr_tag = std.meta.activeTag(checked_expr_data);
-            if (checked_expr_tag == .runtime_error) continue;
-            if (checked_expr_tag != .numeral) {
-                base.invariant(
-                    "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression ({s})",
-                    .{ numeral_plan.node_idx, @tagName(checked_expr_tag) },
-                );
-            }
+            if (!literalNodeConverts(bodies, numeral_plan.node_idx, .numeral)) continue;
             const literal = module_env.numeralLiteralForNode(node) orelse {
                 base.invariant(
                     "checked static dispatch invariant violated: runtime from_numeral plan {d} has no exact literal",
@@ -2533,7 +2548,7 @@ pub const StaticDispatchPlanTable = struct {
 
             const plan_id: StaticDispatchPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(plans.items.len))));
             try plans.append(allocator, .{
-                .expr = checked_expr,
+                .node = numeral_plan.node_idx,
                 .method = try names.internMethodName(Ident.FROM_NUMERAL_METHOD_NAME),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(numeral_plan.target_var))),
@@ -2558,31 +2573,13 @@ pub const StaticDispatchPlanTable = struct {
                 .unresolved => base.invariant("unresolved quote dispatch plan reached checked publication", .{}),
             }
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(quote_plan.node_idx));
-            const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
-                checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
-                continue;
-            const checked_expr_data = checked_bodies.expr(checked_expr).data;
-            const checked_expr_tag = std.meta.activeTag(checked_expr_data);
-            if (checked_expr_tag == .runtime_error) continue;
-            if (checked_expr_tag == .str or checked_expr_tag == .str_segment) {
-                base.invariant(
-                    "checked static dispatch invariant violated: non-builtin quote target {d} lost its from_quote expression",
-                    .{quote_plan.node_idx},
-                );
-            }
-            if (checked_expr_tag != .str_from_quote) {
-                base.invariant(
-                    "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression ({s})",
-                    .{ quote_plan.node_idx, @tagName(checked_expr_tag) },
-                );
-            }
-            const literal = checked_expr_data.str_from_quote.literal;
-            var args = [_]StaticDispatchOperand{.{ .generated_quote = literal }};
+            if (!literalNodeConverts(bodies, quote_plan.node_idx, .quote)) continue;
+            var args = [_]StaticDispatchOperand{.{ .generated_quote = quote_plan.node_idx }};
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
             const plan_id: StaticDispatchPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(plans.items.len))));
             try plans.append(allocator, .{
-                .expr = checked_expr,
+                .node = quote_plan.node_idx,
                 .method = try names.internMethodName(Ident.FROM_QUOTE_METHOD_NAME),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(quote_plan.target_var))),
@@ -2599,18 +2596,22 @@ pub const StaticDispatchPlanTable = struct {
             try quote_by_node.append(allocator, .{ .key = @backingInt(node), .val = @backingInt(plan_id) });
         }
 
-        // Only custom/generalized literal patterns have these synthesized
-        // guards. Builtin patterns produce neither a guard nor an equality plan.
-        for (checked_bodies.literal_pattern_exprs.items) |literal| {
-            const source = module_env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(literal.raw_node))) orelse unreachable; // literalPatternGuard records only pattern nodes that carry a literal dispatch plan
+        // Only custom/generalized literal patterns compare through their
+        // type's `is_eq`. Builtin patterns produce no equality plan.
+        for (bodies.index().node_kinds, 0..) |kind, raw| {
+            if (kind != .pattern) continue;
+            const pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(raw));
+            if (bodies.literalPatternGuard(pattern) == null) continue;
+            const source = module_env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(raw))) orelse unreachable; // literalPatternGuard reports only pattern nodes that carry a literal dispatch plan
             const context = source.patternContext(&module_env.store) orelse unreachable; // recordLiteralDispatchPlan allocates a pattern context for every pattern node's plan
             std.debug.assert(context.equality_fn_var_plus_one != 0);
             const constraint_fn: Var = @fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1));
             const args = [_]StaticDispatchOperand{
-                .{ .checked_expr = literal.scrutinee }, .{ .checked_expr = literal.expr },
+                .{ .literal_pattern_value = pattern }, .{ .literal_pattern_conversion = pattern },
             };
+            const plan_id: StaticDispatchPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(plans.items.len))));
             try plans.append(allocator, .{
-                .expr = literal.equality,
+                .node = @intCast(raw),
                 .method = try names.internMethodName(Ident.IS_EQ_METHOD_NAME),
                 .dispatcher = .{ .arg = 0 },
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(source.target_var))),
@@ -2622,6 +2623,7 @@ pub const StaticDispatchPlanTable = struct {
                 .dispatcher_var = @fromBackingInt(@intCast(source.target_var)),
                 .constraint_fn_var = constraint_fn,
             });
+            try by_node.append(allocator, .{ .key = @intCast(raw), .val = @backingInt(plan_id) });
         }
 
         for (module_env.for_loop_dispatch_plans.items.items) |for_plan| {
@@ -2629,17 +2631,17 @@ pub const StaticDispatchPlanTable = struct {
             const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(for_plan.pattern_idx));
             const iterable_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(for_plan.iterable_idx));
 
-            if (checked_bodies.exprIdForSource(iterable_idx) == null) continue;
+            if (!bodies.index().reachesExpr(iterable_idx)) continue;
             const for_node_tag = module.nodeTag(for_node_idx);
             const for_has_checked_node = if (for_node_tag == .expr_for)
-                checked_bodies.exprIdForSource(@fromBackingInt(@intCast(for_plan.node_idx))) != null
+                bodies.index().nodeKind(for_plan.node_idx) == .expr
             else if (for_node_tag == .statement_for)
-                checked_bodies.statementIdForSource(@fromBackingInt(@intCast(for_plan.node_idx))) != null
+                bodies.index().nodeKind(for_plan.node_idx) == .statement
             else
                 false;
             if (!for_has_checked_node) continue;
 
-            const iterable_expr = checkedExprIdForSource(checked_bodies, iterable_idx);
+            const iterable_expr = iterable_idx;
             const item_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.patternType(pattern_idx));
             const iter_callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(for_plan.iter_fn_var)));
             const next_callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(for_plan.next_fn_var)));
@@ -2701,8 +2703,8 @@ pub const StaticDispatchPlanTable = struct {
 
         // Order the recorded entries into sorted, relocatable PlanKV slices
         // (transform D).
-        const by_expr_sorted = try sortedPlanKVs(allocator, &by_expr);
-        errdefer allocator.free(by_expr_sorted);
+        const by_node_sorted = try sortedPlanKVs(allocator, &by_node);
+        errdefer allocator.free(by_node_sorted);
         const numeral_sorted = try sortedPlanKVs(allocator, &numeral_by_node);
         errdefer allocator.free(numeral_sorted);
         const quote_sorted = try sortedPlanKVs(allocator, &quote_by_node);
@@ -2717,7 +2719,7 @@ pub const StaticDispatchPlanTable = struct {
 
         return .{
             .plans = try plans.toOwnedSlice(allocator),
-            .by_expr = by_expr_sorted,
+            .by_node = by_node_sorted,
             .numeral_by_node = numeral_sorted,
             .quote_by_node = quote_sorted,
             .iterator_for_plans = try iterator_for_plans.toOwnedSlice(allocator),
@@ -2730,18 +2732,30 @@ pub const StaticDispatchPlanTable = struct {
         };
     }
 
-    pub fn lookupByExpr(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?StaticDispatchPlanId {
-        return if (lookupPlanKV(self.by_expr, @backingInt(expr))) |v| @fromBackingInt(@intCast(v)) else null;
+    /// The dispatch plan of a dispatching expression, or the equality plan
+    /// of a custom literal pattern, by CIR node.
+    pub fn lookupByNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
+        return if (lookupPlanKV(self.by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
-    /// The `from_numeral` plan of the numeric literal at source node `node`.
-    pub fn lookupNumeralByNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
+    /// The dispatch plan of a dispatching expression.
+    pub fn lookupByExpr(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?StaticDispatchPlanId {
+        return self.lookupByNode(@backingInt(expr));
+    }
+
+    /// The `from_numeral` plan of the numeric literal at a CIR node.
+    pub fn numeralPlanForNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
         return if (lookupPlanKV(self.numeral_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
-    /// The `from_quote` plan of the string literal at source node `node`.
-    pub fn lookupQuoteByNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
+    /// The `from_quote` plan of the string literal at a CIR node.
+    pub fn quotePlanForNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
         return if (lookupPlanKV(self.quote_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
+    }
+
+    /// The iterator plan of the `for` loop at a CIR node.
+    pub fn iteratorForPlanForNode(self: *const StaticDispatchPlanTable, node: u32) ?IteratorForPlanId {
+        return if (lookupPlanKV(self.iterator_for_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
     pub fn evidenceNode(self: *const StaticDispatchPlanTable, id: EvidenceNodeId) EvidenceNode {
@@ -2795,13 +2809,13 @@ pub const StaticDispatchPlanTable = struct {
     /// definition reference or an expression-position function construction
     /// edge), in the scheme's canonical evidence-param order; null when no
     /// checked instantiation edge was recorded for the expression.
-    pub fn siteEvidence(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?[]const CheckedEvidence {
+    pub fn siteEvidence(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedEvidence {
         const found = self.siteEvidenceSpan(expr) orelse return null;
         return self.evidence_refs[found.start .. found.start + found.len];
     }
 
     /// Exact durable range for a checker-recorded instantiation edge.
-    pub fn siteEvidenceSpan(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?artifact_serialize.Span {
+    pub fn siteEvidenceSpan(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?artifact_serialize.Span {
         const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @backingInt(expr), siteEvidenceOrder) orelse return null;
         return .{ .start = found.start, .len = found.len };
     }
@@ -2822,13 +2836,13 @@ pub const StaticDispatchPlanTable = struct {
     /// all; empty when its entry recorded no instantiation.
     /// The checked type of the instance a stored nested-function use at
     /// `expr` places into its containing value.
-    pub fn siteInstanceType(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?CheckedTypeId {
+    pub fn siteInstanceType(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?CheckedTypeId {
         const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @backingInt(expr), siteEvidenceOrder) orelse return null;
         if (found.instance_ty == SiteEvidenceEntry.no_site_instance) return null;
         return @fromBackingInt(@intCast(found.instance_ty));
     }
 
-    pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?[]const CheckedTypeId {
+    pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedTypeId {
         const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @backingInt(expr), siteEvidenceOrder) orelse return null;
         return self.site_substitutions[found.subst_start .. found.subst_start + found.subst_len];
     }
@@ -2843,7 +2857,7 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(self.template_refs);
         allocator.free(self.direct_template_refs);
         allocator.free(self.dispatch_relation_refs);
-        allocator.free(self.by_expr);
+        allocator.free(self.by_node);
         allocator.free(self.numeral_by_node);
         allocator.free(self.quote_by_node);
         allocator.free(self.iterator_for_by_node);
@@ -2908,7 +2922,7 @@ const StaticDispatchConstraintIndex = struct {
     constraints: []const types.StaticDispatchConstraint = &.{},
     by_fn_var: collections.DenseMapUnmanaged(Var, u32) = .empty,
 
-    fn fromModule(allocator: Allocator, module: TypedCIR.Module, checked_bodies: anytype) Allocator.Error!StaticDispatchConstraintIndex {
+    fn fromModule(allocator: Allocator, module: TypedCIR.Module, bodies: anytype) Allocator.Error!StaticDispatchConstraintIndex {
         const store = module.typeStoreConst();
         var live_fn_vars: collections.DenseMapUnmanaged(Var, void) = .empty;
         defer live_fn_vars.deinit(allocator);
@@ -2928,9 +2942,9 @@ const StaticDispatchConstraintIndex = struct {
             else
                 null;
             if (constraint_fn_var) |fn_var| {
-                const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+                if (!bodies.index().reachesExpr(expr_idx)) continue;
                 if (module.nodeTag(@fromBackingInt(@intCast(node_idx))) == .expr_interpolation and
-                    std.meta.activeTag(checked_bodies.expr(checked_expr).data) != .interpolation) continue;
+                    std.meta.activeTag(bodies.exprData(expr_idx)) != .interpolation) continue;
                 try live_fn_vars.put(allocator, fn_var, {});
             }
         }
@@ -3082,10 +3096,6 @@ fn sourceCallableHasEqualityShape(
 }
 
 fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
-    const raw = @backingInt(ty);
-    if (raw >= checked_types.store.payloadCount()) {
-        base.invariant("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
-    }
     const payload = checked_types.store.payload(ty);
     if (std.meta.activeTag(payload) != .nominal) return false;
     const builtin_owner = payload.nominal.builtin orelse return false;
@@ -3146,7 +3156,7 @@ fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callabl
             .empty_tag_union,
             => return false,
         };
-        if (variable.constraints.len != 0 or variable.numeric_default_phase != null) return false;
+        if (variable.constraints.len() != 0 or variable.numeric_default_phase != null) return false;
         for (type_args[0..index]) |earlier| {
             if (earlier == type_arg) return false;
         }
@@ -3156,7 +3166,7 @@ fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callabl
 
 fn checkedTypeThroughAliases(checked_types: anytype, ty: CheckedTypeId) CheckedTypeId {
     var current = ty;
-    var remaining = checked_types.store.payloadCount();
+    var remaining = checked_types.store.typeCount();
     while (true) {
         const payload = checked_types.store.payload(current);
         if (std.meta.activeTag(payload) != .alias) return current;
@@ -3240,13 +3250,7 @@ pub fn lookupCheckedMethodTarget(
         const imported_owner = methodOwnerInImportedStore(names, imported.canonical_names, owner) orelse continue;
         const imported_method = imported.canonical_names.lookupMethodName(method_name) orelse continue;
         if (imported.method_registry.lookup(.{ .owner = imported_owner, .method = imported_method })) |found| {
-            switch (found) {
-                .rejected => return found,
-                .target => |target| switch (target.kind) {
-                    .procedure, .structural => return found,
-                    .local_proc => continue,
-                },
-            }
+            return found;
         }
     }
     return null;
@@ -3286,7 +3290,7 @@ fn checkedTypeIdForVar(
 fn pushExprOperands(
     pool: *std.ArrayList(StaticDispatchOperand),
     allocator: Allocator,
-    checked_bodies: anytype,
+    bodies: anytype,
     first: ?CIR.Expr.Idx,
     rest: []const CIR.Expr.Idx,
 ) Allocator.Error!artifact_serialize.Span {
@@ -3295,8 +3299,8 @@ fn pushExprOperands(
     const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;
     const len = std.math.cast(u32, count) orelse return error.OutOfMemory;
     try pool.ensureUnusedCapacity(allocator, count);
-    if (first) |expr| pool.appendAssumeCapacity(.{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) });
-    for (rest) |expr| pool.appendAssumeCapacity(.{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) });
+    if (first) |expr| pool.appendAssumeCapacity(.{ .checked_expr = reachedOperand(bodies, expr) });
+    for (rest) |expr| pool.appendAssumeCapacity(.{ .checked_expr = reachedOperand(bodies, expr) });
     return .{ .start = start, .len = len };
 }
 
@@ -3307,13 +3311,33 @@ fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.I
     return null;
 }
 
-fn checkedExprIdForSource(checked_bodies: anytype, expr: CIR.Expr.Idx) CheckedExprId {
-    return checked_bodies.exprIdForSource(expr) orelse {
+fn reachedOperand(bodies: anytype, expr: CIR.Expr.Idx) CIR.Expr.Idx {
+    if (!bodies.index().reachesExpr(expr)) {
         base.invariant(
-            "checked static dispatch invariant violated: dispatch expression {d} has no checked expression id",
+            "checked static dispatch invariant violated: dispatch operand {d} is not reached by the checked bodies",
             .{@backingInt(expr)},
         );
-    };
+    }
+    return expr;
+}
+
+const LiteralConversionKind = enum { numeral, quote };
+
+/// Whether the literal at `node` converts through its target's `from_numeral`
+/// or `from_quote`: a reached literal expression the body reader reports as a
+/// converting literal, or a reached custom literal pattern.
+fn literalNodeConverts(bodies: anytype, node: u32, kind: LiteralConversionKind) bool {
+    switch (bodies.index().nodeKind(node)) {
+        .expr => {
+            const data = bodies.exprData(@fromBackingInt(@intCast(node)));
+            return switch (kind) {
+                .numeral => data == .numeral,
+                .quote => data == .str and bodies.quoteIsCustom(node),
+            };
+        },
+        .pattern => return bodies.literalPatternGuard(@fromBackingInt(@intCast(node))) != null,
+        .statement, .unreached => return false,
+    }
 }
 
 test "method registry can be empty" {
@@ -3385,9 +3409,9 @@ fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
 }
 
-fn testPlan(expr_raw: u32, args_start: u32, args_len: u32) StaticDispatchCallPlan {
+fn testPlan(node: u32, args_start: u32, args_len: u32) StaticDispatchCallPlan {
     return .{
-        .expr = @fromBackingInt(@intCast(expr_raw)),
+        .node = node,
         .method = @fromBackingInt(@intCast(1)),
         .dispatcher = .{ .arg = 0 },
         .dispatcher_ty = @fromBackingInt(@intCast(2)),
@@ -3414,7 +3438,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             testPlan(10, 0, 2),
             testPlan(11, 2, operand_count - 2),
         };
-        var by_expr = [_]PlanKV{
+        var by_node = [_]PlanKV{
             .{ .key = 10, .val = 0 },
             .{ .key = 11, .val = 1 },
         };
@@ -3461,7 +3485,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
 
         const table = StaticDispatchPlanTable{
             .plans = &plans,
-            .by_expr = &by_expr,
+            .by_node = &by_node,
             .iterator_topologies = &iterator_topologies,
             .operand_pool = operands,
             .evidence_nodes = &evidence_nodes,
@@ -3479,16 +3503,16 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
 
         const first_args = loaded.plans[0].argsSlice(&loaded);
         try std.testing.expectEqual(@as(usize, 2), first_args.len);
-        try std.testing.expectEqual(@as(CheckedExprId, @fromBackingInt(@intCast(100))), first_args[0].checked_expr);
+        try std.testing.expectEqual(@as(CIR.Expr.Idx, @fromBackingInt(@intCast(100))), first_args[0].checked_expr);
 
         const second_args = loaded.plans[1].argsSlice(&loaded);
         try std.testing.expectEqual(@as(usize, operand_count - 2), second_args.len);
         try std.testing.expectEqual(
-            @as(CheckedExprId, @fromBackingInt(@intCast(operand_count - 1 + 100))),
+            @as(CIR.Expr.Idx, @fromBackingInt(@intCast(operand_count - 1 + 100))),
             second_args[second_args.len - 1].checked_expr,
         );
 
-        try std.testing.expectEqual(@as(?u32, 1), lookupPlanKV(loaded.by_expr, 11));
+        try std.testing.expectEqual(@as(?u32, 1), lookupPlanKV(loaded.by_node, 11));
 
         const node = loaded.evidenceNode(@fromBackingInt(@intCast(fixtureTableIndex(0))));
         try std.testing.expectEqual(@as(?CheckedTypeId, @fromBackingInt(@intCast(12))), node.dispatcher_ty);

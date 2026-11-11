@@ -49,6 +49,7 @@ const COFF = struct {
 
     // x86_64 relocation types
     const IMAGE_REL_AMD64_ADDR64 = 0x0001;
+    const IMAGE_REL_AMD64_ADDR32 = 0x0002;
     const IMAGE_REL_AMD64_REL32 = 0x0004;
     const IMAGE_REL_AMD64_ADDR32NB = 0x0003; // 32-bit address w/o base (RVA)
     const IMAGE_REL_AMD64_SECREL = 0x000B; // 32-bit offset from the target section start
@@ -402,7 +403,13 @@ pub const CoffWriter = struct {
                 .x86_64 => invariant("COFF invariant violated: pageoff12 data relocation in x86_64 code, which emits rel32", .{}),
                 .aarch64 => COFF.IMAGE_REL_ARM64_PAGEOFFSET_12A,
             },
-            .abs32s => invariant("COFF invariant violated: an abs32s data relocation, which only a Linux x86_64 test unit emits", .{}),
+            // The field's own bytes hold the addend, as for every COFF
+            // absolute field.
+            .abs32s => switch (self.arch) {
+                .x86_64 => COFF.IMAGE_REL_AMD64_ADDR32,
+                .aarch64 => invariant("COFF invariant violated: abs32s data relocation in aarch64 code, which only an x86_64 test unit emits", .{}),
+            },
+            .abs64_field => self.arch.absolutePointerRelocType(),
         };
         try self.text_relocs.append(self.allocator, .{
             .offset = offset,
@@ -881,7 +888,14 @@ pub const CoffWriter = struct {
 
         // Section indices (1-based in COFF)
         const SECT_TEXT: i16 = 1;
-        const has_rdata = self.rdata.len > 0;
+        // A zero-sized definition still needs a section: section zero means
+        // undefined in COFF, even when the symbol has external binding.
+        const has_rdata = self.rdata.len > 0 or blk: {
+            for (self.symbols.items) |symbol| {
+                if (symbol.section == .rdata) break :blk true;
+            }
+            break :blk false;
+        };
         const SECT_RDATA: i16 = if (has_rdata) 2 else 0;
 
         const need_unwind = self.functions.items.len > 0;
@@ -1254,6 +1268,33 @@ pub const CoffWriter = struct {
 };
 
 // Tests
+
+test "coff defines zero-sized readonly symbols in an empty section" {
+    for ([_]Architecture{ .x86_64, .aarch64 }) |isa| {
+        var writer = try CoffWriter.init(std.testing.allocator, isa);
+        defer writer.deinit();
+        const index = try writer.addSymbol(.{
+            .name = "roc__d1",
+            .section = .rdata,
+            .offset = 0,
+            .is_global = true,
+            .is_function = false,
+        });
+
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try writer.write(&output);
+
+        const symbols = std.mem.readInt(u32, output.items[8..12], .little);
+        const symbol_offset = symbols + index * 18;
+        const section = std.mem.readInt(i16, output.items[symbol_offset + 12 ..][0..2], .little);
+        try std.testing.expect(section > 0);
+        const header_offset = @sizeOf(CoffHeader) + @as(usize, @intCast(section - 1)) * @sizeOf(SectionHeader);
+        const header = output.items[header_offset..][0..@sizeOf(SectionHeader)];
+        try std.testing.expectEqualStrings(".rdata", std.mem.sliceTo(header[0..8], 0));
+        try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, header[16..20], .little));
+    }
+}
 
 test "create minimal coff object" {
     var writer = try CoffWriter.init(std.testing.allocator, .x86_64);

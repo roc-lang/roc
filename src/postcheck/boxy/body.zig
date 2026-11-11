@@ -17,6 +17,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
@@ -28,9 +29,10 @@ const StoredFn = @import("stored_fn.zig");
 const Match = @import("match.zig");
 
 const Allocator = std.mem.Allocator;
+const CIR = can.CIR;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
-const NumeralLiteral = @FieldType(checked.CheckedNumeralData, "literal");
+const NumeralLiteral = can.ModuleEnv.NumeralLiteral;
 const LIR = lir_core.LIR;
 const LirStore = lir_core.LirStore;
 const CheckedArithmetic = lir_core.CheckedArithmetic;
@@ -39,15 +41,21 @@ const CFStmtId = LIR.CFStmtId;
 const TypeId = types.TypeId;
 const ModuleIndex = types.ModuleIndex;
 const Program = lower.Program;
-const Layouts = @import("layouts.zig").Layouts;
 const StaticDescs = @import("static_descs.zig").StaticDescs;
+const Tables = @import("tables.zig");
 const WorkerId = lower.WorkerId;
+
+/// A hidden word: a descriptor, dictionary, or literal thunk the body reads,
+/// as a static word or as a recipe over the worker's inputs (`tables.zig`).
+pub const Word = Tables.Operand;
 const invariant = types.invariant;
 const invariantFmt = types.invariantFmt;
 
-const CheckedExprId = checked.CheckedExprId;
-const CheckedPatternId = checked.CheckedPatternId;
-const CheckedStatementId = checked.CheckedStatementId;
+const bodies_mod = check.CheckedBodies;
+const ExprId = bodies_mod.ExprId;
+const PatternId = bodies_mod.PatternId;
+const StatementId = bodies_mod.StatementId;
+const BinderId = bodies_mod.BinderId;
 
 /// Lower worker `id`'s body into its procedure.
 pub fn lowerWorker(program: *Program, id: WorkerId) Allocator.Error!void {
@@ -59,14 +67,37 @@ pub fn lowerWorker(program: *Program, id: WorkerId) Allocator.Error!void {
     program.result.store.tail_call_builder = &builder.tail_calls;
     defer program.result.store.tail_call_builder = null;
     try builder.lowerBody();
+    program.worker(id).needs = try builder.finishNeeds();
 }
 
 /// One unit of pending lowering work on the builder's task stack.
 pub const Task = union(enum) {
-    expr: CheckedExprId,
-    stmt: CheckedStatementId,
+    /// Lower an expression as its parent reads it: a row-coerced result
+    /// through its coercion (`lowerRowCoercion`).
+    expr: ExprId,
+    /// Lower an expression's own value: the value a row coercion converts,
+    /// or an expression a checked table names rather than a parent.
+    own_expr: ExprId,
+    stmt: StatementId,
+    /// Lower the body of compile-time root `root` of this body's module
+    /// (`lowerRootBody`).
+    root_body: checked.ComptimeRootId,
+    /// Pop the value of a hoisted pattern root's base expression, match it
+    /// against the root's pattern, and push the root's value
+    /// (`rootPatternMatch`).
+    root_pattern_match: checked.ComptimeRootId,
+    /// Push whether the value a custom literal pattern matches equals the
+    /// pattern's literal converted at its type
+    /// (`checked_bodies.LiteralPatternGuard`).
+    literal_pattern_guard: PatternId,
+    /// Push the value a custom literal pattern matches, which the pattern
+    /// binds.
+    literal_pattern_value: PatternId,
+    /// Push a custom literal pattern's literal converted at the pattern's
+    /// type.
+    literal_pattern_conversion: PatternId,
     /// Pop the value of a `decl` statement's expression and bind its pattern.
-    bind: struct { pattern: CheckedPatternId, ty: TypeId },
+    bind: struct { pattern: PatternId, ty: TypeId },
     /// Pop and drop one value.
     discard,
     /// Re-tag the popped ground value of type `from` into the open-row type
@@ -86,24 +117,24 @@ pub const Task = union(enum) {
     /// Pop the arguments of a call to `callee` and call it.
     /// `adapt` is set for a callee storing record fields of its signature
     /// in presence slots: the types its scheme takes and the arguments'.
-    finish_call: struct { callee: WorkerId, hidden: []LocalId, bound: []const TypeId, arg_types: []const TypeId, ret: TypeId, result: TypeId },
+    finish_call: struct { callee: WorkerId, hidden: []Word, bound: []const TypeId, arg_types: []const TypeId, ret: TypeId, result: TypeId },
     finish_erased_call: struct { fn_ty: TypeId, arg_count: u32, result: TypeId },
     finish_low_level: struct { op: LIR.LowLevel, arg_count: u32, result: TypeId, arg_types: []const TypeId = &.{} },
     /// Return to the enclosing expression's source region.
     restore_region: base.Region,
-    finish_record: CheckedExprId,
-    finish_tuple: CheckedExprId,
-    finish_tag: CheckedExprId,
+    finish_record: ExprId,
+    finish_tuple: ExprId,
+    finish_tag: ExprId,
     /// `finish_tag` at the type of the nominal the tag constructs.
-    finish_tag_at: struct { expr: CheckedExprId, ty: TypeId },
-    finish_list: CheckedExprId,
+    finish_tag_at: struct { expr: ExprId, ty: TypeId },
+    finish_list: ExprId,
     finish_str: struct { count: u32 },
     finish_eq: struct { negated: bool, operand: TypeId },
     /// Pop a Bool and check it as an `expect`.
-    finish_expect: CheckedExprId,
+    finish_expect: ExprId,
     /// Pop the condition of if-branch `index` of `expr`.
     /// A null `join` is a construct in tail position: each branch returns.
-    if_test: struct { expr: CheckedExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId },
+    if_test: struct { expr: ExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId },
     /// Pop a value and jump to `join` with it.
     jump: LIR.JoinPointId,
     /// Jump to a join that carries no value (a loop's head or exit).
@@ -111,13 +142,13 @@ pub const Task = union(enum) {
     /// Push the `Numeral` argument of a `from_numeral` call.
     numeral_arg: struct { literal: NumeralLiteral, ty: TypeId },
     /// Pop a `for` loop's iterable and run the loop.
-    for_start: struct { pattern: CheckedPatternId, body: CheckedExprId, plan: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId },
+    for_start: struct { loop: u32, pattern: PatternId, body: ExprId, plan: static_dispatch.IteratorForPlanId },
     /// Rebind a merge's binders to their values before its construct.
     restore_merge: MergeId,
     /// Rebind a merge's binders to its join's parameters.
     enter_merge: MergeId,
     /// Pop a loop condition: enter the body or leave the loop.
-    loop_test: struct { body: CheckedExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId },
+    loop_test: struct { body: ExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId },
     end_loop,
     /// Leave the innermost scheme alias scope (`Builder.alias_scopes`).
     leave_alias_scope,
@@ -128,13 +159,13 @@ pub const Task = union(enum) {
     rejected_for: static_dispatch.IteratorForPlanId,
     /// Fill the slots of a recursive value declaration's binders, once the
     /// declaration's pattern bound them.
-    fill_recursive_slots: CheckedPatternId,
+    fill_recursive_slots: PatternId,
     /// Continue emitting at `hole`.
     resume_at: CFStmtId,
-    finish_field_access: CheckedExprId,
+    finish_field_access: ExprId,
     /// Pop a tag union value and compare its discriminant with `tag`'s.
     finish_discriminant_eq: struct { value_ty: TypeId, tag: check.CheckedNames.TagLabelId, negated: bool },
-    finish_tuple_access: CheckedExprId,
+    finish_tuple_access: ExprId,
     /// Pop a value of this type, report it through `dbg`, and push it back.
     finish_dbg: TypeId,
     /// Restore stored constant `node` at `ty`. `root` is the compile-time
@@ -147,12 +178,15 @@ pub const Task = union(enum) {
     /// Pop a restored closure's capture values and build it.
     /// `worker_ty` is the closure's type as its worker stores it, and `ty`
     /// the restored value's.
-    /// Pop a stored function's captures and pack them (`stored_fn.zig`).
-    finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, descs: []const LocalId, capture_types: []const TypeId },
-    finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, dicts: []const LocalId, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
+    /// Pop a stored function's captured values and pack them with its type
+    /// table at `inputs` (`stored_fn.zig`).
+    finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, inputs: []const Word, capture_types: []const TypeId, capture_descs: []const Word },
+    finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const Word, dicts: []const Word, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
-    finish_restore_list: struct { ty: TypeId, count: u32 },
+    finish_static_list: struct { ty: TypeId, count: u32 },
+    finish_static_box: struct { ty: TypeId, sequence_step_offset: ?u32 = null },
+    remember_static_value: lower.Program.StoredValueKey,
     /// Push a value of `ty` for an expression whose evaluation diverged.
     unreachable_value: TypeId,
     /// Push the `{}` value of a construct whose value nothing reads.
@@ -161,32 +195,33 @@ pub const Task = union(enum) {
     /// its function value with them after its own scheme's words.
     /// `params` and `ret` are the procedure's signature, `arg_types` the
     /// call's arguments' types and `result` its result's.
-    finish_local_call: struct { closure: LocalId, words: []const LocalId, params: []const TypeId, ret: TypeId, arg_types: []const TypeId, result: TypeId },
+    finish_local_call: struct { closure: LocalId, words: []const Word, params: []const TypeId, ret: TypeId, arg_types: []const TypeId, result: TypeId },
     /// Push an interpolation's literal segments as the `List(Str)` of `ty`.
-    segments_arg: struct { expr: CheckedExprId, ty: TypeId },
+    segments_arg: struct { expr: ExprId, ty: TypeId },
     /// Pop an interpolation's assembler and call it with the interpolated
     /// values.
-    finish_interpolation: CheckedExprId,
+    finish_interpolation: ExprId,
     /// Pop a literal conversion's `Try` result and push the literal's value.
     finish_literal_conversion: FinishLiteralConversion,
     finish_interpolation_call: struct { assembler: LocalId, assembler_ty: TypeId, plan: static_dispatch.IteratorForPlanId, count: u32, result: TypeId },
     /// Pop a `Str` interpolation's values and write them once with its
     /// non-empty segments (`str_from_parts`); its assembler is not called.
-    finish_str_from_parts: struct { expr: CheckedExprId, count: u32, result: TypeId },
+    finish_str_from_parts: struct { expr: ExprId, count: u32, result: TypeId },
     /// Pop a value and a hasher and hash the value structurally.
     finish_hash: struct { value: TypeId, result: TypeId },
     /// Pop an `expect`'s failing `?` value and fail the expect with it.
-    finish_expect_err: struct { expr: CheckedExprId, value: TypeId },
-    /// Push a string literal of the checked bodies as a `Str` value.
-    push_value_str: checked.CheckedStringLiteralId,
+    finish_expect_err: struct { expr: ExprId, value: TypeId },
+    /// Push the text of the string literal at this CIR node (an
+    /// expression or a string literal pattern) as a `Str` value.
+    push_value_quote: u32,
     /// Push `local` as a value.
     push_value: LocalId,
     /// Pop a value; the enclosing procedure returns it.
     ret,
     /// Pop the left operand of a short-circuit operator.
-    short_circuit: struct { is_and: bool, rhs: CheckedExprId, join: LIR.JoinPointId },
+    short_circuit: struct { is_and: bool, rhs: ExprId, join: LIR.JoinPointId },
     /// Pop the scrutinee of a match and compile its branches.
-    match_start: CheckedExprId,
+    match_start: ExprId,
     /// Continue a match's decision-tree emission with the statement that
     /// answers its outstanding request (null on its first step).
     match_advance: struct { state: *Match.State, input: ?CFStmtId },
@@ -196,13 +231,28 @@ pub const Task = union(enum) {
 
 /// A literal conversion the compile-time evaluator runs where the literal
 /// is: the literal, its conversion's `Try` type, and the literal's type.
-pub const FinishLiteralConversion = struct { expr: CheckedExprId, kind: LIR.LiteralRejectionKind, try_ty: TypeId, result: TypeId };
+pub const FinishLiteralConversion = struct { node: u32, kind: LIR.LiteralRejectionKind, try_ty: TypeId, result: TypeId };
+
+/// A literal a body converts: a literal expression, converted at its own
+/// type, or a custom literal pattern's literal, converted at the pattern's.
+pub const LiteralAt = union(enum) {
+    expr: ExprId,
+    pattern: PatternId,
+
+    /// The literal's CIR node.
+    pub fn node(self: LiteralAt) u32 {
+        return switch (self) {
+            .expr => |expr| @backingInt(expr),
+            .pattern => |pattern| @backingInt(pattern),
+        };
+    }
+};
 
 /// A control-flow construct's merge of the binders it reassigns (a checked
 /// state merge plan): their values before it, and the join parameters that
 /// carry their values after it.
 pub const Merge = struct {
-    binders: []const checked.PatternBinderId,
+    binders: []const BinderId,
     pre: []LocalId,
     params: []LocalId,
 };
@@ -222,21 +272,17 @@ pub const JoinInfo = struct {
 pub const LoopExit = struct { join: LIR.JoinPointId, reached: bool };
 
 /// A value a pattern tests, with the value's type.
-pub const PatternItem = struct { pattern: CheckedPatternId, value: LocalId, ty: TypeId };
-
-/// The key and variable descriptors a recursive member's placeholder was
-/// opened with, which its close repeats.
-const OpenMember = struct { key: LocalId, vars: LIR.LocalSpan };
+pub const PatternItem = struct { pattern: PatternId, value: LocalId, ty: TypeId };
 
 /// A scheme alias's scope as one use instantiates it: the checked evidence
 /// parameters its dictionaries stand for, those dictionaries, and the
 /// environment it extends.
 const AliasScope = struct {
     params: []const u32,
-    dicts: []const LocalId,
+    dicts: []const Word,
     /// The scope's literal arguments, one per literal requirement (design.md
     /// "Literal Arguments"), unless `deferred` says where they come from.
-    literals: []const LocalId = &.{},
+    literals: []const Word = &.{},
     literal_requirements: []const checked.LiteralRequirement = &.{},
     /// A literal chain's frame reads few of a scheme's literal arguments, so
     /// composing them all would make the chains of a scheme with n literals
@@ -246,6 +292,10 @@ const AliasScope = struct {
     /// other requirements can name types only the scopes the chain never
     /// entered bind: each read composes the one it names.
     deferred_dicts: ?DeferredDictionaries = null,
+    /// The declaration context `dicts` come from, for the scope a local
+    /// procedure's own scheme is resolved in when it is built from one: a
+    /// slot still being built holds a null word there.
+    declaration: ?*const Declaration = null,
     saved_env: types.Env,
 };
 
@@ -263,7 +313,10 @@ const DeferredDictionaries = struct {
     /// The frames below the edge: `alias_scopes.items.len` where it is read.
     frames: usize,
     /// Each parameter's dictionary, once read.
-    composed: []?LocalId,
+    composed: []?Word,
+    /// The template worker whose call instance the frame is, whose body can
+    /// declare local procedures its dictionaries call (`Declaration`).
+    declaring: ?WorkerId = null,
 };
 
 /// Where a literal chain frame's literal arguments come from.
@@ -278,6 +331,67 @@ const DeferredLiterals = union(enum) {
     },
     /// The thunks of `owner`'s literal requirements at the types `bound`.
     thunks: struct { owner: WorkerId, bound: []const TypeId },
+};
+
+/// The declaration context of a call instance of template worker `worker`
+/// while its dictionaries are built (design.md "Dictionaries"): the hidden
+/// descriptors, dictionaries, and literal arguments the instance passes, as
+/// this body holds them. A dictionary such as a generated codec can call
+/// local procedures of the callee's body, which is not this body's; their
+/// function values are built from this context. A dictionary slot is built
+/// when the instance or a procedure first reads it; a procedure reading a
+/// slot still being built (the dictionary that captures the procedure)
+/// captures its reserved recipe there, which is filled once the slot is built.
+const Declaration = struct {
+    worker: WorkerId,
+    /// The callee's scheme types, in this body's variables.
+    bound: []const TypeId,
+    /// The descriptors and literal arguments; a literal chain frame's are
+    /// composed when a procedure first reads them (`declarationWords`).
+    words: ?Words,
+    /// By hidden dictionary position; null until built.
+    dicts: []?Word,
+    /// Which dictionary slots are being built.
+    building: []bool,
+    source: Source,
+    outer: ?*Declaration,
+
+    const Source = union(enum) {
+        /// The evidence of a call, read in `module`'s view `view`.
+        call: struct {
+            evidence: []const static_dispatch.CheckedEvidence,
+            context: Builder.ParamContext,
+            owner: ?*const types.ModuleView,
+        },
+        /// A literal chain frame's dictionaries, at its position in
+        /// `alias_scopes`; `composed` is its `DeferredDictionaries.composed`,
+        /// which identifies it.
+        frame: struct { position: usize, composed: [*]?Word, scope: AliasScope },
+        /// All inputs of an already stored checked function are explicit.
+        restored,
+    };
+
+    const Words = struct { descs: []const Word, literals: []const Word };
+};
+
+/// A generated codec constructor being composed: its family at the types
+/// `bound` of the family's variables.
+pub const CodecComposition = struct { family: u32, bound: []const TypeId, recipe: Tables.RecipeId, declaration: ?*Declaration };
+
+/// The scope a local procedure's function value is built in: the worker
+/// declaring it, the procedure's worker there, and the declaring worker's
+/// scheme types and hidden words as this body holds them.
+const LocalProcScope = struct {
+    declaring: WorkerId,
+    worker: WorkerId,
+    bound: []const TypeId,
+    descs: []const Word,
+    /// A reserved recipe stands for each slot still being built.
+    dicts: []const Word,
+    literals: []const Word,
+    /// The declaration context the words come from, when the declaring
+    /// body is not one this body is lowered in.
+    declaration: ?*Declaration,
 };
 
 /// A `literal_argument` root of a module, whose thunk a body composes once.
@@ -298,7 +412,7 @@ const SavedScope = struct {
 /// requirements of the scope the alias owns.
 const AliasStep = struct {
     module: ModuleIndex,
-    lookup: CheckedExprId,
+    lookup: ExprId,
     vars: []const checked.CheckedTypeId,
     params: []const static_dispatch.EvidenceParamRecord,
     literal_requirements: []const checked.LiteralRequirement = &.{},
@@ -312,7 +426,7 @@ const AliasStep = struct {
 const AliasLiterals = union(enum) {
     /// The arguments of the edge naming the target's instantiation composed
     /// through the chain, resolved in the scope holding the edge.
-    edge: []const LocalId,
+    edge: []const Word,
     /// Each alias's forwarded lookup is the edge of the scheme it names, read
     /// in that alias's scope, whose own literal arguments the edge before it
     /// supplies.
@@ -327,8 +441,8 @@ const AliasChain = struct {
     callee: WorkerId,
     first: AliasStep,
     bound: []const TypeId,
-    dicts: []const LocalId,
-    literals: []const LocalId,
+    dicts: []const Word,
+    literals: []const Word,
     /// The evidence filling `first`'s scope.
     evidence: []const static_dispatch.CheckedEvidence,
     literal_source: AliasLiterals,
@@ -339,20 +453,19 @@ const AliasChain = struct {
     call_fn: ?TypeId,
 };
 
-const ArgsDescKey = struct { descs: []const LocalId };
-
-const ArgsDescContext = struct {
-    pub fn hash(_: @This(), key: ArgsDescKey) u64 {
-        return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(key.descs));
+const StaticWordContext = struct {
+    pub fn hash(_: @This(), word: StaticDescs.CaptureWord) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        StaticDescs.hashCaptureWord(&hasher, word);
+        return hasher.final();
     }
-    pub fn eql(_: @This(), a: ArgsDescKey, b: ArgsDescKey) bool {
-        return std.mem.eql(LocalId, a.descs, b.descs);
+    pub fn eql(_: @This(), a: StaticDescs.CaptureWord, b: StaticDescs.CaptureWord) bool {
+        return StaticDescs.captureWordsEqual(a, b);
     }
 };
 
 /// Lowers one worker's checked body to LIR.
 pub const Builder = struct {
-    composition_site_count: u32 = 0,
     program: *Program,
     allocator: Allocator,
     worker_id: WorkerId,
@@ -361,21 +474,24 @@ pub const Builder = struct {
     env: types.Env,
     store: *LirStore,
     frame_locals: std.ArrayList(LocalId) = .empty,
-    binders: collections.DenseMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
-    /// The descriptor local of each scope variable (its hidden parameter).
-    var_descs: []LocalId = &.{},
-    /// The dictionaries in scope (`Worker.scope_dictionary_indices` order).
-    dict_locals: []LocalId = &.{},
+    binders: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
+    /// The descriptor local of each scope variable, read from the worker's
+    /// type table on first use (`inputLocal`).
+    var_descs: []?LocalId = &.{},
+    /// The dictionaries in scope (`Worker.scope_dictionary_indices` order),
+    /// read from the type table on first use.
+    dict_locals: []?LocalId = &.{},
     /// The literal arguments in scope (`Worker.literal_scopes` order): an
     /// immortal callable per literal requirement producing the literal's converted
-    /// value (design.md "Literal Arguments").
-    literal_locals: []LocalId = &.{},
+    /// value (design.md "Literal Arguments"), read from the type table on
+    /// first use.
+    literal_locals: []?LocalId = &.{},
     /// The thunk composed for each `literal_argument` root this body reads.
     /// Set while `enterEdge` builds a frame's call instance, whose
     /// dictionaries the frame composes as it reads them, and whose
     /// descriptors no frame reads: its scheme's types are its `env`.
     chain_frame: bool = false,
-    root_thunks: std.AutoHashMapUnmanaged(RootThunkKey, LocalId) = .empty,
+    root_thunks: std.AutoHashMapUnmanaged(RootThunkKey, Word) = .empty,
     /// While lowering a literal thunk's or literal argument root's chain:
     /// where its frames start in `alias_scopes`. An edge argument or
     /// dictionary naming a scope outside them is one the chain never reads.
@@ -387,52 +503,79 @@ pub const Builder = struct {
     /// The slot of each recursive value binder in scope (design.md
     /// "Recursive values"): a `Box` of a one-item tuple holding the value,
     /// which callables capture in place of the value.
-    recursive_slots: collections.DenseMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
+    recursive_slots: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
     /// What each lambda this body declares captured where it was declared:
     /// a `var`'s value then, whatever the `var` holds where the procedure is
     /// later used.
-    declared_captures: collections.DenseMapUnmanaged(CheckedExprId, []const LocalId) = .empty,
+    declared_captures: collections.DenseMapUnmanaged(ExprId, []const LocalId) = .empty,
     /// While lowering an exact procedure alias's forwarded lookup in the
     /// alias's own module (`aliasTargetHidden`): where that alias's scopes
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
+    /// The innermost declaration context of the call instances whose
+    /// dictionaries are being built (`Declaration`).
+    declaration: ?*Declaration = null,
+    /// The emission states the immortal restores being lowered replaced,
+    /// innermost last.
     type_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
-    /// Complete argument layouts already emitted in this entry chain. Keys
-    /// name the exact ordered descriptor locals, not an approximation of types.
-    args_descs: std.HashMapUnmanaged(ArgsDescKey, LocalId, ArgsDescContext, std.hash_map.default_max_load_percentage) = .empty,
+    product_shapes: collections.DenseMapUnmanaged(TypeId, LIR.StmtRowId(LIR.ProductShape)) = .empty,
 
-    /// What each local holding static data holds, for a dictionary that
-    /// captures it.
-    static_words: collections.DenseMapUnmanaged(LocalId, StaticDescs.CaptureWord) = .empty,
-    /// Each type's descriptor once noted (`Input.stored_functions`).
-    noted_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
+    constant_slots: collections.DenseMapUnmanaged(LocalId, LIR.StaticDataId) = .empty,
+    /// The recipes of the hidden words this body reads (`tables.zig`).
+    recipes: Tables.Recipes,
+    /// The local each recipe was materialized into (`materialize`).
+    recipe_locals: collections.DenseMapUnmanaged(Tables.RecipeId, LocalId) = .empty,
+    /// The local holding each static word other than a descriptor of a
+    /// closed type (`type_descs`) or the null word (`zero_local`).
+    static_word_locals: std.HashMapUnmanaged(StaticDescs.CaptureWord, LocalId, StaticWordContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// The local holding the null word, once materialized.
+    zero_local: ?LocalId = null,
+    /// The descriptor recipe of each type composed in this body.
+    desc_recipes: collections.DenseMapUnmanaged(TypeId, Tables.RecipeId) = .empty,
+    /// The override words of each nominal type this body composes a
+    /// descriptor of (`overrideWords`).
+    override_words: collections.DenseMapUnmanaged(TypeId, [3]?Word) = .empty,
+    /// This worker's type table, its one hidden argument, for a worker with
+    /// inputs (`beginTable`).
+    table_local: ?LocalId = null,
+    /// The recipe of each slot of this worker's tables after its inputs.
+    slots: std.ArrayList(Tables.RecipeId) = .empty,
+    /// Whether each recipe asked about reads an input (`readsInputs`).
+    reads_inputs: collections.DenseMapUnmanaged(Tables.RecipeId, bool) = .empty,
+    /// The evaluation of the recipes that read no input (`foldWord`).
+    fold: ?Tables.Evaluation = null,
     /// The locals the entry chain defines, which every statement of the
     /// body can read.
     entry_locals: collections.DenseMapUnmanaged(LocalId, void) = .empty,
     /// Whether straight-line statements currently go to the entry chain
     /// (`emitIntoEntry`), whose end is then the current hole.
     emitting_entry: bool = false,
-    /// Whether function values are built as immortal compositions (a
-    /// descriptor's local-procedure override, which the descriptor holds
-    /// for the program's lifetime) instead of owned callables.
-    immortal_closures: bool = false,
     /// The compile-time root whose entry wrapper this body is: its own
     /// hoisted expression computes its value here rather than reading it.
     own_root: ?checked.ComptimeRootId = null,
-    /// The recursive components whose members' descriptors this body has
-    /// begun composing.
-    opened_components: std.AutoHashMapUnmanaged(u32, void) = .empty,
-    /// The recursive members whose placeholder descriptor this body has
-    /// opened and not yet closed.
-    open_members: collections.DenseMapUnmanaged(TypeId, OpenMember) = .empty,
-    /// The recursion box over each descriptor local that has one.
-    recursive_boxes: collections.DenseMapUnmanaged(LocalId, LocalId) = .empty,
-    opaque_word_desc: ?LocalId = null,
+    /// Whether this body is a compile-time root's own expression (an entry
+    /// wrapper's body that is not a literal's conversion). A failed pattern
+    /// test here at a checked exhaustiveness site ends in
+    /// `comptime_exhaustiveness_failed`, so compile-time evaluation reports
+    /// the site's empirical failure exactly as it does for `.lss` lowering
+    /// (`comptimeFailure`).
+    comptime_root_body: bool = false,
+    /// The generated codec constructors being composed, innermost last
+    /// (`codec.composeConstructor`).
+    codec_compositions: std.ArrayList(CodecComposition) = .empty,
+    /// Active immutable callable constructions, reserved before capture edges.
+    static_callables: std.ArrayList(StaticCallable) = .empty,
     /// Expressions whose value is built at a row coercion's destination
-    /// type rather than their own (design.md "Row Coercion Primitive").
-    destination_types: collections.DenseMapUnmanaged(CheckedExprId, TypeId) = .empty,
-    /// The expressions whose value is the procedure's result.
-    tail_exprs: collections.DenseMapUnmanaged(CheckedExprId, void) = .empty,
+    /// type rather than their own (design.md "Row Coercion Primitive"), as
+    /// their parents read them: for a row-coerced result, the destination of
+    /// its coercion.
+    destination_types: collections.DenseMapUnmanaged(ExprId, TypeId) = .empty,
+    /// The destination each row-coerced result's own value is built at: the
+    /// type its coercion produces (`lowerRowCoercion`).
+    coerced_destinations: collections.DenseMapUnmanaged(ExprId, TypeId) = .empty,
+    /// The expressions whose value is the procedure's result, as their
+    /// parents read them.
+    tail_exprs: collections.DenseMapUnmanaged(ExprId, void) = .empty,
     /// The procedure's calls and joins as emitted, for its tail calls.
     tail_calls: lir_core.TailCallBuilder,
     /// The statement emitted last, while nothing follows it.
@@ -440,7 +583,6 @@ pub const Builder = struct {
     /// How many branching statements (terminals and joins) this body has
     /// emitted.
     branch_count: u32 = 0,
-    name_locals: collections.DenseMapUnmanaged(types.NameId, LocalId) = .empty,
     entry_hole: CFStmtId = undefined,
     hole: ?CFStmtId = null,
     join_points: std.ArrayList(LIR.JoinPoint) = .empty,
@@ -508,8 +650,14 @@ pub const Builder = struct {
 
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
+        try program.module(worker.module).bodies().demandIndex();
         const bound = try program.arena.allocator().alloc(TypeId, worker.scheme_vars.len);
         for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
+        // An integer list worker's body, and its lambdas', is lowered with
+        // the list item variable bound to its integer type (design.md
+        // "Pre-Specialized Integer List Workers"): every value of the item
+        // type is static.
+        if (worker.list_int) |list_int| bound[list_int.slot] = try program.store.primitive(list_int.item.primitive());
         return .{
             .program = program,
             .allocator = program.allocator,
@@ -519,6 +667,7 @@ pub const Builder = struct {
             .env = .{ .module = worker.module, .vars = worker.scheme_vars, .bound = bound },
             .store = &program.result.store,
             .tail_calls = lir_core.TailCallBuilder.init(program.allocator, worker.proc),
+            .recipes = Tables.Recipes.init(program.allocator),
         };
     }
 
@@ -530,19 +679,23 @@ pub const Builder = struct {
         self.declared_captures.deinit(self.allocator);
         self.root_thunks.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
-        var args_keys = self.args_descs.keyIterator();
-        while (args_keys.next()) |key| self.allocator.free(key.descs);
-        self.args_descs.deinit(self.allocator);
-        self.noted_descs.deinit(self.allocator);
-        self.static_words.deinit(self.allocator);
+        self.product_shapes.deinit(self.allocator);
+        self.constant_slots.deinit(self.allocator);
+        self.recipes.deinit();
+        self.recipe_locals.deinit(self.allocator);
+        self.static_word_locals.deinit(self.allocator);
+        self.desc_recipes.deinit(self.allocator);
+        self.override_words.deinit(self.allocator);
+        self.slots.deinit(self.allocator);
+        self.reads_inputs.deinit(self.allocator);
+        if (self.fold) |*fold| fold.deinit();
         self.entry_locals.deinit(self.allocator);
-        self.opened_components.deinit(self.allocator);
-        self.open_members.deinit(self.allocator);
-        self.recursive_boxes.deinit(self.allocator);
-        self.name_locals.deinit(self.allocator);
+        self.codec_compositions.deinit(self.allocator);
+        self.static_callables.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
         self.destination_types.deinit(self.allocator);
+        self.coerced_destinations.deinit(self.allocator);
         self.tail_exprs.deinit(self.allocator);
         self.tail_calls.deinit();
         self.merges.deinit(self.allocator);
@@ -555,7 +708,7 @@ pub const Builder = struct {
         return self.program.worker(self.worker_id);
     }
 
-    pub fn bodies(self: *const Builder) checked.CheckedBodyStoreView {
+    pub fn bodies(self: *const Builder) checked.CheckedBodies {
         return self.view.bodies();
     }
 
@@ -584,7 +737,61 @@ pub const Builder = struct {
     pub fn localOf(self: *Builder, ty: TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.closed(ty)) return self.closedLocal(try self.program.layouts.layoutOf(ty));
         const desc = try self.descOf(ty);
-        return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage } });
+        return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage }, .product = try self.productShape(ty) });
+    }
+
+    /// Preserve checked product ownership without inventing a byte layout.
+    /// The row is shared by locals of this type in this worker. Descriptors
+    /// are already prepared at entry; ARC never discovers types or offsets.
+    fn productShape(self: *Builder, ty: TypeId) Allocator.Error!LIR.StmtRowId(LIR.ProductShape) {
+        if (self.product_shapes.get(ty)) |shape| return shape;
+        const structural = try self.structuralType(ty);
+        switch (self.program.store.get(structural)) {
+            .record => |record| if (record.ext != null) return .none,
+            .tuple => {},
+            .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => return .none,
+        }
+        const components = try self.structComponentTypes(structural);
+        defer self.allocator.free(components);
+        const shape = try self.productShapeFields(0, components);
+        try self.product_shapes.put(self.allocator, ty, shape);
+        return shape;
+    }
+
+    /// Ownership fields of a complete product, in field-index order. Leading
+    /// ABI words are opaque, non-owning fields; offsets still come from the
+    /// producer's record descriptor, never from this ownership row.
+    fn productShapeFields(self: *Builder, leading: usize, components: []const TypeId) Allocator.Error!LIR.StmtRowId(LIR.ProductShape) {
+        const count = leading + components.len;
+        const field_layouts = try self.allocator.alloc(u32, count);
+        defer self.allocator.free(field_layouts);
+        const descriptors = try self.allocator.alloc(LocalId, count);
+        defer self.allocator.free(descriptors);
+        const slots = try self.allocator.alloc(u32, count + 1);
+        defer self.allocator.free(slots);
+        slots[0] = 0;
+        if (leading != 0) {
+            const descriptor = try self.closedLocal(.opaque_ptr);
+            const slot = try self.program.static_descs.opaqueWordSlot();
+            try self.emitEntry(.{ .assign_literal = .{ .target = descriptor, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
+            try self.constant_slots.put(self.allocator, descriptor, slot);
+            for (0..leading) |index| {
+                field_layouts[index] = @backingInt(layout.Idx.opaque_ptr);
+                descriptors[index] = descriptor;
+                slots[index + 1] = slots[index];
+            }
+        }
+        for (components, field_layouts[leading..], descriptors[leading..], leading..) |component, *field_layout, *descriptor, index| {
+            const field = if (try self.closed(component)) try self.program.layouts.layoutOf(component) else try self.program.result.layouts.dynamicLayout();
+            field_layout.* = @backingInt(field);
+            slots[index + 1] = slots[index] + self.program.result.layouts.ownershipSlotCount(field);
+            descriptor.* = try self.descOf(component);
+        }
+        return try self.store.addStmtRow(LIR.ProductShape, .{
+            .layouts = try self.store.addU32Span(field_layouts),
+            .slots = try self.store.addU32Span(slots),
+            .descriptors = try self.store.addLocalSpan(descriptors),
+        });
     }
 
     /// Whether values of `ty` have one committed layout (see
@@ -597,18 +804,48 @@ pub const Builder = struct {
         return self.program.converter().convert(self.module, ty, self.env);
     }
 
-    pub fn exprType(self: *Builder, expr: CheckedExprId) Allocator.Error!TypeId {
-        const own = try self.convert(self.bodies().expr(expr).ty);
+    /// The type of `expr`'s own value.
+    pub fn exprType(self: *Builder, expr: ExprId) Allocator.Error!TypeId {
+        const own = try self.convert(self.bodies().exprType(expr));
         // A value flowing to a destination of the same shape is built at the
         // destination's type; a diverging value's own type can differ in
         // shape, and it builds nothing. A value no construction builds
         // keeps its own type and is re-tagged into its destination
         // (`retagTarget`).
-        if (self.destination_types.get(expr)) |destination| {
+        if (self.ownDestination(expr)) |destination| {
             if (try self.retagTarget(expr, own) != null) return own;
             if (try types.compatible(self.allocator, &self.program.store, own, destination)) return destination;
         }
         return own;
+    }
+
+    /// The type `expr`'s parent reads its value at: the type its row
+    /// coercion produces when checking recorded one, which converts the
+    /// value as a read does (`retagInto`), and its own value's type
+    /// otherwise.
+    pub fn valueType(self: *Builder, expr: ExprId) Allocator.Error!TypeId {
+        const wide = self.bodies().rowCoercion(expr) orelse return try self.exprType(expr);
+        const own = try self.convert(wide);
+        if (self.destination_types.get(expr)) |destination| {
+            if (try self.retagInto(own, destination) != null) return own;
+            if (try types.compatible(self.allocator, &self.program.store, own, destination)) return destination;
+        }
+        return own;
+    }
+
+    /// The destination `expr`'s own value is built at, if any: its
+    /// coercion's type for a row-coerced result, and the destination its
+    /// parent gives it otherwise.
+    fn ownDestination(self: *Builder, expr: ExprId) ?TypeId {
+        if (self.bodies().rowCoercion(expr) != null) return self.coerced_destinations.get(expr);
+        return self.destination_types.get(expr);
+    }
+
+    /// Whether `expr`'s own value is the procedure's result. A row-coerced
+    /// result's value is its coercion's, never the procedure's directly.
+    pub fn isTail(self: *Builder, expr: ExprId) bool {
+        if (self.bodies().rowCoercion(expr) != null) return false;
+        return self.tail_exprs.contains(expr);
     }
 
     /// The destination a value of expression `expr` (of its own type `own`)
@@ -617,13 +854,20 @@ pub const Builder = struct {
     /// type, which differs from its destination's where the destination
     /// widens a row of it (design.md "Row Coercion Primitive", "Sealed
     /// Result Rows").
-    pub fn retagTarget(self: *Builder, expr: CheckedExprId, own: TypeId) Allocator.Error!?TypeId {
-        const destination = self.destination_types.get(expr) orelse return null;
+    pub fn retagTarget(self: *Builder, expr: ExprId, own: TypeId) Allocator.Error!?TypeId {
+        const destination = self.ownDestination(expr) orelse return null;
         if (destination == own) return null;
-        switch (self.bodies().expr(expr).data) {
-            .block, .if_, .match_, .nominal, .dbg, .tag, .zero_argument_tag, .record, .empty_record, .tuple, .list, .empty_list, .numeral, .str_from_quote, .str_segment, .str, .interpolation, .lambda, .closure, .runtime_error, .crash, .return_ => return null,
-            .pending, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .call, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .expect_err, .expect, .ellipsis, .anno_only, .break_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+        switch (self.bodies().exprData(expr)) {
+            .block, .if_, .match_, .nominal, .dbg, .tag, .zero_argument_tag, .record, .empty_record, .tuple, .list, .empty_list, .numeral, .str_segment, .str, .interpolation, .lambda, .closure, .runtime_error, .crash, .return_ => return null,
+            .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .call, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .expect_err, .expect, .ellipsis, .anno_only, .break_, .for_, .hosted_lambda, .run_low_level => {},
         }
+        return try self.retagInto(own, destination);
+    }
+
+    /// The destination a value of type `own` produced rather than built is
+    /// converted into, or null when the two need no conversion.
+    fn retagInto(self: *Builder, own: TypeId, destination: TypeId) Allocator.Error!?TypeId {
+        if (destination == own) return null;
         // Two closed types committing one layout need no conversion.
         if (try self.closed(own) and try self.closed(destination) and try self.program.layouts.layoutOf(own) == try self.program.layouts.layoutOf(destination)) return null;
         return destination;
@@ -632,14 +876,19 @@ pub const Builder = struct {
     /// The type a read of a stored constant restores its value at: the
     /// read's own, closed type, converted into its destination where that
     /// widens it, or else the type `exprType` gives it.
-    pub fn constReadType(self: *Builder, expr: CheckedExprId) Allocator.Error!TypeId {
-        const own = try self.convert(self.bodies().expr(expr).ty);
+    pub fn constReadType(self: *Builder, expr: ExprId) Allocator.Error!TypeId {
+        const own = try self.convert(self.bodies().exprType(expr));
         if (self.program.store.isClosed(own)) return own;
         return try self.exprType(expr);
     }
 
-    pub fn patternType(self: *Builder, pattern: CheckedPatternId) Allocator.Error!TypeId {
-        return self.convert(self.bodies().pattern(pattern).ty);
+    /// The source region of the CIR node `raw_node` of this body's module.
+    fn nodeRegion(self: *Builder, raw_node: u32) base.Region {
+        return self.bodies().env.store.getNodeRegion(@fromBackingInt(raw_node));
+    }
+
+    pub fn patternType(self: *Builder, pattern: PatternId) Allocator.Error!TypeId {
+        return self.convert(self.bodies().patternType(pattern));
     }
 
     // -- Statements --
@@ -653,21 +902,34 @@ pub const Builder = struct {
         };
     }
 
+    /// What a failed pattern test at checked exhaustiveness site
+    /// `checked_site` reports. In a compile-time root's own body, outside
+    /// every function it builds, it fails as the empirical failure of the
+    /// site, as Monotype's lowering of the body does, and the program records
+    /// the site beside the procedure (design.md "Compile-Time Failure
+    /// Sites"); elsewhere it is a runtime error.
+    pub fn comptimeFailure(self: *Builder, checked_site: ?checked.CheckedExhaustivenessSiteId) Allocator.Error!?Match.ComptimeFailure {
+        if (!self.comptime_root_body) return null;
+        const owner = self.program.lowering_module_ids[@backingInt(self.module)];
+        if (checked_site) |site| {
+            const record = self.view.view.exhaustiveness_sites.get(site);
+            const kind: LIR.ComptimeSiteKind = switch (record.kind) {
+                .match => .match,
+                .destructure => .destructure,
+            };
+            _ = try self.program.result.addComptimeSite(kind, owner, record.region, site, self.currentWorker().proc);
+        }
+        return .{ .owner = owner, .checked_site = checked_site };
+    }
+
     pub fn newHole(self: *Builder) Allocator.Error!CFStmtId {
         return self.store.addCFStmt(.runtime_error, self.origin(.lowering_glue));
     }
 
     /// Replace `hole` with `stmt`.
     pub fn fill(self: *Builder, hole: CFStmtId, stmt: LIR.CFStmt, kind: LIR.OriginKind) Allocator.Error!void {
-        var emitted = stmt;
-        if (self.program.input.composition_sites and emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
-            std.debug.assert(emitted.dyn.composition_cache == null);
-            const site = self.composition_site_count;
-            self.composition_site_count = std.math.add(u32, site, 1) catch return error.OutOfMemory;
-            emitted.dyn.composition_cache = try self.program.static_descs.compositionSlot(self.store.getProcSpec(self.currentWorker().proc).identity, site);
-        }
-        try self.store.replaceCFStmt(hole, emitted, self.origin(kind));
-        self.store.noteStmtShapes(emitted);
+        try self.store.replaceCFStmt(hole, stmt, self.origin(kind));
+        self.store.noteStmtShapes(stmt);
     }
 
     /// The hole the next statement goes into. Code after a diverging
@@ -796,11 +1058,11 @@ pub const Builder = struct {
     pub const MergeEnd = enum { joined, tail };
 
     /// Start a merge of `binders`, recording their current values.
-    pub fn beginMerge(self: *Builder, plan_binders: []const checked.PatternBinderId, end: MergeEnd) Allocator.Error!?MergeId {
+    pub fn beginMerge(self: *Builder, plan_binders: []const BinderId, end: MergeEnd) Allocator.Error!?MergeId {
         // A binder the construct reassigns but that is not bound before it
         // is declared inside it, and goes out of scope with it.
         const arena = self.program.arena.allocator();
-        var in_scope: std.ArrayList(checked.PatternBinderId) = .empty;
+        var in_scope: std.ArrayList(BinderId) = .empty;
         for (plan_binders) |binder| {
             if (self.binders.contains(binder)) try in_scope.append(arena, binder);
         }
@@ -892,7 +1154,7 @@ pub const Builder = struct {
                 const dyn = self.store.localDyn(current);
                 if (!params.contains(current) and (dyn == null or dyn.?.storage != .view)) continue;
                 if (dyn) |dyn_info| {
-                    const staged = try self.addLocal(.{ .layout_idx = self.store.getLocal(current).layout_idx, .dyn = .{ .desc = dyn_info.desc, .storage = .frame } });
+                    const staged = try self.addLocal(.{ .layout_idx = self.store.getLocal(current).layout_idx, .dyn = .{ .desc = dyn_info.desc, .storage = .frame }, .product = self.store.getLocal(current).product });
                     try self.emitDyn(staged, .{ .copy = .{ .src = current, .desc = dyn_info.desc } });
                     source.* = staged;
                 } else {
@@ -920,205 +1182,15 @@ pub const Builder = struct {
 
     // -- Descriptors --
 
-    /// The descriptor local of `ty`, emitted into the entry chain on first
-    /// use: a static descriptor read for a closed type, a hidden parameter
-    /// for a scope variable, and a composition of its components'
-    /// descriptors otherwise (design.md "Type Descriptors"). Components are
-    /// composed before the types that contain them, with an explicit stack.
-    /// The members of a recursive type that its pointer slots (the slots its
-    /// layout boxes, and its list elements and box payloads) point at are
-    /// opened as placeholders first, and each is closed once its own
-    /// components are composed.
+    /// The descriptor local of `root`, read in the entry chain on first
+    /// use: a word (`descWord`), which is a static descriptor of a closed
+    /// type, a scope variable's input, or a recipe of this worker's table
+    /// (design.md "Type Tables").
     pub fn descOf(self: *Builder, root: TypeId) Allocator.Error!LocalId {
-        const local = try self.composedDescOf(root);
-        if (!self.program.input.stored_functions) return local;
-        if (self.program.store.get(root) == .variable) return local;
-        if (self.noted_descs.get(root)) |noted| return noted;
-        const noted = try self.closedLocal(.opaque_ptr);
-        const vars = try self.notedVariables(root);
-        defer self.allocator.free(vars);
-        try self.emitEntry(.{ .dyn = .{ .target = noted, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_note = .{
-            .desc = local,
-            .ty = @backingInt(root),
-            .vars = try self.store.addLocalSpan(vars),
-        } }), .next = undefined } });
-        try self.noted_descs.put(self.allocator, root, noted);
-        return noted;
-    }
-
-    /// The descriptors of `ty`'s variables, by variable index. Composing
-    /// `ty` read each variable it mentions; this body may not have the
-    /// others yet, and an index nothing mentions repeats one it has.
-    fn notedVariables(self: *Builder, ty: TypeId) Allocator.Error![]const LocalId {
-        const mentioned = try self.program.representationVariables(self.allocator, ty);
-        defer self.allocator.free(mentioned);
-        if (mentioned.len == 0) return try self.allocator.alloc(LocalId, 0);
-        const count = std.mem.max(u32, mentioned) + 1;
-        const vars = try self.allocator.alloc(LocalId, count);
-        @memset(vars, self.var_descs[mentioned[0]]);
-        for (mentioned) |index| vars[index] = self.var_descs[index];
-        return vars;
-    }
-
-    fn composedDescOf(self: *Builder, root: TypeId) Allocator.Error!LocalId {
         if (self.type_descs.get(root)) |existing| return existing;
-        const Step = enum { fresh, expanded, close_fresh, close_expanded };
-        var pending: std.ArrayList(struct { ty: TypeId, step: Step }) = .empty;
-        defer pending.deinit(self.allocator);
-        var expanding: collections.DenseMapUnmanaged(TypeId, void) = .empty;
-        defer expanding.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .ty = root, .step = .fresh });
-        while (pending.items.len > 0) {
-            const top = &pending.items[pending.items.len - 1];
-            const ty = top.ty;
-            switch (top.step) {
-                .fresh, .close_fresh => {
-                    if (top.step == .fresh) {
-                        if (self.type_descs.contains(ty)) {
-                            _ = pending.pop();
-                            continue;
-                        }
-                        if (try self.leafDesc(ty)) |local| {
-                            try self.type_descs.put(self.allocator, ty, local);
-                            _ = pending.pop();
-                            continue;
-                        }
-                        if (try self.program.layouts.recursiveComponent(ty)) |component| {
-                            if (!self.opened_components.contains(component)) {
-                                try self.opened_components.put(self.allocator, component, {});
-                                const targets = self.program.layouts.componentTargets(component);
-                                for (targets) |target| try self.openRecursiveMember(target);
-                                for (targets) |target| try pending.append(self.allocator, .{ .ty = target, .step = .close_fresh });
-                                continue;
-                            }
-                        }
-                        // A nominal whose override instances mention the
-                        // nominal (a method generic in its receiver) captures
-                        // its own descriptor: it is composed as a recursive
-                        // member, its placeholder standing for it meanwhile.
-                        if (try self.methodsMention(ty)) {
-                            try self.openRecursiveMember(ty);
-                            top.step = .close_fresh;
-                            continue;
-                        }
-                    }
-                    top.step = if (top.step == .fresh) .expanded else .close_expanded;
-                    try expanding.put(self.allocator, ty, {});
-                    const children = try self.descComponents(ty);
-                    defer self.allocator.free(children);
-                    for (children) |child| {
-                        if (self.type_descs.contains(child)) continue;
-                        if (expanding.contains(child)) invariant("a descriptor composition reached a type it is composing outside its layout's boxed slots");
-                        try pending.append(self.allocator, .{ .ty = child, .step = .fresh });
-                    }
-                },
-                .expanded => {
-                    _ = expanding.remove(ty);
-                    const local = try self.composeDesc(ty);
-                    try self.type_descs.put(self.allocator, ty, local);
-                    _ = pending.pop();
-                },
-                .close_expanded => {
-                    _ = expanding.remove(ty);
-                    const desc = try self.composeDesc(ty);
-                    const open = self.open_members.fetchRemove(ty).?.value;
-                    const closed_local = try self.closedLocal(.opaque_ptr);
-                    try self.emitEntry(.{ .dyn = .{ .target = closed_local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_recursive_close = .{
-                        .shell = self.type_descs.get(ty).?,
-                        .desc = desc,
-                        .key = open.key,
-                        .vars = open.vars,
-                    } }), .next = undefined } });
-                    _ = pending.pop();
-                },
-            }
-        }
-        return self.type_descs.get(root).?;
-    }
-
-    /// Whether the nominal `ty`'s overrides are instantiated at types that
-    /// mention `ty`.
-    fn methodsMention(self: *Builder, ty: TypeId) Allocator.Error!bool {
-        const store = &self.program.store;
-        if (store.get(ty) != .nominal) return false;
-        const overrides = try self.program.nominalOverrides(ty);
-        var pending: std.ArrayList(TypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
-        defer seen.deinit(self.allocator);
-        for (overrides) |maybe| switch (maybe orelse continue) {
-            .procedure => |override| {
-                try pending.appendSlice(self.allocator, override.bound);
-                for (override.dicts) |requirement| try pending.appendSlice(self.allocator, &.{ requirement.dispatcher, requirement.callable });
-            },
-            .local => |override| try pending.append(self.allocator, override.interface),
-        };
-        while (pending.pop()) |current| {
-            if (current == ty) return true;
-            if ((try seen.getOrPut(self.allocator, current)).found_existing) continue;
-            switch (store.get(current)) {
-                .primitive, .empty_record, .variable => {},
-                .record => |record| {
-                    for (store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
-                    if (record.ext) |ext| try pending.append(self.allocator, ext);
-                },
-                .tuple => |items| try pending.appendSlice(self.allocator, store.span(items)),
-                .tag_union => |tag_union| {
-                    for (store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(self.allocator, store.span(tag.payloads));
-                    if (tag_union.ext) |ext| try pending.append(self.allocator, ext);
-                },
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .nominal => |nominal| try pending.appendSlice(self.allocator, store.nominalArgs(nominal)),
-                .function => |function| {
-                    try pending.appendSlice(self.allocator, store.span(function.args));
-                    try pending.append(self.allocator, function.ret);
-                },
-            }
-        }
-        return false;
-    }
-
-    /// Open the placeholder descriptor of the recursive member `ty`, which
-    /// stands for `ty`'s descriptor until `descOf` closes it.
-    fn openRecursiveMember(self: *Builder, ty: TypeId) Allocator.Error!void {
-        const key = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .assign_literal = .{ .target = key, .value = .{ .static_data = .{ .id = try self.program.static_descs.recursionKeySlot(ty) } }, .next = undefined } });
-        const vars = try self.program.layouts.memberVars(ty);
-        const var_descs = try self.allocator.alloc(LocalId, vars.len);
-        defer self.allocator.free(var_descs);
-        for (vars, var_descs) |var_ty, *desc| desc.* = try self.leafDesc(var_ty) orelse invariant("a recursive member's variable has no descriptor in scope");
-        const vars_span = try self.store.addLocalSpan(var_descs);
-        const shell = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .dyn = .{ .target = shell, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_recursive_open = .{ .key = key, .vars = vars_span } }), .next = undefined } });
-        try self.type_descs.put(self.allocator, ty, shell);
-        try self.open_members.put(self.allocator, ty, .{ .key = key, .vars = vars_span });
-    }
-
-    /// The descriptor a composition of `parent` stores for its inline
-    /// component `edge`: the component's own, or the recursion box around it
-    /// in a slot `parent`'s committed layout boxes.
-    fn slotDesc(self: *Builder, parent: TypeId, edge: Layouts.InlineEdge) Allocator.Error!LocalId {
-        const child = self.type_descs.get(edge.child).?;
-        if (try self.program.layouts.boxedEdge(parent, edge)) {
-            if (self.recursive_boxes.get(child)) |existing| return existing;
-            const boxed = try self.closedLocal(.opaque_ptr);
-            try self.emitEntry(.{ .dyn = .{ .target = boxed, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_recursive_box = .{ .payload = child } }), .next = undefined } });
-            try self.recursive_boxes.put(self.allocator, child, boxed);
-            return boxed;
-        }
-        if (self.open_members.contains(edge.child)) invariant("a descriptor composition stores an open recursive member outside a boxed slot");
-        return child;
-    }
-
-    /// A descriptor needing no component descriptors: a static descriptor,
-    /// or a scope variable's hidden parameter.
-    pub fn leafDesc(self: *Builder, ty: TypeId) Allocator.Error!?LocalId {
-        const store = &self.program.store;
-        if (try self.closed(ty) and !try self.program.composedInBody(ty)) return try self.staticDesc(ty);
-        return switch (store.get(ty)) {
-            .variable => |index| self.var_descs[index],
-            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => null,
-        };
+        const local = try self.materialize(try self.descWord(root));
+        try self.type_descs.put(self.allocator, root, local);
+        return local;
     }
 
     pub fn staticDesc(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
@@ -1127,199 +1199,430 @@ pub const Builder = struct {
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
         try self.type_descs.put(self.allocator, ty, local);
-        try self.static_words.put(self.allocator, local, .{ .desc = ty });
+        try self.constant_slots.put(self.allocator, local, slot);
         return local;
     }
 
-    pub fn nameDesc(self: *Builder, name: types.NameId) Allocator.Error!LocalId {
-        if (self.name_locals.get(name)) |existing| return existing;
-        const slot = try self.program.static_descs.nameSlot(name);
-        const local = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
-        try self.name_locals.put(self.allocator, name, local);
-        return local;
+    // -- Positions and plans --
+
+    /// The discriminant of the tag `name` under the tag union `ty`'s
+    /// descriptor (through nominal wrappers), as an index operand.
+    pub fn tagIndex(self: *Builder, ty: TypeId, name: types.NameId) Allocator.Error!LIR.DynIndex {
+        return try self.tagIndexIn(try self.descWord(ty), name);
     }
 
-    /// The types whose descriptors compose `ty`'s. Caller frees.
-    pub fn descComponents(self: *Builder, ty: TypeId) Allocator.Error![]TypeId {
-        const store = &self.program.store;
-        var out: std.ArrayList(TypeId) = .empty;
-        errdefer out.deinit(self.allocator);
-        switch (store.get(ty)) {
-            .list => |elem| try out.append(self.allocator, elem),
-            .box => |payload| try out.append(self.allocator, payload),
-            .tuple => |items| try out.appendSlice(self.allocator, store.span(items)),
-            .record => |record| {
-                if (record.ext) |ext| try out.append(self.allocator, ext);
-                const storage = try self.program.layouts.recordStorage(record);
-                defer self.allocator.free(storage);
-                try out.appendSlice(self.allocator, storage);
-            },
-            .tag_union => |tag_union| {
-                if (tag_union.ext) |ext| try out.append(self.allocator, ext);
-                for (store.tagSpan(tag_union.tags)) |tag| try out.appendSlice(self.allocator, store.span(tag.payloads));
-            },
-            .nominal => try out.append(self.allocator, try self.program.converter().backing(ty)),
-            .primitive, .empty_record, .function, .variable => {},
-        }
-        return try out.toOwnedSlice(self.allocator);
+    /// The discriminant of the tag `name` under the tag union the
+    /// descriptor word `desc` describes, as an index operand.
+    pub fn tagIndexIn(self: *Builder, desc: Word, name: types.NameId) Allocator.Error!LIR.DynIndex {
+        return try self.indexOperand(.{ .tag_index = .{ .desc = desc, .name = name } });
     }
 
-    /// Emit the composition of `ty`'s descriptor from its components'.
-    pub fn composeDesc(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
-        const store = &self.program.store;
-        const local = try self.closedLocal(.opaque_ptr);
-        if (self.program.layouts.presenceSlotPayload(ty)) |payload| {
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_presence_slot = .{
-                .missing = try self.nameDesc(try store.internName(@import("layouts.zig").missing_label)),
-                .present = try self.nameDesc(try store.internName(@import("layouts.zig").present_label)),
-                .payload = try self.slotDesc(ty, .{ .child = payload, .slot = .payload }),
-            } }), .next = undefined } });
-            return local;
-        }
-        const op: LIR.DynOp = switch (store.get(ty)) {
-            // A list or box points at its component, so an open recursive
-            // member's placeholder stands in for it directly.
-            .list => |elem| .{ .desc_list = .{ .elem = self.type_descs.get(elem).? } },
-            .box => |payload| .{ .desc_box = .{ .payload = self.type_descs.get(payload).? } },
-            .tuple => |items_span| blk: {
-                const items = try self.allocator.dupe(TypeId, store.span(items_span));
-                defer self.allocator.free(items);
-                const descs = try self.allocator.alloc(LocalId, items.len);
-                defer self.allocator.free(descs);
-                for (items, descs) |item, *desc| desc.* = try self.slotDesc(ty, .{ .child = item, .slot = .field });
-                break :blk .{ .desc_tuple = .{ .elems = try self.store.addLocalSpan(descs) } };
-            },
-            .record => |record| blk: {
-                if (record.declared) |declared| break :blk try self.declaredRecordDesc(ty, record, declared);
-                const fields = try self.allocator.dupe(types.Field, store.fieldSpan(record.fields));
-                defer self.allocator.free(fields);
-                const names = try self.allocator.alloc(LocalId, fields.len);
-                defer self.allocator.free(names);
-                const descs = try self.allocator.alloc(LocalId, fields.len);
-                defer self.allocator.free(descs);
-                for (fields, names, descs) |field, *name, *desc| {
-                    name.* = try self.nameDesc(field.name);
-                    desc.* = try self.slotDesc(ty, .{ .child = try self.program.layouts.fieldStorage(field), .slot = .field });
-                }
-                break :blk .{ .desc_record = .{
-                    .names = try self.store.addLocalSpan(names),
-                    .descs = try self.store.addLocalSpan(descs),
-                    .ext = if (record.ext) |ext| self.type_descs.get(ext).? else null,
-                } };
-            },
-            .tag_union => |tag_union| blk: {
-                const tags = try self.allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));
-                defer self.allocator.free(tags);
-                var names: std.ArrayList(LocalId) = .empty;
-                defer names.deinit(self.allocator);
-                var counts: std.ArrayList(u32) = .empty;
-                defer counts.deinit(self.allocator);
-                var payloads: std.ArrayList(LocalId) = .empty;
-                defer payloads.deinit(self.allocator);
-                for (tags) |tag| {
-                    try names.append(self.allocator, try self.nameDesc(tag.name));
-                    const tag_payloads = try self.allocator.dupe(TypeId, store.span(tag.payloads));
-                    defer self.allocator.free(tag_payloads);
-                    try counts.append(self.allocator, @intCast(tag_payloads.len));
-                    for (tag_payloads) |payload| try payloads.append(self.allocator, try self.slotDesc(ty, .{
-                        .child = payload,
-                        .slot = if (tag_payloads.len == 1) .payload else .field,
-                    }));
-                }
-                break :blk .{ .desc_tag_union = .{
-                    .names = try self.store.addLocalSpan(names.items),
-                    .payload_counts = try self.store.addU32Span(counts.items),
-                    .payloads = try self.store.addLocalSpan(payloads.items),
-                    .ext = if (tag_union.ext) |ext| self.type_descs.get(ext).? else null,
-                } };
-            },
-            .nominal => |nominal| blk: {
-                if (nominal.builtin == .bool) invariant("Bool is never an open type");
-                break :blk .{ .desc_nominal = .{
-                    .backing = try self.slotDesc(ty, .{ .child = try self.program.converter().backing(ty), .slot = .backing }),
-                    .name = try self.nameDesc(nominal.name),
-                    .methods = try self.composedMethods(ty),
-                    .inspect_opaque = nominal.is_opaque,
-                } };
-            },
-            .primitive, .empty_record, .function, .variable => unreachable, // `leafDesc` answers these
+    /// The label-order index of the field `name` of the record `ty`'s
+    /// descriptor (through nominal wrappers), as an index operand.
+    pub fn fieldIndex(self: *Builder, ty: TypeId, name: types.NameId) Allocator.Error!LIR.DynIndex {
+        return try self.indexOperand(.{ .field_index = .{ .desc = try self.descWord(ty), .name = name } });
+    }
+
+    /// The position recipe `recipe` as an index operand: its value where it
+    /// reads no input, otherwise the `u32` local reading its slot of this
+    /// worker's type table.
+    fn indexOperand(self: *Builder, recipe: Tables.Recipe) Allocator.Error!LIR.DynIndex {
+        const id = try self.recipes.intern(recipe);
+        if (try self.readsInputs(id)) return .{ .local = try self.materialize(.{ .recipe = id }) };
+        return switch (try self.foldWord(id)) {
+            .int => |value| .{ .immediate = value },
+            .desc, .scoped_desc, .callable, .table, .node, .zero => invariant("a position recipe's word is not a position"),
         };
-        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, op), .next = undefined } });
-        return local;
     }
 
-    /// The composition of the padded nominal backing `ty`, in declared order.
-    fn declaredRecordDesc(self: *Builder, ty: TypeId, record: types.Record, declared: types.DeclaredOrder) Allocator.Error!LIR.DynOp {
-        if (record.ext != null) invariant("a padded nominal's record row is closed");
-        const store = &self.program.store;
-        const storage = try self.program.layouts.recordStorage(record);
-        defer self.allocator.free(storage);
-        const slots = store.declaredSlots(declared);
-        const descs = try self.allocator.alloc(LocalId, slots.len);
-        defer self.allocator.free(descs);
-        var names: std.ArrayList(LocalId) = .empty;
-        defer names.deinit(self.allocator);
-        var padding: std.ArrayList(u32) = .empty;
-        defer padding.deinit(self.allocator);
-        for (slots, descs, 0..) |slot, *desc, position| {
-            desc.* = try self.slotDesc(ty, .{ .child = storage[slot], .slot = .field });
-            if (slot < record.fields.len) {
-                try names.append(self.allocator, try self.nameDesc(store.fieldSpan(record.fields)[slot].name));
-            } else {
-                try padding.append(self.allocator, @intCast(position));
-            }
+    /// Write the index operand `index` to the `u32` local `target`.
+    pub fn assignIndex(self: *Builder, target: LocalId, index: LIR.DynIndex) Allocator.Error!void {
+        switch (index) {
+            .immediate => |value| try self.emitLinear(.{ .assign_literal = .{ .target = target, .value = .{ .i64_literal = .{ .value = value, .layout_idx = .u32 } }, .next = undefined } }),
+            .local => |local| try self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.local(local), .next = undefined } }),
         }
-        return .{ .desc_declared_record = .{
-            .names = try self.store.addLocalSpan(names.items),
-            .descs = try self.store.addLocalSpan(descs),
-            .padding = try self.store.addU32Span(padding.items),
-        } };
     }
 
-    /// The `Methods` record of the nominal type `ty`'s overrides, composed
-    /// at runtime from the descriptors of the types each method's scheme
-    /// takes, or null when it has none.
-    pub fn composedMethods(self: *Builder, ty: TypeId) Allocator.Error!?LocalId {
+    /// A `u32` local holding the index operand `index`.
+    pub fn indexLocal(self: *Builder, index: LIR.DynIndex) Allocator.Error!LocalId {
+        return switch (index) {
+            .local => |local| local,
+            .immediate => blk: {
+                const local = try self.closedLocal(.u32);
+                try self.assignIndex(local, index);
+                break :blk local;
+            },
+        };
+    }
+
+    /// The local holding the coercion plan from `from`'s descriptor to
+    /// `to`'s (`DynOp.adapt`).
+    pub fn adaptPlan(self: *Builder, from: TypeId, to: TypeId) Allocator.Error!LocalId {
+        return try self.adaptPlanIn(try self.descWord(from), try self.descWord(to));
+    }
+
+    /// The local holding the coercion plan between the descriptor words
+    /// `from` and `to`.
+    pub fn adaptPlanIn(self: *Builder, from: Word, to: Word) Allocator.Error!LocalId {
+        return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .adapt_plan = .{ .from = from, .to = to } }) });
+    }
+
+    /// The local holding the names block of `ty`'s descriptor, which an
+    /// inspection of a value of `ty` reads its labels and tag names from.
+    pub fn namesOf(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
+        return try self.namesIn(try self.descWord(ty));
+    }
+
+    /// The local holding the names block of the type the descriptor word
+    /// `desc` describes.
+    pub fn namesIn(self: *Builder, desc: Word) Allocator.Error!LocalId {
+        return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .names_block = .{ .desc = desc } }) });
+    }
+
+    /// Convert `src`, of type `from`, into `target`, of type `to`, by their
+    /// coercion plan.
+    pub fn emitAdapt(self: *Builder, target: LocalId, src: LocalId, from: TypeId, to: TypeId) Allocator.Error!void {
+        try self.emitDyn(target, .{ .adapt = .{ .src = src, .plan = try self.adaptPlan(from, to) } });
+    }
+
+    // -- Words --
+
+    /// Input word `index` of this worker: in input order, the descriptors of
+    /// its scheme variables (`var_descs`), its dictionaries (`dict_locals`),
+    /// then its literal arguments (`literal_locals`).
+    pub fn inputWord(self: *Builder, index: usize) Allocator.Error!Word {
+        return .{ .recipe = try self.recipes.intern(.{ .input = @intCast(index) }) };
+    }
+
+    /// The input word of `dict_locals[position]`.
+    pub fn dictInputWord(self: *Builder, position: usize) Allocator.Error!Word {
+        if (position >= self.dict_locals.len) invariant("a dictionary input names a dictionary its worker does not take");
+        return try self.inputWord(self.var_descs.len + position);
+    }
+
+    /// The input word of `literal_locals[position]`.
+    pub fn literalInputWord(self: *Builder, position: usize) Allocator.Error!Word {
+        if (position >= self.literal_locals.len) invariant("a literal input names a literal argument its worker does not take");
+        return try self.inputWord(self.var_descs.len + self.dict_locals.len + position);
+    }
+
+    /// The input words of descriptors `var_descs[start..end]`.
+    pub fn descInputWords(self: *Builder, start: usize, end: usize) Allocator.Error![]Word {
+        const words = try self.program.arena.allocator().alloc(Word, end - start);
+        for (words, start..) |*word, index| word.* = try self.inputWord(index);
+        return words;
+    }
+
+    /// Every input word of this worker, in input order.
+    pub fn allInputWords(self: *Builder) Allocator.Error![]Word {
+        const words = try self.program.arena.allocator().alloc(Word, self.program.inputCount(self.worker_id));
+        for (words, 0..) |*word, index| word.* = try self.inputWord(index);
+        return words;
+    }
+
+    /// The input words of `dict_locals[start..]` then `literal_locals[literal_start..]`.
+    pub fn dictLiteralInputWords(self: *Builder, start: usize, literal_start: usize) Allocator.Error![]Word {
+        const words = try self.program.arena.allocator().alloc(Word, self.dict_locals.len - start + self.literal_locals.len - literal_start);
+        for (words[0 .. self.dict_locals.len - start], start..) |*word, position| word.* = try self.dictInputWord(position);
+        for (words[self.dict_locals.len - start ..], literal_start..) |*word, position| word.* = try self.literalInputWord(position);
+        return words;
+    }
+
+    /// The word of `ty`'s descriptor: a static descriptor of a closed type
+    /// (unless a body must compose it, `Program.composedInBody`), a scope
+    /// variable's input, or the recipe of a type over the worker's
+    /// variables.
+    pub fn descWord(self: *Builder, ty: TypeId) Allocator.Error!Word {
+        if (try self.closed(ty) and !try self.program.composedInBody(ty)) return .{ .static = .{ .desc = ty } };
+        switch (self.program.store.get(ty)) {
+            .variable => |index| return try self.inputWord(index),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => {},
+        }
+        return .{ .recipe = try self.descRecipe(ty) };
+    }
+
+    /// The descriptor words of `tys`.
+    pub fn descWords(self: *Builder, tys: []const TypeId) Allocator.Error![]Word {
+        const words = try self.program.arena.allocator().alloc(Word, tys.len);
+        for (words, tys) |*word, ty| word.* = try self.descWord(ty);
+        return words;
+    }
+
+    /// The descriptor recipe of `ty`, a type this body composes: with the
+    /// override words of every nominal type its composition reaches, which
+    /// only this body builds. It is reserved before those are built, since
+    /// an override generic in its receiver captures this descriptor.
+    fn descRecipe(self: *Builder, root: TypeId) Allocator.Error!Tables.RecipeId {
+        if (self.desc_recipes.get(root)) |known| return known;
+        const id = try self.recipes.reserve();
+        try self.desc_recipes.put(self.allocator, root, id);
+        var scoped: std.ArrayList(Tables.ScopedOverride) = .empty;
+        defer scoped.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            // A component with a static descriptor holds its own overrides.
+            if (ty != root and try self.closed(ty) and !try self.program.composedInBody(ty)) continue;
+            if (self.program.store.get(ty) == .nominal) {
+                if (try self.overrideWords(ty)) |methods| try scoped.append(self.allocator, .{ .nominal = ty, .methods = methods });
+            }
+            try self.program.appendDescriptorComponents(ty, &pending, self.allocator);
+        }
+        try self.recipes.set(id, .{ .desc = .{ .ty = root, .scoped = scoped.items } });
+        return id;
+    }
+
+    /// The override callables of the nominal type `ty`
+    /// (`Program.nominalOverrides`) as words of this body, in `Methods`
+    /// order, or null when it has none. A procedure's override is its
+    /// dictionary entry capturing the descriptors of the types its scheme
+    /// takes, the dictionaries of its requirements resolved from those
+    /// types, and literal thunks derived from them (a descriptor records no
+    /// checked edge, design.md "Literal Arguments"); a method declared in a
+    /// function body is its local procedure's function value at the method's
+    /// interface. Each is reserved before its captures are built, since an
+    /// override generic in its receiver captures `ty`'s descriptor.
+    pub fn overrideWords(self: *Builder, ty: TypeId) Allocator.Error!?[3]?Word {
+        if (self.override_words.get(ty)) |known| return known;
         const overrides = try self.program.nominalOverrides(ty);
         if (overrides[0] == null and overrides[1] == null and overrides[2] == null) return null;
-        var callables: [3]LocalId = undefined;
-        for (overrides, &callables) |maybe, *callable| {
-            const override = maybe orelse {
-                callable.* = try self.closedLocal(.opaque_ptr);
-                try self.emitEntry(.{ .assign_literal = .{ .target = callable.*, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
-                continue;
-            };
+        var reserved: [3]?Tables.RecipeId = .{ null, null, null };
+        var words: [3]?Word = .{ null, null, null };
+        for (overrides, &reserved, &words) |maybe, *id, *word| if (maybe != null) {
+            id.* = try self.recipes.reserve();
+            word.* = .{ .recipe = id.*.? };
+        };
+        try self.override_words.put(self.allocator, ty, words);
+        for (overrides, reserved) |maybe, id| {
+            const override = maybe orelse continue;
             switch (override) {
                 .procedure => |procedure| {
-                    // The entry's literal arguments are derived from the
-                    // nominal's types, as its dictionaries are: a descriptor
-                    // records no checked edge (design.md "Literal
-                    // Arguments").
                     const literal_count = self.program.worker(procedure.target).literal_params;
-                    const hidden = try self.allocator.alloc(LocalId, procedure.bound.len + procedure.dicts.len + literal_count);
-                    defer self.allocator.free(hidden);
-                    for (procedure.bound, hidden[0..procedure.bound.len]) |bound_ty, *desc| desc.* = try self.descOf(bound_ty);
-                    for (procedure.dicts, hidden[procedure.bound.len..][0..procedure.dicts.len]) |requirement, *local| local.* = try self.dictionaryFromType(requirement);
-                    for (hidden[procedure.bound.len + procedure.dicts.len ..], 0..) |*literal, index| {
-                        literal.* = try self.emitIntoEntry(derivedLiteralArg, .{ procedure.target, procedure.bound, @as(u32, @intCast(index)) });
-                    }
-                    callable.* = try self.composeDictionary(procedure.entry, hidden);
+                    const hidden = try self.program.arena.allocator().alloc(Word, procedure.bound.len + procedure.dicts.len + literal_count);
+                    for (procedure.bound, hidden[0..procedure.bound.len]) |bound_ty, *desc| desc.* = try self.descWord(bound_ty);
+                    for (procedure.dicts, hidden[procedure.bound.len..][0..procedure.dicts.len]) |requirement, *dict| dict.* = try self.dictionaryFromType(requirement);
+                    for (hidden[procedure.bound.len + procedure.dicts.len ..], 0..) |*literal, index| literal.* = try self.derivedLiteralArg(procedure.target, procedure.bound, @intCast(index));
+                    try self.recipes.set(id.?, try self.dictionaryRecipe(procedure.entry, hidden));
                 },
-                // A local procedure's function value is built in the entry
-                // chain, where the descriptor that holds it is composed.
+                // The local procedure's immortal callable is the override.
                 .local => |local| {
                     if (local.module != self.module) invariant("a local-procedure override's descriptor is composed outside its declaring module");
-                    const saved = self.immortal_closures;
-                    self.immortal_closures = true;
-                    defer self.immortal_closures = saved;
-                    callable.* = try self.emitIntoEntry(localProcInstanceValueAt, .{ local.binding, local.interface });
+                    const word = try self.localProcWord(local.binding, local.interface, null, null, &.{}, null);
+                    self.recipes.setSame(id.?, word.recipe);
                 },
             }
         }
-        const methods = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .dyn = .{ .target = methods, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_record = .{ .methods = try self.store.addLocalSpan(&callables) } }), .next = undefined } });
-        return methods;
+        return words;
+    }
+
+    /// The immortal callable of `entry` capturing the hidden words
+    /// `captures`, its inputs: an erased callable of the entry capturing
+    /// the entry's type table at those inputs, or nothing for an entry with
+    /// no inputs.
+    pub fn composeDictionary(self: *Builder, entry: WorkerId, captures: []const Word) Allocator.Error!Word {
+        return .{ .recipe = try self.recipes.intern(try self.dictionaryRecipe(entry, captures)) };
+    }
+
+    /// The recipe `composeDictionary` interns.
+    fn dictionaryRecipe(self: *Builder, entry: WorkerId, inputs: []const Word) Allocator.Error!Tables.Recipe {
+        if (self.program.inputCount(entry) != inputs.len) invariant("a dictionary's captures differ from its entry's inputs");
+        if (inputs.len == 0) return .{ .callable = .{ .entry = entry, .captures = &.{} } };
+        const captures = try self.program.arena.allocator().alloc(Word, 1);
+        captures[0] = try self.tableWord(entry, inputs);
+        return .{ .callable = .{ .entry = entry, .captures = captures } };
+    }
+
+    /// The word of `callee`'s type table at the inputs `inputs`.
+    pub fn tableWord(self: *Builder, callee: WorkerId, inputs: []const Word) Allocator.Error!Word {
+        if (self.program.inputCount(callee) != inputs.len) invariant("a type table's inputs differ from its worker's");
+        return .{ .recipe = try self.recipes.intern(.{ .table = .{ .worker = callee, .inputs = inputs } }) };
+    }
+
+    /// A direct call's arguments: `explicit`, then `callee`'s type table at
+    /// `inputs` when it takes one. Caller frees.
+    pub fn callArgs(self: *Builder, explicit: []const LocalId, callee: WorkerId, inputs: []const Word) Allocator.Error![]LocalId {
+        const table = try self.tableLocal(callee, inputs) orelse return try self.allocator.dupe(LocalId, explicit);
+        return try std.mem.concat(self.allocator, LocalId, &.{ explicit, &.{table} });
+    }
+
+    /// The local holding `callee`'s type table at `inputs`, or null for a
+    /// worker with no inputs, which takes no table.
+    pub fn tableLocal(self: *Builder, callee: WorkerId, inputs: []const Word) Allocator.Error!?LocalId {
+        if (inputs.len == 0 and self.program.inputCount(callee) == 0) return null;
+        return try self.materialize(try self.tableWord(callee, inputs));
+    }
+
+    /// The local holding `word`, emitted in the entry chain on first use:
+    /// an input read from where the worker received it; a recipe that
+    /// reads no input, evaluated now and read from static data; any other
+    /// recipe read from its slot of this worker's type table.
+    pub fn materialize(self: *Builder, word: Word) Allocator.Error!LocalId {
+        const named = switch (word) {
+            .static => |static| return try self.staticWordLocal(static),
+            .recipe => |named| named,
+        };
+        const id = self.recipes.resolve(named);
+        if (self.recipe_locals.get(id)) |known| return known;
+        const local = switch (self.recipes.get(id)) {
+            .input => |index| return try self.inputLocal(index),
+            .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => if (try self.readsInputs(id))
+                try self.slotLocal(id)
+            else
+                try self.staticWordLocal(try self.foldWord(id)),
+        };
+        try self.recipe_locals.put(self.allocator, id, local);
+        return local;
+    }
+
+    /// The locals of `words`.
+    pub fn materializeAll(self: *Builder, words: []const Word) Allocator.Error![]LocalId {
+        const locals = try self.allocator.alloc(LocalId, words.len);
+        errdefer self.allocator.free(locals);
+        for (locals, words) |*local, word| local.* = try self.materialize(word);
+        return locals;
+    }
+
+    /// Whether recipe `root` reads one of this worker's inputs: an input,
+    /// or a descriptor of a type over its variables, which their
+    /// descriptors determine.
+    fn readsInputs(self: *Builder, root: Tables.RecipeId) Allocator.Error!bool {
+        if (self.reads_inputs.get(root)) |known| return known;
+        var seen: collections.DenseMapUnmanaged(Tables.RecipeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var pending: std.ArrayList(Tables.RecipeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var operands: std.ArrayList(Word) = .empty;
+        defer operands.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        const found = walk: while (pending.pop()) |named| {
+            const id = self.recipes.resolve(named);
+            if ((try seen.getOrPut(self.allocator, id)).found_existing) continue;
+            if (self.reads_inputs.get(id)) |known| {
+                if (known) break :walk true;
+                continue;
+            }
+            const recipe = self.recipes.get(id);
+            switch (recipe) {
+                .input => break :walk true,
+                .desc => |desc| if (!self.program.store.isClosed(desc.ty)) break :walk true,
+                .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => {},
+            }
+            operands.clearRetainingCapacity();
+            try Tables.appendOperands(self.allocator, &operands, recipe);
+            for (operands.items) |operand| switch (operand) {
+                .recipe => |next| try pending.append(self.allocator, next),
+                .static => {},
+            };
+        } else false;
+        // A recipe that reads no input reaches only recipes that read none.
+        if (!found) {
+            var reached = seen.keyIterator();
+            while (reached.next()) |id| try self.reads_inputs.put(self.allocator, id.*, false);
+        }
+        try self.reads_inputs.put(self.allocator, root, found);
+        return found;
+    }
+
+    /// The word recipe `id`, which reads no input, is: evaluated now.
+    fn foldWord(self: *Builder, id: Tables.RecipeId) Allocator.Error!StaticDescs.CaptureWord {
+        if (self.fold == null) self.fold = Tables.Evaluation.init(self.program, .{ .building = &self.recipes }, &.{}, 0);
+        return try self.fold.?.word(id);
+    }
+
+    /// The local reading recipe `id`'s slot of this worker's type table,
+    /// the slot given it now.
+    fn slotLocal(self: *Builder, id: Tables.RecipeId) Allocator.Error!LocalId {
+        const table = self.table_local orelse invariant("a worker without a type table read an input-dependent recipe");
+        const slot: u32 = @intCast(self.program.inputCount(self.worker_id) + self.slots.items.len);
+        try self.slots.append(self.allocator, id);
+        const local = try self.closedLocal(switch (self.recipes.get(id)) {
+            .callable => try self.erasedLayout(),
+            .desc, .args_desc, .table, .update_plan, .adapt_plan, .names_block => .opaque_ptr,
+            .tag_index, .field_index => .u32,
+            .input => invariant("an input has no slot of its own"),
+        });
+        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .table_entry = .{ .table = table, .index = slot } }), .next = undefined } });
+        return local;
+    }
+
+    /// The local holding the static word `word`, read from static data.
+    fn staticWordLocal(self: *Builder, word: StaticDescs.CaptureWord) Allocator.Error!LocalId {
+        switch (word) {
+            .desc => |ty| return try self.staticDesc(ty),
+            .zero => {
+                if (self.zero_local) |known| return known;
+                const local = try self.nullWord();
+                self.zero_local = local;
+                return local;
+            },
+            .scoped_desc, .callable, .table, .node => {},
+            .int => invariant("a position word is read as an operand, not from static data"),
+        }
+        if (self.static_word_locals.get(word)) |known| return known;
+        const local = try self.closedLocal(if (word == .callable) try self.erasedLayout() else .opaque_ptr);
+        const slot = try self.program.static_descs.wordSlot(word);
+        try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
+        try self.constant_slots.put(self.allocator, local, slot);
+        try self.static_word_locals.put(self.allocator, word, local);
+        return local;
+    }
+
+    /// Take this worker's inputs from its type table `table`, its one
+    /// hidden argument (`tables.zig`): the descriptors of its variables,
+    /// its dictionaries, then its literal arguments, each read in the entry
+    /// chain on first use (`inputLocal`).
+    pub fn beginTable(self: *Builder, table: LocalId, dict_count: usize) Allocator.Error!void {
+        const arena = self.program.arena.allocator();
+        const input_count = self.program.inputCount(self.worker_id);
+        const desc_count = self.program.descCount(self.worker_id);
+        self.table_local = table;
+        self.var_descs = try arena.alloc(?LocalId, desc_count);
+        self.dict_locals = try arena.alloc(?LocalId, dict_count);
+        self.literal_locals = try arena.alloc(?LocalId, input_count - desc_count - dict_count);
+        @memset(self.var_descs, null);
+        @memset(self.dict_locals, null);
+        @memset(self.literal_locals, null);
+    }
+
+    /// The needs list of this worker's tables, once its body is lowered.
+    pub fn finishNeeds(self: *Builder) Allocator.Error!?Tables.Needs {
+        const input_count = self.program.inputCount(self.worker_id);
+        if (input_count == 0) {
+            if (self.slots.items.len != 0) invariant("a worker without inputs read a table slot");
+            return null;
+        }
+        return try self.recipes.needs(self.program.arena.allocator(), self.allocator, input_count, self.program.descCount(self.worker_id), self.slots.items);
+    }
+
+    /// The local holding input `index` (`inputWord`), read from this
+    /// worker's type table in the entry chain on first use.
+    fn inputLocal(self: *Builder, index: u32) Allocator.Error!LocalId {
+        const dict = index -% @as(u32, @intCast(self.var_descs.len));
+        const literal = dict -% @as(u32, @intCast(self.dict_locals.len));
+        const known = if (index < self.var_descs.len)
+            &self.var_descs[index]
+        else if (dict < self.dict_locals.len)
+            &self.dict_locals[dict]
+        else if (literal < self.literal_locals.len)
+            &self.literal_locals[literal]
+        else
+            invariant("an input word names an input its worker does not take");
+        if (known.*) |local| return local;
+        const table = self.table_local orelse invariant("a worker without a type table read an input");
+        const local = try self.closedLocal(if (index < self.var_descs.len) .opaque_ptr else try self.erasedLayout());
+        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .table_entry = .{ .table = table, .index = index } }), .next = undefined } });
+        known.* = local;
+        return local;
+    }
+
+    /// The local holding the descriptor of scope variable `index`.
+    pub fn varDesc(self: *Builder, index: usize) Allocator.Error!LocalId {
+        if (index >= self.var_descs.len) invariant("a scope variable's descriptor is not among its worker's inputs");
+        return try self.inputLocal(@intCast(index));
     }
 
     // -- Body --
@@ -1338,38 +1641,26 @@ pub const Builder = struct {
             .default => |key| return try self.lowerDefaultBody(key.expr),
             .codec => |piece| return try Codec.lowerPiece(self, piece),
             .crash_dictionary => |kind| return try self.lowerCrashDictionary(kind),
+            .callable_eval_entry => |binding| return try self.lowerCallableEvalEntry(binding),
             .convert => |key| return try self.lowerConvertBody(key.from, key.to),
             .literal_thunk => |key| return try self.lowerLiteralThunkBody(key),
             .root_slot => |key| return try self.lowerRootSlotThunkBody(key),
         };
-        // Signature: explicit parameters, then hidden descriptors,
-        // dictionaries, and literal arguments.
+        // Signature: explicit parameters, then the type table, which holds
+        // the descriptors, dictionaries, and literal arguments.
         var args: std.ArrayList(LocalId) = .empty;
         defer args.deinit(self.allocator);
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
-        self.var_descs = try self.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
-        for (self.var_descs) |*slot| slot.* = try self.closedLocal(.opaque_ptr);
-        const passed_types = try self.program.passedDescriptorTypes(self.allocator, self.worker_id);
-        defer self.allocator.free(passed_types);
-        const passed_descs = try self.allocator.alloc(LocalId, passed_types.len);
-        defer self.allocator.free(passed_descs);
-        for (passed_types, passed_descs) |ty, *slot| {
-            slot.* = try self.closedLocal(.opaque_ptr);
-            try self.type_descs.put(self.allocator, ty, slot.*);
+        if (self.program.inputCount(self.worker_id) != 0) {
+            const table = try self.closedLocal(.opaque_ptr);
+            try self.beginTable(table, worker.dictionary_params.len);
         }
         const params = try self.allocator.alloc(LocalId, worker.params.len);
         defer self.allocator.free(params);
         for (params, worker.params) |*param, param_ty| param.* = try self.localOf(param_ty, .param);
         try args.appendSlice(self.allocator, params);
-        try args.appendSlice(self.allocator, self.var_descs);
-        self.dict_locals = try self.program.arena.allocator().alloc(LocalId, worker.dictionary_params.len);
-        for (self.dict_locals) |*slot| slot.* = try self.closedLocal(try self.erasedLayout());
-        try args.appendSlice(self.allocator, self.dict_locals);
-        self.literal_locals = try self.program.arena.allocator().alloc(LocalId, worker.literal_params);
-        for (self.literal_locals) |*slot| slot.* = try self.closedLocal(try self.erasedLayout());
-        try args.appendSlice(self.allocator, self.literal_locals);
-        try args.appendSlice(self.allocator, passed_descs);
+        if (self.table_local) |table| try args.append(self.allocator, table);
         var ret_layout: layout.Idx = undefined;
         if (try self.closed(worker.ret)) {
             ret_layout = try self.program.layouts.layoutOf(worker.ret);
@@ -1381,10 +1672,8 @@ pub const Builder = struct {
         const body_start = try self.newHole();
         self.hole = body_start;
         switch (template.body) {
-            .checked_body => |body_id| {
-                const body = self.bodies().body(body_id);
-                const root = self.bodies().expr(body.root_expr);
-                switch (root.data) {
+            .checked_body => |root_expr| {
+                switch (self.bodies().exprData(root_expr)) {
                     .lambda => |lambda| {
                         if (lambda.args.len != params.len) invariant("a template's lambda arity differs from its signature");
                         for (lambda.args, params, worker.params) |pattern, param, param_ty| try self.bindIrrefutable(pattern, param, param_ty);
@@ -1418,10 +1707,10 @@ pub const Builder = struct {
                             try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message }, .checked_error = true } });
                         }
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .run_low_level => {
+                    .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .run_low_level => {
                         if (params.len != 0) invariant("a non-lambda template body has parameters");
                         try self.tasks.append(self.allocator, .ret);
-                        try self.tasks.append(self.allocator, .{ .expr = body.root_expr });
+                        try self.tasks.append(self.allocator, .{ .own_expr = root_expr });
                     },
                 }
             },
@@ -1440,11 +1729,25 @@ pub const Builder = struct {
                 // whose unit result the evaluator discards.
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
+                self.comptime_root_body = root.kind != .literal_argument and root.literalConversionKind() == null;
                 try self.tasks.append(self.allocator, .ret);
+                // Unit producers also supply factories for CTFE, and contextual
+                // constants retain factory bodies. Polymorphic constants are
+                // explicit evaluation templates, instantiated at their runtime
+                // read rather than CTFE roots. A whole runtime program instead
+                // promises a completed value for context-free roots.
+                if (self.program.moduleUnit() == null and !self.program.input.compile_time and root.request_eligibility == .eligible and root.payloadFor(.boxy) == .pending) {
+                    // Exact aliases also compute their already-proven
+                    // procedure reference without an evaluator.
+                    const forwards = for (self.view.view.callable_eval_templates.templates) |alias| {
+                        if (alias.root == wrapper.root) break alias.forwarded_lookup != null;
+                    } else false;
+                    if (!forwards) invariant("a runtime entry wrapper has no completed Boxy value");
+                }
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
                 } else switch (root.kind) {
-                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (root.payload) {
+                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (root.payloadFor(.boxy)) {
                         // In a module's object, an evaluated root's wrapper
                         // produces the stored value: the object defines it
                         // for the other objects of a link that read the
@@ -1452,12 +1755,9 @@ pub const Builder = struct {
                         .const_node => |node| if (self.program.moduleUnit() != null)
                             try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = wrapper.root } })
                         else
-                            try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
-                        .fn_value => |fn_id| if (self.program.moduleUnit() != null)
-                            try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
-                        else
-                            try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
-                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
+                            try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
+                        .fn_value => invariant("a Boxy root view exposed an LSS function"),
+                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
                     },
                     // A literal argument's body is the conversion its root
                     // names, called on another module's literal.
@@ -1467,6 +1767,9 @@ pub const Builder = struct {
         }
         try self.run();
 
+        self.tail_calls.loop_params = args.items;
+        self.tail_calls.instance_start = params.len;
+        defer self.tail_calls.loop_params = &.{};
         try self.finishProc(entry, body_start, args.items, ret_layout);
     }
 
@@ -1635,6 +1938,9 @@ pub const Builder = struct {
         // copy of the body's first statement.
         const proc_body: CFStmtId = if (entry == self.entry_hole) body_start else blk: {
             try self.store.replaceCFStmt(self.entry_hole, self.store.getCFStmt(body_start), self.store.stmtOrigin(body_start));
+            // A self-tail loop re-enters the body after the entry chain,
+            // whose descriptors every iteration shares.
+            self.tail_calls.loop_entry = self.entry_hole;
             break :blk entry;
         };
 
@@ -1674,31 +1980,31 @@ pub const Builder = struct {
     /// A lambda worker in the uniform erased-callable ABI: its one argument
     /// is the packed argument record, and its captures hold the captured
     /// values followed by the outer worker's descriptors.
-    pub fn lowerLambdaBody(self: *Builder, lambda_expr: CheckedExprId) Allocator.Error!void {
+    pub fn lowerLambdaBody(self: *Builder, lambda_expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        const lambda = switch (self.bodies().expr(lambda_expr).data) {
+        const lambda = switch (self.bodies().exprData(lambda_expr)) {
             .lambda => |lambda| lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
         };
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
 
-        // Captures: values, then the outer scope's descriptors and
-        // dictionaries.
+        // Captures: values, then the type table, unless the procedure's
+        // calls pass it (`Program.perCall`).
         const capture_ptr = try self.closedLocal(.opaque_ptr);
-        const outer_descs = worker.scheme_vars.len - worker.own_descs;
-        const captured_dicts = worker.capturedDictionaryCount();
-        const captured_literals = worker.capturedLiteralCount();
-        self.var_descs = try self.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
-        self.dict_locals = try self.program.arena.allocator().alloc(LocalId, worker.own_dicts + captured_dicts);
-        self.literal_locals = try self.program.arena.allocator().alloc(LocalId, worker.own_literals + captured_literals);
-        const capture_count = worker.capture_types.len + outer_descs + captured_dicts + captured_literals;
+        const dict_count = worker.own_dicts + worker.capturedDictionaryCount();
+        const per_call = self.program.perCall(self.worker_id);
+        // A procedure whose calls pass its table reads it from its argument
+        // record, before the captured values whose types it describes.
+        const own_record: ?LocalId = if (per_call) try self.ownScopeArgs(worker, dict_count) else null;
+        const captured_words: usize = if (self.program.inputCount(self.worker_id) != 0 and !per_call) 1 else 0;
+        const capture_count = worker.capture_types.len + captured_words;
         var capture_values: []LocalId = &.{};
         if (!try self.allClosed(worker.capture_types)) {
             _ = try self.beginReuseArg(.dynamic);
-            capture_values = try self.dynamicCaptures(worker, capture_ptr);
+            capture_values = try self.dynamicCaptures(worker, capture_ptr, captured_words);
         } else if (capture_count != 0) {
-            const capture_layout = try self.captureLayout(worker.capture_types, outer_descs, captured_dicts + captured_literals);
+            const capture_layout = try self.captureLayout(worker.capture_types, captured_words);
             _ = try self.beginReuseArg(.{ .static = capture_layout });
             // A record of zero-sized captures has no storage to read.
             const record: ?LocalId = if (capture_layout == .zst) null else try self.closedLocal(capture_layout);
@@ -1713,10 +2019,8 @@ pub const Builder = struct {
             for (capture_values, 0..) |*slot, index| {
                 const field_layout = if (index < worker.capture_types.len)
                     try self.program.layouts.layoutOf(worker.capture_types[index])
-                else if (index < worker.capture_types.len + outer_descs)
-                    layout.Idx.opaque_ptr
                 else
-                    try self.erasedLayout();
+                    layout.Idx.opaque_ptr;
                 slot.* = try self.closedLocal(field_layout);
                 if (record) |loaded| {
                     try self.emitEntry(.{ .assign_ref = .{ .target = slot.*, .op = LIR.RefOp.field(loaded, @intCast(index)), .next = undefined } });
@@ -1726,16 +2030,11 @@ pub const Builder = struct {
                 }
             }
         }
-        if (capture_count != 0) {
-            @memcpy(self.var_descs[0..outer_descs], capture_values[worker.capture_types.len..][0..outer_descs]);
-            @memcpy(self.dict_locals[worker.own_dicts..], capture_values[worker.capture_types.len + outer_descs ..][0..captured_dicts]);
-            @memcpy(self.literal_locals[worker.own_literals..], capture_values[worker.capture_types.len + outer_descs + captured_dicts ..][0..captured_literals]);
-        }
+        if (captured_words != 0 and self.table_local == null) try self.beginTable(capture_values[worker.capture_types.len], dict_count);
         defer if (capture_count != 0) self.allocator.free(capture_values);
         for (worker.captures, worker.capture_types, 0..) |capture, capture_ty, index| {
-            const binder = self.bodies().pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
-                invariant("a closure capture named a pattern without a binder");
-            if (self.bodies().patternBinder(binder).recursive_value) {
+            const binder = capture.pattern;
+            if (self.bodies().binder(binder).recursive_value) {
                 // A recursive value's slot: the value is read from it on
                 // entry, and the slot stays in scope for the callables this
                 // body builds that capture the binder too.
@@ -1750,10 +2049,10 @@ pub const Builder = struct {
         var args: std.ArrayList(LocalId) = .empty;
         defer args.deinit(self.allocator);
         var record_param: ?LocalId = null;
-        const own_words = worker.own_descs + worker.own_dicts + worker.own_literals;
-        if (own_words != 0) {
-            record_param = try self.ownScopeArgs(worker, outer_descs);
-            try args.append(self.allocator, record_param.?);
+        const own_words: u32 = if (per_call) 1 else 0;
+        if (own_record) |own| {
+            record_param = own;
+            try args.append(self.allocator, own);
         } else if (worker.params.len != 0) {
             record_param = try self.erasedParamLocal(worker.params);
             try args.append(self.allocator, record_param.?);
@@ -1770,11 +2069,10 @@ pub const Builder = struct {
         self.hole = body_start;
         if (lambda.args.len != worker.params.len) invariant("a lambda's arity differs from its type");
         for (lambda.args, worker.params, 0..) |pattern, param_ty, index| {
-            const value = if (own_words != 0) blk: {
-                const local = try self.localOf(param_ty, .view);
-                try self.emitDyn(local, .{ .field_addr = .{ .base = record_param.?, .desc = self.store.localDyn(record_param.?).?.desc, .field_index = @intCast(own_words + index) } });
-                break :blk local;
-            } else try self.erasedParamValue(record_param.?, worker.params, @intCast(index));
+            const value = if (own_words != 0)
+                try self.argsRecordField(record_param.?, @intCast(own_words + index), param_ty)
+            else
+                try self.erasedParamValue(record_param.?, worker.params, @intCast(index));
             try self.bindIrrefutable(pattern, value, param_ty);
         }
         try self.tasks.append(self.allocator, .ret);
@@ -1793,10 +2091,9 @@ pub const Builder = struct {
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const capture_ptr = try self.closedLocal(.opaque_ptr);
-        const descs = worker.scheme_vars.len;
-        self.var_descs = try self.program.arena.allocator().alloc(LocalId, descs);
-        self.dict_locals = &.{};
-        const capture_layout = try self.captureLayout(worker.capture_types, descs, 0);
+        // Captures: the adapted function value, then the type table.
+        const has_table = self.program.inputCount(self.worker_id) != 0;
+        const capture_layout = try self.captureLayout(worker.capture_types, @intFromBool(has_table));
         const record = try self.closedLocal(capture_layout);
         try self.emitEntry(.{ .assign_low_level = .{
             .target = record,
@@ -1807,9 +2104,10 @@ pub const Builder = struct {
         } });
         const inner = try self.closedLocal(try self.erasedLayout());
         try self.emitEntry(.{ .assign_ref = .{ .target = inner, .op = LIR.RefOp.field(record, 0), .next = undefined } });
-        for (self.var_descs, 0..) |*desc, index| {
-            desc.* = try self.closedLocal(.opaque_ptr);
-            try self.emitEntry(.{ .assign_ref = .{ .target = desc.*, .op = LIR.RefOp.field(record, @intCast(1 + index)), .next = undefined } });
+        if (has_table) {
+            const table = try self.closedLocal(.opaque_ptr);
+            try self.emitEntry(.{ .assign_ref = .{ .target = table, .op = LIR.RefOp.field(record, 1), .next = undefined } });
+            try self.beginTable(table, 0);
         }
         var args: std.ArrayList(LocalId) = .empty;
         defer args.deinit(self.allocator);
@@ -1844,134 +2142,11 @@ pub const Builder = struct {
         try self.finishErasedProc(entry, body_start, args.items, ret_layout, capture_ptr);
     }
 
-    /// Where two types of one value differ: nowhere; only in the tags of
-    /// rows, one widening the other along the coercion's reach (design.md
-    /// "Sealed Result Rows"); in the memory order of a record, one being the
-    /// record a padded nominal lifts it into (design.md "Nominal Record Field
-    /// Order"); or inside the function type the value has.
-    pub const StorageDifference = enum { none, rows, record_order, function };
+    pub const StorageDifference = Program.StorageDifference;
 
-    /// A function value inside data is outside every row widening's reach
-    /// (design.md "Row Coercion Primitive"), so both types of the value store
-    /// such a function's signature alike.
-    const nested_function_storage = "two types of one value store the signature of a function value inside data differently";
-
+    /// Where two types of one value differ (`Program.storageDifference`).
     pub fn storageDifference(self: *Builder, from_root: TypeId, to_root: TypeId) Allocator.Error!StorageDifference {
-        if (from_root == to_root) return .none;
-        const store = &self.program.store;
-        // Where a pair sits: in data, in the signature of the root function
-        // or of a function its signature passes (each adapted by its own
-        // adapter), in data such a signature passes, or in a function type
-        // inside data.
-        const Place = enum { data, root_function, signature_data, nested_function };
-        const Pair = struct { from: TypeId, to: TypeId, place: Place };
-        var pending: std.ArrayList(Pair) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .from = from_root, .to = to_root, .place = .data });
-        var result: StorageDifference = .none;
-        while (pending.pop()) |pair| {
-            if (pair.from == pair.to) continue;
-            const from = store.get(pair.from);
-            const to = store.get(pair.to);
-            if ((from == .variable) != (to == .variable)) {
-                // A value whose type a variable of the body leaves open, flowing
-                // into a tag row or out of one (a `?` return's error into the
-                // function's composed row): the variable's tags are known
-                // only at run time, so the value is re-tagged by name under
-                // the destination's descriptor. Elsewhere a variable has the
-                // one representation every type has.
-                if (pair.place == .data and try self.isTagRow(if (from == .variable) pair.to else pair.from)) {
-                    if (result == .none) result = .rows;
-                }
-                continue;
-            }
-            if (from == .variable) continue;
-            if (std.meta.activeTag(from) != std.meta.activeTag(to)) {
-                // A nominal shares its backing's representation.
-                if (from == .nominal and from.nominal.has_backing) {
-                    try pending.append(self.allocator, .{ .from = try self.program.converter().backing(pair.from), .to = pair.to, .place = pair.place });
-                } else if (to == .nominal and to.nominal.has_backing) {
-                    try pending.append(self.allocator, .{ .from = pair.from, .to = try self.program.converter().backing(pair.to), .place = pair.place });
-                } else if (paddedAgainstEmpty(from, to)) {
-                    switch (pair.place) {
-                        .data => result = .record_order,
-                        .root_function, .signature_data => return .function,
-                        .nested_function => invariant(nested_function_storage),
-                    }
-                }
-                continue;
-            }
-            // The place of a component of a non-function type.
-            const inner: Place = if (pair.place == .root_function) .signature_data else pair.place;
-            switch (from) {
-                .record => |record| {
-                    if (!store.sameRecordOrder(record, to.record)) switch (pair.place) {
-                        .data => result = .record_order,
-                        .root_function, .signature_data => return .function,
-                        .nested_function => invariant(nested_function_storage),
-                    };
-                    for (store.fieldSpan(to.record.fields)) |to_field| {
-                        for (store.fieldSpan(record.fields)) |from_field| {
-                            if (from_field.name != to_field.name) continue;
-                            if (from_field.kind != to_field.kind or from_field.slot_variable != to_field.slot_variable) {
-                                invariant("two types of one value store a record field differently, though a field has one storage at an instantiation");
-                            }
-                            try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = inner });
-                        }
-                    }
-                    if (record.ext != null and to.record.ext != null) try pending.append(self.allocator, .{ .from = record.ext.?, .to = to.record.ext.?, .place = inner });
-                },
-                .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
-                .tag_union => |tag_union| {
-                    // A row the destination widens holds its tags under
-                    // other discriminants: the value is converted.
-                    if (tag_union.tags.len != to.tag_union.tags.len or (tag_union.ext == null) != (to.tag_union.ext == null)) switch (pair.place) {
-                        .data => if (result == .none) {
-                            result = .rows;
-                        },
-                        .root_function, .signature_data => return .function,
-                        .nested_function => invariant(nested_function_storage),
-                    };
-                    for (store.tagSpan(to.tag_union.tags)) |to_tag| {
-                        for (store.tagSpan(tag_union.tags)) |from_tag| {
-                            if (from_tag.name != to_tag.name or from_tag.payloads.len != to_tag.payloads.len) continue;
-                            for (store.span(from_tag.payloads), store.span(to_tag.payloads)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner });
-                        }
-                    }
-                    if (tag_union.ext != null and to.tag_union.ext != null) try pending.append(self.allocator, .{ .from = tag_union.ext.?, .to = to.tag_union.ext.?, .place = inner });
-                },
-                .list => |elem| try pending.append(self.allocator, .{ .from = elem, .to = to.list, .place = inner }),
-                .box => |payload| try pending.append(self.allocator, .{ .from = payload, .to = to.box, .place = inner }),
-                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(to.nominal)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
-                .function => |function| {
-                    const place: Place = switch (pair.place) {
-                        .data => if (pair.from == from_root) .root_function else .nested_function,
-                        .root_function => .root_function,
-                        .signature_data, .nested_function => .nested_function,
-                    };
-                    for (store.span(function.args), store.span(to.function.args)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = place });
-                    try pending.append(self.allocator, .{ .from = function.ret, .to = to.function.ret, .place = place });
-                },
-                .primitive, .empty_record, .variable => {},
-            }
-        }
-        return result;
-    }
-
-    /// Whether one of two nodes is the backing of a padded nominal of no named
-    /// fields and the other the empty record, which has no storage.
-    fn paddedAgainstEmpty(a: types.Node, b: types.Node) bool {
-        return a == .empty_record and b == .record and b.record.declared != null or
-            b == .empty_record and a == .record and a.record.declared != null;
-    }
-
-    /// Whether `ty` is a tag union, through the backing of a nominal.
-    fn isTagRow(self: *Builder, ty: TypeId) Allocator.Error!bool {
-        return switch (self.program.store.get(ty)) {
-            .tag_union => true,
-            .nominal => |nominal| nominal.has_backing and try self.isTagRow(try self.program.converter().backing(ty)),
-            .primitive, .empty_record, .record, .tuple, .list, .box, .function, .variable => false,
-        };
+        return try self.program.storageDifference(from_root, to_root);
     }
 
     /// The value `value` of type `from` at type `to`, a type of the same
@@ -2001,19 +2176,24 @@ pub const Builder = struct {
             .rows => {
                 if (try self.closed(from) and try self.closed(to)) return try self.convertRows(value, from, to);
                 const target = try self.localOf(to, .frame);
-                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+                try self.emitAdapt(target, value, from, to);
                 return target;
             },
             // Records hold the difference at any depth, even below a list,
             // so it is rebuilt by descriptors whatever the types.
             .record_order => {
                 const target = try self.localOf(to, .frame);
-                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+                try self.emitAdapt(target, value, from, to);
                 return target;
             },
             .function => {
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                return try self.packClosure(adapter, &.{value}, &.{from}, self.var_descs, &.{});
+                const inputs = try self.descInputWords(0, self.program.descCount(adapter));
+                const static_inputs = for (inputs) |word| {
+                    if (word == .recipe and try self.readsInputs(word.recipe)) break false;
+                } else true;
+                if (static_inputs and self.constant_slots.contains(value)) return self.staticClosure(adapter, &.{value}, &.{from}, inputs, false, null);
+                return try self.packClosure(adapter, &.{value}, &.{from}, inputs);
             },
         }
     }
@@ -2028,7 +2208,7 @@ pub const Builder = struct {
     pub fn retagValue(self: *Builder, value: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
         if (try self.closed(from) and try self.closed(to)) return try self.adaptValue(value, from, to);
         const target = try self.localOf(to, .frame);
-        try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+        try self.emitAdapt(target, value, from, to);
         return target;
     }
 
@@ -2131,14 +2311,25 @@ pub const Builder = struct {
         return result;
     }
 
-    /// Dictionary `dictionary` of type `from` adapted to `to`. A dictionary
-    /// is composed in the entry chain and lives as long as the process, so
-    /// its adapter is too.
-    pub fn adaptDictionary(self: *Builder, dictionary: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
-        const saved = self.immortal_closures;
-        self.immortal_closures = true;
-        defer self.immortal_closures = saved;
-        return try self.adaptValue(dictionary, from, to);
+    /// Dictionary `dictionary` of callable type `from` adapted to `to`: an
+    /// immortal callable of the adapter worker (`WorkerKey.adapter`)
+    /// capturing the dictionary and this worker's descriptors, as an adapted
+    /// function value captures them, where the two types store the
+    /// function's signature differently.
+    pub fn adaptDictionary(self: *Builder, dictionary: Word, from: TypeId, to: TypeId) Allocator.Error!Word {
+        switch (try self.storageDifference(from, to)) {
+            .none => return dictionary,
+            .function => {
+                // The adapter captures the dictionary, then its table.
+                const adapter = try self.program.adapterWorker(self.worker_id, from, to);
+                const descs = try self.descInputWords(0, self.program.descCount(adapter));
+                var captures: [2]Word = .{ dictionary, undefined };
+                const count: usize = if (descs.len == 0) 1 else 2;
+                if (descs.len != 0) captures[1] = try self.tableWord(adapter, descs);
+                return .{ .recipe = try self.recipes.intern(.{ .callable = .{ .entry = adapter, .captures = captures[0..count] } }) };
+            },
+            .rows, .record_order => invariant("two callable types of a dictionary differ outside the signature of the function it is"),
+        }
     }
 
     /// Read a dynamic capture record at `capture_ptr`: its descriptor word,
@@ -2150,31 +2341,29 @@ pub const Builder = struct {
     /// scope's descriptors and dictionaries, which vary per call, then its
     /// explicit arguments. The leading words are read through a descriptor
     /// of just those words; the whole record's descriptor composes from them.
-    pub fn ownScopeArgs(self: *Builder, worker: lower.Worker, outer_descs: usize) Allocator.Error!LocalId {
-        const own_words = worker.own_descs + worker.own_dicts + worker.own_literals;
-        const word = try self.opaqueWordDesc();
-        const full_desc = try self.closedLocal(.opaque_ptr);
-        const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = full_desc, .storage = .param } });
-        const words = try self.allocator.alloc(LocalId, own_words);
-        defer self.allocator.free(words);
-        @memset(words, word);
-        const prefix_desc = try self.composedArgsDesc(words);
-        for (0..own_words) |index| {
-            const local = try self.closedLocal(if (index < worker.own_descs) .opaque_ptr else try self.erasedLayout());
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = prefix_desc, .field_index = @intCast(index) } }), .next = undefined } });
-            if (index < worker.own_descs) self.var_descs[outer_descs + index] = local else if (index < worker.own_descs + worker.own_dicts) self.dict_locals[index - worker.own_descs] = local else self.literal_locals[index - worker.own_descs - worker.own_dicts] = local;
-        }
-        const elems = try self.allocator.alloc(LocalId, own_words + worker.params.len);
-        defer self.allocator.free(elems);
-        @memset(elems[0..own_words], word);
-        for (elems[own_words..], worker.params) |*elem, param_ty| elem.* = try self.descOf(param_ty);
-        try self.emitEntry(.{ .dyn = .{ .target = full_desc, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(elems) } }), .next = undefined } });
+    /// The argument record of a procedure whose calls pass its type table
+    /// (`Program.perCall`): the table, which this reads first, then the
+    /// explicit arguments.
+    pub fn ownScopeArgs(self: *Builder, worker: lower.Worker, dict_count: usize) Allocator.Error!LocalId {
+        // The record is read through its own descriptor, which the table
+        // determines; the table is read through the descriptor of just the
+        // leading word first.
+        const desc_hole = try self.closedLocal(.opaque_ptr);
+        const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc_hole, .storage = .param } });
+        const prefix_desc = try self.argsDesc(1, &.{});
+        const table = try self.closedLocal(.opaque_ptr);
+        try self.emitEntry(.{ .dyn = .{ .target = table, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = prefix_desc, .field_index = .{ .immediate = 0 } } }), .next = undefined } });
+        try self.beginTable(table, dict_count);
+        const full_desc = try self.argsDesc(1, try self.descWords(worker.params));
+        try self.emitEntry(.{ .assign_ref = .{ .target = desc_hole, .op = LIR.RefOp.local(full_desc), .next = undefined } });
+        const product = try self.productShapeFields(1, worker.params);
+        self.store.getLocalPtr(record).product = product;
         return record;
     }
 
-    pub fn dynamicCaptures(self: *Builder, worker: lower.Worker, capture_ptr: LocalId) Allocator.Error![]LocalId {
-        const outer_descs = worker.scheme_vars.len - worker.own_descs;
-        const word_count = outer_descs + worker.capturedDictionaryCount() + worker.capturedLiteralCount();
+    /// The captures of a dynamic capture record: its `word_count` words
+    /// after its own descriptor and capacity, then its values.
+    pub fn dynamicCaptures(self: *Builder, worker: lower.Worker, capture_ptr: LocalId, word_count: usize) Allocator.Error![]LocalId {
         const record_desc = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_low_level = .{
             .target = record_desc,
@@ -2191,15 +2380,16 @@ pub const Builder = struct {
         try self.emitEntry(.{ .dyn = .{ .target = record, .data = try self.store.addStmtRow(LIR.DynOp, .{ .view = .{ .address = capture_ptr, .owner = self.reuse_arg } }), .next = undefined } });
         const values = try self.allocator.alloc(LocalId, worker.capture_types.len + word_count);
         for (0..word_count) |index| {
-            const word = try self.closedLocal(if (index < outer_descs) .opaque_ptr else try self.erasedLayout());
-            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(capture_record_leading_words + index) } }), .next = undefined } });
+            const word = try self.closedLocal(.opaque_ptr);
+            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = .{ .immediate = @intCast(capture_record_leading_words + index) } } }), .next = undefined } });
             values[worker.capture_types.len + index] = word;
         }
-        // The captured values' types mention only the outer scope.
-        @memcpy(self.var_descs[0..outer_descs], values[worker.capture_types.len..][0..outer_descs]);
+        // The captured values' types are read from the table, so it is read
+        // before them.
+        if (word_count != 0) try self.beginTable(values[worker.capture_types.len], worker.own_dicts + worker.capturedDictionaryCount());
         for (worker.capture_types, 0..) |ty, index| {
             const local = try self.localOf(ty, .view);
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(capture_record_leading_words + word_count + index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = .{ .immediate = @intCast(capture_record_leading_words + word_count + index) } } }), .next = undefined } });
             values[index] = local;
         }
         return values;
@@ -2289,6 +2479,13 @@ pub const Builder = struct {
         self.hole = body_start;
         const owner = self.program.moduleByKey(checked.constModuleId(request.const_locator));
         try self.tasks.append(self.allocator, .ret);
+        if (rootOfConstRef(owner, request.const_locator)) |root_id| {
+            if (owner.view.compile_time_roots.root(root_id).payloadFor(.boxy) == .pending) {
+                try self.pendingValueRead(owner.index, root_id, worker.ret);
+                try self.run();
+                return try self.finishProc(entry, body_start, &.{}, ret_layout);
+            }
+        }
         const boxy_value = if (rootOfConstRef(owner, request.const_locator)) |root_id| owner.view.compile_time_roots.root(root_id).boxy_value else null;
         if (boxy_value) |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = stored.node, .ty = worker.ret } }) else switch (owner.view.const_templates.get(request.const_locator).state) {
             .stored_const => |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = request.node orelse stored.node, .ty = worker.ret } }),
@@ -2343,9 +2540,9 @@ pub const Builder = struct {
                 const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
                 const bound = try self.relateVariables(formal, fn_ty, target_worker.scheme_vars.len);
                 defer self.allocator.free(bound);
-                const hidden = try self.allocator.alloc(LocalId, bound.len + target_worker.dictionary_params.len + target_worker.literal_params);
+                const hidden = try self.allocator.alloc(Word, bound.len + target_worker.dictionary_params.len + target_worker.literal_params);
                 defer self.allocator.free(hidden);
-                for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+                for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
                 try self.derivedLiteralArgs(target, bound, hidden[bound.len + target_worker.dictionary_params.len ..]);
                 if (target_worker.dictionary_params.len != 0) {
                     const span = request.root_evidence orelse invariant("a root whose target takes dictionaries has no root evidence");
@@ -2386,48 +2583,71 @@ pub const Builder = struct {
         try self.finishProc(entry, body_start, params, ret_layout);
     }
 
-    /// A default expression's worker: the expression, in no scope.
-    pub fn lowerDefaultBody(self: *Builder, expr: CheckedExprId) Allocator.Error!void {
+    /// A default expression's worker: the expression, in the scope of its
+    /// own type's variables, whose descriptors are its parameters.
+    pub fn lowerDefaultBody(self: *Builder, expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
-        self.var_descs = &.{};
-        self.dict_locals = &.{};
-        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        const has_table = self.program.inputCount(self.worker_id) != 0;
+        var table_arg: [1]LocalId = undefined;
+        if (has_table) {
+            table_arg[0] = try self.closedLocal(.opaque_ptr);
+            try self.beginTable(table_arg[0], 0);
+        }
+        var ret_layout: layout.Idx = undefined;
+        if (try self.closed(worker.ret)) {
+            ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        } else {
+            ret_layout = try self.program.result.layouts.dynamicLayout();
+            self.result_local = try self.localOf(worker.ret, .result);
+        }
         const body_start = try self.newHole();
         self.hole = body_start;
         try self.tasks.append(self.allocator, .ret);
-        try self.tasks.append(self.allocator, .{ .expr = expr });
+        try self.tasks.append(self.allocator, .{ .own_expr = expr });
         try self.run();
-        try self.finishProc(entry, body_start, &.{}, ret_layout);
+        try self.finishProc(entry, body_start, if (has_table) &table_arg else &.{}, ret_layout);
     }
 
-    /// The value of the `??` default `default`: its declaring module's
-    /// default expression, evaluated now.
-    pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault) Allocator.Error!LocalId {
-        const origin_module = default.origin() orelse invariant("a field default has no declaring module");
-        const module_index = self.program.by_identity.get(self.view.nameStore().moduleIdentityBytes(origin_module).*) orelse
-            invariant("a field default's declaring module is not in this lowering");
-        const expr = self.program.module(module_index).bodies().defaultExpr(default.expr_node) orelse
+    /// The value of the `??` default `default` for a field of type
+    /// `field_ty`: its declaring module's default expression, evaluated now
+    /// at the instantiation the field's type gives its variables.
+    pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault, field_ty: TypeId) Allocator.Error!LocalId {
+        return self.fieldDefaultValue(self.program.modules.fieldDefault(self.module, default), field_ty);
+    }
+
+    /// Materialize a default whose declaring module is already program-owned.
+    pub fn fieldDefaultValue(self: *Builder, default: types.FieldDefault, field_ty: TypeId) Allocator.Error!LocalId {
+        const default_bodies = self.program.module(default.module).bodies();
+        try default_bodies.demandIndex();
+        const expr = default_bodies.defaultExpr(default.expr_node) orelse
             invariant("a field default's expression was not archived");
-        const worker = try self.program.defaultWorker(module_index, expr);
-        const target = try self.localOf(self.program.worker(worker).ret, .frame);
-        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker).proc, .args = LIR.LocalSpan.empty(), .next = undefined } });
-        return target;
+        const worker_id = try self.program.defaultWorker(default.module, expr);
+        const worker = self.program.worker(worker_id).*;
+        const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = field_ty, .effectful = false } });
+        const bound = try self.boundTypesAt(worker_id, &.{}, fn_ty);
+        defer self.allocator.free(bound);
+        const args = try self.callArgs(&.{}, worker_id, try self.descWords(bound));
+        defer self.allocator.free(args);
+        const ret = try self.program.substitute(self.allocator, worker.ret, bound);
+        const target = try self.localOf(ret, .frame);
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = worker.proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
+        return try self.adaptValue(target, ret, field_ty);
     }
 
     pub fn lowerMethodEntry(self: *Builder, target: WorkerId) Allocator.Error!void {
         const worker = self.currentWorker().*;
         const target_worker = self.program.worker(target).*;
-        const field_layouts = try self.allocator.alloc(layout.Idx, target_worker.scheme_vars.len + target_worker.dictionary_params.len + target_worker.literal_params);
-        defer self.allocator.free(field_layouts);
-        for (field_layouts, 0..) |*field_layout, index| {
-            field_layout.* = if (index < target_worker.scheme_vars.len) .opaque_ptr else try self.erasedLayout();
-        }
-        var start = try self.beginErasedWorker(field_layouts);
+        // The entry captures its type table, whose inputs are the target's:
+        // its descriptors, then its dictionaries, then its literal
+        // arguments.
+        const has_table = self.program.inputCount(self.worker_id) != 0;
+        var start = try self.beginErasedWorker(if (has_table) &.{.opaque_ptr} else &.{});
         defer self.allocator.free(start.captures);
-        self.var_descs = try self.program.arena.allocator().dupe(LocalId, start.captures[0..target_worker.scheme_vars.len]);
-        try self.runErasedBody(&start, worker.params, worker.ret, .{ .call = .{ .target = target, .hidden = start.captures } });
+        if (has_table) try self.beginTable(start.captures[0], target_worker.dictionary_params.len);
+        const inputs = try self.allInputWords();
+        try self.runErasedBody(&start, worker.params, worker.ret, .{ .call = .{ .target = target, .inputs = inputs } });
     }
 
     /// A structural method over the one descriptor its dictionary captures.
@@ -2435,7 +2655,7 @@ pub const Builder = struct {
         const worker = self.currentWorker().*;
         var start = try self.beginErasedWorker(&.{.opaque_ptr});
         defer self.allocator.free(start.captures);
-        self.var_descs = try self.program.arena.allocator().dupe(LocalId, start.captures);
+        try self.beginTable(start.captures[0], 0);
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural = method });
     }
 
@@ -2446,12 +2666,9 @@ pub const Builder = struct {
     /// payloads unchanged.
     pub fn lowerStructuralMap(self: *Builder, map: lower.StructuralMap) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        const field_layouts = try self.allocator.alloc(layout.Idx, worker.structural_descs);
-        defer self.allocator.free(field_layouts);
-        @memset(field_layouts, .opaque_ptr);
-        var start = try self.beginErasedWorker(field_layouts);
+        var start = try self.beginErasedWorker(&.{.opaque_ptr});
         defer self.allocator.free(start.captures);
-        self.var_descs = try self.program.arena.allocator().dupe(LocalId, start.captures);
+        try self.beginTable(start.captures[0], 0);
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural_map = map });
     }
 
@@ -2460,13 +2677,11 @@ pub const Builder = struct {
     /// worker's result of type `output_ty`.
     fn structuralMapBranches(self: *Builder, map: lower.StructuralMap, input: LocalId, transform: LocalId, input_ty: TypeId, output_ty: TypeId) Allocator.Error!void {
         const store = &self.program.store;
-        const input_desc = self.var_descs[0];
-        const output_desc = self.var_descs[1];
-        const name = try self.nameDesc(map.name);
+        const input_desc = try self.varDesc(0);
+        const output_desc = try self.varDesc(1);
         const discriminant = try self.closedLocal(.u32);
         try self.emitDyn(discriminant, .{ .tag_discriminant = .{ .base = input, .desc = input_desc } });
-        const selected = try self.closedLocal(.u32);
-        try self.emitDyn(selected, .{ .tag_discriminant_of = .{ .desc = input_desc, .name = name } });
+        const selected = try self.indexLocal(try self.tagIndexIn(try self.inputWord(0), map.name));
         const is_selected = try self.closedLocal(.bool);
         try self.emitLowLevel(is_selected, .num_is_eq, &.{ discriminant, selected });
         const holes = try self.emitBoolSwitch(is_selected);
@@ -2479,7 +2694,7 @@ pub const Builder = struct {
             const view = try self.localOf(payload_ty, .view);
             try self.emitDyn(view, .{ .tag_payload_addr = .{ .base = input, .desc = input_desc, .payload_index = @intCast(index) } });
             const copy = try self.localOf(payload_ty, .frame);
-            try self.emitDyn(copy, .{ .copy = .{ .src = view, .desc = self.var_descs[2 + index] } });
+            try self.emitDyn(copy, .{ .copy = .{ .src = view, .desc = try self.varDesc(2 + index) } });
             payload.* = copy;
         }
         const transform_ty = try store.intern(.{ .function = .{
@@ -2489,13 +2704,13 @@ pub const Builder = struct {
         } });
         payloads[map.payload_index] = try self.emitErasedCall(transform, transform_ty, &.{payloads[map.payload_index]}, try store.variable(2 + map.arity));
         const mapped = try self.localOf(output_ty, .frame);
-        try self.emitDyn(mapped, .{ .tag = .{ .desc = output_desc, .name = name, .payloads = try self.store.addLocalSpan(payloads) } });
+        try self.emitDyn(mapped, .{ .tag = .{ .desc = output_desc, .discriminant = try self.tagIndexIn(try self.inputWord(1), map.name), .payloads = try self.store.addLocalSpan(payloads) } });
         try self.pushValue(mapped);
         try self.step(.ret);
 
         self.hole = holes.otherwise;
         const unchanged = try self.localOf(output_ty, .frame);
-        try self.emitDyn(unchanged, .{ .adapt = .{ .src = input, .from = try self.descOf(input_ty), .to = output_desc } });
+        try self.emitDyn(unchanged, .{ .adapt = .{ .src = input, .plan = try self.adaptPlanIn(try self.descWord(input_ty), try self.inputWord(1)) } });
         try self.pushValue(unchanged);
         try self.step(.ret);
     }
@@ -2528,10 +2743,23 @@ pub const Builder = struct {
     }
 
     pub const ErasedBody = union(enum) {
-        call: struct { target: WorkerId, hidden: []const LocalId },
+        call: struct { target: WorkerId, inputs: []const Word },
         structural: lower.StructuralMethod,
         structural_map: lower.StructuralMap,
+        /// A call of the function value of a computed callable binding.
+        callable_eval: lower.CallableEvalBinding,
     };
+
+    /// The erased entry of a method bound to a computed callable: it
+    /// restores the binding's function value and calls it with its
+    /// arguments (`WorkerKey.callable_eval_entry`).
+    pub fn lowerCallableEvalEntry(self: *Builder, binding: lower.CallableEvalBinding) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        var start = try self.beginErasedWorker(&.{});
+        defer self.allocator.free(start.captures);
+        self.var_descs = &.{};
+        try self.runErasedBody(&start, worker.params, worker.ret, .{ .callable_eval = binding });
+    }
 
     pub fn runErasedBody(self: *Builder, start: *ErasedStart, params: []const TypeId, ret: TypeId, body: ErasedBody) Allocator.Error!void {
         var args: std.ArrayList(LocalId) = .empty;
@@ -2555,9 +2783,7 @@ pub const Builder = struct {
         for (values, 0..) |*value, index| value.* = try self.erasedParamValue(record.?, params, @intCast(index));
         const result: ?LocalId = switch (body) {
             .call => |call| blk: {
-                const passed = try self.callDescriptorArgs(call.target, null);
-                defer self.allocator.free(passed);
-                const all = try std.mem.concat(self.allocator, LocalId, &.{ values, call.hidden, passed });
+                const all = try self.callArgs(values, call.target, call.inputs);
                 defer self.allocator.free(all);
                 const target = try self.localOf(ret, .frame);
                 try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(call.target).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
@@ -2566,11 +2792,16 @@ pub const Builder = struct {
             .structural => |method| blk: {
                 const target = try self.localOf(ret, .frame);
                 switch (method) {
-                    .is_eq => try self.emitDyn(target, .{ .eq = .{ .lhs = values[0], .rhs = values[1], .desc = self.var_descs[0] } }),
-                    .to_hash => try self.emitDyn(target, .{ .hash = .{ .hasher = values[1], .value = values[0], .desc = self.var_descs[0] } }),
-                    .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = self.var_descs[0] } }),
+                    .is_eq => try self.emitDyn(target, .{ .eq = .{ .lhs = values[0], .rhs = values[1], .desc = try self.varDesc(0) } }),
+                    .to_hash => try self.emitDyn(target, .{ .hash = .{ .hasher = values[1], .value = values[0], .desc = try self.varDesc(0) } }),
+                    .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = try self.varDesc(0), .names = try self.namesIn(try self.inputWord(0)) } }),
                 }
                 break :blk target;
+            },
+            .callable_eval => |binding| blk: {
+                const fn_ty = try self.program.store.intern(.{ .function = .{ .args = params, .ret = ret, .effectful = false } });
+                const value = try self.callableEvalValueAt(binding, fn_ty);
+                break :blk try self.emitErasedCall(value, fn_ty, values, ret);
             },
             .structural_map => |map| blk: {
                 try self.structuralMapBranches(map, values[0], values[1], params[0], ret);
@@ -2584,21 +2815,16 @@ pub const Builder = struct {
         try self.finishErasedProc(start.entry, body_start, args.items, ret_layout, start.capture_ptr);
     }
 
-    /// The closed layout of a lambda's capture record: the captured values,
-    /// then one descriptor pointer per scope variable, in that order of
-    /// checked field indices.
-    pub fn captureLayout(self: *Builder, capture_types: []const TypeId, descriptor_count: usize, dictionary_count: usize) Allocator.Error!layout.Idx {
-        const fields = try self.allocator.alloc(layout.StructField, capture_types.len + descriptor_count + dictionary_count);
+    /// The closed layout of an erased worker's capture record: the captured
+    /// values, then `word_count` pointer-sized words (its type table), in
+    /// that order of checked field indices.
+    pub fn captureLayout(self: *Builder, capture_types: []const TypeId, word_count: usize) Allocator.Error!layout.Idx {
+        const fields = try self.allocator.alloc(layout.StructField, capture_types.len + word_count);
         defer self.allocator.free(fields);
         for (fields, 0..) |*field, index| {
             field.* = .{
                 .index = @intCast(index),
-                .layout = if (index < capture_types.len)
-                    try self.program.layouts.layoutOf(capture_types[index])
-                else if (index < capture_types.len + descriptor_count)
-                    .opaque_ptr
-                else
-                    try self.erasedLayout(),
+                .layout = if (index < capture_types.len) try self.program.layouts.layoutOf(capture_types[index]) else .opaque_ptr,
             };
         }
         return try self.program.result.layouts.putStructFields(fields);
@@ -2620,12 +2846,13 @@ pub const Builder = struct {
     }
 
     /// The packed erased-call argument record of `params`: a declared-order
-    /// struct when every parameter type is closed, a dynamic record composed
-    /// with `desc_args` otherwise.
+    /// struct when every parameter type is closed, a dynamic record read
+    /// through its argument record descriptor (`argsDesc`) otherwise.
     pub fn argsRecordLocal(self: *Builder, params: []const TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.allClosed(params)) return self.closedLocal(try self.argsRecordLayout(params));
         const desc = try self.argsRecordDesc(params);
-        return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage } });
+        const product = try self.productShapeFields(0, params);
+        return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage }, .product = product });
     }
 
     pub fn allClosed(self: *Builder, tys: []const TypeId) Allocator.Error!bool {
@@ -2643,36 +2870,22 @@ pub const Builder = struct {
     }
 
     pub fn argsRecordDesc(self: *Builder, params: []const TypeId) Allocator.Error!LocalId {
-        const descs = try self.allocator.alloc(LocalId, params.len);
-        defer self.allocator.free(descs);
-        for (descs, params) |*desc, param| desc.* = try self.descOf(param);
-        return self.composedArgsDesc(descs);
+        return try self.argsDesc(0, try self.descWords(params));
     }
 
-    /// Reuse an exact argument-layout computation in this worker's entry.
-    fn composedArgsDesc(self: *Builder, descs: []const LocalId) Allocator.Error!LocalId {
-        // Only completed descriptor graphs are immutable. A composition
-        // emitted while a recursive member is open is not shared across its
-        // close, which can change the layout it describes.
-        const finalized = self.open_members.count() == 0;
-        if (finalized) if (self.args_descs.get(.{ .descs = descs })) |existing| return existing;
-        const local = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(descs) } }), .next = undefined } });
-        if (finalized) {
-            const key = try self.allocator.dupe(LocalId, descs);
-            errdefer self.allocator.free(key);
-            try self.args_descs.put(self.allocator, .{ .descs = key }, local);
-        }
-        return local;
+    /// The local holding the descriptor of an erased call's packed argument
+    /// record: `leading` pointer-sized words, then values of the types
+    /// whose descriptors `elems` are (`Tables.Recipe.args_desc`).
+    fn argsDesc(self: *Builder, leading: u32, elems: []const Word) Allocator.Error!LocalId {
+        return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .args_desc = .{ .leading = leading, .elems = elems } }) });
     }
 
-    /// Argument `index` of an argument record, as a borrowed read.
+    /// Copy argument `index` into independent storage. The ABI transfers the
+    /// contents, not ownership of the caller's argument buffer. ARC decides
+    /// whether this complete field moves, is retained, or remains borrowed.
     pub fn argsRecordField(self: *Builder, record: LocalId, index: u32, param_ty: TypeId) Allocator.Error!LocalId {
-        if (self.store.localDyn(record)) |dyn| {
-            const local = try self.localOf(param_ty, .view);
-            try self.emitDyn(local, .{ .field_addr = .{ .base = record, .desc = dyn.desc, .field_index = index } });
-            return local;
-        }
+        if (self.store.localDyn(record) != null and self.store.getLocal(record).product == .none)
+            invariant("a complete dynamic argument record omitted its product ownership shape");
         const local = try self.localOf(param_ty, .frame);
         if (self.store.getLocal(record).layout_idx == .zst) {
             // A record of zero-sized arguments has no storage to read.
@@ -2706,11 +2919,47 @@ pub const Builder = struct {
             // lowered, and an expression there stands for a value no
             // execution produces.
             .expr => |expr| if (self.hole == null) {
-                const checked_ty = self.bodies().expr(expr).ty;
-                try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.exprType(expr), .frame));
+                const checked_ty = self.bodies().valueType(expr);
+                try self.pushValue(if (try self.program.hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.valueType(expr), .frame));
             } else try self.stepExpr(expr),
+            .own_expr => |expr| if (self.hole == null) {
+                const checked_ty = self.bodies().exprType(expr);
+                try self.pushValue(if (try self.program.hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.exprType(expr), .frame));
+            } else try self.stepOwnExpr(expr),
+            .root_body => |root| try self.lowerRootBody(root),
+            .root_pattern_match => |root| try self.rootPatternMatch(root),
+            .literal_pattern_guard => |pattern| if (self.hole == null) {
+                const checked_ty = self.bodies().literalPatternGuard(pattern).?.equality_ty;
+                try self.pushValue(if (try self.program.hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.convert(checked_ty), .frame));
+            } else {
+                try self.push(.{ .restore_region = self.region });
+                try self.lowerLiteralPatternGuard(pattern);
+            },
+            .literal_pattern_value => |pattern| if (self.hole == null) {
+                try self.pushValue(try self.literalPatternDeadValue(pattern));
+            } else {
+                try self.pushValue(self.binders.get(pattern) orelse invariant("a custom literal pattern's guard read a value the pattern never bound"));
+            },
+            .literal_pattern_conversion => |pattern| if (self.hole == null) {
+                try self.pushValue(try self.literalPatternDeadValue(pattern));
+            } else {
+                try self.push(.{ .restore_region = self.region });
+                self.region = self.nodeRegion(@backingInt(pattern));
+                const conversion = self.bodies().literalConversion(@backingInt(pattern));
+                switch (conversion.literal) {
+                    .numeral => |literal| try self.lowerNumeral(.{ .pattern = pattern }, literal, conversion.plan, conversion.conversion_root),
+                    .quote => |text| try self.lowerQuote(.{ .pattern = pattern }, text, conversion.plan, conversion.conversion_root),
+                }
+            },
             .stmt => |stmt| if (self.hole != null) try self.stepStmt(stmt),
-            .bind => |bind| try self.bindIrrefutable(bind.pattern, self.popValue(), bind.ty),
+            .bind => |bind| {
+                const value = self.popValue();
+                // A destructure that can miss has the checked site of the
+                // pending diagnostic checking left it.
+                const failure = if (self.view.view.exhaustiveness_sites.lookupByDestructurePattern(bind.pattern)) |site| try self.comptimeFailure(site) else null;
+                const miss = try self.store.addCFStmt(Match.ComptimeFailure.terminal(failure), self.origin(.lowering_glue));
+                try self.testPattern(bind.pattern, value, bind.ty, miss);
+            },
             .discard => _ = self.popValue(),
             .runtime_error => |ty| try self.runtimeErrorValue(ty),
             .retag => |retag| {
@@ -2729,13 +2978,13 @@ pub const Builder = struct {
             .unreachable_value => |ty| try self.pushValue(try self.localOf(ty, .frame)),
             .unreachable_or_unit => try self.pushValue(try self.unitValue()),
             .segments_arg => |arg| {
-                const interpolation = self.bodies().expr(arg.expr).data.interpolation;
-                const elems = try self.allocator.alloc(LocalId, interpolation.segments.len);
+                const interpolation = self.bodies().exprData(arg.expr).interpolation;
+                const elems = try self.allocator.alloc(LocalId, interpolation.segmentCount());
                 defer self.allocator.free(elems);
-                for (interpolation.segments, elems) |segment, *elem| {
-                    elem.* = switch (self.bodies().expr(segment).data) {
-                        .str_segment => |literal| try self.strLiteral(self.bodies().stringLiteral(literal)),
-                        .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
+                for (elems, 0..) |*elem, index| {
+                    elem.* = switch (self.bodies().exprData(interpolation.segment(index))) {
+                        .str_segment => |literal| try self.strLiteral(self.bodies().text(literal)),
+                        .numeral, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
                     };
                 }
                 const list = try self.localOf(arg.ty, .frame);
@@ -2761,14 +3010,15 @@ pub const Builder = struct {
             .finish_str_from_parts => |call| {
                 const values = try self.popValues(call.count);
                 defer self.allocator.free(values);
-                const interpolation = self.bodies().expr(call.expr).data.interpolation;
+                const interpolation = self.bodies().exprData(call.expr).interpolation;
                 var parts: std.ArrayList(LocalId) = .empty;
                 defer parts.deinit(self.allocator);
-                for (interpolation.segments, 0..) |segment, i| {
+                for (0..interpolation.segmentCount()) |i| {
+                    const segment = interpolation.segment(i);
                     if (!self.bodies().isEmptyStrSegment(segment)) {
-                        const text = switch (self.bodies().expr(segment).data) {
-                            .str_segment => |literal| self.bodies().stringLiteral(literal),
-                            .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
+                        const text = switch (self.bodies().exprData(segment)) {
+                            .str_segment => |literal| self.bodies().text(literal),
+                            .numeral, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
                         };
                         try parts.append(self.allocator, try self.strLiteral(text));
                     }
@@ -2792,7 +3042,7 @@ pub const Builder = struct {
                 try self.emitDyn(target, .{ .hash = .{ .hasher = hasher, .value = value, .desc = try self.descOf(hash.value) } });
                 try self.pushValue(target);
             },
-            .push_value_str => |literal| try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(literal))),
+            .push_value_quote => |node| try self.pushValue(try self.textLiteral(self.bodies().quoteText(node))),
 
             .resume_at => |hole| self.hole = hole,
             .ret => {
@@ -2846,7 +3096,7 @@ pub const Builder = struct {
                 const loop = self.loops.pop().?;
                 if (!loop.reached) try self.emitTerminal(.runtime_error);
             },
-            .for_start => |for_| try self.forStart(for_.pattern, for_.body, for_.plan, for_.mutations),
+            .for_start => |for_| try self.forStart(for_.loop, for_.pattern, for_.body, for_.plan),
             .numeral_arg => |arg| try self.pushValue(try self.numeralArgument(arg.literal, arg.ty)),
             .finish_call => |call| {
                 defer self.allocator.free(call.hidden);
@@ -2861,16 +3111,20 @@ pub const Builder = struct {
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
-                switch (root.payload) {
-                    .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
+                const payload = root.payloadFor(.boxy);
+                switch (payload) {
+                    .fn_value => invariant("a Boxy callable root view exposed an LSS function"),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
-                    // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name, or one
-                    // whose evaluation failed where it was guarded): its
-                    // entry wrapper computes it.
                     .pending, .unevaluated, .runtime => {
+                        // An ineligible root is a checked instantiation
+                        // template, not a value waiting for an evaluator.
+                        // Its wrapper receives this use's type arguments.
+                        // Eligible pending roots still require their producer.
+                        if (payload == .pending and root.request_eligibility != .ineligible) {
+                            return try self.pendingValueRead(eval.module, template.root, eval.ty);
+                        }
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
@@ -2878,56 +3132,60 @@ pub const Builder = struct {
                         if (callee_worker.params.len != 0 or callee_worker.dictionary_params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
                         const bound = try self.relateVariables(callee_worker.ret, eval.ty, callee_worker.scheme_vars.len);
                         defer self.allocator.free(bound);
-                        const hidden = try self.allocator.alloc(LocalId, bound.len);
+                        const hidden = try self.allocator.alloc(Word, bound.len);
                         defer self.allocator.free(hidden);
-                        for (bound, hidden) |ty, *desc| desc.* = try self.descOf(ty);
+                        for (bound, hidden) |ty, *desc| desc.* = try self.descWord(ty);
                         try self.finishCall(callee, hidden, bound, &.{}, try self.program.substitute(self.allocator, callee_worker.ret, bound), eval.ty);
                     },
                     .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
                 }
             },
             .finish_stored_fn => |stored| {
-                const captured = try self.popValues(@intCast(stored.shape.values.len + stored.shape.dicts));
-                defer self.allocator.free(captured);
-                const values = captured[0..stored.shape.values.len];
-                const dicts = captured[stored.shape.values.len..];
+                const values = try self.popValues(@intCast(stored.shape.values.len));
+                defer self.allocator.free(values);
                 if (stored.shape.composed) {
-                    const all = try std.mem.concat(self.allocator, LocalId, &.{ values, stored.descs, dicts });
-                    defer self.allocator.free(all);
-                    try self.pushValue(try self.composeDictionary(stored.worker, all));
-                } else if (try self.allClosed(stored.shape.values)) {
-                    try self.pushValue(try self.packClosure(stored.worker, values, stored.shape.values, stored.descs, dicts));
+                    if (values.len != 0) invariant("a stored dictionary captures values");
+                    try self.pushValue(try self.materialize(try self.composeDictionary(stored.worker, stored.inputs)));
                 } else {
-                    try self.pushValue(try self.packDynamicClosure(stored.worker, values, stored.capture_types, stored.descs, dicts));
+                    try self.pushValue(try self.staticClosure(stored.worker, values, stored.capture_types, stored.inputs, !try self.allClosed(stored.shape.values), stored.capture_descs));
                 }
             },
             .finish_restore_closure => |closure| {
                 const values = try self.popValues(closure.count);
                 defer self.allocator.free(values);
                 const worker = self.program.worker(closure.worker).*;
-                const packed_closure = if (try self.allClosed(worker.capture_types))
-                    try self.packClosure(closure.worker, values, worker.capture_types, closure.descs, closure.dicts)
-                else
-                    try self.packDynamicClosure(closure.worker, values, closure.capture_types, closure.descs, closure.dicts);
+                const inputs: []const Word = if (self.program.perCall(closure.worker)) &.{} else try std.mem.concat(self.program.arena.allocator(), Word, &.{ closure.descs, closure.dicts });
+                const packed_closure = try self.staticClosure(closure.worker, values, closure.capture_types, inputs, !try self.allClosed(worker.capture_types), null);
                 try self.pushValue(try self.adaptValue(packed_closure, closure.worker_ty, closure.ty));
             },
             .finish_restore_struct => |restore| {
                 const values = try self.popValues(restore.count);
                 defer self.allocator.free(values);
-                try self.pushValue(try self.buildStruct(try self.structuralType(restore.ty), values));
+                try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .product, values));
             },
             .finish_restore_tag => |restore| {
                 const values = try self.popValues(restore.count);
                 defer self.allocator.free(values);
-                try self.pushValue(try self.buildTag(restore.ty, restore.name, values));
+                const structural = try self.structuralType(restore.ty);
+                const tags = self.program.store.tagSpan(self.program.store.get(structural).tag_union.tags);
+                const variant = for (tags, 0..) |tag, index| {
+                    if (tag.name == restore.name) break index;
+                } else invariant("a stored tag has no declared variant");
+                try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .{ .tag = @intCast(variant) }, values));
             },
-            .finish_restore_list => |restore| try self.finishRestoreList(restore.ty, restore.count),
+            .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .list),
+            .finish_static_box => |value| try self.finishStaticParts(value.ty, 1, if (value.sequence_step_offset) |offset| .{ .boxed_sequence = offset } else .box),
+            .remember_static_value => |key| {
+                const value = self.popValue();
+                try self.program.stored_value_slots.put(self.allocator, key, try self.constantSlot(value));
+                try self.pushValue(value);
+            },
             .finish_field_access => |expr| try self.finishFieldAccess(expr),
             .finish_discriminant_eq => |eq| try self.finishDiscriminantEq(eq.value_ty, eq.tag, eq.negated),
             .finish_tuple_access => |expr| {
-                const access = self.bodies().expr(expr).data.tuple_access;
+                const access = self.bodies().exprData(expr).tuple_access;
                 const tuple = self.popValue();
-                const tuple_ty = try self.structuralType(try self.exprType(access.tuple));
+                const tuple_ty = try self.structuralType(try self.valueType(access.tuple));
                 const elems = switch (self.program.store.get(tuple_ty)) {
                     .tuple => |span| self.program.store.span(span),
                     .primitive, .empty_record, .record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a tuple access's receiver is not a tuple"),
@@ -2940,20 +3198,20 @@ pub const Builder = struct {
                 const value = self.popValue();
                 const expr = self.bodies().expr(fail.expr);
                 const rendered = try self.closedLocal(.str);
-                try self.emitDyn(rendered, .{ .inspect = .{ .value = value, .desc = try self.descOf(fail.value) } });
-                const prefix_text = try std.fmt.allocPrint(self.allocator, "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(", .{self.bodies().stringLiteral(expr.data.expect_err.snippet)});
+                try self.emitDyn(rendered, .{ .inspect = .{ .value = value, .desc = try self.descOf(fail.value), .names = try self.namesOf(fail.value) } });
+                const prefix_text = try std.fmt.allocPrint(self.allocator, "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(", .{self.bodies().text(expr.data.expect_err.snippet)});
                 defer self.allocator.free(prefix_text);
                 const with_value = try self.closedLocal(.str);
-                try self.emitLowLevel(with_value, .str_concat, &.{ try self.strLiteral(prefix_text), rendered });
+                try self.emitLowLevel(with_value, .str_append, &.{ try self.strLiteral(prefix_text), rendered });
                 const message = try self.closedLocal(.str);
-                try self.emitLowLevel(message, .str_concat, &.{ with_value, try self.strLiteral(")") });
+                try self.emitLowLevel(message, .str_append, &.{ with_value, try self.strLiteral(")") });
                 try self.emitTerminal(.{ .expect_err = .{ .message = message, .region = expr.source_region } });
                 try self.pushValue(try self.localOf(try self.exprType(fail.expr), .frame));
             },
             .finish_dbg => |ty| {
                 const value = self.popValue();
                 const message = try self.closedLocal(.str);
-                try self.emitDyn(message, .{ .inspect = .{ .value = value, .desc = try self.descOf(ty) } });
+                try self.emitDyn(message, .{ .inspect = .{ .value = value, .desc = try self.descOf(ty), .names = try self.namesOf(ty) } });
                 try self.emitLinear(.{ .debug = .{ .message = message, .next = undefined } });
                 // `dbg` evaluates to `{}`.
                 try self.pushValue(try self.unitValue());
@@ -3025,9 +3283,9 @@ pub const Builder = struct {
 
     /// Lower `expr` now, at the current statement position, and return its
     /// value: the tasks it pushes run before this returns.
-    pub fn lowerExprNow(self: *Builder, expr: CheckedExprId) Allocator.Error!LocalId {
+    pub fn lowerNow(self: *Builder, task: Task) Allocator.Error!LocalId {
         const base_tasks = self.tasks.items.len;
-        try self.push(.{ .expr = expr });
+        try self.push(task);
         while (self.tasks.items.len > base_tasks) try self.step(self.tasks.pop().?);
         return self.popValue();
     }
@@ -3038,19 +3296,20 @@ pub const Builder = struct {
     /// reads it instead of computing it: not the root this body computes,
     /// not a root whose evaluation failed (it runs in place), and not a
     /// guarded binding's root, whose declaration keeps its right-hand side.
-    fn storedHoisted(self: *Builder, expr_id: CheckedExprId) ?HoistedRead {
+    fn storedHoisted(self: *Builder, expr_id: ExprId) Allocator.Error!?HoistedRead {
         const entry = self.view.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.own_root) |own| if (own == entry.root) return null;
         const root = self.view.view.compile_time_roots.root(entry.root);
         if (root.boxy_value) |stored| return .{ .stored = stored };
-        if (root.payload == .runtime) return null;
+        if (root.payloadFor(.boxy) == .pending and self.view.view.const_templates.get(entry.const_ref).state == .stored_const) return .{ .pending = entry.root };
+        if (root.payloadFor(.boxy) == .runtime) return null;
         if (entry.pattern != null and root.guarded) return null;
         return switch (self.view.view.const_templates.get(entry.const_ref).state) {
             .stored_const => |stored| .{ .stored = stored },
             // A value this compile-time program evaluates is read from its
             // slot; a polymorphic hoisted value computes at its instance, as
             // its entry procedure would.
-            .eval_template => if (self.program.readsRootSlot(self.module, entry.root)) .{ .pending = entry.root } else null,
+            .eval_template => if (try self.program.readsRootSlot(self.module, entry.root)) .{ .pending = entry.root } else null,
             // A compile-time evaluator reads a value its own level has not
             // completed only as a member of a group that reads itself.
             .reserved => if (self.program.input.compile_time) .{ .pending = entry.root } else invariant("a hoisted root reached runtime lowering without a stored value or an entry procedure"),
@@ -3063,7 +3322,7 @@ pub const Builder = struct {
     fn hoistedRootOfConstRef(self: *Builder, const_ref: checked.ConstRef) ?checked.ComptimeRootId {
         if (!std.mem.eql(u8, &const_ref.artifact.bytes, &self.view.key.bytes)) return null;
         return switch (const_ref.owner) {
-            .hoisted_expr => |hoisted| (self.view.view.hoisted_constants.lookupByExpr(hoisted.expr) orelse return null).root,
+            .hoisted_root => |hoisted| hoisted.root,
             .top_level_binding => |top_level| self.view.view.compile_time_roots.lookupIdByPattern(top_level.pattern),
         };
     }
@@ -3080,12 +3339,19 @@ pub const Builder = struct {
     /// in, and the evaluator reruns the reading root once the value
     /// completes (design.md "Compile-Time Evaluation Strategy").
     fn pendingValueRead(self: *Builder, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
+        if (!self.program.input.compile_time) invariant("a runtime body reads a root without its completed Boxy representation");
         if (self.program.evaluatesRoot(module_index, root)) {
-            if (!try self.closed(ty)) invariant("a compile-time root's value has an open type");
-            const slot = try self.program.rootValueSlot(module_index, root, ty);
-            const local = try self.closedLocal(try self.program.layouts.layoutOf(ty));
+            // The slot holds the value at the root's own type. A read in
+            // another module is checked at that module's own copy of the
+            // type, which can store the value differently (a record row
+            // lifted into a padded nominal), so it converts the value as a
+            // read of a stored value does (`pushStoredRestore`).
+            const own = try self.program.rootValueType(module_index, root);
+            if (!try self.closed(own)) invariant("a compile-time root's value has an open type");
+            const slot = try self.program.rootValueSlot(module_index, root);
+            const local = try self.closedLocal(try self.program.layouts.layoutOf(own));
             try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
-            try self.pushValue(local);
+            try self.pushValue(if (own == ty) local else try self.retagValue(local, own, ty));
             return;
         }
         // A value no program evaluates: the read fails as the recursion
@@ -3104,64 +3370,84 @@ pub const Builder = struct {
     /// Lower an expression. What its enclosing expression emits after it,
     /// such as the call taking it as an argument, belongs to the enclosing
     /// expression's region.
-    pub fn stepExpr(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn stepExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         try self.push(.{ .restore_region = self.region });
         try self.lowerExpr(expr_id);
     }
 
-    fn lowerExpr(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    /// Lower an expression's own value. What its enclosing expression emits
+    /// after it belongs to the enclosing expression's region.
+    pub fn stepOwnExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        try self.push(.{ .restore_region = self.region });
+        try self.lowerOwnExpr(expr_id);
+    }
+
+    /// Lower an expression as its parent reads it.
+    fn lowerExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        if (self.bodies().rowCoercion(expr_id)) |wide| return try self.lowerRowCoercion(expr_id, wide);
+        try self.lowerOwnExpr(expr_id);
+    }
+
+    /// The coercion of a row-coerced result into the widened type its
+    /// parent reads it at: the value is built straight at the coercion's
+    /// row (design.md "Row Coercion Primitive").
+    fn lowerRowCoercion(self: *Builder, expr_id: ExprId, wide: checked.CheckedTypeId) Allocator.Error!void {
+        self.region = self.nodeRegion(@backingInt(expr_id));
+        if (self.destination_types.get(expr_id)) |destination| if (!try self.program.hasError(self.module, wide)) {
+            const own = try self.convert(wide);
+            if (try self.retagInto(own, destination)) |to| try self.push(.{ .retag = .{ .from = own, .to = to } });
+        };
+        try self.coerced_destinations.put(self.allocator, expr_id, try self.valueType(expr_id));
+        try self.push(.{ .own_expr = expr_id });
+    }
+
+    fn lowerOwnExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
-        if (self.destination_types.get(expr_id)) |destination| try self.passDestination(expr.data, destination);
+        if (self.ownDestination(expr_id)) |destination| try self.passDestination(expr.data, destination);
         self.region = expr.source_region;
-        if (self.destination_types.contains(expr_id) and !try self.program.converter().hasError(self.module, expr.ty)) {
+        if (self.ownDestination(expr_id) != null and !try self.program.hasError(self.module, expr.ty)) {
             const own = try self.convert(expr.ty);
             if (try self.retagTarget(expr_id, own)) |destination| try self.push(.{ .retag = .{ .from = own, .to = destination } });
         }
         // An expression compile-time evaluation hoisted and stored is read
         // (design.md "Runtime Programs Read Stored Values").
-        if (self.storedHoisted(expr_id)) |read| switch (read) {
+        if (try self.storedHoisted(expr_id)) |read| switch (read) {
             .stored => |stored| return try self.pushStoredRestore(.{ .module = self.module }, stored, try self.exprType(expr_id), if (self.view.view.hoisted_constants.lookupByExpr(expr_id)) |hoisted| hoisted.root else null),
             .pending => |root| return try self.pendingValueRead(self.module, root, try self.exprType(expr_id)),
         };
+        const raw = @backingInt(expr_id);
         switch (expr.data) {
-            .numeral => |numeral| try self.lowerNumeral(expr_id, numeral),
-            .str_segment => |literal| try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(literal))),
-            .str => |parts| {
-                // An empty literal segment writes nothing: it is not a part.
-                var count: u32 = 0;
-                for (parts) |part| count += @intFromBool(!self.bodies().isEmptyStrSegment(part));
-                try self.push(.{ .finish_str = .{ .count = count } });
-                var index = parts.len;
-                while (index > 0) {
-                    index -= 1;
-                    if (!self.bodies().isEmptyStrSegment(parts[index])) try self.push(.{ .expr = parts[index] });
-                }
-            },
-            .lookup_local => |lookup| try self.lowerLookupLocal(expr_id, lookup.pattern, lookup.resolved),
-            .lookup_external => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("an external lookup had no resolved reference")),
-            .lookup_required => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("a platform requirement lookup had no resolved reference")),
+            .numeral => try self.lowerNumeral(.{ .expr = expr_id }, self.bodies().numeralLiteral(raw), self.bodies().numeralPlan(raw), self.bodies().literalConversionRoot(raw)),
+            .str_segment => |literal| try self.pushValue(try self.strLiteral(self.bodies().text(literal))),
+            .str => |segments| if (self.bodies().quoteIsCustom(raw))
+                try self.lowerQuote(.{ .expr = expr_id }, .{ .quote = segments }, self.bodies().quotePlan(raw), self.bodies().literalConversionRoot(raw))
+            else
+                try self.lowerStrParts(.{ .rest = segments }),
+            .lookup_local => |pattern| try self.lowerLookupLocal(expr_id, pattern, self.bodies().resolvedRef(expr_id)),
+            .lookup_external => try self.lowerLookupExternal(expr_id, self.bodies().resolvedRef(expr_id) orelse invariant("an external lookup had no resolved reference")),
+            .lookup_required => try self.lowerLookupExternal(expr_id, self.bodies().resolvedRef(expr_id) orelse invariant("a platform requirement lookup had no resolved reference")),
             .block => |block| {
-                if (self.tail_exprs.contains(expr_id)) try self.tail_exprs.put(self.allocator, block.final_expr, {});
+                if (self.isTail(expr_id)) try self.tail_exprs.put(self.allocator, block.final_expr, {});
                 // A divergent statement leaves the rest of the block
                 // unreachable: nothing after it is lowered, and the block's
                 // value is never produced.
                 const mode = self.inlineExpectMode();
                 const diverges_at: ?usize = for (block.statements, 0..) |stmt, position| {
-                    if (self.bodies().statementDiverges(stmt, mode)) break position;
+                    if (try self.bodies().statementDiverges(stmt, mode)) break position;
                     // A declaration whose value diverges binds nothing, so
                     // nothing after it is reached either.
-                    switch (self.bodies().statement(stmt).data) {
-                        .decl => |decl| if (self.bodies().exprDiverges(decl.expr, mode)) break position,
-                        .var_ => |var_| if (self.bodies().exprDiverges(var_.expr, mode)) break position,
-                        .pending, .promoted_proc, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+                    switch (self.bodies().statementData(stmt)) {
+                        .decl => |decl| if (try self.bodies().exprDiverges(decl.expr, mode)) break position,
+                        .var_ => |var_| if (try self.bodies().exprDiverges(var_.expr, mode)) break position,
+                        .promoted_proc, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
                     }
                 } else null;
                 var index = if (diverges_at) |position| position + 1 else block.statements.len;
                 if (diverges_at == null) {
                     try self.push(.{ .expr = block.final_expr });
                 } else {
-                    const block_ty = self.bodies().expr(expr_id).ty;
-                    try self.push(.{ .diverged = if (try self.program.converter().hasError(self.module, block_ty)) null else try self.exprType(expr_id) });
+                    const block_ty = self.bodies().exprType(expr_id);
+                    try self.push(.{ .diverged = if (try self.program.hasError(self.module, block_ty)) null else try self.exprType(expr_id) });
                 }
                 while (index > 0) {
                     index -= 1;
@@ -3169,13 +3455,13 @@ pub const Builder = struct {
                 }
             },
             .call => |call| try self.lowerCall(expr_id, call),
-            .dispatch_call => |plan| try self.lowerDispatch(expr_id, plan orelse invariant("a dispatch call had no checked plan")),
-            .method_eq => |plan| try self.lowerDispatch(expr_id, plan orelse invariant("a method equality had no checked plan")),
-            .type_dispatch_call => |plan| try self.lowerDispatch(expr_id, plan orelse invariant("a type dispatch call had no checked plan")),
+            .dispatch_call => try self.lowerDispatch(expr_id, self.bodies().dispatchPlan(raw) orelse invariant("a dispatch call had no checked plan")),
+            .method_eq => try self.lowerDispatch(expr_id, self.bodies().dispatchPlan(raw) orelse invariant("a method equality had no checked plan")),
+            .type_dispatch_call => try self.lowerDispatch(expr_id, self.bodies().dispatchPlan(raw) orelse invariant("a type dispatch call had no checked plan")),
             .run_low_level => |run_ll| {
                 const args = run_ll.args[0 .. run_ll.args.len - run_ll.op.typeOnlyOperands()];
                 const arg_types = try self.program.arena.allocator().alloc(TypeId, args.len);
-                for (args, arg_types) |arg, *arg_ty| arg_ty.* = try self.exprType(arg);
+                for (args, arg_types) |arg, *arg_ty| arg_ty.* = try self.valueType(arg);
                 try self.push(.{ .finish_low_level = .{ .op = run_ll.op, .arg_count = @intCast(args.len), .result = try self.exprType(expr_id), .arg_types = arg_types } });
                 try self.pushExprsReversed(args);
             },
@@ -3187,7 +3473,7 @@ pub const Builder = struct {
                 var index = record.fields.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .expr = record.fields[index].value });
+                    try self.push(.{ .expr = self.bodies().recordFieldValue(record.fields[index]) });
                 }
                 // An update evaluates its base first.
                 if (record.ext) |base_expr| try self.push(.{ .expr = base_expr });
@@ -3202,6 +3488,7 @@ pub const Builder = struct {
             },
             .zero_argument_tag => try self.finishTag(expr_id, null),
             .list => |items| {
+                if (try self.packedNumeralList(expr_id, items)) |packed_list| return try self.pushValue(packed_list);
                 try self.push(.{ .finish_list = expr_id });
                 try self.pushExprsReversed(items);
             },
@@ -3210,16 +3497,16 @@ pub const Builder = struct {
                 // A tag constructing a nominal is built at the nominal's
                 // declared backing row (design.md "Nominal Constructor
                 // Backing Relation"), not at the tag's own narrower row.
-                const backing = self.bodies().expr(nominal.backing_expr);
-                switch (backing.data) {
+                const backing = self.bodies().exprData(nominal.backing_expr);
+                switch (backing) {
                     .tag => |tag| {
                         const nominal_ty = try self.exprType(expr_id);
-                        try self.passDestination(self.bodies().expr(nominal.backing_expr).data, nominal_ty);
+                        try self.passDestination(backing, nominal_ty);
                         try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = nominal_ty } });
                         try self.pushExprsReversed(tag.args);
                     },
                     .zero_argument_tag => try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } }),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
+                    .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
                         // The operand is the nominal's own backing, which a
                         // padded declaration lays out differently from the
                         // operand's record row.
@@ -3230,19 +3517,13 @@ pub const Builder = struct {
             },
             .lambda => try self.lowerClosure(expr_id, expr_id, try self.program.siteCaptures(self.module, expr_id)),
             .closure => |closure| try self.lowerClosure(expr_id, closure.lambda, try self.program.siteCaptures(self.module, expr_id)),
-            .row_coerce => |coerce| {
-                // The coerced value is built straight at its destination's
-                // row (design.md "Row Coercion Primitive").
-                try self.destination_types.put(self.allocator, coerce.value, try self.exprType(expr_id));
-                try self.push(.{ .expr = coerce.value });
-            },
             .structural_eq => |eq| {
-                if (eq.discriminant) |discriminant| {
-                    try self.push(.{ .finish_discriminant_eq = .{ .value_ty = try self.exprType(discriminant.value), .tag = discriminant.tag, .negated = eq.negated } });
+                if (self.bodies().tagDiscriminantEquality(eq.lhs, eq.rhs)) |discriminant| {
+                    try self.push(.{ .finish_discriminant_eq = .{ .value_ty = try self.valueType(discriminant.value), .tag = discriminant.tag, .negated = eq.negated } });
                     try self.push(.{ .expr = discriminant.value });
                     return;
                 }
-                try self.push(.{ .finish_eq = .{ .negated = eq.negated, .operand = try self.exprType(eq.lhs) } });
+                try self.push(.{ .finish_eq = .{ .negated = eq.negated, .operand = try self.valueType(eq.lhs) } });
                 try self.push(.{ .expr = eq.rhs });
                 try self.push(.{ .expr = eq.lhs });
             },
@@ -3250,12 +3531,12 @@ pub const Builder = struct {
                 try self.push(.{ .finish_expect = expr_id });
                 try self.push(.{ .expr = cond });
             },
-            .crash => |literal| try self.crashValue(self.bodies().stringLiteral(literal), try self.exprType(expr_id)),
+            .crash => |literal| try self.crashValue(self.bodies().text(literal), try self.exprType(expr_id)),
             .runtime_error => |runtime_error| {
                 // A retired expression evaluates the operands it still
                 // evaluates, each for its effects, then crashes.
-                const checked_ty = self.bodies().expr(expr_id).ty;
-                try self.push(.{ .runtime_error = if (try self.program.converter().hasError(self.module, checked_ty)) null else try self.exprType(expr_id) });
+                const checked_ty = self.bodies().exprType(expr_id);
+                try self.push(.{ .runtime_error = if (try self.program.hasError(self.module, checked_ty)) null else try self.exprType(expr_id) });
                 var index = runtime_error.evaluated.len;
                 while (index > 0) {
                     index -= 1;
@@ -3264,28 +3545,29 @@ pub const Builder = struct {
                 }
             },
             .if_ => |if_| {
-                if (self.tail_exprs.contains(expr_id)) {
-                    for (if_.branches) |branch| try self.tail_exprs.put(self.allocator, branch.body, {});
+                const first_cond = self.bodies().ifBranch(if_.branches[0]).cond;
+                if (self.isTail(expr_id)) {
+                    for (if_.branches) |branch| try self.tail_exprs.put(self.allocator, self.bodies().ifBranch(branch).body, {});
                     try self.tail_exprs.put(self.allocator, if_.final_else, {});
                     // Each branch returns; nothing reads the construct's
                     // own value, and each branch starts from the binder
                     // values the construct started with.
-                    const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{}, .tail);
+                    const merge = try self.beginMerge(try self.bodies().stateMergeBinders(expr_id), .tail);
                     try self.push(.unreachable_or_unit);
                     try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = null, .merge = merge } });
-                    try self.push(.{ .expr = if_.branches[0].cond });
+                    try self.push(.{ .expr = first_cond });
                     return;
                 }
                 const result_ty = try self.exprType(expr_id);
                 const result = try self.localOf(result_ty, .frame);
                 const join = self.freshJoin();
-                const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{}, .joined);
+                const merge = try self.beginMerge(try self.bodies().stateMergeBinders(expr_id), .joined);
                 const after = try self.declareMergeJoin(join, result, merge);
                 try self.push(.{ .push_value = result });
                 if (merge) |m| try self.push(.{ .enter_merge = m });
                 try self.push(.{ .resume_at = after });
                 try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = join, .merge = merge } });
-                try self.push(.{ .expr = if_.branches[0].cond });
+                try self.push(.{ .expr = first_cond });
             },
             .match_ => |match| {
                 // A match on a layout-resolved low-level whose answer is
@@ -3294,6 +3576,15 @@ pub const Builder = struct {
                     try self.destination_types.put(self.allocator, value, try self.exprType(expr_id));
                     return try self.push(.{ .expr = value });
                 }
+                // A scrutinee that diverges leaves every branch unreachable;
+                // checking relates no pattern to it, so it has no decision
+                // tree.
+                if (try self.bodies().exprDiverges(match.cond, self.inlineExpectMode())) {
+                    const match_ty = self.bodies().expr(expr_id).ty;
+                    try self.push(.{ .diverged = if (try self.program.hasError(self.module, match_ty)) null else try self.exprType(expr_id) });
+                    try self.push(.discard);
+                    return try self.push(.{ .expr = match.cond });
+                }
                 try self.push(.{ .match_start = expr_id });
                 try self.push(.{ .expr = match.cond });
             },
@@ -3301,7 +3592,7 @@ pub const Builder = struct {
                 .@"and", .@"or" => try self.lowerShortCircuit(binop.op == .@"and", binop.lhs, binop.rhs),
                 .add, .sub, .mul, .div, .rem, .lt, .gt, .le, .ge, .eq, .ne, .div_trunc, .range_exclusive, .range_inclusive => invariantFmt("binary operator {s} reached Boxy lowering outside a dispatch", .{@tagName(binop.op)}),
             },
-            .for_ => |for_| try self.pushForLoop(for_.pattern, for_.expr, for_.body, for_.plan, for_.mutations),
+            .for_ => |for_| try self.pushForLoop(raw, for_.pattern, for_.expr, for_.body, self.bodies().iteratorForPlan(raw)),
             .field_access => |access| {
                 try self.push(.{ .finish_field_access = expr_id });
                 try self.push(.{ .expr = access.receiver });
@@ -3311,24 +3602,16 @@ pub const Builder = struct {
                 try self.push(.{ .expr = access.tuple });
             },
             .dbg => |inner| {
-                try self.push(.{ .finish_dbg = try self.exprType(inner) });
+                try self.push(.{ .finish_dbg = try self.valueType(inner) });
                 try self.push(.{ .expr = inner });
             },
-            .interpolation => |interpolation| try self.lowerInterpolation(expr_id, interpolation),
+            .interpolation => |interpolation| if (self.bodies().interpolationIsBuiltinStr(expr_id))
+                try self.lowerStrParts(interpolation.strParts())
+            else
+                try self.lowerInterpolation(expr_id),
             .expect_err => |expect_err| {
-                try self.push(.{ .finish_expect_err = .{ .expr = expr_id, .value = try self.exprType(expect_err.expr) } });
+                try self.push(.{ .finish_expect_err = .{ .expr = expr_id, .value = try self.valueType(expect_err.expr) } });
                 try self.push(.{ .expr = expect_err.expr });
-            },
-            .str_from_quote => |quote| {
-                if (quote.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .quote, quote.plan);
-                if (quote.plan) |plan| return try self.lowerPlannedLiteral(expr_id, .quote, plan, try self.exprType(expr_id));
-                const ty = try self.exprType(expr_id);
-                const is_str = switch (self.program.store.get(ty)) {
-                    .primitive => |primitive| primitive == .str,
-                    .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => false,
-                };
-                if (!is_str) return try self.rejectedLiteralValue(ty);
-                try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(quote.literal)));
             },
             .return_ => |ret| {
                 // The expression itself never produces a value; its successor
@@ -3338,17 +3621,13 @@ pub const Builder = struct {
                 try self.destination_types.put(self.allocator, ret.expr, self.currentWorker().ret);
                 try self.push(.{ .expr = ret.expr });
             },
-            .unary_not => |operand| {
-                try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = try self.exprType(expr_id) } });
-                try self.push(.{ .expr = operand });
-            },
             .structural_hash => |hash| {
-                try self.push(.{ .finish_hash = .{ .value = try self.exprType(hash.value), .result = try self.exprType(expr_id) } });
+                try self.push(.{ .finish_hash = .{ .value = try self.valueType(hash.value), .result = try self.exprType(expr_id) } });
                 try self.push(.{ .expr = hash.hasher });
                 try self.push(.{ .expr = hash.value });
             },
             .bytes_literal => |literal| {
-                const bytes = self.bodies().stringLiteral(literal);
+                const bytes = self.bodies().text(literal);
                 const local = try self.localOf(try self.exprType(expr_id), .frame);
                 const backing = try self.store.insertStringAligned(bytes, 16);
                 try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
@@ -3365,7 +3644,6 @@ pub const Builder = struct {
                 try self.emitJump(loop.join, null);
                 try self.push(.{ .unreachable_value = try self.exprType(expr_id) });
             },
-            .pending => invariant("a pending checked expression reached Boxy lowering, which reads only completed checking"),
             .unary_minus => invariant("a unary minus reached Boxy lowering without its checked dispatch"),
             .anno_only => invariant("an annotation-only declaration is read, which resolves to what it requests instead"),
             .hosted_lambda => invariant("a hosted lambda is a hosted template's body root, never a nested expression"),
@@ -3374,14 +3652,14 @@ pub const Builder = struct {
 
     /// Hand an expression's destination type to the subexpressions whose
     /// value is its value.
-    pub fn passDestination(self: *Builder, data: checked.CheckedExprData, destination: TypeId) Allocator.Error!void {
+    pub fn passDestination(self: *Builder, data: bodies_mod.ExprData, destination: TypeId) Allocator.Error!void {
         switch (data) {
             .block => |block| try self.destination_types.put(self.allocator, block.final_expr, destination),
             .if_ => |if_| {
-                for (if_.branches) |branch| try self.destination_types.put(self.allocator, branch.body, destination);
+                for (if_.branches) |branch| try self.destination_types.put(self.allocator, self.bodies().ifBranch(branch).body, destination);
                 try self.destination_types.put(self.allocator, if_.final_else, destination);
             },
-            .match_ => |match| for (match.branches) |branch| try self.destination_types.put(self.allocator, branch.value, destination),
+            .match_ => |match| for (match.branches) |branch| try self.destination_types.put(self.allocator, self.bodies().matchBranch(branch).value, destination),
             .nominal => |nominal| try self.destination_types.put(self.allocator, nominal.backing_expr, try self.structuralType(destination)),
             // A tag's payloads are reached positions of its destination's
             // row (design.md "Row Coercion Primitive").
@@ -3391,18 +3669,31 @@ pub const Builder = struct {
                     .tag_union => |value| value,
                     .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => return,
                 };
-                const name = try store.internName(self.view.nameStore().tagLabelText(tag.name));
+                const name = try store.internName(self.view.nameStore().tagLabelText(self.bodies().tagLabel(tag.name)));
                 for (store.tagSpan(tag_union.tags)) |candidate| {
                     if (candidate.name != name or candidate.payloads.len != tag.args.len) continue;
                     for (tag.args, store.span(candidate.payloads)) |arg, payload_ty| try self.destination_types.put(self.allocator, arg, payload_ty);
                     return;
                 }
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
     }
 
-    pub fn pushExprsReversed(self: *Builder, exprs: []const CheckedExprId) Allocator.Error!void {
+    /// A string concatenated from its parts in order.
+    fn lowerStrParts(self: *Builder, parts: bodies_mod.StrParts) Allocator.Error!void {
+        // An empty literal segment writes nothing: it is not a part.
+        var count: u32 = 0;
+        for (0..parts.len()) |index| count += @intFromBool(!self.bodies().isEmptyStrSegment(parts.at(index)));
+        try self.push(.{ .finish_str = .{ .count = count } });
+        var index = parts.len();
+        while (index > 0) {
+            index -= 1;
+            if (!self.bodies().isEmptyStrSegment(parts.at(index))) try self.push(.{ .expr = parts.at(index) });
+        }
+    }
+
+    pub fn pushExprsReversed(self: *Builder, exprs: []const ExprId) Allocator.Error!void {
         var index = exprs.len;
         while (index > 0) {
             index -= 1;
@@ -3437,15 +3728,108 @@ pub const Builder = struct {
         }
     }
 
-    pub fn lowerNumeral(self: *Builder, expr_id: CheckedExprId, numeral: checked.CheckedNumeralData) Allocator.Error!void {
-        if (numeral.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .numeral, numeral.plan);
-        if (numeral.plan) |plan| return try self.lowerPlannedLiteral(expr_id, .numeral, plan, try self.exprType(expr_id));
+    /// A list of builtin numerals at a numeric primitive element type, as one
+    /// literal of the elements' packed bytes, exactly as Monotype lowers it
+    /// (`lowerPackedNumeralList`), so the list's code does not grow with its
+    /// length. Null for any other list, which builds its elements one by one.
+    fn packedNumeralList(self: *Builder, expr_id: ExprId, items: []const ExprId) Allocator.Error!?LocalId {
+        if (items.len == 0) return null;
         const ty = try self.exprType(expr_id);
+        if (!try self.closed(ty)) return null;
+        const elem = switch (self.program.store.get(try self.structuralType(ty))) {
+            .list => |elem| elem,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a list's type is not a List"),
+        };
+        const primitive = switch (self.program.store.get(elem)) {
+            .primitive => |primitive| primitive,
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => return null,
+        };
+        const width: usize = switch (primitive) {
+            .u8, .i8 => 1,
+            .u16, .i16 => 2,
+            .u32, .i32, .f32 => 4,
+            .u64, .i64, .f64 => 8,
+            .u128, .i128, .dec => 16,
+            .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
+        };
+        for (items) |item| switch (self.bodies().exprData(item)) {
+            .numeral => if (self.bodies().numeralPlan(@backingInt(item)) != null or self.bodies().literalConversionRoot(@backingInt(item)) != null) return null,
+            .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+        };
+        const exact_numeral = checked.exact_numeral;
+        const bytes = try self.allocator.alloc(u8, items.len * width);
+        defer self.allocator.free(bytes);
+        for (items, 0..) |item, index| {
+            const exact = self.view.view.module_env.exactNumeral(self.bodies().numeralLiteral(@backingInt(item)));
+            var encoded: [16]u8 = undefined;
+            switch (primitive) {
+                inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |integer| {
+                    const bits = exact_numeral.intBits(exact, @field(exact_numeral.Target, @tagName(integer))) orelse return null;
+                    const wide: i128 = switch (bits) {
+                        .i128 => |value| value,
+                        .u128 => |value| @bitCast(value),
+                    };
+                    std.mem.writeInt(i128, &encoded, wide, .little);
+                },
+                .f32 => std.mem.writeInt(u32, encoded[0..4], @bitCast(try exact_numeral.floatBits(f32, self.allocator, exact)), .little),
+                .f64 => std.mem.writeInt(u64, encoded[0..8], @bitCast(try exact_numeral.floatBits(f64, self.allocator, exact)), .little),
+                .dec => std.mem.writeInt(i128, &encoded, (try exact_numeral.decBits(self.allocator, exact)) orelse return null, .little),
+                .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => unreachable, // the width switch admits only scalar numerics
+            }
+            @memcpy(bytes[index * width ..][0..width], encoded[0..width]);
+        }
+        const local = try self.localOf(ty, .frame);
+        const backing = try self.store.insertStringAligned(bytes, @intCast(width));
+        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
+            .bytes = .{ .backing = backing, .offset = 0, .len = @intCast(bytes.len) },
+            .len = @intCast(items.len),
+        } }, .next = undefined } });
+        return local;
+    }
+
+    /// A numeric literal at `at`: its conversion root's value, its
+    /// conversion `plan`'s result, or a builtin number.
+    pub fn lowerNumeral(self: *Builder, at: LiteralAt, literal: NumeralLiteral, plan: ?static_dispatch.StaticDispatchPlanId, conversion_root: ?checked.ComptimeRootId) Allocator.Error!void {
+        if (conversion_root) |root| return try self.restoreConversionRoot(root, at, .numeral, plan);
+        if (plan) |plan_id| return try self.lowerPlannedLiteral(at.node(), .numeral, plan_id, try self.literalType(at));
+        const ty = try self.literalType(at);
         // A numeral at a non-builtin type with no conversion plan is one
         // whose conversion checking rejected and reported: the checked
         // module records no plan for it, and reaching it is a checked error.
         if (self.program.store.get(ty) != .primitive) return try self.rejectedLiteralValue(ty);
-        try self.pushValue(try self.builtinNumeral(numeral.literal, ty));
+        try self.pushValue(try self.builtinNumeral(literal, ty));
+    }
+
+    /// A literal-only string at `at` whose target is custom or open: its
+    /// conversion root's value, its conversion `plan`'s result, or the
+    /// string itself at a `Str` target.
+    pub fn lowerQuote(self: *Builder, at: LiteralAt, literal: bodies_mod.Text, plan: ?static_dispatch.StaticDispatchPlanId, conversion_root: ?checked.ComptimeRootId) Allocator.Error!void {
+        if (conversion_root) |root| return try self.restoreConversionRoot(root, at, .quote, plan);
+        if (plan) |plan_id| return try self.lowerPlannedLiteral(at.node(), .quote, plan_id, try self.literalType(at));
+        const ty = try self.literalType(at);
+        const is_str = switch (self.program.store.get(ty)) {
+            .primitive => |primitive| primitive == .str,
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => false,
+        };
+        if (!is_str) return try self.rejectedLiteralValue(ty);
+        try self.pushValue(try self.textLiteral(literal));
+    }
+
+    /// The type a literal converts to: a literal expression's own, or a
+    /// custom literal pattern's.
+    fn literalType(self: *Builder, at: LiteralAt) Allocator.Error!TypeId {
+        return switch (at) {
+            .expr => |expr| try self.exprType(expr),
+            .pattern => |pattern| try self.patternType(pattern),
+        };
+    }
+
+    /// A `Str` value of `text`'s bytes.
+    pub fn textLiteral(self: *Builder, text: bodies_mod.Text) Allocator.Error!LocalId {
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(self.allocator);
+        try self.bodies().appendText(self.allocator, text, &bytes);
+        return try self.strLiteral(bytes.items);
     }
 
     /// A literal whose conversion checking rejected: the crash a
@@ -3460,10 +3844,10 @@ pub const Builder = struct {
     /// by its instance's literal argument where the plan is open, in place
     /// where it is closed, and a crash where checking rejected the plan or
     /// found its value unreachable.
-    fn lowerPlannedLiteral(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, lit_ty: TypeId) Allocator.Error!void {
+    fn lowerPlannedLiteral(self: *Builder, node: u32, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, lit_ty: TypeId) Allocator.Error!void {
         switch (self.dispatchPlan(plan_id).resolution) {
-            .direct_closed => try self.lowerLiteralConversion(expr_id, kind, plan_id, lit_ty),
-            .direct_parametric, .evidence_dependent => try self.lowerInstanceLiteral(expr_id, lit_ty),
+            .direct_closed => try self.lowerLiteralConversion(node, kind, plan_id, lit_ty),
+            .direct_parametric, .evidence_dependent => try self.lowerInstanceLiteral(node, lit_ty),
             .checked_error => {
                 try self.emitDispatchCrash(.checked_error);
                 try self.pushValue(try self.localOf(lit_ty, .frame));
@@ -3520,7 +3904,7 @@ pub const Builder = struct {
     /// produces `Try(result_ty, row)`: checking unifies the plan's `Ok`
     /// payload with the literal's type, which is `result_ty` here, and fixes
     /// its error row to closed tags carrying the message.
-    fn lowerLiteralConversion(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, result_ty: TypeId) Allocator.Error!void {
+    fn lowerLiteralConversion(self: *Builder, node: u32, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, result_ty: TypeId) Allocator.Error!void {
         const call_plan = self.dispatchPlan(plan_id);
         if (call_plan.result_mode != .value) invariant("a literal conversion plan has a non-value result mode");
         const checked_types = self.view.types();
@@ -3536,8 +3920,8 @@ pub const Builder = struct {
             },
             .pending, .field_kind, .err, .flex, .rigid, .function, .record, .tuple, .empty_record, .tag_union, .empty_tag_union => invariant("a literal conversion's result is not a Try type"),
         };
-        const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) }, self.env);
-        try self.push(.{ .finish_literal_conversion = .{ .expr = expr_id, .kind = kind, .try_ty = try_ty, .result = result_ty } });
+        const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) });
+        try self.push(.{ .finish_literal_conversion = .{ .node = node, .kind = kind, .try_ty = try_ty, .result = result_ty } });
         try self.lowerDispatchAt(plan_id, try_ty);
     }
 
@@ -3566,9 +3950,8 @@ pub const Builder = struct {
             }
             try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(ok_variant.index), .layout_idx = .u32 } }, .next = undefined } });
         } else {
-            const desc = try self.descOf(try_ty);
-            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = try_value, .desc = desc } });
-            try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.nameDesc(ok_name) } });
+            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = try_value, .desc = try self.descOf(try_ty) } });
+            try self.assignIndex(expected, try self.tagIndex(try_ty, ok_name));
         }
         const is_ok = try self.closedLocal(.bool);
         try self.emitLowLevel(is_ok, .num_is_eq, &.{ actual, expected });
@@ -3593,7 +3976,7 @@ pub const Builder = struct {
         if (tags.len == 0) invariant("a literal conversion's error row has no tag");
         const site: LIR.LiteralRejectionSite = .{
             .owner = self.program.lowering_module_ids[@backingInt(self.module)],
-            .checked_expr = @backingInt(conversion.expr),
+            .node = conversion.node,
             .kind = conversion.kind,
         };
         // Each tag of the row carries the message as its one payload.
@@ -3636,13 +4019,13 @@ pub const Builder = struct {
     /// The literal argument in scope for literal requirement `index` (depth 0 is the
     /// innermost scope: an entered scheme's, then the worker's own): the
     /// immortal callable producing the literal's converted value.
-    pub fn scopeLiteral(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!LocalId {
+    pub fn scopeLiteral(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!Word {
         if (self.foreign_scopes) |first| {
             const scopes = self.alias_scopes.items[first..];
             // A frame of a literal thunk's chain that lies outside the
             // frames the thunk entered is one the chain never reads.
             if (index.depth >= scopes.len) {
-                if (self.thunk_frames != null) return try self.unreachableWord();
+                if (self.thunk_frames != null) return .{ .static = .zero };
                 invariant("an exact procedure alias's lookup names a literal argument outside the alias's scope");
             }
             return try self.frameLiteral(first + scopes.len - 1 - index.depth, index.index);
@@ -3655,14 +4038,18 @@ pub const Builder = struct {
         var offset: usize = 0;
         for (scopes[0..depth]) |scope| offset += scope.len;
         if (index.index >= scopes[depth].len) invariant("an edge named a literal argument its scope does not have");
-        return self.literal_locals[offset + index.index];
+        return try self.literalInputWord(offset + index.index);
     }
 
     /// Literal argument `index` of the frame at `position` of `alias_scopes`.
-    /// A deferred argument is composed at each read: a read can sit in one
-    /// branch of a conversion, which another branch's read must not reuse.
-    fn frameLiteral(self: *Builder, position: usize, index: u32) Allocator.Error!LocalId {
-        const scope = self.alias_scopes.items[position];
+    /// A deferred argument is resolved in the scope holding the frame's edge.
+    fn frameLiteral(self: *Builder, position: usize, index: u32) Allocator.Error!Word {
+        return try self.scopeFrameLiteral(self.alias_scopes.items[position], position, index);
+    }
+
+    /// Literal argument `index` of `scope`, the frame at `position` of
+    /// `alias_scopes`, whose frames below it are in place.
+    fn scopeFrameLiteral(self: *Builder, scope: AliasScope, position: usize, index: u32) Allocator.Error!Word {
         const deferred = scope.deferred orelse {
             if (index >= scope.literals.len) invariant("an edge named a literal argument its scope does not have");
             return scope.literals[index];
@@ -3695,18 +4082,8 @@ pub const Builder = struct {
         }
     }
 
-    /// The word an edge argument the current body never reads takes: a
-    /// literal thunk's chain enters only the frames on the chain, and the
-    /// arguments of its edges that name scopes outside them are read by no
-    /// body the thunk lowers.
-    fn unreachableWord(self: *Builder) Allocator.Error!LocalId {
-        const local = try self.nullWord();
-        try self.static_words.put(self.allocator, local, .zero);
-        return local;
-    }
-
-    /// A word holding null. A recursive dictionary's placeholder is one, which
-    /// keeps that dictionary composed: `dict_patch` fills it at runtime.
+    /// A word holding null, which no reference counting reads: the static
+    /// word `zero`.
     fn nullWord(self: *Builder) Allocator.Error!LocalId {
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
@@ -3716,7 +4093,7 @@ pub const Builder = struct {
     /// Fill `out` with the literal arguments of a call of `callee` at the
     /// edge `edge` of this body's module: one per literal requirement of the callee's
     /// scheme, from the checked edge arguments (`literalEdgeArgs`).
-    pub fn fillLiteralArgs(self: *Builder, callee: ?WorkerId, edge: checked.LiteralEdge, out: []LocalId) Allocator.Error!void {
+    pub fn fillLiteralArgs(self: *Builder, callee: ?WorkerId, edge: checked.LiteralEdge, out: []Word) Allocator.Error!void {
         if (out.len == 0) return;
         const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
         if (args.len != out.len) invariantFmt("an edge's {d} literal arguments do not cover its callee's {d} literal requirements (caller {s}, callee {s}{s})", .{
@@ -3738,12 +4115,12 @@ pub const Builder = struct {
                 const export_name = view.nameStore().procBase(template.proc_base).export_name orelse break :blk "a template";
                 break :blk view.nameStore().exportNameText(export_name);
             },
-            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| @tagName(kind),
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| @tagName(kind),
         };
     }
 
     /// The literal argument an edge argument source denotes.
-    fn literalArg(self: *Builder, source: checked.LiteralArgSource) Allocator.Error!LocalId {
+    fn literalArg(self: *Builder, source: checked.LiteralArgSource) Allocator.Error!Word {
         return switch (source) {
             .root => |root| try self.rootThunk(root),
             .forwarded => |index| try self.scopeLiteral(.{ .depth = 0, .index = index }),
@@ -3753,14 +4130,14 @@ pub const Builder = struct {
 
     /// The literal argument of an instantiation no use fixes: like a
     /// `from_scheme` dictionary, a crash nothing reads.
-    fn unreadLiteralArg(self: *Builder) Allocator.Error!LocalId {
+    fn unreadLiteralArg(self: *Builder) Allocator.Error!Word {
         return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{});
     }
 
     /// The immortal callable of this body's module's `literal_argument`
     /// root `root`: its entry wrapper's dictionary entry, which restores the
     /// stored value, or converts the literal where none is stored.
-    pub fn rootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!LocalId {
+    pub fn rootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!Word {
         const key: RootThunkKey = .{ .module = self.module, .root = root };
         if (self.root_thunks.get(key)) |existing| return existing;
         const thunk = try self.composeRootThunk(root);
@@ -3768,15 +4145,15 @@ pub const Builder = struct {
         return thunk;
     }
 
-    /// `rootThunk`'s callable, composed here.
-    fn composeRootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!LocalId {
+    /// `rootThunk`'s callable.
+    fn composeRootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!Word {
         const compile_time_root = self.view.view.compile_time_roots.root(root);
         const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
         // In the compile-time program evaluating the root, a reader reads
         // its value from its slot once it completes; its wrapper converts
         // the literal only as the root's own evaluation. A validate-only
         // root stores no value, so its wrapper converts for every reader.
-        const slot_read = compile_time_root.payload == .pending and !argument.validate_only and self.program.evaluatesRoot(self.module, root);
+        const slot_read = compile_time_root.payloadFor(.boxy) == .pending and !argument.validate_only and self.program.evaluatesRoot(self.module, root);
         const entry = if (slot_read)
             try self.program.rootSlotThunkWorker(self.module, root, try self.convert(argument.ty))
         else blk: {
@@ -3791,7 +4168,7 @@ pub const Builder = struct {
     /// instantiation checking recorded no edge for: a thunk per literal requirement
     /// of each of its scopes, converting the literal at those types
     /// (`WorkerKey.literal_thunk`), captured scopes' after its own.
-    pub fn derivedLiteralArgs(self: *Builder, worker_id: WorkerId, bound: []const TypeId, out: []LocalId) Allocator.Error!void {
+    pub fn derivedLiteralArgs(self: *Builder, worker_id: WorkerId, bound: []const TypeId, out: []Word) Allocator.Error!void {
         if (out.len == 0) return;
         const entries = try self.program.literalThunks(self.allocator, worker_id, bound);
         defer self.allocator.free(entries);
@@ -3801,7 +4178,7 @@ pub const Builder = struct {
 
     /// Literal argument `index` of `worker_id` whose scheme takes `bound`,
     /// derived as `derivedLiteralArgs` derives every one.
-    fn derivedLiteralArg(self: *Builder, worker_id: WorkerId, bound: []const TypeId, index: u32) Allocator.Error!LocalId {
+    fn derivedLiteralArg(self: *Builder, worker_id: WorkerId, bound: []const TypeId, index: u32) Allocator.Error!Word {
         const entries = try self.program.literalThunks(self.allocator, worker_id, bound);
         defer self.allocator.free(entries);
         if (index >= entries.len) invariant("a worker's literal arguments differ from its scopes' literal_requirements");
@@ -3819,15 +4196,16 @@ pub const Builder = struct {
     /// A literal whose conversion depends on the instance the body runs at:
     /// the value its literal argument produces (design.md "Literal
     /// Arguments"). An interpolation's argument produces its assembler.
-    pub fn lowerInstanceLiteral(self: *Builder, expr_id: CheckedExprId, lit_ty: TypeId) Allocator.Error!void {
-        const index = self.ownLiteralRequirementIndex(expr_id) orelse invariantFmt("a literal whose conversion depends on its instance has no literal_requirement in its scope (worker {s} #{d}, module {d}, expr {d}, alias scopes {d}, foreign {?}, literal scopes {d}, frames {?})", .{ @tagName(self.currentWorker().key), @backingInt(self.worker_id), @backingInt(self.module), @backingInt(expr_id), self.alias_scopes.items.len, self.foreign_scopes, self.currentWorker().literal_scopes.len, self.thunk_frames });
-        const thunk = try self.scopeLiteral(.{ .depth = 0, .index = index });
+    pub fn lowerInstanceLiteral(self: *Builder, node: u32, lit_ty: TypeId) Allocator.Error!void {
+        const index = self.ownLiteralRequirementIndex(node) orelse invariantFmt("a literal whose conversion depends on its instance has no literal_requirement in its scope (worker {s} #{d}, module {d}, expr {d}, alias scopes {d}, foreign {?}, literal scopes {d}, frames {?})", .{ @tagName(self.currentWorker().key), @backingInt(self.worker_id), @backingInt(self.module), node, self.alias_scopes.items.len, self.foreign_scopes, self.currentWorker().literal_scopes.len, self.thunk_frames });
+        const thunk = try self.materialize(try self.scopeLiteral(.{ .depth = 0, .index = index }));
         const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = lit_ty, .effectful = false } });
         try self.pushValue(try self.emitErasedCall(thunk, fn_ty, &.{}, lit_ty));
     }
 
-    /// The literal requirement of the innermost scope whose literal is `expr`.
-    fn ownLiteralRequirementIndex(self: *Builder, expr: CheckedExprId) ?u32 {
+    /// The literal requirement of the innermost scope whose literal is at
+    /// CIR node `node`.
+    fn ownLiteralRequirementIndex(self: *Builder, node: u32) ?u32 {
         const literal_requirements: []const checked.LiteralRequirement = if (self.foreign_scopes != null or self.alias_scopes.items.len != 0)
             self.alias_scopes.items[self.alias_scopes.items.len - 1].literal_requirements
         else if (self.currentWorker().literal_scopes.len != 0)
@@ -3835,9 +4213,74 @@ pub const Builder = struct {
         else
             &.{};
         for (literal_requirements, 0..) |literal_requirement, index| {
-            if (literal_requirement.edge == .literal and literal_requirement.site.expr == expr and literal_requirement.site.module.eql(self.view.key)) return @intCast(index);
+            if (literal_requirement.edge == .literal and literal_requirement.site.node == node and literal_requirement.site.module.eql(self.view.key)) return @intCast(index);
         }
         return null;
+    }
+
+    /// The body of compile-time root `root_id`'s entry wrapper, where it
+    /// computes the root's value: the root's expression; for a literal
+    /// conversion root, the conversion of its literal; or, for a hoisted
+    /// pattern root, the construct its `hoisted_body` describes. A rejected
+    /// destructure binder's root crashes; an extraction or validation root
+    /// matches its base expression against its pattern, crashing where the
+    /// pattern does not match (`rootPatternMatch`).
+    fn lowerRootBody(self: *Builder, root_id: checked.ComptimeRootId) Allocator.Error!void {
+        const root = self.view.view.compile_time_roots.root(root_id);
+        if (root.literalNode()) |literal| return switch (literal) {
+            .expr => |expr| try self.push(.{ .own_expr = expr }),
+            .pattern => |pattern| try self.push(.{ .literal_pattern_conversion = pattern }),
+        };
+        if (root.evaluatedExpr()) |evaluated| return try self.push(.{ .own_expr = evaluated });
+        const body = root.hoisted_body orelse invariant("a compile-time root that evaluates no expression has no hoisted body");
+        switch (body) {
+            .expr, .valueless_binding => invariant("a hoisted root evaluating its expression reached its pattern construct"),
+            .pattern_error => |pattern| {
+                try self.push(.{ .restore_region = self.region });
+                self.region = self.nodeRegion(@backingInt(pattern));
+                try self.push(.{ .runtime_error = if (try self.program.hasError(self.module, root.checked_type)) null else try self.convert(root.checked_type) });
+            },
+            .pattern_extraction => |extraction| try self.pushRootPatternMatch(root_id, extraction.scrutinee_pattern, extraction.base_expr),
+            .pattern_validation => |validation| try self.pushRootPatternMatch(root_id, validation.scrutinee_pattern, validation.base_expr),
+        }
+    }
+
+    /// Lower a hoisted pattern root's base expression, then match it
+    /// against the root's pattern (`rootPatternMatch`).
+    fn pushRootPatternMatch(self: *Builder, root_id: checked.ComptimeRootId, scrutinee_pattern: PatternId, base_expr: ExprId) Allocator.Error!void {
+        try self.push(.{ .restore_region = self.region });
+        self.region = self.nodeRegion(@backingInt(scrutinee_pattern));
+        try self.push(.{ .root_pattern_match = root_id });
+        try self.push(.{ .own_expr = base_expr });
+    }
+
+    /// Pop a hoisted pattern root's base value and match it against the
+    /// root's pattern: where it matches, an extraction root's value is its
+    /// result binder's, and a validation root's is `{}`; where it does not,
+    /// the root crashes.
+    fn rootPatternMatch(self: *Builder, root_id: checked.ComptimeRootId) Allocator.Error!void {
+        const root = self.view.view.compile_time_roots.root(root_id);
+        const body = root.hoisted_body orelse invariant("a hoisted pattern root has no hoisted body");
+        const scrutinee_pattern, const base_expr, const result_pattern: ?PatternId = switch (body) {
+            .pattern_extraction => |extraction| .{ extraction.scrutinee_pattern, extraction.base_expr, extraction.result_pattern },
+            .pattern_validation => |validation| .{ validation.scrutinee_pattern, validation.base_expr, null },
+            .expr, .valueless_binding, .pattern_error => invariant("a hoisted root without a pattern match reached its pattern match"),
+        };
+        const scrutinee = self.popValue();
+        if (self.hole == null) {
+            try self.pushValue(if (try self.program.hasError(self.module, root.checked_type)) try self.closedLocal(.zst) else try self.localOf(try self.convert(root.checked_type), .frame));
+            return;
+        }
+        // A miss fails as the destructure's checked site reports
+        // (`comptimeFailure`).
+        const failure = try self.comptimeFailure(self.view.view.exhaustiveness_sites.lookupByDestructurePattern(scrutinee_pattern));
+        const miss = try self.store.addCFStmt(Match.ComptimeFailure.terminal(failure), self.origin(.lowering_glue));
+        try self.testPattern(scrutinee_pattern, scrutinee, try self.exprType(base_expr), miss);
+        if (result_pattern) |pattern| {
+            try self.pushValue(self.binders.get(pattern) orelse invariant("a hoisted extraction root's pattern never bound its result binder"));
+        } else {
+            try self.pushValue(try self.unitValue());
+        }
     }
 
     /// The body of a `literal_argument` root's entry wrapper: the stored
@@ -3846,7 +4289,7 @@ pub const Builder = struct {
     /// at the root's edge.
     pub fn lowerLiteralArgumentRoot(self: *Builder, root_id: checked.ComptimeRootId, argument: checked.LiteralArgumentRoot) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        switch (self.view.view.compile_time_roots.root(root_id).payload) {
+        switch (self.view.view.compile_time_roots.root(root_id).payloadFor(.boxy)) {
             .const_node => |node| return try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = worker.ret, .root = root_id } }),
             .pending, .unevaluated, .discarded => {},
             inline .fn_value, .expect, .runtime => |_, tag| invariantFmt("a literal argument root holding {s} reached lowering", .{@tagName(tag)}),
@@ -3946,12 +4389,25 @@ pub const Builder = struct {
             switch (literal_requirement.edge) {
                 .literal => {
                     if (!literal_requirement.site.module.eql(self.view.key)) invariant("a literal literal_requirement's literal is in another module than its scheme");
-                    const expr = literal_requirement.site.expr;
-                    return switch (self.bodies().expr(expr).data) {
-                        .numeral => |numeral| try self.lowerLiteralConversion(expr, .numeral, numeral.plan orelse invariant("a literal literal_requirement's numeral has no conversion plan"), result_ty),
-                        .str_from_quote => |quote| try self.lowerLiteralConversion(expr, .quote, quote.plan orelse invariant("a literal literal_requirement's quote has no conversion plan"), result_ty),
-                        .interpolation => |interpolation| try self.lowerLiteralConversion(expr, .interpolation, interpolation.plan orelse invariant("a literal literal_requirement's interpolation has no conversion plan"), result_ty),
-                        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a literal literal_requirement's literal is not a literal expression"),
+                    const node = literal_requirement.site.node;
+                    // Forwarding can enter an imported scheme whose linked
+                    // worker needed no body index. Reading its literal does.
+                    try self.bodies().demandIndex();
+                    // A custom literal pattern's literal converts at the
+                    // pattern's type.
+                    if (self.bodies().index().nodeKind(node) == .pattern) {
+                        const conversion = self.bodies().literalConversion(node);
+                        const kind: LIR.LiteralRejectionKind = switch (conversion.literal) {
+                            .numeral => .numeral,
+                            .quote => .quote,
+                        };
+                        return try self.lowerLiteralConversion(node, kind, conversion.plan orelse invariant("a literal literal_requirement's pattern literal has no conversion plan"), result_ty);
+                    }
+                    return switch (self.bodies().exprData(@fromBackingInt(node))) {
+                        .numeral => try self.lowerLiteralConversion(node, .numeral, self.bodies().numeralPlan(node) orelse invariant("a literal literal_requirement's numeral has no conversion plan"), result_ty),
+                        .str => try self.lowerLiteralConversion(node, .quote, self.bodies().quotePlan(node) orelse invariant("a literal literal_requirement's quote has no conversion plan"), result_ty),
+                        .interpolation => try self.lowerLiteralConversion(node, .interpolation, self.bodies().dispatchPlan(node) orelse invariant("a literal literal_requirement's interpolation has no conversion plan"), result_ty),
+                        .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a literal literal_requirement's literal is not a literal expression"),
                     };
                 },
                 .node, .use => {
@@ -3974,7 +4430,7 @@ pub const Builder = struct {
                 const node = table.evidenceNode(node_id);
                 const procedure = switch (node.target.kind) {
                     .procedure => |procedure| procedure,
-                    .local_proc, .structural => invariant("a literal argument's edge instantiates no procedure template"),
+                    .local_proc, .structural, .callable_binding => invariant("a literal argument's edge instantiates no procedure template"),
                 };
                 const callee = try self.program.templateRefWorker(procedure.template);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
@@ -3996,7 +4452,7 @@ pub const Builder = struct {
                 return try self.enterWorkerFrame(callee, instance, if (deferred) edge else null);
             },
             .use => |expr| {
-                if (self.view.view.resolved_value_refs.by_checked_expr[@backingInt(expr)].get()) |ref_id| {
+                if (self.view.view.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
                     const record = self.view.view.resolved_value_refs.records[@backingInt(ref_id)];
                     switch (record.ref) {
                         .local_proc => |local| {
@@ -4013,7 +4469,7 @@ pub const Builder = struct {
                                 },
                                 .callable_eval => invariant("a literal argument's edge uses a computed callable"),
                             };
-                            const use_ty = try self.convert(self.bodies().expr(expr).ty);
+                            const use_ty = try self.convert(self.bodies().exprType(expr));
                             self.chain_frame = true;
                             defer self.chain_frame = false;
                             const instance = if (tag == .platform_required_proc)
@@ -4041,7 +4497,7 @@ pub const Builder = struct {
     fn enterWorkerFrame(self: *Builder, callee: WorkerId, instance: CallInstance, deferred_edge: ?checked.LiteralEdge) Allocator.Error![]const checked.LiteralRequirement {
         const target = self.program.worker(callee).*;
         const arena = self.program.arena.allocator();
-        const dicts: []const LocalId = if (instance.deferred_dicts != null or target.dictionary_params.len == 0) &.{} else instance.hidden[instance.bound.len..][0..target.dictionary_params.len];
+        const dicts: []const Word = if (instance.deferred_dicts != null or target.dictionary_params.len == 0) &.{} else instance.hidden[instance.bound.len..][0..target.dictionary_params.len];
         const literals = instance.hidden[instance.bound.len + target.dictionary_params.len ..];
         if (literals.len != target.literal_params) invariant("a call instance's literal arguments differ from its target's literal_requirements");
         const literal_requirements: []const checked.LiteralRequirement = if (target.literal_scopes.len == 0) &.{} else target.literal_scopes[0];
@@ -4055,8 +4511,8 @@ pub const Builder = struct {
         self.env = .{ .module = target.module, .vars = target.scheme_vars, .bound = instance.bound };
         try self.alias_scopes.append(self.allocator, .{
             .params = target.dictionary_params,
-            .dicts = try arena.dupe(LocalId, dicts),
-            .literals = if (deferred == null) try arena.dupe(LocalId, literals) else &.{},
+            .dicts = try arena.dupe(Word, dicts),
+            .literals = if (deferred == null) try arena.dupe(Word, literals) else &.{},
             .literal_requirements = literal_requirements,
             .deferred = deferred,
             .deferred_dicts = instance.deferred_dicts,
@@ -4068,7 +4524,7 @@ pub const Builder = struct {
     /// Enter the scope of exact procedure alias `alias` as the site `site`
     /// of this body's module instantiates it. Its literal requirements are
     /// those its forwarded lookup's scheme gives it.
-    fn enterAliasFrame(self: *Builder, alias: AliasCallee, site: CheckedExprId) Allocator.Error![]const checked.LiteralRequirement {
+    fn enterAliasFrame(self: *Builder, alias: AliasCallee, site: ExprId) Allocator.Error![]const checked.LiteralRequirement {
         const alias_step = self.callableEvalAliasStep(alias.module, alias.template);
         const bound = try self.aliasScopeBound(alias_step, self.siteSubstitution(site), try self.exprType(site));
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(site) orelse &.{};
@@ -4093,7 +4549,7 @@ pub const Builder = struct {
 
     /// Enter the frame of the generalized local scope `scope_id` of this
     /// body's module as the site `site` instantiates it.
-    fn enterLocalScopeFrame(self: *Builder, scope_id: checked.DispatchScopeId, site: CheckedExprId) Allocator.Error![]const checked.LiteralRequirement {
+    fn enterLocalScopeFrame(self: *Builder, scope_id: checked.DispatchScopeId, site: ExprId) Allocator.Error![]const checked.LiteralRequirement {
         const arena = self.program.arena.allocator();
         const scheme = try self.localScheme(scope_id);
         const subst = self.siteSubstitution(site);
@@ -4144,24 +4600,24 @@ pub const Builder = struct {
         });
     }
 
-    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
-        switch (self.view.view.compile_time_roots.root(root_id).payload) {
-            .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.exprType(expr_id), .root = root_id } }),
+    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, at: LiteralAt, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+        switch (self.view.view.compile_time_roots.root(root_id).payloadFor(.boxy)) {
+            .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.literalType(at), .root = root_id } }),
             // The literal converts where it is reached: as the root's own
             // evaluation, or at a site no evaluation converts (a literal in
             // a branch). Any other body of the compile-time program
             // evaluating the root reads the value from the root's slot once
             // it completes.
             .pending, .unevaluated => if ((self.own_root != null and self.own_root.? == root_id) or !self.program.evaluatesRoot(self.module, root_id))
-                try self.lowerLiteralConversion(expr_id, kind, plan_id orelse invariant("a literal with a conversion root has no conversion plan"), try self.exprType(expr_id))
+                try self.lowerLiteralConversion(at.node(), kind, plan_id orelse invariant("a literal with a conversion root has no conversion plan"), try self.literalType(at))
             else
-                try self.pendingValueRead(self.module, root_id, try self.exprType(expr_id)),
+                try self.pendingValueRead(self.module, root_id, try self.literalType(at)),
             inline .fn_value, .discarded, .expect, .runtime => |_, tag| invariantFmt("a literal conversion root holding {s} reached runtime lowering", .{@tagName(tag)}),
         }
     }
 
-    pub fn lowerInterpolation(self: *Builder, expr_id: CheckedExprId, interpolation: checked.CheckedInterpolation) Allocator.Error!void {
-        const plan_id = interpolation.plan orelse invariant("an interpolation has no checked conversion plan");
+    pub fn lowerInterpolation(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        const plan_id = self.bodies().dispatchPlan(@backingInt(expr_id)) orelse invariant("an interpolation has no checked conversion plan");
         const plan = self.dispatchPlan(plan_id);
         switch (plan.resolution) {
             .direct_closed, .direct_parametric, .evidence_dependent => {},
@@ -4183,8 +4639,13 @@ pub const Builder = struct {
             .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => false,
         };
         if (dispatcher_is_str) {
-            try self.push(.{ .finish_str_from_parts = .{ .expr = expr_id, .count = @intCast(interpolation.values.len), .result = try self.exprType(expr_id) } });
-            try self.pushExprsReversed(interpolation.values);
+            const interpolation = self.bodies().exprData(expr_id).interpolation;
+            try self.push(.{ .finish_str_from_parts = .{ .expr = expr_id, .count = @intCast(interpolation.valueCount()), .result = try self.exprType(expr_id) } });
+            var index = interpolation.valueCount();
+            while (index > 0) {
+                index -= 1;
+                try self.push(.{ .expr = interpolation.value(index) });
+            }
             return;
         }
         const try_ty = switch (self.program.store.get(try self.dispatchCallable(plan.resolution, plan.callable_ty))) {
@@ -4197,8 +4658,8 @@ pub const Builder = struct {
         const assembler_ty = try self.tryOkPayload(try_ty);
         try self.push(.{ .finish_interpolation = expr_id });
         switch (plan.resolution) {
-            .direct_closed => try self.lowerLiteralConversion(expr_id, .interpolation, plan_id, assembler_ty),
-            .direct_parametric, .evidence_dependent => try self.lowerInstanceLiteral(expr_id, assembler_ty),
+            .direct_closed => try self.lowerLiteralConversion(@backingInt(expr_id), .interpolation, plan_id, assembler_ty),
+            .direct_parametric, .evidence_dependent => try self.lowerInstanceLiteral(@backingInt(expr_id), assembler_ty),
             .checked_error, .@"unreachable", .structural, .direct_pending => unreachable, // handled above
         }
     }
@@ -4217,14 +4678,18 @@ pub const Builder = struct {
         invariant("a conversion's Try type has no Ok payload");
     }
 
-    pub fn finishInterpolation(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn finishInterpolation(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const assembler = self.popValue();
-        const interpolation = self.bodies().expr(expr_id).data.interpolation;
-        const assembler_ty = try self.convert(interpolation.assembler_ty);
-        const plan = interpolation.iter_plan orelse invariant("an interpolation has no checked iterator plan");
+        const interpolation = self.bodies().exprData(expr_id).interpolation;
+        const assembler_ty = try self.convert(self.bodies().interpolationAssemblerType(expr_id));
+        const plan = self.bodies().iteratorForPlan(@backingInt(expr_id)) orelse invariant("an interpolation has no checked iterator plan");
         // The values are lowered after the assembler, in order.
-        try self.push(.{ .finish_interpolation_call = .{ .assembler = assembler, .assembler_ty = assembler_ty, .plan = plan, .count = @intCast(interpolation.values.len), .result = try self.exprType(expr_id) } });
-        try self.pushExprsReversed(interpolation.values);
+        try self.push(.{ .finish_interpolation_call = .{ .assembler = assembler, .assembler_ty = assembler_ty, .plan = plan, .count = @intCast(interpolation.valueCount()), .result = try self.exprType(expr_id) } });
+        var index = interpolation.valueCount();
+        while (index > 0) {
+            index -= 1;
+            try self.push(.{ .expr = interpolation.value(index) });
+        }
     }
 
     /// The `Numeral` value `from_numeral` receives for `literal`, at the
@@ -4295,18 +4760,17 @@ pub const Builder = struct {
         return self.view.view.resolved_value_refs.records[@backingInt(id)];
     }
 
-    pub fn lowerLookupLocal(self: *Builder, expr_id: CheckedExprId, pattern: CheckedPatternId, resolved: ?checked.ResolvedValueRefId) Allocator.Error!void {
+    pub fn lowerLookupLocal(self: *Builder, expr_id: ExprId, pattern: PatternId, resolved: ?checked.ResolvedValueRefId) Allocator.Error!void {
         if (resolved) |id| return try self.lowerResolvedValue(expr_id, self.resolvedRef(id).ref);
-        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse invariant("a local lookup named a pattern without a binder");
-        try self.pushValue(self.binders.get(binder) orelse invariant("a local lookup named a binder this body never bound"));
+        try self.pushValue(self.binders.get(pattern) orelse invariant("a local lookup named a binder this body never bound"));
     }
 
-    pub fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
+    pub fn lowerLookupExternal(self: *Builder, expr_id: ExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
         try self.lowerResolvedValue(expr_id, self.resolvedRef(resolved).ref);
     }
 
     /// The value a lookup `expr_id` resolved to `ref` reads.
-    fn lowerResolvedValue(self: *Builder, expr_id: CheckedExprId, ref: checked.ResolvedValueRef) Allocator.Error!void {
+    fn lowerResolvedValue(self: *Builder, expr_id: ExprId, ref: checked.ResolvedValueRef) Allocator.Error!void {
         switch (ref) {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => |binding| {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
@@ -4338,7 +4802,7 @@ pub const Builder = struct {
     /// lowered in the alias's scope as this use instantiates it (its
     /// variables bound to the use's types, its dictionaries to the use's
     /// evidence).
-    fn lowerAliasUse(self: *Builder, expr_id: CheckedExprId, local: checked.LocalProcedureBinding) Allocator.Error!void {
+    fn lowerAliasUse(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding) Allocator.Error!void {
         if (self.binders.get(local.binder)) |value| return try self.pushValue(value);
         const scope_id = local.dispatch_scope orelse invariant("an alias without a generalized scheme is bound where it is declared");
         const scheme = try self.localScheme(scope_id);
@@ -4348,7 +4812,7 @@ pub const Builder = struct {
         defer self.allocator.free(generic_bound);
         for (generic_bound[0..scheme.scheme_vars.len], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(outer_count + index));
         for (generic_bound[scheme.scheme_vars.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        const alias_ty = self.bodies().expr(local.expr).ty;
+        const alias_ty = self.bodies().exprType(local.expr);
         const generic_fn = try self.program.converter().convert(self.module, alias_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
         const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.exprType(expr_id) }}, outer_count + scheme.scheme_vars.len);
         defer self.allocator.free(related);
@@ -4364,68 +4828,180 @@ pub const Builder = struct {
                 try self.program.converter().sealedScheme(self.module, variable);
         @memcpy(bound[scheme.scheme_vars.len..], self.env.bound);
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
-        const dicts = try self.program.arena.allocator().alloc(LocalId, scheme.dictionaries.len);
+        const dicts = try self.program.arena.allocator().alloc(Word, scheme.dictionaries.len);
         const context: ParamContext = .{ .module = self.module, .params = self.scopeParams(scope_id), .env = .{ .module = self.module, .vars = vars, .bound = bound } };
         for (scheme.dictionaries, dicts) |param_index, *dict| {
             if (param_index >= evidence.len) invariant("an alias use's evidence does not cover its dictionaries");
             dict.* = try self.paramDictionary(evidence, param_index, context);
         }
-        const literals = try self.program.arena.allocator().alloc(LocalId, scheme.literal_requirements.len);
+        const literals = try self.program.arena.allocator().alloc(Word, scheme.literal_requirements.len);
         const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = expr_id });
         if (literal_args.len != literals.len) invariant("an alias use has no literal arguments for its scheme's literal_requirements");
         for (literal_args, literals) |source, *word| word.* = try self.literalArg(source);
         try self.alias_scopes.append(self.allocator, .{ .params = scheme.dictionaries, .dicts = dicts, .literals = literals, .literal_requirements = scheme.literal_requirements, .saved_env = self.env });
         self.env = .{ .module = self.module, .vars = vars, .bound = bound };
         try self.push(.leave_alias_scope);
-        try self.push(.{ .expr = local.expr });
+        try self.push(.{ .own_expr = local.expr });
     }
 
     /// The function value a use `expr_id` of a local procedure denotes. A
     /// generalized local procedure whose calls pass its own scheme's
     /// instantiation is, as a value, instantiated where it is used: the
     /// value captures the use's descriptors and dictionaries of its scheme.
-    pub fn localProcUseValue(self: *Builder, expr_id: CheckedExprId, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
+    pub fn localProcUseValue(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
         // A use checking recorded no evidence for (one inside a rejected
         // expression, evaluated only for its effects) resolves the
         // procedure's dictionaries from its types.
-        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id }, self.siteSubstitution(expr_id));
+        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id }, self.siteSubstitution(expr_id), null);
     }
+
+    /// What the function value of a local procedure at one use packs: the
+    /// procedure's worker, the values it captures and their types, then the
+    /// hidden words it captures (descriptors, then dictionaries and literal
+    /// arguments). A generalized procedure instantiated at the use has the
+    /// procedure's type there, `own_ty`, which the use's own type `use_ty`
+    /// may store differently.
+    pub const LocalProcClosure = struct {
+        callee: WorkerId,
+        values: []const LocalId,
+        capture_types: []const TypeId,
+        descs: []const Word,
+        words: []const Word,
+        adapt: ?struct { own_ty: TypeId, use_ty: TypeId } = null,
+        /// Static methods capture only other checked local procedures. Their
+        /// edges are traversed after reserving the callable, never as LIR values.
+        static_scope: ?LocalProcScope = null,
+
+        /// The callee's inputs: the descriptors, then the other words.
+        /// Caller frees.
+        pub fn inputs(self: LocalProcClosure, allocator: Allocator) Allocator.Error![]Word {
+            return try std.mem.concat(allocator, Word, &.{ self.descs, self.words });
+        }
+    };
+
+    const StaticCallable = struct {
+        closure: LocalProcClosure,
+        inputs: []const Word,
+        recipe: Tables.RecipeId,
+    };
 
     /// The function value of local procedure `local` used at the function
     /// type `use_ty`, whose own scheme's dictionaries `evidence` supplies
-    /// (or, when null, each dispatcher's type resolves).
-    /// `localProcInstanceValue` resolving the procedure's dictionaries from
-    /// its types.
-    fn localProcInstanceValueAt(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId) Allocator.Error!LocalId {
-        return try self.localProcInstanceValue(local, use_ty, null, null, &.{});
+    /// (or, when null, each dispatcher's type resolves). `edge` is the
+    /// checked edge the use is (design.md "Literal Arguments"), whose literal
+    /// arguments the procedure's own scheme's literal requirements take;
+    /// null derives them from the use's types, as the dictionaries are
+    /// derived when `evidence` is null. `subst` is the use's checked
+    /// instantiation of the procedure's scheme, when it recorded one, for
+    /// the variables its type does not relate. `site` owns the evidence and
+    /// substitution when a dispatch selects an imported body-local method.
+    pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView) Allocator.Error!LocalId {
+        const closure = (try self.localProcClosureAt(local, use_ty, evidence, edge, subst, site, false)) orelse return try self.localProcValue(local);
+        const inputs = try closure.inputs(self.allocator);
+        defer self.allocator.free(inputs);
+        const packed_closure = if (try self.allClosed(closure.capture_types))
+            try self.packClosure(closure.callee, closure.values, closure.capture_types, inputs)
+        else
+            try self.packDynamicClosure(closure.callee, closure.values, closure.capture_types, inputs);
+        const adapt = closure.adapt orelse return packed_closure;
+        return try self.adaptValue(packed_closure, adapt.own_ty, adapt.use_ty);
     }
 
-    /// `edge` is the checked edge the use is (design.md "Literal
-    /// Arguments"), whose literal arguments the procedure's own scheme's
-    /// literal requirements take; null derives them from the use's types, as the
-    /// dictionaries are derived when `evidence` is null. `subst` is the use's
-    /// checked instantiation of the procedure's scheme, when it recorded one,
-    /// for the variables its type does not relate.
-    pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId) Allocator.Error!LocalId {
-        const lambda_expr = switch (self.bodies().expr(local.expr).data) {
+    /// The function value of local procedure `local` at the function type
+    /// `use_ty` as an immortal callable: a method declared in a function
+    /// body, which captures no values, as a descriptor's override or a
+    /// dictionary holds it. `localProcInstanceValue` gives its arguments.
+    pub fn localProcWord(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView) Allocator.Error!Word {
+        const closure = (try self.localProcClosureAt(local, use_ty, evidence, edge, subst, site, true)) orelse try self.localProcClosureWithCaptures(local, true);
+        return .{ .recipe = try self.immortalRecipe(closure) };
+    }
+
+    /// The immortal callable recipe of `closure`, adapted to its use's type.
+    fn immortalRecipe(self: *Builder, closure: LocalProcClosure) Allocator.Error!Tables.RecipeId {
+        if (closure.values.len != 0) invariant("an immortal function value captures a value, which methods never do");
+        const scope = closure.static_scope orelse invariant("a static callable has no producer capture context");
+        const arena = self.program.arena.allocator();
+        const inputs = try closure.inputs(arena);
+        for (self.static_callables.items) |active| {
+            if (active.closure.callee != closure.callee or active.closure.static_scope.?.declaration != scope.declaration or
+                !std.meta.eql(active.closure.adapt, closure.adapt) or !std.mem.eql(TypeId, active.closure.capture_types, closure.capture_types) or
+                active.inputs.len != inputs.len) continue;
+            const same_inputs = for (active.inputs, inputs) |a, b| {
+                if (!std.meta.eql(a, b)) break false;
+            } else true;
+            if (same_inputs) return active.recipe;
+        }
+        const reserved = try self.recipes.reserve();
+        try self.static_callables.append(self.allocator, .{ .closure = closure, .inputs = inputs, .recipe = reserved });
+        defer _ = self.static_callables.pop();
+        const worker = self.program.worker(closure.callee).*;
+        const has_table = !self.program.perCall(closure.callee) and inputs.len != 0;
+        const captures = try arena.alloc(Word, worker.captures.len + @intFromBool(has_table));
+        for (worker.captures, closure.capture_types, captures[0..worker.captures.len]) |capture, ty, *word| {
+            const local = (try self.program.localProcBinding(self.module, capture.pattern)) orelse
+                invariant("an immortal local method captures invocation-specific data rather than a local procedure");
+            const use_ty = try self.program.substitute(self.allocator, ty, scope.bound);
+            word.* = try self.localProcWord(local, use_ty, null, null, &.{}, null);
+        }
+        if (has_table) captures[worker.captures.len] = try self.tableWord(closure.callee, inputs);
+        const callable = try self.recipes.intern(.{ .callable = .{ .entry = closure.callee, .captures = captures } });
+        const result = if (closure.adapt) |adapt| switch (try self.adaptDictionary(.{ .recipe = callable }, adapt.own_ty, adapt.use_ty)) {
+            .recipe => |id| id,
+            .static => invariant("an adapted recipe became static"),
+        } else callable;
+        self.recipes.setSame(reserved, result);
+        return reserved;
+    }
+
+    /// `localProcInstanceValue`'s closure for a generalized local procedure
+    /// whose calls pass its own scheme's instantiation, instantiated at the
+    /// use; null for any other local procedure, whose function value is the
+    /// one its declaration bound (`localProcClosure`).
+    fn localProcClosureAt(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView, comptime static_captures: bool) Allocator.Error!?LocalProcClosure {
+        const arena = self.program.arena.allocator();
+        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
-        const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) orelse
-            return try self.localProcValue(local);
+        const scope_id = (try self.program.localScope(self.module, lambda_expr)) orelse return null;
         var scheme = try self.localScheme(scope_id);
-        if (!scheme.per_call or (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0)) return try self.localProcValue(local);
-        const scope_worker, const per_call = try self.localProcWorker(local);
+        if (!scheme.per_call or scheme.isEmpty()) return null;
+        const scope = try self.localProcWorker(local, try self.localProcDeclaration(lambda_expr));
+        const scope_worker = scope.declaring;
         const declaring = self.program.worker(scope_worker).*;
-        const per_call_worker = self.program.worker(per_call).*;
+        const per_call_worker = self.program.worker(scope.worker).*;
         const outer_count = declaring.scheme_vars.len;
+        // Built from a declaration context, the procedure's types are read in
+        // its callee's scope, whose dictionaries the evidence of its scheme
+        // names, and its function value is a dictionary's method, an
+        // immortal composition.
+        const saved_env = self.env;
+        const saved_foreign = self.foreign_scopes;
+        const saved_scopes = self.alias_scopes.items.len;
+        defer {
+            self.env = saved_env;
+            self.foreign_scopes = saved_foreign;
+            self.alias_scopes.shrinkRetainingCapacity(saved_scopes);
+        }
+        if (scope.declaration != null) {
+            self.env = .{ .module = self.module, .vars = declaring.scheme_vars, .bound = scope.bound };
+            try self.alias_scopes.append(self.allocator, .{
+                .params = declaring.dictionary_params,
+                .dicts = scope.dicts,
+                .literals = scope.literals,
+                .literal_requirements = if (declaring.literal_scopes.len == 0) &.{} else declaring.literal_scopes[0],
+                .declaration = scope.declaration,
+                .saved_env = self.env,
+            });
+            self.foreign_scopes = saved_scopes;
+        }
         const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ declaring.scheme_vars, scheme.scheme_vars });
         defer self.allocator.free(vars);
         const generic_bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(generic_bound);
         for (generic_bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        const lambda_ty = self.bodies().expr(lambda_expr).ty;
+        const lambda_ty = self.bodies().exprType(lambda_expr);
         const generic_fn = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
         // The procedure's own variables take the types the use's
         // instantiation gives them.
@@ -4434,80 +5010,70 @@ pub const Builder = struct {
         // A variable the use's type does not reach, like the type of a
         // numeral only the body's methods fix, takes the type those methods
         // give it.
-        for (related[0..outer_count], self.env.bound[0..outer_count]) |*slot, ty| {
+        for (related[0..outer_count], scope.bound) |*slot, ty| {
             if (slot.* == null) slot.* = ty;
         }
         try self.program.relateThroughRequirements(self.module, vars, scheme.params, related);
         scheme.per_call = false;
         const callee = try self.program.lambdaWorker(scope_worker, lambda_expr, per_call_worker.captures, per_call_worker.capture_types, generic_fn, scheme);
-        const values = try self.allocator.alloc(LocalId, per_call_worker.captures.len);
-        defer self.allocator.free(values);
-        const declared = self.declared_captures.get(lambda_expr);
-        for (per_call_worker.captures, values, 0..) |capture, *value, index| {
-            value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
-        }
-        var declaring_dicts: usize = 0;
-        for (declaring.dict_scopes) |dict_scope| declaring_dicts += dict_scope.len;
-        const descs = try self.allocator.alloc(LocalId, vars.len);
-        defer self.allocator.free(descs);
-        @memcpy(descs[0..outer_count], self.var_descs[0..outer_count]);
-        const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
-        defer self.allocator.free(own_types);
-        for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
-            own_ty.* = ty orelse if (index < subst.len and self.view.types().payload(subst[index]) != .err)
-                try self.convert(subst[index])
-            else
-                try self.program.converter().sealedScheme(self.module, variable);
-        }
-        try self.resolveOwnKinds(lambda_ty, scheme, own_types);
-        for (descs[outer_count..], own_types) |*desc, own_ty| desc.* = try self.descOf(own_ty);
-        const dicts = try self.allocator.alloc(LocalId, scheme.dictionaries.len + declaring_dicts);
-        defer self.allocator.free(dicts);
-        const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
-        for (scheme.dictionaries, dicts[0..scheme.dictionaries.len]) |param_index, *dict| {
-            if (evidence) |entries| {
-                if (param_index >= entries.len) invariant("a local procedure use's evidence does not cover its dictionaries");
-                dict.* = try self.paramDictionary(entries, param_index, context);
-            } else {
-                const param = context.params[param_index];
-                const converter = self.program.converter();
-                dict.* = try self.dictionaryFromType(.{
-                    .module = context.module,
-                    .method = param.method,
-                    .structural = param.structural,
-                    .dispatcher = try converter.convert(context.module, param.dispatcher_ty, context.env),
-                    .callable = try converter.convert(context.module, param.callable_ty, context.env),
-                });
+        const values = try arena.alloc(LocalId, if (static_captures) 0 else per_call_worker.captures.len);
+        if (!static_captures) {
+            const declared = self.declared_captures.get(lambda_expr);
+            for (per_call_worker.captures, values, 0..) |capture, *value, index| {
+                value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
             }
         }
-        @memcpy(dicts[scheme.dictionaries.len..], self.dict_locals[self.dict_locals.len - declaring_dicts ..]);
+        const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
+        defer self.allocator.free(own_types);
+        const declaring_module = self.module;
+        const declaring_view = self.view;
+        for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
+            own_ty.* = ty orelse if (index < subst.len and (site orelse declaring_view).types().payload(subst[index]) != .err) blk: {
+                self.enterSiteView(site);
+                defer self.leaveSiteView(declaring_module, declaring_view);
+                break :blk try self.convert(subst[index]);
+            } else try self.program.converter().sealedScheme(self.module, variable);
+        }
+        try self.resolveOwnKinds(lambda_ty, scheme, own_types);
+        const descs = try std.mem.concat(arena, Word, &.{ scope.descs, try self.descWords(own_types) });
+        const dicts = try arena.alloc(Word, scheme.dictionaries.len);
+        const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
+        for (scheme.dictionaries, dicts) |param_index, *dict| {
+            if (evidence) |entries| {
+                if (param_index >= entries.len) invariant("a local procedure use's evidence does not cover its dictionaries");
+                self.enterSiteView(site);
+                defer self.leaveSiteView(declaring_module, declaring_view);
+                dict.* = try self.paramDictionary(entries, param_index, context);
+            } else {
+                dict.* = try self.derivedParamDictionary(param_index, context);
+            }
+        }
         // The procedure's own scheme's literal arguments, then the
         // declaring scope's.
-        var declaring_literals: usize = 0;
-        for (declaring.literal_scopes) |literal_scope| declaring_literals += literal_scope.len;
-        const literals = try self.allocator.alloc(LocalId, scheme.literal_requirements.len + declaring_literals);
-        defer self.allocator.free(literals);
+        const literals = try arena.alloc(Word, scheme.literal_requirements.len);
         if (edge) |use_edge| {
-            try self.fillLiteralArgs(null, use_edge, literals[0..scheme.literal_requirements.len]);
+            try self.fillLiteralArgs(null, use_edge, literals);
         } else {
-            const bound_all = try std.mem.concat(self.allocator, TypeId, &.{ self.env.bound[0..outer_count], own_types });
+            const bound_all = try std.mem.concat(self.allocator, TypeId, &.{ scope.bound, own_types });
             defer self.allocator.free(bound_all);
-            try self.derivedLiteralArgs(callee, bound_all, literals[0..scheme.literal_requirements.len]);
+            try self.derivedLiteralArgs(callee, bound_all, literals);
         }
-        @memcpy(literals[scheme.literal_requirements.len..], self.literal_locals[self.literal_locals.len - declaring_literals ..]);
-        const words = try std.mem.concat(self.allocator, LocalId, &.{ dicts, literals });
-        defer self.allocator.free(words);
-        const closure = if (try self.allClosed(per_call_worker.capture_types))
-            try self.packClosure(callee, values, per_call_worker.capture_types, descs, words)
-        else
-            try self.packDynamicClosure(callee, values, per_call_worker.capture_types, descs, words);
+        const words = try std.mem.concat(arena, Word, &.{ dicts, scope.dicts, literals, scope.literals });
         // The procedure's type at this use, in this worker's variables.
         const use_bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(use_bound);
-        for (use_bound[0..outer_count], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
+        @memcpy(use_bound[0..outer_count], scope.bound);
         @memcpy(use_bound[outer_count..], own_types);
         const procedure_ty = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = use_bound });
-        return try self.adaptValue(closure, procedure_ty, use_ty);
+        return .{
+            .callee = callee,
+            .values = values,
+            .capture_types = per_call_worker.capture_types,
+            .descs = descs,
+            .words = words,
+            .adapt = .{ .own_ty = procedure_ty, .use_ty = use_ty },
+            .static_scope = if (static_captures) scope else null,
+        };
     }
 
     /// The function value of the local procedure a dispatch edge `node`
@@ -4515,49 +5081,96 @@ pub const Builder = struct {
     /// in a function body is a local procedure of that body, which this
     /// body is, or is nested in.
     pub fn localMethodValue(self: *Builder, node: static_dispatch.EvidenceNode, fn_ty: TypeId) Allocator.Error!LocalId {
-        const target = switch (node.target.kind) {
-            .local_proc => |target| target,
-            .procedure, .structural => invariant("a local method value names a procedure that is not local"),
-        };
-        if (self.program.moduleByIdx(node.target.module_idx).index != self.module) invariant("a method declared in a function body is dispatched outside its module");
-        const local: checked.LocalProcedureBinding = .{ .binder = target.binder, .expr = target.expr, .dispatch_scope = target.dispatch_scope };
-        const table = self.view.view.static_dispatch_plans;
-        const evidence: ?[]const static_dispatch.CheckedEvidence = switch (node.nested) {
-            .resolved => table.nestedEvidence(node),
-            .from_callable => null,
-            .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
-        };
-        const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-        return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst);
+        const method = try self.localMethod(node);
+        const site = self.view;
+        const declaring = self.program.moduleByIdx(node.target.module_idx);
+        self.enterSiteView(declaring);
+        defer self.leaveSiteView(site.index, site);
+        return try self.localProcInstanceValue(method.local, fn_ty, method.evidence, null, method.subst, site);
     }
 
-    /// The worker that declares local procedure `local` (this worker or one
-    /// it is nested in) and the procedure's worker there. A procedure whose
-    /// declaring body never ran here (it ran at compile time, and a closure
-    /// it built was stored) gets its worker now.
-    pub fn localProcWorker(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!struct { WorkerId, WorkerId } {
-        const closure_expr = self.bodies().expr(local.expr);
-        const lambda_expr = switch (closure_expr.data) {
-            .lambda => local.expr,
-            .closure => |closure| closure.lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+    /// `localMethodValue` as an immortal callable, which a dictionary holds.
+    pub fn localMethodWord(self: *Builder, node: static_dispatch.EvidenceNode, fn_ty: TypeId) Allocator.Error!Word {
+        const method = try self.localMethod(node);
+        const site = self.view;
+        const declaring = self.program.moduleByIdx(node.target.module_idx);
+        self.enterSiteView(declaring);
+        defer self.leaveSiteView(site.index, site);
+        return try self.localProcWord(method.local, fn_ty, method.evidence, null, method.subst, site);
+    }
+
+    /// The local procedure a dispatch edge `node` selected, and the edge's
+    /// evidence and substitution of its scheme.
+    fn localMethod(self: *Builder, node: static_dispatch.EvidenceNode) Allocator.Error!struct { local: checked.LocalProcedureBinding, evidence: ?[]const static_dispatch.CheckedEvidence, subst: []const checked.CheckedTypeId } {
+        const target = switch (node.target.kind) {
+            .local_proc => |target| target,
+            .procedure, .structural, .callable_binding => invariant("a local method value names a procedure that is not local"),
         };
-        const captures = try self.program.siteCaptures(self.module, local.expr);
-        var scope_worker = self.worker_id;
-        while (true) {
-            if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| return .{ scope_worker, id };
-            switch (self.program.worker(scope_worker).key) {
-                .lambda => |key| scope_worker = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => break,
+        const table = self.view.view.static_dispatch_plans;
+        return .{
+            .local = .{ .binder = target.binder, .expr = target.expr, .dispatch_scope = target.dispatch_scope },
+            .evidence = switch (node.nested) {
+                .resolved => table.nestedEvidence(node),
+                .from_callable => null,
+                .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
+            },
+            .subst = table.site_substitutions[node.subst.start..][0..node.subst.len],
+        };
+    }
+
+    /// Read in `site`'s view, when there is one (`localProcInstanceValue`).
+    fn enterSiteView(self: *Builder, site: ?*const types.ModuleView) void {
+        const view = site orelse return;
+        self.module = view.index;
+        self.view = view;
+    }
+
+    fn leaveSiteView(self: *Builder, module: ModuleIndex, view: *const types.ModuleView) void {
+        self.module = module;
+        self.view = view;
+    }
+
+    /// The declaration context a function value of the local procedure
+    /// whose lambda is `lambda_expr` is built from: the innermost one being
+    /// built whose callee is the template owning the procedure's site. There
+    /// is none when this body is, or is nested in, that template's body: a
+    /// local procedure named in this body is then this body's own, even
+    /// while it builds the dictionaries of a call of its own procedure.
+    fn localProcDeclaration(self: *Builder, lambda_expr: ExprId) Allocator.Error!?*Declaration {
+        if (self.declaration == null) return null;
+        const owner = (try self.localProcOwner(lambda_expr)) orelse return null;
+        var chain = self.worker_id;
+        while (chain != owner) {
+            switch (self.program.worker(chain).key) {
+                .lambda => |key| chain = key.outer,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => return self.declarationOf(owner),
             }
         }
-        // No body of the chain declared it: the chain is a stored closure
-        // restored in its procedure's scope, and the procedure is declared
-        // in that scope's body, which ran at compile time.
-        const scope = self.program.worker(scope_worker).*;
-        const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id| blk: {
+        return null;
+    }
+
+    /// The worker of the procedure template owning the site of the local
+    /// procedure whose lambda is `lambda_expr`, when it has one.
+    fn localProcOwner(self: *Builder, lambda_expr: ExprId) Allocator.Error!?WorkerId {
+        const site_index = (try self.program.nestedProcSite(self.module, lambda_expr)) orelse
+            invariant("a local procedure has no nested procedure site");
+        const owner = switch (self.view.view.nested_proc_sites.sites[site_index].owner) {
+            .template => |ref| ref,
+            .default_root => return null,
+        };
+        const owner_module = self.program.moduleByKey(.{ .bytes = owner.artifact.bytes }).index;
+        return self.program.worker_ids.get(.{ .template = .{ .module = owner_module, .template = owner.template } });
+    }
+
+    /// The worker of local procedure `lambda_expr` (of closure expression
+    /// `closure_expr`, capturing `captures`) declared in `outer`'s body,
+    /// created now when that body was never lowered here: it ran at compile
+    /// time, and a closure it built was stored.
+    fn declaredLambdaWorker(self: *Builder, outer: WorkerId, lambda_expr: ExprId, closure_ty: checked.CheckedTypeId, captures: []const checked.CheckedCapture) Allocator.Error!WorkerId {
+        const scope = self.program.worker(outer).*;
+        const own: ?lower.LocalScheme = if (try self.program.localScope(self.module, lambda_expr)) |scope_id| blk: {
             const scheme = try self.localScheme(scope_id);
-            break :blk if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme;
+            break :blk if (scheme.isEmpty()) null else scheme;
         } else null;
         const vars = if (own) |scheme| try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ scope.scheme_vars, scheme.scheme_vars }) else try self.allocator.dupe(checked.CheckedTypeId, scope.scheme_vars);
         defer self.allocator.free(vars);
@@ -4565,29 +5178,110 @@ pub const Builder = struct {
         defer self.allocator.free(bound);
         for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
         const env: types.Env = .{ .module = self.module, .vars = vars, .bound = bound };
-        const fn_ty = try self.program.converter().convert(self.module, closure_expr.ty, env);
+        const fn_ty = try self.program.converter().convert(self.module, closure_ty, env);
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
-        for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, self.bodies().pattern(capture.pattern).ty, env));
-        return .{ scope_worker, try self.program.lambdaWorker(scope_worker, lambda_expr, captures, capture_types, fn_ty, own) };
+        for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, self.bodies().patternType(capture.pattern), env));
+        return try self.program.lambdaWorker(outer, lambda_expr, captures, capture_types, fn_ty, own);
+    }
+
+    /// The scope a function value of local procedure `local` is built in.
+    /// From `declaration`, it is the context's callee's; otherwise it is the
+    /// worker of this worker's chain that declares the procedure, whose
+    /// body this body is or is nested in.
+    fn localProcWorker(self: *Builder, local: checked.LocalProcedureBinding, declaration: ?*Declaration) Allocator.Error!LocalProcScope {
+        const closure_expr = self.bodies().expr(local.expr);
+        const lambda_expr = switch (closure_expr.data) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+        };
+        const captures = try self.program.siteCaptures(self.module, local.expr);
+        const context = declaration orelse {
+            var scope_worker = self.worker_id;
+            const found = while (true) {
+                if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| break id;
+                switch (self.program.worker(scope_worker).key) {
+                    .lambda => |key| scope_worker = key.outer,
+                    // The chain's procedure declares it but never lowered
+                    // its declaration here: the chain is a stored closure
+                    // of that procedure, whose body ran at compile time.
+                    .template => if (try self.localProcOwner(lambda_expr) == scope_worker)
+                        break try self.declaredLambdaWorker(scope_worker, lambda_expr, closure_expr.ty, captures)
+                    else
+                        invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
+                    .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
+                }
+            };
+            const declaring = self.program.worker(scope_worker).*;
+            var declaring_dicts: usize = 0;
+            for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
+            var declaring_literals: usize = 0;
+            for (declaring.literal_scopes) |scope| declaring_literals += scope.len;
+            const words = try self.dictLiteralInputWords(self.dict_locals.len - declaring_dicts, self.literal_locals.len - declaring_literals);
+            return .{
+                .declaring = scope_worker,
+                .worker = found,
+                .bound = self.env.bound[0..declaring.scheme_vars.len],
+                .descs = try self.descInputWords(0, declaring.scheme_vars.len),
+                .dicts = words[0..declaring_dicts],
+                .literals = words[declaring_dicts..],
+                .declaration = null,
+            };
+        };
+        // A procedure built from a declaration context is a method of a type
+        // its callee's body declares, outside every generalized local other
+        // than its own scheme's. What it captures are the other local
+        // procedures of that body it refers to (`localProcCaptureValue`).
+        switch (self.view.view.nested_proc_sites.sites[(try self.program.nestedProcSite(self.module, lambda_expr)).?].lexical_scope) {
+            .root => {},
+            .generalized => |scope_id| if (try self.program.localScope(self.module, lambda_expr) != scope_id)
+                invariant("a local procedure built from a declaration context is declared in a generalized local"),
+        }
+        const worker = try self.declaredLambdaWorker(context.worker, lambda_expr, closure_expr.ty, captures);
+        const dicts = try self.program.arena.allocator().alloc(Word, context.dicts.len);
+        for (dicts, 0..) |*dict, slot| dict.* = try self.declarationDictionary(context, slot);
+        const words = try self.declarationWords(context);
+        return .{
+            .declaring = context.worker,
+            .worker = worker,
+            .bound = context.bound,
+            .descs = words.descs,
+            .dicts = dicts,
+            .literals = words.literals,
+            .declaration = context,
+        };
+    }
+
+    /// What a function value of a local procedure captures for `capture`:
+    /// the value its declaration captured (`declared`), when this body
+    /// declared it; built from the declaration context `declaration`, the
+    /// function value of the other local procedure of the callee's body it
+    /// names, built from the same context, since a method of a type declared
+    /// in a function body captures only the local procedures it refers to;
+    /// otherwise the value visible here.
+    fn localProcCaptureValue(self: *Builder, capture: checked.CheckedCapture, declared: ?LocalId, declaration: ?*Declaration) Allocator.Error!LocalId {
+        if (declared) |value| return value;
+        if (declaration != null) {
+            const local = (try self.program.localProcBinding(self.module, capture.pattern)) orelse
+                invariant("a local procedure built from a declaration context captures a value that is not a local procedure");
+            return try self.localProcValue(local);
+        }
+        return self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
     }
 
     /// The type a callable captures `pattern`'s binder at: its value's type
     /// `ty`, or for a recursive value, the slot's.
-    fn capturedType(self: *Builder, pattern: CheckedPatternId, ty: TypeId) Allocator.Error!TypeId {
-        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse
-            invariant("a closure capture named a pattern without a binder");
-        if (!self.bodies().patternBinder(binder).recursive_value) return ty;
+    fn capturedType(self: *Builder, pattern: PatternId, ty: TypeId) Allocator.Error!TypeId {
+        if (!self.bodies().binder(pattern).recursive_value) return ty;
         return try self.recursiveSlotType(ty);
     }
 
     /// What a callable captures for `pattern`'s binder: its value, or for a
     /// recursive value, its slot.
-    fn capturedValue(self: *Builder, pattern: CheckedPatternId) ?LocalId {
-        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse
-            invariant("a closure capture named a pattern without a binder");
-        if (self.bodies().patternBinder(binder).recursive_value) return self.recursive_slots.get(binder);
-        return self.binders.get(binder);
+    fn capturedValue(self: *Builder, pattern: PatternId) ?LocalId {
+        if (self.bodies().binder(pattern).recursive_value) return self.recursive_slots.get(pattern);
+        return self.binders.get(pattern);
     }
 
     /// The slot type of a recursive value of type `ty`: a `Box` of the
@@ -4610,45 +5304,43 @@ pub const Builder = struct {
         const payload = try self.localOf(tuple_ty, .view);
         try self.emitEntry(.{ .dyn = .{ .target = payload, .data = try self.store.addStmtRow(LIR.DynOp, .{ .box_payload_addr = .{ .box = slot, .desc = try self.descOf(tuple_ty) } }), .next = undefined } });
         const value = try self.localOf(value_ty, .view);
-        try self.emitEntry(.{ .dyn = .{ .target = value, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = payload, .desc = try self.descOf(tuple_ty), .field_index = 0 } }), .next = undefined } });
+        try self.emitEntry(.{ .dyn = .{ .target = value, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = payload, .desc = try self.descOf(tuple_ty), .field_index = .{ .immediate = 0 } } }), .next = undefined } });
         return value;
     }
 
     /// The recursive value binders `pattern` binds.
-    fn recursiveBinders(self: *Builder, pattern: CheckedPatternId, out: *std.ArrayList(checked.PatternBinderId)) Allocator.Error!void {
-        var stack: std.ArrayList(CheckedPatternId) = .empty;
+    fn recursiveBinders(self: *Builder, pattern: PatternId, out: *std.ArrayList(BinderId)) Allocator.Error!void {
+        var stack: std.ArrayList(PatternId) = .empty;
         defer stack.deinit(self.allocator);
         try stack.append(self.allocator, pattern);
         while (stack.pop()) |current| {
-            switch (self.bodies().pattern(current).data) {
-                .assign => |binder| if (self.bodies().patternBinder(binder).recursive_value) try out.append(self.allocator, binder),
+            switch (self.bodies().patternData(current)) {
+                .assign => if (self.bodies().binder(current).recursive_value) try out.append(self.allocator, current),
                 .as => |as| {
-                    if (self.bodies().patternBinder(as.binder).recursive_value) try out.append(self.allocator, as.binder);
+                    if (self.bodies().binder(current).recursive_value) try out.append(self.allocator, current);
                     try stack.append(self.allocator, as.pattern);
                 },
                 .applied_tag => |tag| try stack.appendSlice(self.allocator, tag.args),
                 .nominal => |nominal| try stack.append(self.allocator, nominal.backing_pattern),
-                .record_destructure => |destructs| for (destructs) |destruct| switch (destruct.kind) {
-                    .required, .sub_pattern, .rest => |sub| try stack.append(self.allocator, sub),
-                },
+                .record_destructure => |destructs| for (destructs) |destruct| try stack.append(self.allocator, self.bodies().recordDestructPattern(destruct)),
                 .list => |list| {
                     try stack.appendSlice(self.allocator, list.patterns);
                     if (list.rest) |rest| if (rest.pattern) |sub| try stack.append(self.allocator, sub);
                 },
                 .tuple => |items| try stack.appendSlice(self.allocator, items),
-                .pending, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {},
+                .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {},
             }
         }
     }
 
     /// Allocate a zeroed slot for each recursive value binder `pattern`
     /// binds.
-    fn allocRecursiveSlots(self: *Builder, pattern: CheckedPatternId) Allocator.Error!void {
-        var binders: std.ArrayList(checked.PatternBinderId) = .empty;
+    fn allocRecursiveSlots(self: *Builder, pattern: PatternId) Allocator.Error!void {
+        var binders: std.ArrayList(BinderId) = .empty;
         defer binders.deinit(self.allocator);
         try self.recursiveBinders(pattern, &binders);
         for (binders.items) |binder| {
-            const value_ty = try self.patternType(self.bodies().patternBinder(binder).pattern);
+            const value_ty = try self.patternType(binder);
             const slot_ty = try self.recursiveSlotType(value_ty);
             const tuple_ty = try self.program.store.intern(.{ .tuple = &.{value_ty} });
             const slot = try self.localOf(slot_ty, .frame);
@@ -4658,13 +5350,13 @@ pub const Builder = struct {
     }
 
     /// Store each recursive value binder's value, now bound, in its slot.
-    fn fillRecursiveSlots(self: *Builder, pattern: CheckedPatternId) Allocator.Error!void {
-        var binders: std.ArrayList(checked.PatternBinderId) = .empty;
+    fn fillRecursiveSlots(self: *Builder, pattern: PatternId) Allocator.Error!void {
+        var binders: std.ArrayList(BinderId) = .empty;
         defer binders.deinit(self.allocator);
         try self.recursiveBinders(pattern, &binders);
         for (binders.items) |binder| {
             const value = self.binders.get(binder) orelse invariant("a recursive value's binder was not bound by its declaration");
-            const value_ty = try self.patternType(self.bodies().patternBinder(binder).pattern);
+            const value_ty = try self.patternType(binder);
             const tuple_ty = try self.program.store.intern(.{ .tuple = &.{value_ty} });
             const tuple = try self.buildStruct(tuple_ty, &.{value});
             const filled = try self.localOf(try self.recursiveSlotType(value_ty), .frame);
@@ -4679,55 +5371,78 @@ pub const Builder = struct {
 
     /// The function value of a local procedure: the closure its declaration
     /// bound, or, inside the procedure's own body, the same closure rebuilt
-    /// from the captures the body received.
+    /// from the captures the body received (`localProcClosure`).
     pub fn localProcValue(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
-        // The entry chain reads only values the entry chain defines.
-        if (self.binders.get(local.binder)) |value| {
-            if (!self.emitting_entry or self.entry_locals.contains(value)) return value;
+        const declaration = if (local.is_alias) null else try self.localProcDeclaration(switch (self.bodies().expr(local.expr).data) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+        });
+        if (declaration == null) {
+            // The entry chain reads only values the entry chain defines.
+            if (self.binders.get(local.binder)) |value| {
+                if (!self.emitting_entry or self.entry_locals.contains(value)) return value;
+            }
         }
         if (local.is_alias) invariant("an alias is used only after its declaration binds it");
-        // Referenced inside its own body or a nested function: build the
-        // procedure's function value from its captures, which the checker
-        // makes visible wherever the procedure is, and the scope it was
-        // declared in, whose descriptors and dictionaries this body holds.
-        switch (self.bodies().expr(local.expr).data) {
-            .lambda, .closure => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
-        }
-        const scope_worker, const target = try self.localProcWorker(local);
-        const declaring = self.program.worker(scope_worker).*;
-        const target_worker = self.program.worker(target).*;
-        const values = try self.allocator.alloc(LocalId, target_worker.captures.len);
-        defer self.allocator.free(values);
-        const declared = self.declared_captures.get(target_worker.key.lambda.expr);
-        for (target_worker.captures, values, 0..) |capture, *value, index| {
-            value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is referenced");
-        }
-        var declaring_dicts: usize = 0;
-        for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
-        var declaring_literals: usize = 0;
-        for (declaring.literal_scopes) |scope| declaring_literals += scope.len;
-        const descs = self.var_descs[0..declaring.scheme_vars.len];
-        const dicts = try std.mem.concat(self.program.arena.allocator(), LocalId, &.{ self.dict_locals[self.dict_locals.len - declaring_dicts ..], self.literal_locals[self.literal_locals.len - declaring_literals ..] });
+        const closure = try self.localProcClosure(local);
+        // A procedure whose calls pass its table captures none.
+        const inputs: []const Word = if (self.program.perCall(closure.callee)) &.{} else try closure.inputs(self.program.arena.allocator());
         // A value built from entry locals only is built once, in the entry
         // chain, for every reference; one reading a value the body computes
         // is built where it is referenced.
-        const at_entry = for (values) |value| {
+        const at_entry = for (closure.values) |value| {
             if (!self.entry_locals.contains(value)) break false;
         } else true;
-        const all_closed = try self.allClosed(target_worker.capture_types);
+        const all_closed = try self.allClosed(closure.capture_types);
         if (!at_entry) {
             return if (all_closed)
-                try self.packClosure(target, values, target_worker.capture_types, descs, dicts)
+                try self.packClosure(closure.callee, closure.values, closure.capture_types, inputs)
             else
-                try self.packDynamicClosure(target, values, target_worker.capture_types, descs, dicts);
+                try self.packDynamicClosure(closure.callee, closure.values, closure.capture_types, inputs);
         }
-        const closure = if (all_closed)
-            try self.emitIntoEntry(packClosure, .{ target, values, target_worker.capture_types, descs, dicts })
+        const value = if (all_closed)
+            try self.emitIntoEntry(packClosure, .{ closure.callee, closure.values, closure.capture_types, inputs })
         else
-            try self.emitIntoEntry(packDynamicClosure, .{ target, values, target_worker.capture_types, descs, dicts });
-        if (!self.immortal_closures) try self.binders.put(self.allocator, local.binder, closure);
-        return closure;
+            try self.emitIntoEntry(packDynamicClosure, .{ closure.callee, closure.values, closure.capture_types, inputs });
+        if (declaration == null) try self.binders.put(self.allocator, local.binder, value);
+        return value;
+    }
+
+    /// What the function value of a local procedure packs, referenced
+    /// inside its own body or a nested function: its captures, which the
+    /// checker makes visible wherever the procedure is, and the scope it was
+    /// declared in, whose descriptors and dictionaries this body holds.
+    fn localProcClosure(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalProcClosure {
+        return try self.localProcClosureWithCaptures(local, false);
+    }
+
+    fn localProcClosureWithCaptures(self: *Builder, local: checked.LocalProcedureBinding, comptime static_captures: bool) Allocator.Error!LocalProcClosure {
+        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+        };
+        const scope = try self.localProcWorker(local, try self.localProcDeclaration(lambda_expr));
+        const target = scope.worker;
+        const target_worker = self.program.worker(target).*;
+        const values = try self.program.arena.allocator().alloc(LocalId, if (static_captures) 0 else target_worker.captures.len);
+        if (!static_captures) {
+            const declared = self.declared_captures.get(target_worker.key.lambda.expr);
+            for (target_worker.captures, values, 0..) |capture, *value, index| {
+                value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
+            }
+        }
+        const descs = scope.descs;
+        const dicts = try std.mem.concat(self.program.arena.allocator(), Word, &.{ scope.dicts, scope.literals });
+        return .{
+            .callee = target,
+            .values = values,
+            .capture_types = target_worker.capture_types,
+            .descs = descs,
+            .words = dicts,
+            .static_scope = if (static_captures) scope else null,
+        };
     }
 
     /// The own scheme of generalized-local scope `scope_id`: its quantified
@@ -4749,7 +5464,7 @@ pub const Builder = struct {
             .dictionaries = dictionaries.items,
             .params = evidence_params,
             .literal_requirements = templates.scopeLiteralRequirements(&scope),
-            .per_call = self.program.local_procs.contains(.{ .module = view.index, .expr = scope.checked_expr }),
+            .per_call = try self.program.isLocalProc(view.index, scope.checked_expr),
         };
     }
 
@@ -4757,16 +5472,16 @@ pub const Builder = struct {
     /// with an argument record of the call's instantiation of the
     /// procedure's own scheme (descriptors, then dictionaries) followed by
     /// the explicit arguments.
-    pub fn lowerGeneralizedLocalCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call"), local: checked.LocalProcedureBinding, scheme: lower.LocalScheme) Allocator.Error!void {
+    pub fn lowerGeneralizedLocalCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call"), local: checked.LocalProcedureBinding, scheme: lower.LocalScheme) Allocator.Error!void {
         const closure = try self.localProcValue(local);
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{};
         // The procedure's own variables take the types the call's
         // instantiation of its type gives them; the enclosing scope's stay as
         // they are here.
-        const lambda_expr = switch (self.bodies().expr(local.expr).data) {
+        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
             .lambda => local.expr,
             .closure => |closure_expr| closure_expr.lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const outer_count = self.env.vars.len;
         const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ scheme.scheme_vars, self.env.vars });
@@ -4775,9 +5490,9 @@ pub const Builder = struct {
         defer self.allocator.free(generic_bound);
         for (generic_bound[0..scheme.scheme_vars.len], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(outer_count + index));
         for (generic_bound[scheme.scheme_vars.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        const lambda_ty = self.bodies().expr(lambda_expr).ty;
+        const lambda_ty = self.bodies().exprType(lambda_expr);
         const generic_fn = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
-        const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.exprType(call.func) }}, outer_count + scheme.scheme_vars.len);
+        const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.valueType(call.func) }}, outer_count + scheme.scheme_vars.len);
         defer self.allocator.free(related);
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
@@ -4803,13 +5518,13 @@ pub const Builder = struct {
         defer self.allocator.free(params);
         if (params.len != call.args.len) invariant("a local procedure call's arity differs from its type");
         const arg_types = try self.program.arena.allocator().alloc(TypeId, call.args.len);
-        for (call.args, arg_types) |arg, *arg_ty| arg_ty.* = try self.exprType(arg);
+        for (call.args, arg_types) |arg, *arg_ty| arg_ty.* = try self.valueType(arg);
         // The procedure's own scheme's descriptors, dictionaries and
         // literal arguments, which the call passes with its arguments.
         const own_words = scheme.scheme_vars.len + scheme.dictionaries.len + scheme.literal_requirements.len;
-        const words = try self.allocator.alloc(LocalId, own_words);
+        const words = try self.allocator.alloc(Word, own_words);
         defer self.allocator.free(words);
-        for (own_types, words[0..own_types.len]) |ty, *desc| desc.* = try self.descOf(ty);
+        for (own_types, words[0..own_types.len]) |ty, *desc| desc.* = try self.descWord(ty);
         const scope_id = local.dispatch_scope orelse invariant("a generalized local procedure has no checked scheme scope");
         const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
         for (scheme.dictionaries, words[own_types.len..][0..scheme.dictionaries.len]) |param_index, *dict| {
@@ -4817,9 +5532,24 @@ pub const Builder = struct {
             dict.* = try self.paramDictionary(evidence, param_index, context);
         }
         try self.fillLiteralArgs(null, .{ .use = call.func }, words[own_types.len + scheme.dictionaries.len ..]);
+        // The call passes the procedure's table: its inputs are the
+        // declaring scope's descriptors then its own, its own dictionaries
+        // then the declaring scope's, and likewise its literal arguments.
+        const declared = try self.localProcClosure(local);
+        const target = self.program.worker(declared.callee).*;
+        const outer_dicts = target.capturedDictionaryCount();
+        if (target.own_descs != own_types.len or target.own_dicts != scheme.dictionaries.len or target.own_literals != scheme.literal_requirements.len) invariant("a local procedure call's own words differ from its worker's");
+        const table_inputs = try std.mem.concat(self.program.arena.allocator(), Word, &.{
+            declared.descs,
+            words[0..own_types.len],
+            words[own_types.len..][0..scheme.dictionaries.len],
+            declared.words[0..outer_dicts],
+            words[own_types.len + scheme.dictionaries.len ..],
+            declared.words[outer_dicts..],
+        });
         try self.push(.{ .finish_local_call = .{
             .closure = closure,
-            .words = try self.program.arena.allocator().dupe(LocalId, words),
+            .words = try self.program.arena.allocator().dupe(Word, &.{try self.tableWord(declared.callee, table_inputs)}),
             .params = try self.program.arena.allocator().dupe(TypeId, params),
             .ret = ret,
             .arg_types = arg_types,
@@ -4828,7 +5558,9 @@ pub const Builder = struct {
         try self.pushExprsReversed(call.args);
     }
 
-    pub fn finishLocalCall(self: *Builder, closure: LocalId, words: []const LocalId, params: []const TypeId, ret: TypeId, arg_types: []const TypeId, result_ty: TypeId) Allocator.Error!void {
+    pub fn finishLocalCall(self: *Builder, closure: LocalId, word_values: []const Word, params: []const TypeId, ret: TypeId, arg_types: []const TypeId, result_ty: TypeId) Allocator.Error!void {
+        const words = try self.materializeAll(word_values);
+        defer self.allocator.free(words);
         const args = try self.popValues(@intCast(params.len));
         defer self.allocator.free(args);
         // The procedure stores record fields its own way where its kinds
@@ -4838,13 +5570,9 @@ pub const Builder = struct {
             const target = try self.callErased(closure, args[0], ret);
             return self.pushValue(try self.adaptValue(target, ret, result_ty));
         }
-        const word = try self.opaqueWordDesc();
-        const elems = try self.allocator.alloc(LocalId, words.len + params.len);
-        defer self.allocator.free(elems);
-        @memset(elems[0..words.len], word);
-        for (elems[words.len..], params) |*elem, param_ty| elem.* = try self.descOf(param_ty);
-        const desc = try self.composedArgsDesc(elems);
-        const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = .frame } });
+        const desc = try self.argsDesc(@intCast(words.len), try self.descWords(params));
+        const product = try self.productShapeFields(words.len, params);
+        const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = .frame }, .product = product });
         const fields = try std.mem.concat(self.allocator, LocalId, &.{ words, args });
         defer self.allocator.free(fields);
         try self.emitDyn(record, .{ .record = .{ .desc = desc, .fields = try self.store.addLocalSpan(fields) } });
@@ -4854,14 +5582,14 @@ pub const Builder = struct {
 
     /// A procedure used as a function value: an immortal callable of its
     /// dictionary entry, capturing the use site's hidden arguments.
-    pub fn procedureValue(self: *Builder, expr_id: CheckedExprId, use: checked.ProcedureUseTemplate, required: ?checked.PlatformRequiredProcedureResolvedRef) Allocator.Error!void {
+    pub fn procedureValue(self: *Builder, expr_id: ExprId, use: checked.ProcedureUseTemplate, required: ?checked.PlatformRequiredProcedureResolvedRef) Allocator.Error!void {
         const callee = try self.procedureUseCallee(use);
         if (callee == .callable_eval) return try self.push(.{ .restore_callable_eval = .{ .module = callee.callable_eval.module, .template = callee.callable_eval.template, .ty = try self.exprType(expr_id) } });
         const use_ty = try self.exprType(expr_id);
         const target = callee.target();
         const instance = try self.procedureUseInstance(callee, expr_id, required, use_ty);
         defer self.allocator.free(instance.hidden);
-        const value = try self.composeDictionary(try self.program.methodEntryWorker(target), instance.hidden);
+        const value = try self.materialize(try self.composeDictionary(try self.program.methodEntryWorker(target), instance.hidden));
         // The procedure stores record fields its own way where its kinds are
         // its own scheme's (design.md "Field Kinds"); the value is adapted to
         // the representation its use calls it with.
@@ -4875,7 +5603,7 @@ pub const Builder = struct {
     /// when it is one, whose call checking recorded no edge for, so its
     /// literal arguments derive from the use's instantiation as its
     /// dictionaries do.
-    fn procedureUseInstance(self: *Builder, callee: Callee, expr_id: CheckedExprId, required: ?checked.PlatformRequiredProcedureResolvedRef, use_ty: TypeId) Allocator.Error!CallInstance {
+    fn procedureUseInstance(self: *Builder, callee: Callee, expr_id: ExprId, required: ?checked.PlatformRequiredProcedureResolvedRef, use_ty: TypeId) Allocator.Error!CallInstance {
         const subst = self.siteSubstitution(expr_id);
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
         return switch (callee) {
@@ -4891,12 +5619,13 @@ pub const Builder = struct {
         };
     }
 
-    /// A read of a stored constant: its value's construction at `ty`
+    /// A read of a stored constant: its immutable representation at `ty`
     /// (design.md "Compile-Time Evaluation Strategy").
     /// Restore stored constant `stored` read at `ty`: at `ty` when it is
     /// closed, and otherwise at the value's own stored type, re-tagged to
     /// `ty`.
     fn pushStoredRestore(self: *Builder, source: lower.ConstSource, stored: checked.StoredConstTemplate, ty: TypeId, root: ?checked.ComptimeRootId) Allocator.Error!void {
+        if (root) |id| if (self.program.module(source.module).view.compile_time_roots.root(id).needsEvaluation(.boxy)) invariant("a stored root read bypassed strategy readiness");
         if (self.program.store.isClosed(ty)) return try self.push(.{ .restore = .{ .source = source, .node = stored.node, .ty = ty, .root = root } });
         const stored_ty = try self.constType(source, stored.root_type);
         try self.push(.{ .retag = .{ .from = stored_ty, .to = ty } });
@@ -4906,17 +5635,19 @@ pub const Builder = struct {
     /// The compile-time root whose value a stored constant reference is.
     fn rootOfConstRef(owner: *const types.ModuleView, const_ref: checked.ConstRef) ?checked.ComptimeRootId {
         return switch (const_ref.owner) {
-            .hoisted_expr => |hoisted| (owner.view.hoisted_constants.lookupByExpr(hoisted.expr) orelse return null).root,
+            .hoisted_root => |hoisted| hoisted.root,
             .top_level_binding => |top_level| owner.view.compile_time_roots.lookupIdByPattern(top_level.pattern),
         };
     }
 
-    pub fn restoreConstUse(self: *Builder, expr_id: CheckedExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
+    pub fn restoreConstUse(self: *Builder, expr_id: ExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
         const template = owner.view.const_templates.get(use.const_ref);
-        if (rootOfConstRef(owner, use.const_ref)) |root_id| if (owner.view.compile_time_roots.root(root_id).boxy_value) |stored| {
-            return try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, root_id);
-        };
+        if (rootOfConstRef(owner, use.const_ref)) |root_id| {
+            const root = owner.view.compile_time_roots.root(root_id);
+            if (root.boxy_value) |stored| return try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, root_id);
+            if (root.payloadFor(.boxy) == .pending and template.state == .stored_const) return try self.pendingValueRead(owner.index, root_id, ty);
+        }
         switch (template.state) {
             .stored_const => |stored| try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, rootOfConstRef(owner, use.const_ref)),
             // A constant this compile-time program evaluates is read from
@@ -4924,7 +5655,7 @@ pub const Builder = struct {
             // not store is its entry procedure's value at the read's
             // instantiation.
             .eval_template => |eval| {
-                if (rootOfConstRef(owner, use.const_ref)) |root| if (self.program.readsRootSlot(owner.index, root)) return try self.pendingValueRead(owner.index, root, ty);
+                if (rootOfConstRef(owner, use.const_ref)) |root| if (try self.program.readsRootSlot(owner.index, root)) return try self.pendingValueRead(owner.index, root, ty);
                 const callee = try self.program.templateRefWorker(eval.entry_template);
                 const read_ty = try self.exprType(expr_id);
                 const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
@@ -4940,7 +5671,7 @@ pub const Builder = struct {
                 if (!self.program.input.compile_time) invariant("a constant read at runtime was not stored by compile-time evaluation");
                 const root = switch (use.const_ref.owner) {
                     .top_level_binding => |top_level| owner.view.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse invariant("a reserved constant has no compile-time root"),
-                    .hoisted_expr => |hoisted| (owner.view.hoisted_constants.lookupByExpr(hoisted.expr) orelse invariant("a reserved hoisted constant has no hoisted entry")).root,
+                    .hoisted_root => |hoisted| hoisted.root,
                 };
                 try self.pendingValueRead(owner.index, root, ty);
             },
@@ -4956,13 +5687,12 @@ pub const Builder = struct {
         // closed type's components are closed.
         if (!store.isClosed(raw_ty)) invariant("a stored value is restored at an open type");
         const ty = try self.structuralType(raw_ty);
-        switch (const_store.get(node)) {
+        const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
+        const data = const_store.get(node);
+        if (data != .scalar) if (self.program.stored_value_slots.get(key)) |slot| return self.pushValue(try self.staticRead(slot));
+        if (data != .crash and data != .checked_error) try self.push(.{ .remember_static_value = key });
+        switch (data) {
             .pending => invariant("a stored constant was never filled"),
-            .zst => {
-                const local = try self.localOf(raw_ty, .frame);
-                try self.emitLinear(.{ .assign_struct = .{ .target = local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
-                try self.pushValue(local);
-            },
             .scalar => |scalar| {
                 const local = try self.localOf(raw_ty, .frame);
                 const value: LIR.LiteralValue = switch (scalar) {
@@ -4975,9 +5705,11 @@ pub const Builder = struct {
                     .dec_bits => |bits| .{ .dec_literal = bits },
                 };
                 try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = value, .next = undefined } });
+                const slot = try self.storedDataSlot(source, node, raw_ty);
+                try self.constant_slots.put(self.allocator, local, slot);
                 try self.pushValue(local);
             },
-            .str => |str| try self.pushValue(try self.strLiteral(const_store.strBytes(str))),
+            .zst, .str => try self.pushValue(try self.storedDataLocal(source, node, raw_ty)),
             .crash => |message| {
                 if (root) |failed| {
                     // The value is a root's whose evaluation failed and was
@@ -5007,7 +5739,12 @@ pub const Builder = struct {
                     .box => |payload| payload,
                     .primitive, .empty_record, .record, .tuple, .tag_union, .list, .nominal, .function, .variable => invariant("a stored box restored at a non-Box type"),
                 };
-                try self.push(.{ .finish_low_level = .{ .op = .box_box, .arg_count = 1, .result = raw_ty } });
+                const sequence_step_offset: ?u32 = if (store.isSequence(payload)) blk: {
+                    const payload_layout = try self.program.layouts.layoutOf(payload);
+                    const layouts = &self.program.result.layouts;
+                    break :blk layouts.getStructFieldOffsetByOriginalIndex(layouts.getLayout(payload_layout).getStruct().idx, 1);
+                } else null;
+                try self.push(.{ .finish_static_box = .{ .ty = raw_ty, .sequence_step_offset = sequence_step_offset } });
                 try self.push(.{ .restore = .{ .source = source, .node = child, .ty = payload } });
             },
             .tuple, .record => |children| {
@@ -5057,37 +5794,14 @@ pub const Builder = struct {
                 };
                 switch (list) {
                     .nodes => |nodes| {
-                        try self.push(.{ .finish_restore_list = .{ .ty = raw_ty, .count = @intCast(nodes.len) } });
+                        try self.push(.{ .finish_static_list = .{ .ty = raw_ty, .count = @intCast(nodes.len) } });
                         var index = nodes.len;
                         while (index > 0) {
                             index -= 1;
                             try self.push(.{ .restore = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
-                    .empty => try self.finishRestoreList(raw_ty, 0),
-                    .packed_bytes => |packed_list| {
-                        const local = try self.localOf(raw_ty, .frame);
-                        var bytes = const_store.blobBytes(packed_list.bytes);
-                        // A product's items are its scalar leaves in field
-                        // order, laid out here as its layout stores them.
-                        var decoded: ?[]u8 = null;
-                        defer if (decoded) |owned| self.allocator.free(owned);
-                        if (packed_list.element == null) {
-                            var plan = try lir_core.PackedData.Plan.init(self.allocator, &self.program.result.layouts, try self.program.layouts.layoutOf(elem));
-                            defer plan.deinit();
-                            if (plan.packed_width != packed_list.product_width) invariant("a stored packed list's items differ from their type's fields");
-                            const memory = try self.allocator.alloc(u8, @as(usize, packed_list.len) * plan.memory_width);
-                            decoded = memory;
-                            plan.decode(memory, bytes, packed_list.len);
-                            bytes = memory;
-                        }
-                        const backing = try self.store.insertStringAligned(bytes, 16);
-                        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
-                            .bytes = .{ .backing = backing, .offset = 0, .len = @intCast(bytes.len) },
-                            .len = packed_list.len,
-                        } }, .next = undefined } });
-                        try self.pushValue(local);
-                    },
+                    .empty, .packed_bytes => try self.pushValue(try self.storedDataLocal(source, node, raw_ty)),
                 }
             },
             .fn_value => |fn_id| try self.restoreFn(source, fn_id, raw_ty),
@@ -5113,19 +5827,19 @@ pub const Builder = struct {
                 const bound = (try self.program.instantiateTarget(target, formal, fn_ty)).bound;
                 const dicts = try self.storedDictionaries(source, stored, target, bound);
                 defer self.allocator.free(dicts);
-                const hidden = try self.allocator.alloc(LocalId, bound.len + dicts.len);
+                const hidden = try self.allocator.alloc(Word, bound.len + dicts.len);
                 defer self.allocator.free(hidden);
-                for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+                for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
                 @memcpy(hidden[bound.len..], dicts);
                 const entry = try self.program.methodEntryWorker(target);
-                try self.pushValue(try self.composeDictionary(entry, hidden));
+                try self.pushValue(try self.materialize(try self.composeDictionary(entry, hidden)));
             },
             .nested => |nested| {
                 // A closure of a defaulted field's expression belongs to the
                 // worker evaluating that default, which has no scheme and no
                 // dictionaries of its own.
                 const owner_worker = if (nested.default_root) |identity| blk: {
-                    const declaring = self.program.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
+                    const declaring = self.program.modules.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
                     const declaring_view = self.program.module(declaring);
                     const default_site = declaring_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
                     break :blk switch (default_site.owner) {
@@ -5141,16 +5855,16 @@ pub const Builder = struct {
                 const lambda_expr = switch (expr.data) {
                     .lambda => site_expr,
                     .closure => |closure| closure.lambda,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
+                    .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
                 };
                 const captures = try self.program.runtimeCaptures(owner_view, @backingInt(nested.site));
                 // The closure in its owner's scope (and, for a generalized
                 // lambda, its own scheme's), whose variables the stored
                 // value's type instantiates; the value captures them all.
-                const own_scope = self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr });
+                const own_scope = try self.program.localScope(owner.module, lambda_expr);
                 const own: ?lower.LocalScheme = if (own_scope) |scope_id| blk: {
                     var scheme = try self.localSchemeIn(owner_view, scope_id);
-                    if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
+                    if (scheme.isEmpty()) break :blk null;
                     scheme.per_call = false;
                     break :blk scheme;
                 } else null;
@@ -5172,7 +5886,7 @@ pub const Builder = struct {
                 defer relations.deinit(self.allocator);
                 try relations.append(self.allocator, .{ generic_fn, fn_ty });
                 for (captures, capture_types, stored_captures) |capture, *capture_ty, *stored_capture| {
-                    capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, generic);
+                    capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), generic);
                     stored_capture.* = for (stored.captures) |candidate| {
                         if (std.meta.eql(candidate.id, capture.capture_id)) break candidate;
                     } else invariant("a stored closure lacks one of its site's captures");
@@ -5240,18 +5954,18 @@ pub const Builder = struct {
                 const concrete_capture_types = try self.allocator.alloc(TypeId, captures.len);
                 defer self.allocator.free(concrete_capture_types);
                 for (captures, concrete_capture_types) |capture, *concrete_ty| {
-                    concrete_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, concrete);
+                    concrete_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), concrete);
                 }
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
-                const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
-                for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
-                const owner_dicts = if (nested.default_root != null) try self.allocator.alloc(LocalId, 0) else try self.storedDictionaries(source, stored, owner_worker, bound[0..owner.scheme_vars.len]);
+                const descs = try self.program.arena.allocator().alloc(Word, bound.len);
+                for (bound, descs) |ty, *desc| desc.* = try self.descWord(ty);
+                const owner_dicts = if (nested.default_root != null) try self.allocator.alloc(Word, 0) else try self.storedDictionaries(source, stored, owner_worker, bound[0..owner.scheme_vars.len]);
                 defer self.allocator.free(owner_dicts);
                 // A generalized lambda's own dictionaries are the stored
                 // evidence's innermost frame, its own scope's, ahead of its
                 // owner's.
-                const own_dicts: []LocalId = if (own) |scheme| own: {
-                    if (scheme.dictionaries.len == 0) break :own try self.allocator.alloc(LocalId, 0);
+                const own_dicts: []Word = if (own) |scheme| own: {
+                    if (scheme.dictionaries.len == 0) break :own try self.allocator.alloc(Word, 0);
                     const head = stored.evidence_frame_head orelse invariant("a stored generalized lambda with dictionaries has no evidence");
                     const frame = stored.evidence_frames[head];
                     if (frame.scope() == .root) invariant("a stored generalized lambda's innermost evidence frame is its procedure's");
@@ -5259,24 +5973,24 @@ pub const Builder = struct {
                     const params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.dispatch_scopes[@backingInt(own_scope.?)].evidence_params);
                     const roots = try self.storedEvidenceTrees(source, stored.evidence, frame.roots_start, frame.roots_len, params, concrete);
                     defer self.allocator.free(roots);
-                    const out = try self.allocator.alloc(LocalId, scheme.dictionaries.len);
+                    const out = try self.allocator.alloc(Word, scheme.dictionaries.len);
                     for (scheme.dictionaries, out) |param_index, *dict| dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
                     break :own out;
-                } else try self.allocator.alloc(LocalId, 0);
+                } else try self.allocator.alloc(Word, 0);
                 defer self.allocator.free(own_dicts);
                 // The closure's literal arguments, derived from its scopes'
                 // types as a stored closure records no edge.
                 const closure_worker = self.program.worker(worker).*;
-                const literals = try self.allocator.alloc(LocalId, closure_worker.own_literals + closure_worker.capturedLiteralCount());
+                const literals = try self.allocator.alloc(Word, closure_worker.own_literals + closure_worker.capturedLiteralCount());
                 defer self.allocator.free(literals);
                 try self.derivedLiteralArgs(worker, bound, literals);
-                const dicts = try std.mem.concat(self.allocator, LocalId, &.{ own_dicts, owner_dicts, literals });
+                const dicts = try std.mem.concat(self.allocator, Word, &.{ own_dicts, owner_dicts, literals });
                 defer self.allocator.free(dicts);
                 try self.push(.{ .finish_restore_closure = .{
                     .worker = worker,
                     .count = @intCast(captures.len),
                     .descs = descs,
-                    .dicts = try self.program.arena.allocator().dupe(LocalId, dicts),
+                    .dicts = try self.program.arena.allocator().dupe(Word, dicts),
                     .capture_types = try self.program.arena.allocator().dupe(TypeId, concrete_capture_types),
                     .worker_ty = try self.program.converter().convert(owner.module, expr.ty, concrete),
                     .ty = fn_ty,
@@ -5291,47 +6005,76 @@ pub const Builder = struct {
         }
     }
 
-    /// Restore a function value a `.boxy` evaluation stored: its worker,
-    /// packing what it captured.
+    /// Restore a completed function as immutable code and capture references.
     pub fn restoreStoredFn(self: *Builder, source: lower.ConstSource, recipe: []const u8, captures: []const checked.ConstNodeId) Allocator.Error!void {
         const decoded = try StoredFn.decode(self, recipe);
-        if (decoded.rebuilt) {
-            const target = switch (self.program.worker(decoded.worker).key) {
-                .method_entry => |target| target,
-                .template, .adapter, .default, .lambda, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a rebuilt stored dictionary is not a method entry's"),
-            };
-            const instance = try self.program.targetRequirements(target, decoded.bound);
-            return try self.pushValue(try self.dictionaryOfTree(.{ .target = .{ .target = target, .instance = instance } }));
-        }
         const shape = StoredFn.captureShape(self.program, decoded.worker);
         const arena = self.program.arena.allocator();
-        const descs = try arena.alloc(LocalId, decoded.bound.len);
-        for (decoded.bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        if (captures.len != shape.values.len) invariant("a stored function's captures differ from its worker's");
+        if (!try self.allClosed(shape.values) and decoded.capture_descs.len != captures.len) invariant("a stored dynamic capture record has the wrong descriptor arity");
         const capture_types = try arena.alloc(TypeId, shape.values.len);
         for (shape.values, capture_types) |generic, *concrete| concrete.* = try self.program.substitute(self.allocator, generic, decoded.bound);
-        if (captures.len != shape.values.len + shape.dicts) invariant("a stored function's captures differ from its worker's");
-        try self.push(.{ .finish_stored_fn = .{ .worker = decoded.worker, .shape = shape, .descs = descs, .capture_types = capture_types } });
-        const function = try self.program.anyFunction();
-        var index = captures.len;
+        try self.push(.{ .finish_stored_fn = .{ .worker = decoded.worker, .shape = shape, .inputs = decoded.inputs, .capture_types = capture_types, .capture_descs = decoded.capture_descs } });
+        var index = shape.values.len;
         while (index > 0) {
             index -= 1;
-            const ty = if (index < capture_types.len) capture_types[index] else function;
-            try self.push(.{ .restore = .{ .source = source, .node = captures[index], .ty = ty } });
+            try self.push(.{ .restore = .{ .source = source, .node = captures[index], .ty = capture_types[index] } });
         }
+    }
+
+    /// The function values of generated codec family `family`'s local
+    /// procedures, at its variables' types `bound`, for restoring stored
+    /// generated runtime `stored` of procedure `owner`, into `out`. The
+    /// procedures are local procedures of `owner`'s body, built in the
+    /// declaration context of the instance of `owner` that built the
+    /// runtime: its function type, which the value records, and its stored
+    /// evidence.
+    pub fn storedRuntimeLocals(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: check.CheckedNames.ProcTemplate, out: []LocalId, family: u32, bound: []const TypeId) Allocator.Error!void {
+        const owner_worker = try self.program.templateRefWorker(owner);
+        const target = self.program.worker(owner_worker).*;
+        const owner_fn_ty = stored.owner_fn_ty orelse invariant("a stored generated runtime calling local procedures records no instance of its procedure");
+        const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
+        const owner_bound = (try self.program.instantiateTarget(owner_worker, formal, try self.constType(source, owner_fn_ty))).bound;
+        const descs = try self.allocator.alloc(Word, owner_bound.len);
+        defer self.allocator.free(descs);
+        for (owner_bound, descs) |ty, *desc| desc.* = try self.descWord(ty);
+        const restored = try self.storedDictionaries(source, stored, owner_worker, owner_bound);
+        defer self.allocator.free(restored);
+        const dicts = try self.allocator.alloc(?Word, restored.len);
+        defer self.allocator.free(dicts);
+        for (dicts, restored) |*dict, dictionary| dict.* = dictionary;
+        const building = try self.allocator.alloc(bool, restored.len);
+        defer self.allocator.free(building);
+        @memset(building, false);
+        const literals = try self.allocator.alloc(Word, target.literal_params);
+        defer self.allocator.free(literals);
+        try self.derivedLiteralArgs(owner_worker, owner_bound, literals);
+        var declaration: Declaration = .{
+            .worker = owner_worker,
+            .bound = owner_bound,
+            .words = .{ .descs = descs, .literals = literals },
+            .dicts = dicts,
+            .building = building,
+            .source = .restored,
+            .outer = self.declaration,
+        };
+        self.declaration = &declaration;
+        defer self.declaration = declaration.outer;
+        try Codec.localValues(self, family, bound, out);
     }
 
     /// The lambda worker of expression `lambda_expr` of the worker
     /// `owner_worker`, as a stored function names it: the closure's scheme
     /// and capture types in its owner's variables, which every construction
     /// of it shares.
-    pub fn storedLambdaWorker(self: *Builder, owner_worker: WorkerId, lambda_expr: CheckedExprId, captured_scheme: bool) Allocator.Error!WorkerId {
+    pub fn storedLambdaWorker(self: *Builder, owner_worker: WorkerId, lambda_expr: ExprId, captured_scheme: bool) Allocator.Error!WorkerId {
         const owner = self.program.worker(owner_worker).*;
         const owner_view = self.program.module(owner.module);
         const expr = owner_view.bodies().expr(lambda_expr);
         const captures = try self.program.siteCaptures(owner.module, lambda_expr);
-        const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr })) |scope_id| blk: {
+        const own: ?lower.LocalScheme = if (try self.program.localScope(owner.module, lambda_expr)) |scope_id| blk: {
             var scheme = try self.localSchemeIn(owner_view, scope_id);
-            if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
+            if (scheme.isEmpty()) break :blk null;
             if (captured_scheme) scheme.per_call = false;
             break :blk scheme;
         } else null;
@@ -5345,7 +6088,7 @@ pub const Builder = struct {
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
         for (captures, capture_types) |capture, *capture_ty| {
-            capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, generic);
+            capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), generic);
         }
         return try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
     }
@@ -5354,9 +6097,9 @@ pub const Builder = struct {
     /// instantiated with: for each of the worker `owner`'s dictionary
     /// parameters, the dictionary its stored evidence denotes, with the
     /// owner's scheme variables bound to `bound`.
-    pub fn storedDictionaries(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: WorkerId, bound: []const TypeId) Allocator.Error![]LocalId {
+    pub fn storedDictionaries(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: WorkerId, bound: []const TypeId) Allocator.Error![]Word {
         const owner_worker = self.program.worker(owner).*;
-        const dicts = try self.allocator.alloc(LocalId, owner_worker.dictionary_params.len);
+        const dicts = try self.allocator.alloc(Word, owner_worker.dictionary_params.len);
         errdefer self.allocator.free(dicts);
         if (dicts.len == 0) return dicts;
         // The procedure's evidence is the outermost frame's roots.
@@ -5436,7 +6179,7 @@ pub const Builder = struct {
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("evidence parameters of a worker that is not a procedure template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("evidence parameters of a worker that is not a procedure template's"),
         };
         const view = self.program.module(key.module).view;
         const template = view.checked_procedure_templates.templates.items[@backingInt(key.template)];
@@ -5449,7 +6192,7 @@ pub const Builder = struct {
     /// each entry's callable contracts, which no dictionary reads, follow
     /// it. A target takes the instantiation its parameter's callable type,
     /// bound by its owner's instantiation, relates it to.
-    pub fn storedEvidenceTrees(self: *Builder, source: lower.ConstSource, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, root_params: []const static_dispatch.EvidenceParamRecord, root_env: types.Env) Allocator.Error![]?LocalId {
+    pub fn storedEvidenceTrees(self: *Builder, source: lower.ConstSource, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, root_params: []const static_dispatch.EvidenceParamRecord, root_env: types.Env) Allocator.Error![]?Word {
         const Parsed = struct {
             node: u32,
             /// The parsed target whose nested vector holds this entry and
@@ -5549,7 +6292,7 @@ pub const Builder = struct {
         }
         // Children follow their parents, so the reverse order builds every
         // nested dictionary before the dictionary that captures it.
-        const dicts = try self.allocator.alloc(?LocalId, parsed.items.len);
+        const dicts = try self.allocator.alloc(?Word, parsed.items.len);
         defer self.allocator.free(dicts);
         @memset(dicts, null);
         var index = parsed.items.len;
@@ -5560,9 +6303,9 @@ pub const Builder = struct {
             dicts[index] = switch (evidence.nodes[entry.node]) {
                 .target => blk: {
                     const target_worker = self.program.worker(entry.target.?).*;
-                    const hidden = try self.allocator.alloc(LocalId, entry.bound.len + target_worker.dictionary_params.len + target_worker.literal_params);
+                    const hidden = try self.allocator.alloc(Word, entry.bound.len + target_worker.dictionary_params.len + target_worker.literal_params);
                     defer self.allocator.free(hidden);
-                    for (entry.bound, hidden[0..entry.bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+                    for (entry.bound, hidden[0..entry.bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
                     try self.derivedLiteralArgs(entry.target.?, entry.bound, hidden[entry.bound.len + target_worker.dictionary_params.len ..]);
                     for (target_worker.dictionary_params, hidden[entry.bound.len..][0..target_worker.dictionary_params.len]) |param_index, *dict| {
                         if (param_index >= entry.children.items.len) invariant("stored method evidence does not cover its target's dictionaries");
@@ -5575,12 +6318,12 @@ pub const Builder = struct {
                 .from_callable, .from_scheme, .unreachable_value, .checked_error => null,
             };
         }
-        const result = try self.allocator.alloc(?LocalId, roots.items.len);
+        const result = try self.allocator.alloc(?Word, roots.items.len);
         for (roots.items, result) |root, *dict| dict.* = dicts[root];
         return result;
     }
 
-    pub fn storedStructuralDictionary(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFnStructuralEvidence, dispatcher: TypeId, callable: TypeId) Allocator.Error!?LocalId {
+    pub fn storedStructuralDictionary(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFnStructuralEvidence, dispatcher: TypeId, callable: TypeId) Allocator.Error!?Word {
         const method: lower.StructuralMethod = switch (stored.derivation) {
             .equality => .is_eq,
             .hash => .to_hash,
@@ -5590,15 +6333,63 @@ pub const Builder = struct {
             },
             .map, .map_effectful => |plan| return try self.structuralMapDictionary(plan, stored.derivation == .map_effectful, callable),
         };
-        return try self.composeDictionary(try self.program.structuralWorker(self.module, method), &.{try self.descOf(dispatcher)});
+        return try self.composeDictionary(try self.program.structuralWorker(self.module, method), &.{try self.descWord(dispatcher)});
     }
 
-    pub fn finishRestoreList(self: *Builder, ty: TypeId, count: u32) Allocator.Error!void {
+    /// A read of immutable target data. No runtime constructor exists.
+    pub fn staticRead(self: *Builder, slot: LIR.StaticDataId) Allocator.Error!LocalId {
+        const local = try self.closedLocal(self.program.result.static_data_values.items[@backingInt(slot)].layout_idx);
+        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
+        try self.constant_slots.put(self.allocator, local, slot);
+        return local;
+    }
+
+    fn storedDataLocal(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!LocalId {
+        return self.staticRead(try self.storedDataSlot(source, node, ty));
+    }
+
+    fn storedDataSlot(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
+        if (self.program.stored_value_slots.get(.{ .module = source.module, .node = node, .ty = ty })) |slot| return slot;
+        const value_layout = try self.program.layouts.layoutOf(ty);
+        const plan = try @import("const_schema.zig").constPlanOf(self.program, ty);
+        const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.program.result.static_data_values.items.len));
+        try self.program.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = value_layout,
+            .stored = .{ .module = self.program.module(source.module).key, .node = node, .plan = plan },
+        });
+        return slot;
+    }
+
+    pub fn constantSlot(self: *Builder, value: LocalId) Allocator.Error!LIR.StaticDataId {
+        if (self.constant_slots.get(value)) |slot| return slot;
+        invariant("a completed compile-time value has no immutable data slot");
+    }
+
+    pub fn staticPartsLocal(self: *Builder, value_layout: layout.Idx, kind: @FieldType(lir_core.Program.StaticDataParts, "kind"), values: []const LocalId) Allocator.Error!LocalId {
+        const children = try self.allocator.alloc(LIR.StaticDataId, values.len);
+        errdefer self.allocator.free(children);
+        for (values, children) |value, *child| child.* = try self.constantSlot(value);
+        const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.program.result.static_data_values.items.len));
+        try self.program.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = value_layout,
+            .parts = .{ .kind = kind, .children = children },
+        });
+        return self.staticRead(slot);
+    }
+
+    fn finishStaticParts(self: *Builder, ty: TypeId, count: u32, kind: @FieldType(lir_core.Program.StaticDataParts, "kind")) Allocator.Error!void {
         const values = try self.popValues(count);
         defer self.allocator.free(values);
-        const target = try self.localOf(ty, .frame);
-        try self.emitLinear(.{ .assign_list = .{ .target = target, .elems = try self.store.addLocalSpan(values), .next = undefined } });
-        try self.pushValue(target);
+        const value_layout = try self.program.layouts.layoutOf(ty);
+        // Box(function) has the callable's own representation, with no
+        // second allocation or pointer around it.
+        if (kind == .box and self.program.result.layouts.getLayout(value_layout).tag == .erased_callable) {
+            try self.pushValue(values[0]);
+            return;
+        }
+        try self.pushValue(try self.staticPartsLocal(value_layout, kind, values));
     }
 
     /// What a procedure use calls: a template's worker, the worker an exact
@@ -5669,7 +6460,7 @@ pub const Builder = struct {
         const owner = self.program.module(module);
         const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
         const forwarded = template.forwarded_lookup orelse invariant("a callable-eval template that is no alias forwards nothing");
-        const ref_id = owner.view.resolved_value_refs.by_checked_expr[@backingInt(forwarded)].get() orelse
+        const ref_id = owner.view.resolved_value_refs.lookupIdByExpr(forwarded) orelse
             invariant("a procedure alias's lookup has no resolved reference");
         var ref = owner.view.resolved_value_refs.records[@backingInt(ref_id)].ref;
         while (true) switch (ref) {
@@ -5687,13 +6478,13 @@ pub const Builder = struct {
         };
     }
 
-    pub fn lowerCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
+    pub fn lowerCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call")) Allocator.Error!void {
         const func = self.bodies().expr(call.func);
         const resolved: ?checked.ResolvedValueRefId = switch (func.data) {
-            .lookup_external => |r| r orelse invariant("a call's external callee was unresolved"),
-            .lookup_required => |r| r orelse invariant("a call's platform requirement callee was unresolved"),
-            .lookup_local => |lookup| lookup.resolved,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
+            .lookup_external => self.bodies().resolvedRef(call.func) orelse invariant("a call's external callee was unresolved"),
+            .lookup_required => self.bodies().resolvedRef(call.func) orelse invariant("a call's platform requirement callee was unresolved"),
+            .lookup_local => self.bodies().resolvedRef(call.func),
+            .numeral, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
         };
         const callee: Callee = if (resolved) |id| switch (self.resolvedRef(id).ref) {
             inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| try self.procedureUseCallee(if (tag == .platform_required_proc) ref.procedure else ref),
@@ -5701,14 +6492,14 @@ pub const Builder = struct {
                 if (local.is_alias) return try self.lowerValueCall(expr_id, call);
                 if (local.dispatch_scope) |scope_id| {
                     const scheme = try self.localScheme(scope_id);
-                    if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return try self.lowerGeneralizedLocalCall(expr_id, call, local, scheme);
+                    if (!scheme.isEmpty()) return try self.lowerGeneralizedLocalCall(expr_id, call, local, scheme);
                 }
                 return try self.lowerValueCall(expr_id, call);
             },
             .local_param, .local_value, .pattern_binder, .local_mutable_version, .platform_required_const, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_checked_error => return try self.lowerValueCall(expr_id, call),
             .platform_required_declaration => invariant("a platform requirement reached lowering unpaired with its app binding"),
         } else return try self.lowerValueCall(expr_id, call);
-        const call_fn = try self.exprType(call.func);
+        const call_fn = try self.valueType(call.func);
         if (callee == .callable_eval) {
             const eval = callee.callable_eval;
             try self.push(.{ .finish_erased_call = .{ .fn_ty = call_fn, .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
@@ -5735,17 +6526,10 @@ pub const Builder = struct {
 
     /// A call of a function value: evaluate the function, then its
     /// arguments, then call through the erased-callable ABI.
-    pub fn lowerValueCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
-        try self.push(.{ .finish_erased_call = .{ .fn_ty = try self.exprType(call.func), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
+    pub fn lowerValueCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call")) Allocator.Error!void {
+        try self.push(.{ .finish_erased_call = .{ .fn_ty = try self.valueType(call.func), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
         try self.pushExprsReversed(call.args);
         try self.push(.{ .expr = call.func });
-    }
-
-    /// The hidden descriptor arguments of a call whose target's scheme
-    /// variables `subst` instantiates (checked types of this body's module,
-    /// in the target's `scheme_vars` order), followed by its dictionaries.
-    pub fn hiddenArgs(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, edge: checked.LiteralEdge) Allocator.Error![]LocalId {
-        return try self.hiddenArgsAt(callee, subst, evidence, null, edge);
     }
 
     /// The hidden arguments of a call of `callee` whose function type at the
@@ -5753,7 +6537,7 @@ pub const Builder = struct {
     /// erroneous is a scheme variable the call's own type does not fix: it
     /// takes what the call's function type relates it to, or, related to
     /// nothing, what a variable no use relates seals to.
-    pub fn hiddenArgsAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: ?TypeId, edge: checked.LiteralEdge) Allocator.Error![]LocalId {
+    pub fn hiddenArgsAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: ?TypeId, edge: checked.LiteralEdge) Allocator.Error![]Word {
         return (try self.callInstanceAt(callee, subst, evidence, call_fn, edge)).hidden;
     }
 
@@ -5762,7 +6546,7 @@ pub const Builder = struct {
     /// (arena-owned), and the callee's result type at that instantiation.
     /// A literal chain frame's instance sets only the literal arguments the
     /// frame reads eagerly in `hidden`: `deferred_dicts` holds its dictionaries.
-    pub const CallInstance = struct { hidden: []LocalId, bound: []const TypeId, ret: TypeId, deferred_dicts: ?DeferredDictionaries = null };
+    pub const CallInstance = struct { hidden: []Word, bound: []const TypeId, ret: TypeId, deferred_dicts: ?DeferredDictionaries = null };
 
     /// `hiddenArgsAt` with the instantiation it computed.
     pub fn callInstanceAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: ?TypeId, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
@@ -5805,13 +6589,14 @@ pub const Builder = struct {
         const chain_frame = self.chain_frame;
         self.chain_frame = false;
         const target = self.program.worker(callee).*;
-        const hidden = try self.allocator.alloc(LocalId, bound.len + target.dictionary_params.len + target.literal_params);
+        const hidden = try self.allocator.alloc(Word, bound.len + target.dictionary_params.len + target.literal_params);
         errdefer self.allocator.free(hidden);
         if (chain_frame) {
             const ret = try self.program.substitute(self.allocator, target.ret, bound);
             if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = bound, .ret = ret };
             const context = self.templateParamContext(callee, bound);
             var deferred = try self.deferredDictionaries(evidence, context, target.dictionary_params.len);
+            deferred.declaring = callee;
             if (evidence_owner) |owner| {
                 deferred.module = owner.index;
                 deferred.view = owner;
@@ -5820,30 +6605,7 @@ pub const Builder = struct {
             }
             return .{ .hidden = hidden, .bound = bound, .ret = ret, .deferred_dicts = deferred };
         }
-        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
-        if (target.dictionary_params.len != 0) {
-            const context = self.templateParamContext(callee, bound);
-            const saved_module = self.module;
-            const saved_view = self.view;
-            const saved_env = self.env;
-            const saved_foreign = self.foreign_scopes;
-            defer {
-                self.module = saved_module;
-                self.view = saved_view;
-                self.env = saved_env;
-                self.foreign_scopes = saved_foreign;
-            }
-            if (evidence_owner) |owner| {
-                self.module = owner.index;
-                self.view = owner;
-                self.env = context.env;
-                self.foreign_scopes = self.alias_scopes.items.len;
-            }
-            for (target.dictionary_params, hidden[bound.len..][0..target.dictionary_params.len]) |param_index, *dict| {
-                if (param_index >= evidence.len) invariant("a call's evidence does not cover its target's dictionaries");
-                dict.* = try self.paramDictionary(evidence, param_index, context);
-            }
-        }
+        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
         const literals = hidden[bound.len + target.dictionary_params.len ..];
         if (edge == .literal) {
             // A call checking recorded no edge for (a platform requirement's
@@ -5853,14 +6615,128 @@ pub const Builder = struct {
         } else {
             try self.fillLiteralArgs(callee, edge, literals);
         }
+        if (target.dictionary_params.len != 0) {
+            const count = target.dictionary_params.len;
+            const dicts = try self.allocator.alloc(?Word, count);
+            defer self.allocator.free(dicts);
+            @memset(dicts, null);
+            const building = try self.allocator.alloc(bool, count);
+            defer self.allocator.free(building);
+            @memset(building, false);
+            var declaration: Declaration = .{
+                .worker = callee,
+                .bound = bound,
+                .words = .{ .descs = hidden[0..bound.len], .literals = literals },
+                .dicts = dicts,
+                .building = building,
+                .source = .{ .call = .{ .evidence = evidence, .context = self.templateParamContext(callee, bound), .owner = evidence_owner } },
+                .outer = self.declaration,
+            };
+            for (hidden[bound.len..][0..count], 0..) |*dict, slot| {
+                dict.* = try self.declarationDictionary(&declaration, slot);
+            }
+        }
         return .{ .hidden = hidden, .bound = bound, .ret = try self.program.substitute(self.allocator, target.ret, bound) };
+    }
+
+    /// Dictionary slot `slot`, with a reserved recipe for a recursive read.
+    fn declarationDictionary(self: *Builder, declaration: *Declaration, slot: usize) Allocator.Error!Word {
+        if (declaration.dicts[slot]) |dictionary| return dictionary;
+        if (declaration.building[slot]) {
+            const pending: Word = .{ .recipe = try self.recipes.reserve() };
+            declaration.dicts[slot] = pending;
+            return pending;
+        }
+        declaration.building[slot] = true;
+        // The slot is built in the scope its instance's evidence is read
+        // in, whose innermost declaration context is the instance's.
+        const saved_declaration = self.declaration;
+        self.declaration = declaration;
+        defer self.declaration = saved_declaration;
+        const param_index = self.program.worker(declaration.worker).dictionary_params[slot];
+        const dictionary = switch (declaration.source) {
+            .call => |call| blk: {
+                if (param_index >= call.evidence.len) invariant("a call's evidence does not cover its target's dictionaries");
+                const saved_module = self.module;
+                const saved_view = self.view;
+                const saved_env = self.env;
+                const saved_foreign = self.foreign_scopes;
+                defer {
+                    self.module = saved_module;
+                    self.view = saved_view;
+                    self.env = saved_env;
+                    self.foreign_scopes = saved_foreign;
+                }
+                if (call.owner) |owner| {
+                    self.module = owner.index;
+                    self.view = owner;
+                    self.env = call.context.env;
+                    self.foreign_scopes = self.alias_scopes.items.len;
+                }
+                break :blk try self.paramDictionary(call.evidence, param_index, call.context);
+            },
+            .frame => |frame| try self.frameDictionary(frame.position, param_index),
+            .restored => invariant("a restored declaration context's dictionary is neither restored nor being composed"),
+        };
+        self.completeDeclarationSlot(declaration, slot, dictionary);
+        return dictionary;
+    }
+
+    /// Complete the reserved node before returning the dictionary's recipe.
+    fn completeDeclarationSlot(self: *Builder, declaration: *Declaration, slot: usize, dictionary: Word) void {
+        declaration.building[slot] = false;
+        if (declaration.dicts[slot]) |pending| switch (dictionary) {
+            .recipe => |recipe| self.recipes.setSame(pending.recipe, recipe),
+            .static => invariant("a recursive dictionary resolves to no callable recipe"),
+        };
+        declaration.dicts[slot] = dictionary;
+    }
+
+    /// The descriptors and literal arguments of `declaration`, composed at
+    /// the first read of a literal chain frame's.
+    fn declarationWords(self: *Builder, declaration: *Declaration) Allocator.Error!Declaration.Words {
+        if (declaration.words) |words| return words;
+        const frame = switch (declaration.source) {
+            .frame => |frame| frame,
+            .call, .restored => invariant("a call's declaration context has no descriptors or literal arguments"),
+        };
+        const arena = self.program.arena.allocator();
+        const descs = try arena.alloc(Word, declaration.bound.len);
+        for (declaration.bound, descs) |ty, *desc| desc.* = try self.descWord(ty);
+        const literals = try arena.alloc(Word, self.program.worker(declaration.worker).literal_params);
+        for (literals, 0..) |*literal, index| literal.* = try self.scopeFrameLiteral(frame.scope, frame.position, @intCast(index));
+        declaration.words = .{ .descs = descs, .literals = literals };
+        return declaration.words.?;
+    }
+
+    /// The innermost declaration context of the call instances being built
+    /// whose callee is `worker`.
+    fn declarationOf(self: *const Builder, worker: WorkerId) ?*Declaration {
+        var next = self.declaration;
+        while (next) |declaration| : (next = declaration.outer) {
+            if (declaration.worker == worker) return declaration;
+        }
+        return null;
+    }
+
+    /// The declaration context of the literal chain frame whose
+    /// dictionaries are `composed`, when one is being built.
+    fn frameDeclaration(self: *const Builder, composed: []?Word) ?*Declaration {
+        var next = self.declaration;
+        while (next) |declaration| : (next = declaration.outer) {
+            switch (declaration.source) {
+                .frame => |frame| if (frame.composed == composed.ptr) return declaration,
+                .call, .restored => {},
+            }
+        }
+        return null;
     }
 
     /// The dictionaries of a literal chain frame with `count` parameters,
     /// whose edge is in the current scope: none is composed until it is read
     /// (`frameDictionary`).
     fn deferredDictionaries(self: *Builder, evidence: []const static_dispatch.CheckedEvidence, context: ?ParamContext, count: usize) Allocator.Error!DeferredDictionaries {
-        const composed = try self.program.arena.allocator().alloc(?LocalId, count);
+        const composed = try self.program.arena.allocator().alloc(?Word, count);
         @memset(composed, null);
         return .{
             .evidence = evidence,
@@ -5972,19 +6848,32 @@ pub const Builder = struct {
         return switch (target.kind) {
             .procedure => |procedure| try self.program.templateRefWorker(procedure.template),
             .local_proc => invariant("a method declared in a function body is a local procedure, called through its function value, never as a worker"),
+            .callable_binding => invariant("a method bound to a computed callable is called through its function value, never as a worker"),
             .structural => invariant("a structural method reached a procedure dispatch"),
         };
     }
 
-    /// The dictionary `evidence` denotes (design.md "Dictionaries"),
-    /// composed in the entry chain.
-    pub fn dictionaryOf(self: *Builder, evidence: static_dispatch.CheckedEvidence) Allocator.Error!LocalId {
+    /// The function value of the callable-eval binding `binding`, at `fn_ty`:
+    /// the value its compile-time root evaluated, or, where this program
+    /// evaluated none, the value its entry wrapper computes.
+    pub fn callableEvalValueAt(self: *Builder, binding: lower.CallableEvalBinding, fn_ty: TypeId) Allocator.Error!LocalId {
+        return try self.lowerNow(.{ .restore_callable_eval = .{ .module = binding.module, .template = binding.template, .ty = fn_ty } });
+    }
+
+    /// The function value of a method bound to a computed callable, at the
+    /// callable type `fn_ty` a dispatch calls it at.
+    pub fn callableBindingMethodValue(self: *Builder, binding: static_dispatch.CallableBindingTarget, fn_ty: TypeId) Allocator.Error!LocalId {
+        return try self.callableEvalValueAt(self.program.callableEvalBinding(binding), fn_ty);
+    }
+
+    /// The dictionary `evidence` denotes (design.md "Dictionaries").
+    pub fn dictionaryOf(self: *Builder, evidence: static_dispatch.CheckedEvidence) Allocator.Error!Word {
         return try self.dictionaryOfAt(evidence, null);
     }
 
     /// `dictionaryOf`, its method adapted to the callable type `interface`
     /// its consumer calls it at when one is known (the parameter it fills).
-    pub fn dictionaryOfAt(self: *Builder, evidence: static_dispatch.CheckedEvidence, interface: ?TypeId) Allocator.Error!LocalId {
+    pub fn dictionaryOfAt(self: *Builder, evidence: static_dispatch.CheckedEvidence, interface: ?TypeId) Allocator.Error!Word {
         const table = self.view.view.static_dispatch_plans;
         switch (evidence.resolution) {
             .constraint => |constraint| return try self.scopeDictionary(constraint.index),
@@ -5992,7 +6881,18 @@ pub const Builder = struct {
                 const node = table.evidenceNode(node_id);
                 if (node.target.kind == .local_proc) {
                     const fn_ty = (try self.instantiationCallable(node.instantiation)) orelse try self.convert(node.target.callable_ty);
-                    return try self.localMethodValue(node, fn_ty);
+                    return try self.localMethodWord(node, fn_ty);
+                }
+                if (node.target.kind == .callable_binding) {
+                    // The entry restores the value when called, so the
+                    // dictionary holds the entry, adapted to the callable
+                    // type it is called at.
+                    const entry = try self.program.callableEvalEntryWorker(self.module, self.program.callableEvalBinding(node.target.kind.callable_binding));
+                    const dictionary = try self.composeDictionary(entry, &.{});
+                    const expected = interface orelse (try self.instantiationCallable(node.instantiation)) orelse return dictionary;
+                    const entry_worker = self.program.worker(entry).*;
+                    const own_fn = try self.program.store.intern(.{ .function = .{ .args = entry_worker.params, .ret = entry_worker.ret, .effectful = false } });
+                    return try self.adaptDictionary(dictionary, own_fn, expected);
                 }
                 const target = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
@@ -6032,8 +6932,7 @@ pub const Builder = struct {
                     .map, .map_effectful => |plan| return try self.structuralMapDictionary(plan, structural.derivation == .map_effectful, try self.convert(structural.callable_ty)),
                 };
                 const entry = try self.program.structuralWorker(self.module, method);
-                const desc = try self.descOf(try self.convert(structural.dispatcher_ty));
-                return try self.composeDictionary(entry, &.{desc});
+                return try self.composeDictionary(entry, &.{try self.descWord(try self.convert(structural.dispatcher_ty))});
             },
             .checked_error => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .checked_error), &.{}),
             // A lambda stored with its own dictionaries takes them where it is
@@ -6058,7 +6957,7 @@ pub const Builder = struct {
         const target = self.program.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.program.module(key.module).view.checked_procedure_templates;
         return .{
@@ -6092,7 +6991,7 @@ pub const Builder = struct {
     /// the checker left to the concrete callable (`from_callable`) is the
     /// dictionary of the parameter's dispatcher at the types the context
     /// binds.
-    pub fn paramDictionary(self: *Builder, evidence: []const static_dispatch.CheckedEvidence, index: u32, context: ParamContext) Allocator.Error!LocalId {
+    pub fn paramDictionary(self: *Builder, evidence: []const static_dispatch.CheckedEvidence, index: u32, context: ParamContext) Allocator.Error!Word {
         switch (evidence[index].resolution) {
             // A literal chain reads only the requirements of the literal's
             // closed type, and evidence for a closed type names no scope
@@ -6118,7 +7017,7 @@ pub const Builder = struct {
 
     /// The dictionary of scheme parameter `index`, resolved from the types
     /// its instantiation `context` binds its requirement at.
-    fn derivedParamDictionary(self: *Builder, index: u32, context: ParamContext) Allocator.Error!LocalId {
+    fn derivedParamDictionary(self: *Builder, index: u32, context: ParamContext) Allocator.Error!Word {
         if (index >= context.params.len) invariant("a dictionary parameter names a requirement its scheme does not have");
         const param = context.params[index];
         const converter = self.program.converter();
@@ -6133,112 +7032,66 @@ pub const Builder = struct {
 
     /// The dictionary of `root`, resolved from its dispatcher's type
     /// (`Program.resolveRequirement`), with each method target's own
-    /// requirements resolved the same way (`Program.dictionaryTree`). A target
-    /// a back edge returns to composes before the dictionaries that reach it,
-    /// a null word in each of their capture slots, which `dict_patch` then
-    /// fills, so its identity is what remains. Nested requirements are
-    /// resolved with an explicit stack.
-    pub fn dictionaryFromType(self: *Builder, root: lower.DictRequirement) Allocator.Error!LocalId {
+    /// requirements resolved the same way (`Program.dictionaryTree`).
+    pub fn dictionaryFromType(self: *Builder, root: lower.DictRequirement) Allocator.Error!Word {
         return try self.dictionaryOfTree(.{ .requirement = root });
     }
 
-    fn dictionaryOfTree(self: *Builder, root: lower.DictionaryRoot) Allocator.Error!LocalId {
-        const Frame = struct {
-            node: u32,
-            /// The entry's captures: descriptors, dictionaries, literals.
-            hidden: []LocalId,
-            /// The next dictionary to compose, once through the requirements
-            /// the composition captures, then through those it is patched
-            /// with.
-            next: usize,
-            patching: bool,
-            /// The latest of the composition and its patches.
-            composed: ?LocalId,
-        };
+    /// The dictionary of the requirement tree `root`: a target's dictionary
+    /// is its entry capturing the descriptors of the types its scheme takes,
+    /// its children's dictionaries, and literal thunks derived from those
+    /// types, each adapted to the callable its requirement names. A target a
+    /// back edge returns to is reserved before its children are built, so
+    /// the dictionaries of a requirement that reaches itself capture one
+    /// another (`materializeCallable`). Children follow their parents in the
+    /// tree, so building it from the last node builds every child first.
+    fn dictionaryOfTree(self: *Builder, root: lower.DictionaryRoot) Allocator.Error!Word {
         const tree = try self.program.dictionaryTree(root);
-        const composed = try self.allocator.alloc(?LocalId, tree.len);
-        defer self.allocator.free(composed);
-        @memset(composed, null);
-        var frames: std.ArrayList(Frame) = .empty;
-        defer {
-            for (frames.items) |frame| self.allocator.free(frame.hidden);
-            frames.deinit(self.allocator);
+        const words = try self.allocator.alloc(?Word, tree.len);
+        defer self.allocator.free(words);
+        @memset(words, null);
+        // The reserved recipe of each target a back edge returns to.
+        const heads = try self.allocator.alloc(?Tables.RecipeId, tree.len);
+        defer self.allocator.free(heads);
+        for (tree, heads) |node, *head| head.* = switch (node.kind) {
+            .target => |target| if (target.recursive) try self.recipes.reserve() else null,
+            .resolved, .back_edge => null,
+        };
+        var index = tree.len;
+        while (index > 0) {
+            index -= 1;
+            const node = tree[index];
+            words[index] = switch (node.kind) {
+                .resolved => |resolution| switch (resolution) {
+                    .structural => |structural| try self.composeDictionary(try self.program.structuralWorker(self.module, structural.method), &.{try self.descWord(structural.over)}),
+                    .crash => |kind| try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, kind), &.{}),
+                    .scope_variable => |variable| try self.variableDictionary(variable, self.program.module(node.requirement.?.module).nameStore().methodNameText(node.requirement.?.method)),
+                    .callable_eval => |entry| try self.composeDictionary(entry, &.{}),
+                    .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
+                    .target => invariant("a dictionary's target requirement is not a resolved node"),
+                },
+                .back_edge => |head| try self.adaptTargetDictionary(.{ .recipe = heads[head].? }, tree[head].kind.target, node.requirement.?.callable),
+                .target => |target| blk: {
+                    const worker = self.program.worker(target.target).*;
+                    const bound = target.instance.bound;
+                    const hidden = try self.program.arena.allocator().alloc(Word, bound.len + target.children.len + worker.literal_params);
+                    for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
+                    for (target.children, hidden[bound.len..][0..target.children.len]) |child, *dictionary| dictionary.* = words[child].?;
+                    try self.derivedLiteralArgs(target.target, bound, hidden[bound.len + target.children.len ..]);
+                    const entry = try self.program.methodEntryWorker(target.target);
+                    const dictionary: Word = if (heads[index]) |head| head: {
+                        try self.recipes.set(head, try self.dictionaryRecipe(entry, hidden));
+                        break :head .{ .recipe = head };
+                    } else try self.composeDictionary(entry, hidden);
+                    break :blk if (node.requirement) |requirement| try self.adaptTargetDictionary(dictionary, target, requirement.callable) else dictionary;
+                },
+            };
         }
-        var pending: ?u32 = 0;
-        var delivered: ?LocalId = null;
-        while (true) {
-            if (pending) |index| {
-                pending = null;
-                const node = tree[index];
-                switch (node.kind) {
-                    .resolved => |resolution| switch (resolution) {
-                        .structural => |structural| delivered = try self.composeDictionary(try self.program.structuralWorker(self.module, structural.method), &.{try self.descOf(structural.over)}),
-                        .crash => |kind| delivered = try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, kind), &.{}),
-                        .scope_variable => |variable| delivered = self.variableDictionary(variable, self.program.module(node.requirement.?.module).nameStore().methodNameText(node.requirement.?.method)),
-                        .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
-                        .target => invariant("a dictionary's target requirement is not a resolved node"),
-                    },
-                    .back_edge => |head| delivered = try self.adaptTargetDictionary(composed[head].?, tree[head].kind.target, node.requirement.?.callable),
-                    .target => |target| {
-                        const worker = self.program.worker(target.target).*;
-                        const bound = target.instance.bound;
-                        const hidden = try self.allocator.alloc(LocalId, bound.len + target.instance.requirements.len + worker.literal_params);
-                        errdefer self.allocator.free(hidden);
-                        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
-                        try self.derivedLiteralArgs(target.target, bound, hidden[bound.len + target.instance.requirements.len ..]);
-                        try frames.append(self.allocator, .{ .node = index, .hidden = hidden, .next = 0, .patching = false, .composed = null });
-                    },
-                }
-            }
-            const frame = if (frames.items.len > 0) &frames.items[frames.items.len - 1] else return delivered.?;
-            const target = tree[frame.node].kind.target;
-            const dictionaries = frame.hidden[target.instance.bound.len..][0..target.children.len];
-            if (delivered) |dictionary| {
-                delivered = null;
-                const slot = frame.next - 1;
-                if (frame.patching) {
-                    const local = try self.closedLocal(try self.erasedLayout());
-                    try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_patch = .{
-                        .dict = frame.composed.?,
-                        .index = @intCast(target.instance.bound.len + slot),
-                        .value = dictionary,
-                    } }), .next = undefined } });
-                    frame.composed = local;
-                } else {
-                    dictionaries[slot] = dictionary;
-                }
-            }
-            while (frame.next < target.children.len) {
-                const slot = frame.next;
-                const child = target.children[slot];
-                const waits = target.recursive and tree[child].reaches <= target.depth;
-                frame.next += 1;
-                if (waits == frame.patching) {
-                    pending = child;
-                    break;
-                }
-                if (waits) dictionaries[slot] = try self.nullWord();
-            }
-            if (pending != null) continue;
-            if (!frame.patching) {
-                const dictionary = try self.composeDictionary(try self.program.methodEntryWorker(target.target), frame.hidden);
-                frame.composed = dictionary;
-                composed[frame.node] = dictionary;
-                if (target.recursive) {
-                    frame.patching = true;
-                    frame.next = 0;
-                    continue;
-                }
-            }
-            const dictionary = frame.composed.?;
-            const node = tree[frame.node];
-            self.allocator.free(frames.pop().?.hidden);
-            delivered = if (node.requirement) |requirement| try self.adaptTargetDictionary(dictionary, target, requirement.callable) else dictionary;
-        }
+        return words[0].?;
     }
 
     /// `dictionary`, of `target`'s method entry, at the method's `callable`.
-    fn adaptTargetDictionary(self: *Builder, dictionary: LocalId, target: lower.DictionaryNode.Target, callable: TypeId) Allocator.Error!LocalId {
+    fn adaptTargetDictionary(self: *Builder, dictionary: Word, target: lower.DictionaryNode.Target, callable: TypeId) Allocator.Error!Word {
         const worker = self.program.worker(target.target).*;
         const own_fn = try self.program.store.intern(.{ .function = .{ .args = worker.params, .ret = worker.ret, .effectful = false } });
         return try self.adaptDictionary(dictionary, try self.program.substitute(self.allocator, own_fn, target.instance.bound), callable);
@@ -6246,7 +7099,7 @@ pub const Builder = struct {
 
     /// The dictionary this body's scopes hold for method `method_text` on
     /// scope variable `index`.
-    fn variableDictionary(self: *Builder, index: u32, method_text: []const u8) LocalId {
+    fn variableDictionary(self: *Builder, index: u32, method_text: []const u8) Allocator.Error!Word {
         const worker = self.currentWorker().*;
         if (index >= worker.scheme_vars.len) invariant("a dispatcher variable is outside its worker's scope");
         const variable = worker.scheme_vars[index];
@@ -6255,7 +7108,7 @@ pub const Builder = struct {
         for (worker.dict_scopes, worker.dict_scope_params) |scope, params| {
             for (scope, 0..) |param_index, position| {
                 const param = params[param_index];
-                if (param.dispatcher_ty == variable and std.mem.eql(u8, names.methodNameText(param.method), method_text)) return self.dict_locals[offset + position];
+                if (param.dispatcher_ty == variable and std.mem.eql(u8, names.methodNameText(param.method), method_text)) return try self.dictInputWord(offset + position);
             }
             offset += scope.len;
         }
@@ -6266,7 +7119,7 @@ pub const Builder = struct {
     /// at the function type `fn_ty` (`input, transform -> output`): its
     /// worker captures the descriptors of the input and output unions, of
     /// the selected variant's payloads, and of the transformed payload.
-    pub fn structuralMapDictionary(self: *Builder, plan: static_dispatch.DerivedMapPlan, effectful: bool, fn_ty: TypeId) Allocator.Error!LocalId {
+    pub fn structuralMapDictionary(self: *Builder, plan: static_dispatch.DerivedMapPlan, effectful: bool, fn_ty: TypeId) Allocator.Error!Word {
         const store = &self.program.store;
         const function = switch (store.get(fn_ty)) {
             .function => |value| value,
@@ -6291,12 +7144,12 @@ pub const Builder = struct {
         defer self.allocator.free(payload_types);
         if (plan.payload_index >= payload_types.len) invariant("a derived map's selected payload is past its tag's payloads");
         const map: lower.StructuralMap = .{ .name = name, .payload_index = plan.payload_index, .arity = @intCast(payload_types.len), .effectful = effectful };
-        const descs = try self.allocator.alloc(LocalId, 3 + payload_types.len);
+        const descs = try self.allocator.alloc(Word, 3 + payload_types.len);
         defer self.allocator.free(descs);
-        descs[0] = try self.descOf(args[0]);
-        descs[1] = try self.descOf(function.ret);
-        for (payload_types, descs[2..][0..payload_types.len]) |ty, *desc| desc.* = try self.descOf(ty);
-        descs[2 + payload_types.len] = try self.descOf(mapped);
+        descs[0] = try self.descWord(args[0]);
+        descs[1] = try self.descWord(function.ret);
+        for (payload_types, descs[2..][0..payload_types.len]) |ty, *desc| desc.* = try self.descWord(ty);
+        descs[2 + payload_types.len] = try self.descWord(mapped);
         return try self.composeDictionary(try self.program.structuralMapWorker(self.module, map), descs);
     }
 
@@ -6308,7 +7161,7 @@ pub const Builder = struct {
     /// substitution and evidence over that scope, so lowering the lookup's
     /// in the scope so instantiated gives the next alias's, alias by alias,
     /// up to the procedure the chain reaches.
-    pub fn aliasTargetHidden(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId, edge: checked.LiteralEdge) Allocator.Error![]LocalId {
+    pub fn aliasTargetHidden(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId, edge: checked.LiteralEdge) Allocator.Error![]Word {
         return (try self.aliasTargetInstance(node, callee, edge)).hidden;
     }
 
@@ -6317,10 +7170,10 @@ pub const Builder = struct {
     pub fn aliasTargetInstance(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
         const table = self.view.view.static_dispatch_plans;
         const alias = node.target.alias orelse invariant("an alias-instantiated target has no alias binding");
-        const alias_module = self.program.moduleByIdx(node.target.module_idx).index;
+        const alias_module = self.program.moduleByKey(alias.module).index;
         const chain_frame = self.chain_frame;
         self.chain_frame = false;
-        const first: AliasStep = switch (alias) {
+        const first: AliasStep = switch (alias.binding) {
             .top_level => |pattern| self.callableEvalAliasStep(alias_module, self.program.callable_eval_by_pattern.get(.{ .module = alias_module, .pattern = pattern }) orelse
                 invariant("a method's alias binding has no callable-eval template")),
             .local => |local| self.localAliasStep(alias_module, local.lookup, local.dispatch_scope),
@@ -6336,7 +7189,7 @@ pub const Builder = struct {
         // A dispatch through another module's alias derives the literal
         // arguments from that instantiation.
         const literal_source: AliasLiterals = if (alias_module == self.module) blk: {
-            const literals = try self.program.arena.allocator().alloc(LocalId, self.program.worker(callee).literal_params);
+            const literals = try self.program.arena.allocator().alloc(Word, self.program.worker(callee).literal_params);
             try self.fillLiteralArgs(null, edge, literals);
             break :blk .{ .edge = literals };
         } else .derived;
@@ -6399,7 +7252,7 @@ pub const Builder = struct {
     /// The instantiation and dictionaries of the scope of alias `alias_step`
     /// that platform requirement `required` enters. The evidence is the app's,
     /// resolved in its module at the scope's types.
-    fn requiredAliasScope(self: *Builder, alias_step: AliasStep, required: checked.PlatformRequiredProcedureResolvedRef, call_fn: TypeId) Allocator.Error!struct { bound: []const TypeId, dicts: []const LocalId } {
+    fn requiredAliasScope(self: *Builder, alias_step: AliasStep, required: checked.PlatformRequiredProcedureResolvedRef, call_fn: TypeId) Allocator.Error!struct { bound: []const TypeId, dicts: []const Word } {
         const bound = try self.aliasScopeBound(alias_step, &.{}, call_fn);
         const span = required.root_evidence orelse return .{ .bound = bound, .dicts = try self.scopeDictionaries(alias_step, bound, &.{}) };
         const owner = self.program.moduleByKey(span.checked_module);
@@ -6451,9 +7304,9 @@ pub const Builder = struct {
 
     /// The literal arguments the edge `edge` of this body's module gives the
     /// scope of alias `alias_step`.
-    fn aliasLiteralArgs(self: *Builder, alias_step: AliasStep, edge: checked.LiteralEdge) Allocator.Error![]const LocalId {
+    fn aliasLiteralArgs(self: *Builder, alias_step: AliasStep, edge: checked.LiteralEdge) Allocator.Error![]const Word {
         if (edge == .literal) return &.{};
-        const literals = try self.program.arena.allocator().alloc(LocalId, alias_step.literal_requirements.len);
+        const literals = try self.program.arena.allocator().alloc(Word, alias_step.literal_requirements.len);
         try self.fillLiteralArgs(null, edge, literals);
         return literals;
     }
@@ -6503,7 +7356,7 @@ pub const Builder = struct {
             }
             const lookup_subst = self.siteSubstitution(alias_step.lookup);
             const evidence = self.view.view.static_dispatch_plans.siteEvidence(alias_step.lookup) orelse &.{};
-            const ref_id = self.view.view.resolved_value_refs.by_checked_expr[@backingInt(alias_step.lookup)].get() orelse
+            const ref_id = self.view.view.resolved_value_refs.lookupIdByExpr(alias_step.lookup) orelse
                 invariant("a forwarded procedure alias lookup has no resolved reference");
             const lookup_ref = self.view.view.resolved_value_refs.records[@backingInt(ref_id)].ref;
             const next: AliasStep = switch (lookup_ref) {
@@ -6535,10 +7388,10 @@ pub const Builder = struct {
                     const owned_bound = try self.boundTypesAt(callee, lookup_subst, chain.call_fn);
                     defer self.allocator.free(owned_bound);
                     const target_bound = try arena.dupe(TypeId, owned_bound);
-                    const hidden = try self.allocator.alloc(LocalId, target_bound.len + target.dictionary_params.len + target.literal_params);
+                    const hidden = try self.allocator.alloc(Word, target_bound.len + target.dictionary_params.len + target.literal_params);
                     errdefer self.allocator.free(hidden);
                     if (!chain_frame) {
-                        for (target_bound, hidden[0..target_bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+                        for (target_bound, hidden[0..target_bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
                     }
                     const target_literals = hidden[target_bound.len + target.dictionary_params.len ..];
                     switch (literal_source) {
@@ -6591,7 +7444,7 @@ pub const Builder = struct {
     /// The step of an alias chain through a local exact procedure alias of
     /// `module`, which owns generalized scope `dispatch_scope` when its
     /// scheme has one.
-    fn localAliasStep(self: *Builder, module: ModuleIndex, lookup: CheckedExprId, dispatch_scope: ?checked.DispatchScopeId) AliasStep {
+    fn localAliasStep(self: *Builder, module: ModuleIndex, lookup: ExprId, dispatch_scope: ?checked.DispatchScopeId) AliasStep {
         const scope_id = dispatch_scope orelse return .{ .module = module, .lookup = lookup, .vars = &.{}, .params = &.{} };
         const templates = self.program.module(module).view.checked_procedure_templates;
         const scope = templates.dispatch_scopes[@backingInt(scope_id)];
@@ -6627,9 +7480,9 @@ pub const Builder = struct {
 
     /// The dictionaries of the scope of alias `alias_step` whose variables
     /// take `bound`, from `evidence` (one entry per parameter).
-    fn scopeDictionaries(self: *Builder, alias_step: AliasStep, bound: []const TypeId, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error![]const LocalId {
+    fn scopeDictionaries(self: *Builder, alias_step: AliasStep, bound: []const TypeId, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error![]const Word {
         if (evidence.len != alias_step.params.len) invariant("an alias scope's evidence differs from its requirements");
-        const dicts = try self.program.arena.allocator().alloc(LocalId, alias_step.params.len);
+        const dicts = try self.program.arena.allocator().alloc(Word, alias_step.params.len);
         const context: ParamContext = .{ .module = alias_step.module, .params = alias_step.params, .env = .{ .module = alias_step.module, .vars = alias_step.vars, .bound = bound } };
         for (dicts, 0..) |*dict, index| dict.* = try self.paramDictionary(evidence, @intCast(index), context);
         return dicts;
@@ -6643,7 +7496,7 @@ pub const Builder = struct {
         return indices.items;
     }
 
-    pub fn relatedHiddenArgs(self: *Builder, callee: WorkerId, callable: checked.CheckedTypeId) Allocator.Error![]LocalId {
+    pub fn relatedHiddenArgs(self: *Builder, callee: WorkerId, callable: checked.CheckedTypeId) Allocator.Error![]Word {
         return try self.callableDerivedHidden(callee, &.{}, try self.convert(callable));
     }
 
@@ -6652,7 +7505,7 @@ pub const Builder = struct {
     /// dictionaries derived from those types: each requirement dispatches on
     /// its dispatcher's type at the instantiation, as checking selects
     /// targets.
-    pub fn callableDerivedHidden(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error![]LocalId {
+    pub fn callableDerivedHidden(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error![]Word {
         return (try self.callableDerivedInstance(callee, subst, call_fn)).hidden;
     }
 
@@ -6662,9 +7515,9 @@ pub const Builder = struct {
         const owned = try self.boundTypesAt(callee, subst, call_fn);
         defer self.allocator.free(owned);
         const bound = try self.program.arena.allocator().dupe(TypeId, owned);
-        const hidden = try self.allocator.alloc(LocalId, bound.len + target.dictionary_params.len + target.literal_params);
+        const hidden = try self.allocator.alloc(Word, bound.len + target.dictionary_params.len + target.literal_params);
         errdefer self.allocator.free(hidden);
-        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
         const ret = try self.program.substitute(self.allocator, target.ret, bound);
         try self.derivedLiteralArgs(callee, bound, hidden[bound.len + target.dictionary_params.len ..]);
         if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = bound, .ret = ret };
@@ -6814,17 +7667,22 @@ pub const Builder = struct {
                     if (named.kind == .alias) break :blk done.get(named.backing.?.ty).?;
                     if (named.def.generated != null) invariant("a stored type names a generated nominal, which only specialization mints");
                     const identity = names.moduleIdentityBytes(named.def.module).*;
-                    const declaring = self.program.by_identity.get(identity) orelse
+                    const declaring = self.program.modules.by_identity.get(identity) orelse
                         invariant("a stored type's declaring module is not in this lowering");
                     const source_decl = named.def.source_decl orelse invariant("a stored nominal type names no declaring statement");
                     const view = self.program.module(declaring);
                     const declaration_id = try self.program.store.declarationBySourceDecl(view, source_decl) orelse
                         invariant("a stored type names a declaration its module does not make");
                     const declaration = view.types().nominalDeclarationById(declaration_id);
-                    const args = try self.allocator.alloc(TypeId, named.args.len);
+                    // A declaration in a function body takes its context
+                    // arguments, which a stored type leaves out, from the
+                    // restoring scope.
+                    const context = declaration.contextFormalArgs(view.types());
+                    const args = try self.allocator.alloc(TypeId, named.args.len + context.len);
                     defer self.allocator.free(args);
-                    for (const_types.typeSpan(named.args), args) |child, *arg| arg.* = done.get(child).?;
-                    break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args, self.env);
+                    for (const_types.typeSpan(named.args), args[0..named.args.len]) |child, *arg| arg.* = done.get(child).?;
+                    for (context, args[named.args.len..]) |formal, *arg| arg.* = try self.program.converter().convert(declaring, formal, self.env);
+                    break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args);
                 },
                 // Only a closure's capture holds an erased function type, and
                 // its restore relates no such capture (`constTypeHasErased`).
@@ -6870,29 +7728,27 @@ pub const Builder = struct {
         return try self.program.relateVariablesPartial(self.allocator, roots, count);
     }
 
-    pub fn composeDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!LocalId {
-        if (try self.staticDictionary(entry, captures)) |local| return local;
-        const local = try self.closedLocal(try self.erasedLayout());
-        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_compose = .{
-            .worker = self.program.worker(entry).proc,
-            .captures = try self.store.addLocalSpan(captures),
-        } }), .next = undefined } });
-        return local;
+    /// Reserve the constructor before following its local-method capture edges.
+    /// Re-entry names that same node only in the same declaration instance.
+    pub fn beginCodecComposition(self: *Builder, family: u32, bound: []const TypeId, actual: TypeId) Allocator.Error!union(enum) { composing: u32, back_edge: Word } {
+        for (self.codec_compositions.items) |composition| {
+            if (composition.family != family or composition.declaration != self.declaration or !std.mem.eql(TypeId, composition.bound, bound)) continue;
+            const formal = try self.program.substitute(self.allocator, self.program.codec.families.items[family].constructor_fn, bound);
+            return .{ .back_edge = try self.adaptDictionary(.{ .recipe = composition.recipe }, formal, actual) };
+        }
+        const index: u32 = @intCast(self.codec_compositions.items.len);
+        const recipe = try self.recipes.reserve();
+        try self.codec_compositions.append(self.allocator, .{ .family = family, .bound = bound, .recipe = recipe, .declaration = self.declaration });
+        return .{ .composing = index };
     }
 
-    /// The dictionary of `entry` as static data, when all of `captures` are
-    /// themselves static. A compile-time program reads its function values'
-    /// types back from what its compositions noted, so it composes them.
-    fn staticDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!?LocalId {
-        if (self.program.input.stored_functions) return null;
-        const words = try self.allocator.alloc(StaticDescs.CaptureWord, captures.len);
-        defer self.allocator.free(words);
-        for (captures, words) |capture, *word| word.* = self.static_words.get(capture) orelse return null;
-        const dictionary = try self.program.static_descs.dictionary(self.program.worker(entry).proc, words);
-        const local = try self.closedLocal(try self.erasedLayout());
-        try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = dictionary.slot } }, .next = undefined } });
-        try self.static_words.put(self.allocator, local, .{ .callable = dictionary.node });
-        return local;
+    pub fn finishCodecComposition(self: *Builder, index: u32, composed: Word) void {
+        if (self.codec_compositions.items.len != index + 1) invariant("generated codec constructor compositions did not nest");
+        const composition = self.codec_compositions.pop().?;
+        switch (composed) {
+            .recipe => |recipe| self.recipes.setSame(composition.recipe, recipe),
+            .static => invariant("a generated codec constructor has no callable recipe"),
+        }
     }
 
     /// The callable type the requirement of evidence parameter `index` of
@@ -6914,7 +7770,7 @@ pub const Builder = struct {
     /// The dictionary in scope for checked evidence parameter `index`, or
     /// null when the parameter is no dictionary of the worker's scopes: a
     /// requirement on a sealed scheme variable.
-    pub fn scopeDictionaryIfAny(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!?LocalId {
+    pub fn scopeDictionaryIfAny(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!?Word {
         if (self.foreign_scopes != null) return try self.scopeDictionary(index);
         const aliases = self.alias_scopes.items;
         if (index.depth < aliases.len) return try self.scopeDictionary(index);
@@ -6924,7 +7780,7 @@ pub const Builder = struct {
         var offset: usize = 0;
         for (scopes[0..depth]) |scope| offset += scope.len;
         for (scopes[depth], 0..) |param_index, position| {
-            if (param_index == index.index) return self.dict_locals[offset + position];
+            if (param_index == index.index) return try self.dictInputWord(offset + position);
         }
         return null;
     }
@@ -6932,7 +7788,7 @@ pub const Builder = struct {
     /// The dictionary of the requirement that evidence parameter `index`
     /// of the worker's scopes names, resolved from the sealed type of the
     /// variable it dispatches on.
-    fn sealedScopeDictionary(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!LocalId {
+    fn sealedScopeDictionary(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!Word {
         const aliases = self.alias_scopes.items.len;
         if (index.depth < aliases) invariant("a scheme alias scope's requirement has no dictionary");
         const depth = index.depth - aliases;
@@ -6954,11 +7810,26 @@ pub const Builder = struct {
     /// Dictionary parameter `param` of the frame at `position` of
     /// `alias_scopes`. A literal chain frame's is composed at its first read,
     /// in the scope that holds the frame's edge.
-    fn frameDictionary(self: *Builder, position: usize, param: u32) Allocator.Error!LocalId {
+    fn frameDictionary(self: *Builder, position: usize, param: u32) Allocator.Error!Word {
         const scope = self.alias_scopes.items[position];
         const slot = std.mem.findScalar(u32, scope.params, param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
+        if (scope.declaration) |declaration| if (declaration.dicts[slot] == null) {
+            // Only a requirement naming a type the callee's body declares
+            // (a captured codec requirement whose format is a local type)
+            // composes a dictionary that reaches the callee's local
+            // procedures, so only such a slot is ever being built while one
+            // is. A local procedure's own scheme names a declaring slot only
+            // through a requirement on one of the callee's quantified
+            // variables, which the callee's annotation states outside its
+            // body and so cannot name a type its body declares; a captured
+            // requirement on a structural receiver resolves structurally.
+            invariant("a local procedure's own scheme names a declaration context's dictionary while it is built");
+        };
         const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
         if (deferred.composed[slot]) |dictionary| return dictionary;
+        if (deferred.declaring) |declaring| if (self.frameDeclaration(deferred.composed) == null) {
+            return try self.frameDeclarationDictionary(position, declaring, deferred, slot);
+        };
         const saved_module = self.module;
         const saved_view = self.view;
         const saved_env = self.env;
@@ -6988,10 +7859,33 @@ pub const Builder = struct {
         return dictionary;
     }
 
+    /// Dictionary `slot` of the literal chain frame at `position`, a call
+    /// instance of template worker `declaring`, built in the frame's
+    /// declaration context.
+    fn frameDeclarationDictionary(self: *Builder, position: usize, declaring: WorkerId, deferred: DeferredDictionaries, slot: usize) Allocator.Error!Word {
+        const context = deferred.context orelse invariant("a template frame's dictionaries have no parameter context");
+        const bound = context.env.bound;
+        const dicts = try self.allocator.dupe(?Word, deferred.composed);
+        defer self.allocator.free(dicts);
+        const building = try self.allocator.alloc(bool, dicts.len);
+        defer self.allocator.free(building);
+        @memset(building, false);
+        var declaration: Declaration = .{
+            .worker = declaring,
+            .bound = bound,
+            .words = null,
+            .dicts = dicts,
+            .building = building,
+            .source = .{ .frame = .{ .position = position, .composed = deferred.composed.ptr, .scope = self.alias_scopes.items[position] } },
+            .outer = self.declaration,
+        };
+        return try self.declarationDictionary(&declaration, slot);
+    }
+
     /// The dictionary in scope for checked evidence parameter `index`.
     /// Depth 0 is the innermost scope: an entered scheme alias's, then the
     /// worker's own.
-    pub fn scopeDictionary(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!LocalId {
+    pub fn scopeDictionary(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!Word {
         if (self.foreign_scopes) |first| {
             const scopes = self.alias_scopes.items[first..];
             if (index.depth >= scopes.len) invariant("an exact procedure alias's lookup names evidence outside the alias's scope");
@@ -7005,7 +7899,7 @@ pub const Builder = struct {
         var offset: usize = 0;
         for (scopes[0..depth]) |scope| offset += scope.len;
         for (scopes[depth], 0..) |param_index, position| {
-            if (param_index == index.index) return self.dict_locals[offset + position];
+            if (param_index == index.index) return try self.dictInputWord(offset + position);
         }
         const worker = self.currentWorker().*;
         const named = self.workerName(self.worker_id);
@@ -7028,7 +7922,7 @@ pub const Builder = struct {
         });
     }
 
-    pub fn siteSubstitution(self: *Builder, site: CheckedExprId) []const checked.CheckedTypeId {
+    pub fn siteSubstitution(self: *Builder, site: ExprId) []const checked.CheckedTypeId {
         return self.view.view.static_dispatch_plans.siteSubstitution(site) orelse &.{};
     }
 
@@ -7056,7 +7950,7 @@ pub const Builder = struct {
                         // must remain an explicit operation.
                         if (dyn.desc != self.store.localDyn(result).?.desc) return false;
                     },
-                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_compose, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
+                    .frame_alloc, .table_entry, .copy, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
                 }
                 op.target = result;
             },
@@ -7073,45 +7967,57 @@ pub const Builder = struct {
     /// instantiation, `ret`; the call's own type `result_ty` may widen a
     /// sealed row of it, which the result is converted to (design.md
     /// "Sealed Result Rows").
-    pub fn finishCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, bound: []const TypeId, arg_types: []const TypeId, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
+    pub fn finishCall(self: *Builder, callee: WorkerId, hidden_words: []const Word, bound: []const TypeId, arg_types: []const TypeId, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
         const explicit = try self.popValues(@intCast(arg_types.len));
         defer self.allocator.free(explicit);
-        try self.argsAtParams(explicit, arg_types, callee, bound);
-        const passed = try self.callDescriptorArgs(callee, bound);
-        defer self.allocator.free(passed);
-        const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden, passed });
+        // Checking identifies compiler-provided operations explicitly. Emit
+        // that operation at its checked instantiation, using the same path
+        // as the wrapper's own body, rather than calling the wrapper.
+        const worker = self.program.worker(callee).*;
+        if (worker.key == .template) {
+            const key = worker.key.template;
+            const owner = self.program.module(key.module);
+            const template = owner.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+            if (template.provided_low_level) |op| {
+                const adapted_types = try self.allocator.dupe(TypeId, arg_types);
+                defer self.allocator.free(adapted_types);
+                try self.argsAtParams(explicit, arg_types, callee, bound, adapted_types);
+                try self.emitLowLevelCall(op, explicit, ret, adapted_types);
+                const value = self.popValue();
+                return try self.pushValue(try self.adaptValue(value, ret, result_ty));
+            }
+        }
+        // A `List` template called at a fixed-size integer item type calls
+        // its integer list worker for that type, whose inputs are the
+        // generic worker's.
+        const direct = try self.program.directCallTarget(callee, bound);
+        try self.argsAtParams(explicit, arg_types, direct, bound, null);
+        // The callee's one hidden argument: its type table at the hidden
+        // words.
+        const args = try self.callArgs(explicit, direct, hidden_words);
         defer self.allocator.free(args);
         const target = try self.localOf(ret, .frame);
-        const proc = self.program.worker(callee).proc;
+        const proc = self.program.worker(direct).proc;
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
-    }
-
-    /// Prepare the callee's signature descriptors at this checked instantiation.
-    /// The returned argument array belongs to the caller; locals belong to LIR.
-    pub fn callDescriptorArgs(self: *Builder, callee: WorkerId, bound: ?[]const TypeId) Allocator.Error![]LocalId {
-        const required = try self.program.passedDescriptorTypes(self.allocator, callee);
-        defer self.allocator.free(required);
-        const result = try self.allocator.alloc(LocalId, required.len);
-        errdefer self.allocator.free(result);
-        for (required, result) |ty, *local| {
-            const instantiated = if (bound) |subst| try self.program.substitute(self.allocator, ty, subst) else ty;
-            local.* = try self.descOf(instantiated);
-        }
-        return result;
     }
 
     /// `args` of types `arg_types`, where one parameter of `callee` under
     /// `bound` stores a record in another order: a padded nominal passed to
     /// a parameter of its record row (design.md "Nominal Record Field
     /// Order"), which the callee reads by the structural rule.
-    fn argsAtParams(self: *Builder, args: []LocalId, arg_types: []const TypeId, callee: WorkerId, bound: []const TypeId) Allocator.Error!void {
+    fn argsAtParams(self: *Builder, args: []LocalId, arg_types: []const TypeId, callee: WorkerId, bound: []const TypeId, adapted_types: ?[]TypeId) Allocator.Error!void {
         const store = &self.program.store;
-        for (args, arg_types, self.program.worker(callee).params[0..args.len]) |*arg, arg_ty, param| {
+        for (args, arg_types, self.program.worker(callee).params[0..args.len], 0..) |*arg, arg_ty, param, index| {
             // A variable has the one representation of whatever it binds.
             if (store.get(param) == .variable) continue;
             const param_ty = if (store.isClosed(param)) param else try self.program.substitute(self.allocator, param, bound);
-            if (try self.recordOrderDiffers(arg_ty, param_ty)) arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
+            if (try self.recordOrderDiffers(arg_ty, param_ty)) {
+                arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
+                // A direct primitive consumes these adapted bytes, so its
+                // descriptor operands must describe the adapted type too.
+                if (adapted_types) |types_after_adaptation| types_after_adaptation[index] = param_ty;
+            }
         }
     }
 
@@ -7131,7 +8037,7 @@ pub const Builder = struct {
                     try pending.append(self.allocator, .{ try self.program.converter().backing(pair[0]), pair[1] });
                 } else if (to == .nominal and to.nominal.has_backing) {
                     try pending.append(self.allocator, .{ pair[0], try self.program.converter().backing(pair[1]) });
-                } else if (paddedAgainstEmpty(from, to)) {
+                } else if (Program.paddedAgainstEmpty(from, to)) {
                     return true;
                 }
                 continue;
@@ -7242,19 +8148,47 @@ pub const Builder = struct {
         return self.view.view.static_dispatch_plans.plans[@backingInt(id)];
     }
 
-    pub fn lowerDispatch(self: *Builder, expr_id: CheckedExprId, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+    pub fn lowerDispatch(self: *Builder, expr_id: ExprId, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         try self.lowerDispatchAt(plan_id, try self.exprType(expr_id));
     }
 
-    /// Push a dispatch operand: a checked expression, or a value the checker
-    /// generated for a literal conversion.
+    /// The equality test of a custom literal pattern: its `is_eq` dispatch
+    /// on the value the pattern matches and the pattern's literal converted
+    /// at its type (`checked_bodies.LiteralPatternGuard`).
+    fn lowerLiteralPatternGuard(self: *Builder, pattern: PatternId) Allocator.Error!void {
+        const guard = self.bodies().literalPatternGuard(pattern) orelse invariant("a literal guard was asked of a pattern compared directly");
+        self.region = self.nodeRegion(@backingInt(pattern));
+        try self.lowerDispatchAt(guard.equality_plan orelse invariant("a custom literal pattern had no checked equality plan"), try self.convert(guard.equality_ty));
+    }
+
+    /// The value of a custom literal pattern's guard operand where no
+    /// execution reaches it: a value of the pattern's type.
+    fn literalPatternDeadValue(self: *Builder, pattern: PatternId) Allocator.Error!LocalId {
+        if (try self.program.hasError(self.module, self.bodies().patternType(pattern))) return try self.closedLocal(.zst);
+        return try self.localOf(try self.patternType(pattern), .frame);
+    }
+
+    /// Push a dispatch operand: a checked expression, a value the checker
+    /// generated for a literal conversion, or an operand of a custom
+    /// literal pattern's equality.
     pub fn pushOperand(self: *Builder, operand: static_dispatch.StaticDispatchOperand, ty: TypeId) Allocator.Error!void {
         switch (operand) {
-            .checked_expr => |expr| try self.push(.{ .expr = expr }),
+            .checked_expr => |expr| try self.push(.{ .own_expr = expr }),
             .generated_numeral => |literal| try self.push(.{ .numeral_arg = .{ .literal = literal, .ty = ty } }),
-            .generated_quote => |literal| try self.push(.{ .push_value_str = literal }),
+            .generated_quote => |node| try self.push(.{ .push_value_quote = node }),
             .generated_interpolation_segments => |expr| try self.push(.{ .segments_arg = .{ .expr = expr, .ty = ty } }),
+            .literal_pattern_value => |pattern| try self.push(.{ .literal_pattern_value = pattern }),
+            .literal_pattern_conversion => |pattern| try self.push(.{ .literal_pattern_conversion = pattern }),
         }
+    }
+
+    /// The type of a structural equality's operand.
+    fn operandType(self: *Builder, operand: static_dispatch.StaticDispatchOperand) Allocator.Error!TypeId {
+        return switch (operand) {
+            .checked_expr => |expr| try self.exprType(expr),
+            .literal_pattern_value, .literal_pattern_conversion => |pattern| try self.patternType(pattern),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => invariant("structural equality operand is not an expression"),
+        };
     }
 
     pub fn operandTypes(self: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error![]const TypeId {
@@ -7292,6 +8226,26 @@ pub const Builder = struct {
                         try self.pushOperand(operands[index], operand_types[index]);
                     }
                     try self.pushValue(value);
+                    return;
+                }
+                if (node.target.kind == .callable_binding) {
+                    // A method bound to a computed callable is a call of
+                    // the function value its root evaluated.
+                    const fn_ty = try self.dispatchCallable(call_plan.resolution, call_plan.callable_ty);
+                    switch (call_plan.result_mode) {
+                        .value, .parser_for, .encoder_for, .hash, .map, .map_effectful => {},
+                        .equality => |equality| if (equality.negated) {
+                            try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = result_ty } });
+                        },
+                    }
+                    try self.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = @intCast(operands.len), .result = if (call_plan.result_mode == .equality) try self.program.store.primitive(.bool) else result_ty } });
+                    var index = operands.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try self.pushOperand(operands[index], operand_types[index]);
+                    }
+                    const binding = self.program.callableEvalBinding(node.target.kind.callable_binding);
+                    try self.push(.{ .restore_callable_eval = .{ .module = binding.module, .template = binding.template, .ty = fn_ty } });
                     return;
                 }
                 const callee = try self.methodTargetWorker(node.target);
@@ -7336,17 +8290,13 @@ pub const Builder = struct {
                         .value, .hash, .parser_for, .encoder_for, .map, .map_effectful => false,
                     };
                     if (operands.len != 2) invariant("structural equality has two operands");
-                    const lhs = switch (operands[0]) {
-                        .checked_expr => |operand| operand,
+                    switch (operands[1]) {
+                        .checked_expr, .literal_pattern_value, .literal_pattern_conversion => {},
                         .generated_interpolation_segments, .generated_numeral, .generated_quote => invariant("structural equality operand is not an expression"),
-                    };
-                    const rhs = switch (operands[1]) {
-                        .checked_expr => |operand| operand,
-                        .generated_interpolation_segments, .generated_numeral, .generated_quote => invariant("structural equality operand is not an expression"),
-                    };
-                    try self.push(.{ .finish_eq = .{ .negated = negated, .operand = try self.exprType(lhs) } });
-                    try self.push(.{ .expr = rhs });
-                    try self.push(.{ .expr = lhs });
+                    }
+                    try self.push(.{ .finish_eq = .{ .negated = negated, .operand = try self.operandType(operands[0]) } });
+                    try self.pushOperand(operands[1], operand_types[1]);
+                    try self.pushOperand(operands[0], operand_types[0]);
                 },
                 .parser, .encoder => try Codec.dispatch(self, call_plan, operands, operand_types, result_ty),
                 .map, .map_effectful => |plan| {
@@ -7359,7 +8309,7 @@ pub const Builder = struct {
                         index -= 1;
                         try self.pushOperand(operands[index], operand_types[index]);
                     }
-                    try self.pushValue(dict);
+                    try self.pushValue(try self.materialize(dict));
                 },
             },
             .evidence_dependent => |dependent| {
@@ -7367,7 +8317,7 @@ pub const Builder = struct {
                 // dictionary parameter (design.md "Sealed Result Rows"): its
                 // dictionary is resolved from the variable's sealed type,
                 // as a callable-derived requirement's is.
-                const dict = (try self.scopeDictionaryIfAny(dependent.index)) orelse try self.sealedScopeDictionary(dependent.index);
+                const dict = try self.materialize((try self.scopeDictionaryIfAny(dependent.index)) orelse try self.sealedScopeDictionary(dependent.index));
                 // The dictionary's method is called at the interface its
                 // scope's requirement names; its result is read at the
                 // dispatch's type.
@@ -7416,6 +8366,10 @@ pub const Builder = struct {
     pub fn finishLowLevel(self: *Builder, op: LIR.LowLevel, arg_count: u32, result_ty: TypeId, arg_types: []const TypeId) Allocator.Error!void {
         const args = try self.popValues(arg_count);
         defer self.allocator.free(args);
+        try self.emitLowLevelCall(op, args, result_ty, arg_types);
+    }
+
+    fn emitLowLevelCall(self: *Builder, op: LIR.LowLevel, args: []const LocalId, result_ty: TypeId, arg_types: []const TypeId) Allocator.Error!void {
         const store = &self.program.store;
         var open = !store.isClosed(result_ty);
         for (arg_types) |arg_ty| open = open or !store.isClosed(arg_ty);
@@ -7452,11 +8406,14 @@ pub const Builder = struct {
         // `Box(function)` is the function's erased callable: boxing or
         // unboxing one is the callable itself.
         switch (op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => invariant("LIR-only sequence operation reached checked-body lowering"),
             .box_box => if (store.get(result_ty) == .box and store.get(store.get(result_ty).box) == .function) return try self.pushValue(args[0]),
             .box_unbox, .box_unbox_borrowed => if (store.get(result_ty) == .function) return try self.pushValue(args[0]),
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
-        if (!open) {
+        const sequence_box = (op == .box_box and store.get(result_ty) == .box and store.isSequence(store.get(result_ty).box)) or
+            ((op == .box_unbox or op == .box_unbox_borrowed) and store.isSequence(result_ty));
+        if (!open and !sequence_box) {
             const target = try self.localOf(result_ty, .frame);
             // Source arithmetic commits to its operand type's behavior.
             const committed = if (args.len != 0) CheckedArithmetic.lowerOp(op, self.store.getLocal(args[0]).layout_idx) else op;
@@ -7464,6 +8421,7 @@ pub const Builder = struct {
             return try self.pushValue(target);
         }
         switch (op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => invariant("LIR-only sequence operation reached a generic source operation"),
             .box_box => {
                 const target = try self.localOf(result_ty, .frame);
                 try self.emitDyn(target, .{ .box = .{ .desc = try self.descOf(arg_types[0]), .payload = args[0] } });
@@ -7476,7 +8434,7 @@ pub const Builder = struct {
                 try self.emitDyn(target, .{ .copy = .{ .src = view, .desc = try self.descOf(result_ty) } });
                 return try self.pushValue(target);
             },
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         // Every Builtin low-level whose operands or result can mention a type
         // variable is a list or box operation; every other one is declared
@@ -7511,15 +8469,14 @@ pub const Builder = struct {
     /// Builtin wrapper of `list_map_can_reuse` with local arguments, every
     /// branch tests an integer literal or nothing, and the answer is the
     /// same on every pointer width.
-    fn layoutResolvedBranch(self: *Builder, cond: CheckedExprId, branches: []const checked.CheckedMatchBranch) Allocator.Error!?CheckedExprId {
-        const call = switch (self.bodies().expr(cond).data) {
+    fn layoutResolvedBranch(self: *Builder, cond: ExprId, branches: []const CIR.Expr.Match.Branch.Idx) Allocator.Error!?ExprId {
+        const call = switch (self.bodies().exprData(cond)) {
             .call => |call| call,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
-        const resolved = switch (self.bodies().expr(call.func).data) {
-            .lookup_external => |r| r orelse return null,
-            .lookup_local => |lookup| lookup.resolved orelse return null,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+        const resolved = switch (self.bodies().exprData(call.func)) {
+            .lookup_external, .lookup_local => self.bodies().resolvedRef(call.func) orelse return null,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const use = switch (self.resolvedRef(resolved).ref) {
             .top_level_proc, .imported_proc => |use| use,
@@ -7532,21 +8489,22 @@ pub const Builder = struct {
         };
         const owner = self.program.moduleByKey(.{ .bytes = template_ref.artifact.bytes });
         const op = (owner.view.checked_procedure_templates.templates.items[@backingInt(template_ref.template)].provided_low_level orelse return null).layoutResolved() orelse return null;
-        for (call.args) |arg| switch (self.bodies().expr(arg).data) {
+        for (call.args) |arg| switch (self.bodies().exprData(arg)) {
             .lookup_local => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
-        for (branches) |branch| {
+        for (branches) |branch_idx| {
+            const branch = self.bodies().matchBranch(branch_idx);
             if (branch.guard != null) return null;
-            for (branch.patternsSlice(self.bodies())) |pattern| switch (self.bodies().pattern(pattern.pattern).data) {
+            for (branch.patterns) |pattern| switch (self.bodies().patternData(self.bodies().matchBranchPattern(pattern).pattern)) {
                 .underscore => {},
-                .numeral_literal => |numeral| if (numeral.guard != null) return null,
-                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => return null,
+                .numeral_literal => if (self.bodies().literalPatternIsCustom(self.bodies().matchBranchPattern(pattern).pattern)) return null,
+                .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => return null,
             };
         }
         const arg_types = try self.allocator.alloc(TypeId, call.args.len);
         defer self.allocator.free(arg_types);
-        for (call.args, arg_types) |arg, *ty| ty.* = try self.exprType(arg);
+        for (call.args, arg_types) |arg, *ty| ty.* = try self.valueType(arg);
         const answer: u8 = switch (op) {
             .list_map_can_reuse => blk: {
                 const decision = try self.listMapInterchangeable(arg_types);
@@ -7556,18 +8514,20 @@ pub const Builder = struct {
             // Its answer is computed where it runs.
             .list_item_size_at_most => return null,
         };
-        for (branches) |branch| {
-            for (branch.patternsSlice(self.bodies())) |pattern| switch (self.bodies().pattern(pattern.pattern).data) {
+        for (branches) |branch_idx| {
+            const branch = self.bodies().matchBranch(branch_idx);
+            for (branch.patterns) |pattern| switch (self.bodies().patternData(self.bodies().matchBranchPattern(pattern).pattern)) {
                 .underscore => return branch.value,
-                .numeral_literal => |numeral| {
-                    const bits = checked.exact_numeral.intBits(self.view.view.module_env.exactNumeral(numeral.literal), .u8) orelse continue;
+                .numeral_literal => {
+                    const literal = self.bodies().numeralLiteral(@backingInt(self.bodies().matchBranchPattern(pattern).pattern));
+                    const bits = checked.exact_numeral.intBits(self.view.view.module_env.exactNumeral(literal), .u8) orelse continue;
                     const value: i128 = switch (bits) {
                         .i128 => |value| value,
                         .u128 => |value| @bitCast(value),
                     };
                     if (value == answer) return branch.value;
                 },
-                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => unreachable, // only literal and wildcard branches reach here
+                .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => unreachable, // only literal and wildcard branches reach here
             };
         }
         return null;
@@ -7629,23 +8589,30 @@ pub const Builder = struct {
 
     /// A function value: an erased callable of the lambda's worker, whose
     /// captures hold the captured values and this worker's descriptors.
-    pub fn lowerClosure(self: *Builder, expr_id: CheckedExprId, lambda_expr: CheckedExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
+    pub fn lowerClosure(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
+        // rejectCapturingMethods removes methods that transitively capture
+        // invocation-specific values before the registry records a target.
+        // Only that checked proof authorizes immutable capture edges here.
+        if (try self.program.localMethodBinding(self.module, lambda_expr)) |method| {
+            const closure = try self.localProcClosureWithCaptures(method, true);
+            return try self.pushValue(try self.materialize(.{ .recipe = try self.immortalRecipe(closure) }));
+        }
         // A generalized local procedure's type is converted with its own
         // scheme's variables in scope.
-        const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id|
+        const own: ?lower.LocalScheme = if (try self.program.localScope(self.module, lambda_expr)) |scope_id|
             try self.localScheme(scope_id)
         else
             null;
         const fn_ty = if (own) |scheme| blk: {
-            if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk try self.exprType(expr_id);
+            if (scheme.isEmpty()) break :blk try self.exprType(expr_id);
             const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ self.env.vars, scheme.scheme_vars });
             defer self.allocator.free(vars);
             const bound = try self.allocator.alloc(TypeId, vars.len);
             defer self.allocator.free(bound);
             for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-            break :blk try self.program.converter().convert(self.module, self.bodies().expr(expr_id).ty, .{ .module = self.module, .vars = vars, .bound = bound });
+            break :blk try self.program.converter().convert(self.module, self.bodies().exprType(expr_id), .{ .module = self.module, .vars = vars, .bound = bound });
         } else try self.exprType(expr_id);
-        const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme) else null;
+        const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.isEmpty()) null else scheme) else null;
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
         const values = try self.allocator.alloc(LocalId, captures.len + self.var_descs.len + self.dict_locals.len);
@@ -7659,11 +8626,12 @@ pub const Builder = struct {
         // A generalized lambda that is not a local procedure is instantiated
         // where it is constructed: its function value captures its own
         // scheme's descriptors and dictionaries after the enclosing scope's.
-        var descs: []const LocalId = self.var_descs;
-        var dicts: []const LocalId = try std.mem.concat(self.program.arena.allocator(), LocalId, &.{ self.dict_locals, self.literal_locals });
-        var own_descs: std.ArrayList(LocalId) = .empty;
+        const enclosing_dicts = try self.dictLiteralInputWords(0, 0);
+        var descs: []const Word = try self.descInputWords(0, self.var_descs.len);
+        var dicts: []const Word = enclosing_dicts;
+        var own_descs: std.ArrayList(Word) = .empty;
         defer own_descs.deinit(self.allocator);
-        var own_dicts: std.ArrayList(LocalId) = .empty;
+        var own_dicts: std.ArrayList(Word) = .empty;
         defer own_dicts.deinit(self.allocator);
         if (generalized) |scheme| if (!scheme.per_call) {
             // A variable the construction's checked instantiation fixes takes
@@ -7673,7 +8641,7 @@ pub const Builder = struct {
             const subst = self.siteSubstitution(expr_id);
             if (subst.len != 0 and subst.len != scheme.scheme_vars.len) invariant("a generalized lambda's construction substitution differs from its scheme");
             const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
-            try own_descs.appendSlice(self.allocator, self.var_descs);
+            try own_descs.appendSlice(self.allocator, descs);
             const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
             defer self.allocator.free(own_types);
             for (own_types, scheme.scheme_vars, 0..) |*own_ty, variable, index| {
@@ -7682,15 +8650,15 @@ pub const Builder = struct {
                 else
                     try self.program.converter().sealedScheme(self.module, variable);
             }
-            try self.resolveOwnKinds(self.bodies().expr(expr_id).ty, scheme, own_types);
-            for (own_types) |own_ty| try own_descs.append(self.allocator, try self.descOf(own_ty));
-            const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }).?;
+            try self.resolveOwnKinds(self.bodies().exprType(expr_id), scheme, own_types);
+            for (own_types) |own_ty| try own_descs.append(self.allocator, try self.descWord(own_ty));
+            const scope_id = (try self.program.localScope(self.module, lambda_expr)).?;
             const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
             for (scheme.dictionaries) |param_index| {
                 if (param_index >= evidence.len) invariant("a generalized lambda's construction evidence does not cover its dictionaries");
                 try own_dicts.append(self.allocator, try self.paramDictionary(evidence, param_index, context));
             }
-            try own_dicts.appendSlice(self.allocator, self.dict_locals);
+            try own_dicts.appendSlice(self.allocator, enclosing_dicts[0..self.dict_locals.len]);
             // Its own scheme's literal arguments, from the construction's
             // edge, then the enclosing scope's. A construction with no checked
             // instantiation has no edge: no use instantiated the lambda, so
@@ -7703,14 +8671,16 @@ pub const Builder = struct {
                 if (subst.len != 0) invariant("a generalized lambda's instantiated construction has no literal arguments for its scheme's literal_requirements");
                 for (scheme.literal_requirements) |_| try own_dicts.append(self.allocator, try self.unreadLiteralArg());
             }
-            try own_dicts.appendSlice(self.allocator, self.literal_locals);
+            try own_dicts.appendSlice(self.allocator, enclosing_dicts[self.dict_locals.len..]);
             descs = own_descs.items;
             dicts = own_dicts.items;
         };
+        // A procedure whose calls pass its table captures none.
+        const inputs: []const Word = if (self.program.perCall(callee)) &.{} else try std.mem.concat(self.program.arena.allocator(), Word, &.{ descs, dicts });
         if (try self.allClosed(capture_types)) {
-            try self.pushValue(try self.packClosure(callee, values[0..captures.len], capture_types, descs, dicts));
+            try self.pushValue(try self.packClosure(callee, values[0..captures.len], capture_types, inputs));
         } else {
-            try self.pushValue(try self.packDynamicClosure(callee, values[0..captures.len], capture_types, descs, dicts));
+            try self.pushValue(try self.packDynamicClosure(callee, values[0..captures.len], capture_types, inputs));
         }
     }
 
@@ -7719,37 +8689,34 @@ pub const Builder = struct {
     /// allocation's capture capacity word, the descriptor and dictionary
     /// words, then the captured values.
     pub fn dynamicCaptureDesc(self: *Builder, capture_types: []const TypeId, word_count: usize) Allocator.Error!LocalId {
-        const word = try self.opaqueWordDesc();
-        const descs = try self.allocator.alloc(LocalId, capture_record_leading_words + word_count + capture_types.len);
-        defer self.allocator.free(descs);
-        @memset(descs[0 .. capture_record_leading_words + word_count], word);
-        for (descs[capture_record_leading_words + word_count ..], capture_types) |*desc, ty| desc.* = try self.descOf(ty);
-        return self.composedArgsDesc(descs);
+        return try self.captureRecordDesc(@intCast(capture_record_leading_words + word_count), try self.descWords(capture_types));
+    }
+
+    /// A capture record's purpose is explicit, including when its fields
+    /// happen to match an ordinary argument buffer's fields.
+    fn captureRecordDesc(self: *Builder, leading: u32, elems: []const Word) Allocator.Error!LocalId {
+        return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .args_desc = .{ .leading = leading, .elems = elems, .capture_record = true } }) });
     }
 
     /// The words before a dynamic capture record's descriptor and
     /// dictionary words: its descriptor and its capture capacity.
     pub const capture_record_leading_words = 2;
 
-    pub fn opaqueWordDesc(self: *Builder) Allocator.Error!LocalId {
-        if (self.opaque_word_desc) |local| return local;
-        const local = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.opaqueWordSlot() } }, .next = undefined } });
-        self.opaque_word_desc = local;
-        return local;
-    }
-
     /// A function value whose captures include values of open types: the
     /// capture record is built in the dynamic frame region and moved into
     /// the callable. `capture_types` are the captured values' types in this
     /// body's scope.
-    pub fn packDynamicClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
-        if (self.immortal_closures) invariant("a method override captures a value of an open type, which methods never capture");
-        const record_desc = try self.dynamicCaptureDesc(capture_types, descs.len + dicts.len);
+    pub fn packDynamicClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, inputs: []const Word) Allocator.Error!LocalId {
+        var table_word: [1]LocalId = undefined;
+        const words: []const LocalId = if (try self.capturedTable(callee, inputs)) |table| blk: {
+            table_word[0] = table;
+            break :blk &table_word;
+        } else &.{};
+        const record_desc = try self.dynamicCaptureDesc(capture_types, words.len);
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = record_desc, .storage = .frame } });
         // The capacity word is the runtime's to write when it packs the
         // callable; the record carries its descriptor there until then.
-        const fields = try std.mem.concat(self.allocator, LocalId, &.{ &.{ record_desc, record_desc }, descs, dicts, captured });
+        const fields = try std.mem.concat(self.allocator, LocalId, &.{ &.{ record_desc, record_desc }, words, captured });
         defer self.allocator.free(fields);
         try self.emitDyn(record, .{ .record = .{ .desc = record_desc, .fields = try self.store.addLocalSpan(fields) } });
         const target = try self.closedLocal(try self.erasedLayout());
@@ -7757,26 +8724,39 @@ pub const Builder = struct {
         return target;
     }
 
-    /// The erased callable of lambda worker `callee` capturing `values`
-    /// (of `capture_types`), then descriptors and dictionaries.
-    pub fn packClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
-        const values = try std.mem.concat(self.allocator, LocalId, &.{ captured, descs, dicts });
-        defer self.allocator.free(values);
-        if (self.immortal_closures) {
-            // Only function values (an adapted override's or dictionary's
-            // own callable, itself immortal) are captured: methods capture
-            // no values.
-            for (capture_types) |capture_ty| {
-                if (self.program.store.get(capture_ty) != .function) invariant("a method override captures a value, which methods never do");
-            }
-            return try self.composeDictionary(callee, values);
+    /// The type table an erased callable of `callee` captures at `inputs`:
+    /// none for a worker without inputs, or one whose calls pass its table
+    /// (`Program.perCall`), which takes no inputs here.
+    pub fn capturedTable(self: *Builder, callee: WorkerId, inputs: []const Word) Allocator.Error!?LocalId {
+        if (self.program.perCall(callee)) {
+            if (inputs.len != 0) invariant("a procedure whose calls pass its table was packed with inputs");
+            return null;
         }
+        return try self.tableLocal(callee, inputs);
+    }
+
+    /// The erased callable of worker `callee` capturing `values` (of
+    /// `capture_types`), then its type table at `inputs`.
+    pub fn packClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, inputs: []const Word) Allocator.Error!LocalId {
+        var table_word: [1]LocalId = undefined;
+        const words: []const LocalId = if (try self.capturedTable(callee, inputs)) |table| blk: {
+            table_word[0] = table;
+            break :blk &table_word;
+        } else &.{};
+        const values = try std.mem.concat(self.allocator, LocalId, &.{ captured, words });
+        defer self.allocator.free(values);
+        // Producer-authored constant slots prove that this environment has
+        // no invocation-specific data, including the capture-free case.
+        const all_static = for (values) |value| {
+            if (!self.constant_slots.contains(value)) break false;
+        } else true;
+        if (all_static) return try self.staticClosure(callee, captured, capture_types, inputs, false, null);
         const target = try self.closedLocal(try self.erasedLayout());
         var capture: ?LocalId = null;
         var capture_layout: ?layout.Idx = null;
         var on_drop: LIR.ErasedCallableOnDrop = .none;
         if (values.len != 0) {
-            const record_layout = try self.captureLayout(capture_types, descs.len, dicts.len);
+            const record_layout = try self.captureLayout(capture_types, words.len);
             const record = try self.closedLocal(record_layout);
             try self.emitLinear(.{ .assign_struct = .{ .target = record, .fields = try self.store.addLocalSpan(values), .next = undefined } });
             capture = record;
@@ -7796,11 +8776,67 @@ pub const Builder = struct {
                 .capture = capture,
                 .capture_layout = capture_layout,
                 .on_drop = on_drop,
+                .on_copy = on_drop.copyCallback(),
+                .frozen_capture_layout = switch (on_drop) {
+                    .none => null,
+                    .rc_helper => |helper| try self.program.result.layouts.putPrefixedCaptureLayout(helper.layout_idx, self.program.result.erased_capture_prefix),
+                },
                 .reuse = reuse,
             }),
             .next = undefined,
         } });
         return target;
+    }
+
+    /// Encode a completed callable and its captures as immutable target data.
+    /// The layout follows the worker's declared ABI; no closure packing executes
+    /// when the constant is read.
+    fn staticClosure(self: *Builder, worker: WorkerId, captured: []const LocalId, capture_types: []const TypeId, inputs: []const Word, dynamic: bool, capture_descs: ?[]const Word) Allocator.Error!LocalId {
+        const per_call = self.program.perCall(worker);
+        if (per_call and inputs.len != 0) invariant("a completed per-call worker captures unexpected inputs");
+        const table = if (per_call or (inputs.len == 0 and self.program.inputCount(worker) == 0)) null else table: {
+            const word = try self.tableWord(worker, inputs);
+            const static = switch (word) {
+                .static => |value| value,
+                .recipe => |id| value: {
+                    if (try self.readsInputs(id)) invariant("a completed function's type table depends on runtime inputs");
+                    break :value try self.foldWord(id);
+                },
+            };
+            break :table try self.staticRead(try self.program.static_descs.wordSlot(static));
+        };
+        const table_count: usize = @intFromBool(table != null);
+        var fields: std.ArrayList(LocalId) = .empty;
+        defer fields.deinit(self.allocator);
+        var record_layout: layout.Idx = .zst;
+        if (dynamic) {
+            const count = capture_record_leading_words + table_count + captured.len;
+            const layouts = try self.allocator.alloc(layout.StructField, count);
+            defer self.allocator.free(layouts);
+            const words = capture_record_leading_words + table_count;
+            for (layouts, 0..) |*field, i| {
+                field.* = .{ .index = @intCast(i), .layout = if (i < words) .opaque_ptr else try self.program.layouts.layoutOf(capture_types[i - words]) };
+            }
+            record_layout = try self.program.result.layouts.putNominalStructFields(layouts);
+            const record_desc = try self.captureRecordDesc(@intCast(words), capture_descs orelse try self.descWords(capture_types));
+            const capacity = try self.staticPartsLocal(.opaque_ptr, .{ .word = self.program.result.layouts.layoutSize(self.program.result.layouts.getLayout(record_layout)) }, &.{});
+            try fields.appendSlice(self.allocator, &.{ record_desc, capacity });
+            if (table) |local| try fields.append(self.allocator, local);
+            try fields.appendSlice(self.allocator, captured);
+        } else {
+            record_layout = try self.captureLayout(capture_types, table_count);
+            try fields.appendSlice(self.allocator, captured);
+            if (table) |local| try fields.append(self.allocator, local);
+        }
+        const proc = self.program.worker(worker).proc;
+        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc } }, &.{});
+        const record = try self.staticPartsLocal(record_layout, .product, fields.items);
+        const layouts = &self.program.result.layouts;
+        const on_drop: LIR.ErasedCallableOnDrop = if (layouts.layoutContainsRefcounted(layouts.getLayout(record_layout)))
+            .{ .rc_helper = .{ .op = .host_drop, .layout_idx = try layouts.putPrefixedCaptureLayout(record_layout, self.program.result.erased_capture_prefix) } }
+        else
+            .none;
+        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{record});
     }
 
     /// Pop a function value's arguments and the function value, and call it
@@ -7880,7 +8916,7 @@ pub const Builder = struct {
 
     /// `a and b` evaluates `b` only when `a` is true; `a or b` only when
     /// `a` is false.
-    pub fn lowerShortCircuit(self: *Builder, is_and: bool, lhs: CheckedExprId, rhs: CheckedExprId) Allocator.Error!void {
+    pub fn lowerShortCircuit(self: *Builder, is_and: bool, lhs: ExprId, rhs: ExprId) Allocator.Error!void {
         const result = try self.closedLocal(.bool);
         const join = self.freshJoin();
         const after = try self.declareMergeJoin(join, result, null);
@@ -7890,7 +8926,7 @@ pub const Builder = struct {
         try self.push(.{ .expr = lhs });
     }
 
-    pub fn shortCircuit(self: *Builder, is_and: bool, rhs: CheckedExprId, join: LIR.JoinPointId) Allocator.Error!void {
+    pub fn shortCircuit(self: *Builder, is_and: bool, rhs: ExprId, join: LIR.JoinPointId) Allocator.Error!void {
         const holes = try self.emitBoolSwitch(self.popValue());
         // The side that decides the result alone jumps with the constant.
         self.hole = if (is_and) holes.otherwise else holes.then;
@@ -7902,11 +8938,11 @@ pub const Builder = struct {
 
     // -- Aggregates --
 
-    pub fn finishRecord(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
-        const record: @FieldType(checked.CheckedExprData, "record") = switch (self.bodies().expr(expr_id).data) {
+    pub fn finishRecord(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        const record: @FieldType(bodies_mod.ExprData, "record") = switch (self.bodies().exprData(expr_id)) {
             .record => |record| record,
             .empty_record => .{ .fields = &.{}, .unsets = &.{}, .ext = null },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a record construction is not a record expression"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a record construction is not a record expression"),
         };
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(record.fields.len));
@@ -7926,7 +8962,8 @@ pub const Builder = struct {
         defer self.allocator.free(ordered);
         @memset(ordered, null);
         const name_store = self.view.nameStore();
-        for (record.fields, values) |field, value| {
+        for (record.fields, values) |field_id, value| {
+            const field = self.bodies().recordField(field_id);
             const name = try self.program.store.internName(name_store.recordFieldLabelText(field.label));
             const position = for (fields, 0..) |candidate, index| {
                 if (candidate.name == name) break index;
@@ -7937,13 +8974,14 @@ pub const Builder = struct {
                 .variable_slot => blk: {
                     const storage = try self.program.layouts.fieldStorage(fields[position]);
                     const slot_local = try self.localOf(storage, .frame);
-                    try self.emitDyn(slot_local, .{ .adapt = .{ .src = value, .from = try self.descOf(fields[position].ty), .to = try self.descOf(storage) } });
+                    try self.emitAdapt(slot_local, value, fields[position].ty, storage);
                     break :blk slot_local;
                 },
             };
         }
         // Unset fields (`name: _`) are missing.
-        for (record.unsets) |label| {
+        for (record.unsets) |unset| {
+            const label = self.bodies().unsetField(unset);
             const name = try self.program.store.internName(name_store.recordFieldLabelText(label));
             for (fields, ordered) |field, *slot| {
                 if (field.name != name) continue;
@@ -7956,26 +8994,32 @@ pub const Builder = struct {
             // A record of an open row takes the fields its update names and
             // the rest of its base's, which only its descriptor lists.
             if (record_ty.ext != null) {
-                var names: std.ArrayList(LocalId) = .empty;
+                var names: std.ArrayList(types.NameId) = .empty;
                 defer names.deinit(self.allocator);
                 var updated: std.ArrayList(LocalId) = .empty;
                 defer updated.deinit(self.allocator);
                 for (fields, ordered) |field, value| {
                     const local = value orelse continue;
-                    try names.append(self.allocator, try self.nameDesc(field.name));
+                    try names.append(self.allocator, field.name);
                     try updated.append(self.allocator, local);
                 }
+                const base_ty = try self.valueType(record.ext.?);
+                const plan = try self.materialize(.{ .recipe = try self.recipes.intern(.{ .update_plan = .{
+                    .base = try self.descWord(base_ty),
+                    .result = try self.descWord(ty),
+                    .names = names.items,
+                } }) });
                 const result = try self.localOf(ty, .frame);
                 try self.emitDyn(result, .{ .record_update = .{
                     .base = base_value,
-                    .base_desc = try self.descOf(try self.exprType(record.ext.?)),
+                    .base_desc = try self.descOf(base_ty),
                     .desc = try self.descOf(ty),
-                    .names = try self.store.addLocalSpan(names.items),
+                    .plan = plan,
                     .values = try self.store.addLocalSpan(updated.items),
                 } });
                 return try self.pushValue(result);
             }
-            const base_ty = try self.structuralType(try self.exprType(record.ext.?));
+            const base_ty = try self.structuralType(try self.valueType(record.ext.?));
             const base_record = switch (self.program.store.get(base_ty)) {
                 .record => |value| value,
                 .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record update's base is not a record"),
@@ -7993,7 +9037,7 @@ pub const Builder = struct {
                 } else {
                     if (base_record.ext == null) invariant("a record update's field is absent from its base");
                     const local = try self.localOf(storage, .view);
-                    try self.emitDyn(local, .{ .field_addr_named = .{ .base = base_value, .desc = try self.descOf(base_ty), .name = try self.nameDesc(field.name) } });
+                    try self.emitDyn(local, .{ .field_addr = .{ .base = base_value, .desc = try self.descOf(base_ty), .field_index = try self.fieldIndex(base_ty, field.name) } });
                     slot.* = local;
                 }
             }
@@ -8003,8 +9047,8 @@ pub const Builder = struct {
         for (fields, ordered, slots) |field, value, *slot| {
             slot.* = value orelse switch (field.kind) {
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{}),
-                .inline_slot => try self.defaultValue(self.program.omitted_defaults.get(.{ .module = self.module, .expr = expr_id, .name = field.name }) orelse
-                    invariant("a record construction omits a field it has no default for")),
+                .inline_slot => try self.defaultValue((try self.program.omittedDefault(.{ .module = self.module, .expr = expr_id, .name = field.name })) orelse
+                    invariant("a record construction omits a field it has no default for"), field.ty),
                 .variable_slot => invariant("a record construction omits a field of undetermined kind"),
             };
         }
@@ -8033,25 +9077,25 @@ pub const Builder = struct {
         return target;
     }
 
-    pub fn finishTuple(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
-        const items = self.bodies().expr(expr_id).data.tuple;
+    pub fn finishTuple(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        const items = self.bodies().exprData(expr_id).tuple;
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(items.len));
         defer self.allocator.free(values);
         try self.pushValue(try self.buildStruct(ty, values));
     }
 
-    pub fn finishTag(self: *Builder, expr_id: CheckedExprId, at_ty: ?TypeId) Allocator.Error!void {
+    pub fn finishTag(self: *Builder, expr_id: ExprId, at_ty: ?TypeId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
         const label, const arg_count: usize = switch (expr.data) {
             .tag => |tag| .{ tag.name, tag.args.len },
             .zero_argument_tag => |tag| .{ tag.name, 0 },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // only tag expressions finish as tags
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only tag expressions finish as tags
         };
         const ty = at_ty orelse try self.exprType(expr_id);
         const values = try self.popValues(@intCast(arg_count));
         defer self.allocator.free(values);
-        const name = try self.program.store.internName(self.view.nameStore().tagLabelText(label));
+        const name = try self.program.store.internName(self.view.nameStore().tagLabelText(self.bodies().tagLabel(label)));
         try self.pushValue(try self.buildTag(ty, name, values));
     }
 
@@ -8060,7 +9104,8 @@ pub const Builder = struct {
     pub fn buildTag(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId) Allocator.Error!LocalId {
         if (!try self.closed(ty)) {
             const target = try self.localOf(ty, .frame);
-            try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(try self.structuralType(ty)), .name = try self.nameDesc(name), .payloads = try self.store.addLocalSpan(values) } });
+            const union_ty = try self.structuralType(ty);
+            try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(union_ty), .discriminant = try self.tagIndex(union_ty, name), .payloads = try self.store.addLocalSpan(values) } });
             return target;
         }
         switch (self.program.store.get(try self.structuralType(ty))) {
@@ -8098,12 +9143,12 @@ pub const Builder = struct {
         return target;
     }
 
-    pub fn finishList(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn finishList(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
         const count: usize = switch (expr.data) {
             .list => |items| items.len,
             .empty_list => 0,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // only list expressions finish as lists
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only list expressions finish as lists
         };
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(count));
@@ -8128,8 +9173,8 @@ pub const Builder = struct {
 
     // -- Control flow --
 
-    pub fn ifTest(self: *Builder, expr_id: CheckedExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
-        const if_ = self.bodies().expr(expr_id).data.if_;
+    pub fn ifTest(self: *Builder, expr_id: ExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
+        const if_ = self.bodies().exprData(expr_id).if_;
         const cond = self.popValue();
         const holes = try self.emitBoolSwitch(cond);
         // Pushed in reverse execution order: the then-branch runs first, then
@@ -8137,7 +9182,7 @@ pub const Builder = struct {
         // binder values the construct started with.
         if (index + 1 < if_.branches.len) {
             try self.push(.{ .if_test = .{ .expr = expr_id, .index = index + 1, .join = join, .merge = merge } });
-            try self.push(.{ .expr = if_.branches[index + 1].cond });
+            try self.push(.{ .expr = self.bodies().ifBranch(if_.branches[index + 1]).cond });
         } else {
             try self.pushBranchEnd(join);
             try self.push(.{ .expr = if_.final_else });
@@ -8145,7 +9190,7 @@ pub const Builder = struct {
         if (merge) |m| try self.push(.{ .restore_merge = m });
         try self.push(.{ .resume_at = holes.otherwise });
         try self.pushBranchEnd(join);
-        try self.push(.{ .expr = if_.branches[index].body });
+        try self.push(.{ .expr = self.bodies().ifBranch(if_.branches[index]).body });
         if (merge) |m| try self.restoreMerge(m);
         self.hole = holes.then;
     }
@@ -8156,11 +9201,17 @@ pub const Builder = struct {
         try self.push(if (join) |id| .{ .jump = id } else .ret);
     }
 
-    pub fn matchStart(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    /// What a match reports when no branch matches (`comptimeFailure`).
+    fn comptimeMatchFailure(self: *Builder, expr_id: ExprId, match: @FieldType(bodies_mod.ExprData, "match_")) Allocator.Error!?Match.ComptimeFailure {
+        if (match.skip_exhaustiveness) return null;
+        return try self.comptimeFailure(self.view.view.exhaustiveness_sites.lookupByMatchExpr(expr_id));
+    }
+
+    pub fn matchStart(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
-        const match = self.bodies().expr(expr_id).data.match_;
-        const scrutinee_ty = try self.exprType(match.cond);
-        const tail = self.tail_exprs.contains(expr_id);
+        const match = self.bodies().exprData(expr_id).match_;
+        const scrutinee_ty = try self.valueType(match.cond);
+        const tail = self.isTail(expr_id);
         const state = try self.program.arena.allocator().create(Match.State);
         state.* = .{
             .arena = std.heap.ArenaAllocator.init(self.allocator),
@@ -8168,13 +9219,14 @@ pub const Builder = struct {
             .tail = tail,
             .merge = null,
             .remainder = undefined,
+            .comptime_failure = try self.comptimeMatchFailure(expr_id, match),
         };
-        const merge_binders: []const checked.PatternBinderId = if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{};
+        const merge_binders = try self.bodies().stateMergeBinders(expr_id);
         if (tail) {
             // Each branch returns; nothing reads the construct's own value,
             // and each branch starts from the binder values the construct
             // started with.
-            for (match.branches) |branch| try self.tail_exprs.put(self.allocator, branch.value, {});
+            for (match.branches) |branch| try self.tail_exprs.put(self.allocator, self.bodies().matchBranch(branch).value, {});
             state.merge = try self.beginMerge(merge_binders, .tail);
             try self.push(.unreachable_or_unit);
         } else {
@@ -8193,16 +9245,26 @@ pub const Builder = struct {
         const arena = state.arena.allocator();
         const ctx: Match.Ctx = .{ .b = self, .state = state };
         var rows: std.ArrayList(Match.Compiler.Branch) = .empty;
-        for (match.branches, 0..) |branch, index| {
-            const patterns = branch.patternsSlice(self.bodies());
-            try state.alternatives.put(arena, branch.value, @intCast(patterns.len));
-            for (patterns) |alternative| {
-                for (alternative.binderRemapsSlice(self.bodies())) |remap| {
-                    try state.representatives.put(arena, remap.candidate_binder, remap.representative_binder);
+        var remaps: std.ArrayList(checked.AlternativeBinderRemap) = .empty;
+        for (match.branches, 0..) |branch_idx, index| {
+            const branch = self.bodies().matchBranch(branch_idx);
+            try state.alternatives.put(arena, branch.value, @intCast(branch.patterns.len));
+            // A later alternative's binders read the locals of the
+            // branch's first pattern's binders of the same names.
+            if (branch.patterns.len > 1) {
+                const representative = self.bodies().matchBranchPattern(branch.patterns[0]).pattern;
+                for (branch.patterns[1..]) |alternative_idx| {
+                    const alternative = self.bodies().matchBranchPattern(alternative_idx);
+                    if (alternative.degenerate) continue;
+                    remaps.clearRetainingCapacity();
+                    try self.bodies().appendAlternativeBinderRemaps(arena, representative, alternative.pattern, &remaps);
+                    for (remaps.items) |remap| {
+                        try state.representatives.put(arena, remap.candidate_binder, remap.representative_binder);
+                    }
                 }
             }
-            for (patterns) |alternative| try rows.append(arena, .{
-                .pat = alternative.pattern,
+            for (branch.patterns) |alternative_idx| try rows.append(arena, .{
+                .pat = self.bodies().matchBranchPattern(alternative_idx).pattern,
                 .guard = branch.guard,
                 .body = branch.value,
                 .branch_index = @intCast(index),
@@ -8254,19 +9316,12 @@ pub const Builder = struct {
                 },
                 .literal_guard => |guard| {
                     // The literal's checked equality reads the matched value
-                    // through the pattern's binder.
-                    const binder = self.bodies().pattern_binder_by_pattern[@backingInt(guard.pat)].get() orelse
-                        invariant("a converted literal pattern has no binder for its guard");
-                    try self.binders.put(self.allocator, binder, guard.value);
-                    const expr = switch (self.bodies().pattern(guard.pat).data) {
-                        .numeral_literal => |numeral| numeral.guard.?,
-                        .str_literal => |literal| literal.guard.?,
-                        .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => invariant("a literal guard was asked of a non-literal pattern"),
-                    };
+                    // through the pattern itself, its binder.
+                    try self.binders.put(self.allocator, guard.pat, guard.value);
                     const guard_hole = try self.newHole();
                     try self.push(.{ .match_advance = .{ .state = state, .input = guard_hole } });
                     try self.push(.{ .match_guard_done = .{ .cond = guard.cond, .next = guard.next } });
-                    try self.push(.{ .expr = expr });
+                    try self.push(.{ .literal_pattern_guard = guard.pat });
                     try self.push(.{ .resume_at = guard_hole });
                 },
                 // Checked branches bind nothing beyond their patterns.
@@ -8335,23 +9390,22 @@ pub const Builder = struct {
     /// does not, and bind the pattern's binders: a destructuring pattern
     /// outside a match (a parameter, a declaration, a loop's pattern).
     /// Continues in the matched path.
-    pub fn testPattern(self: *Builder, root_pattern: CheckedPatternId, root_value: LocalId, root_ty: TypeId, miss: CFStmtId) Allocator.Error!void {
+    pub fn testPattern(self: *Builder, root_pattern: PatternId, root_value: LocalId, root_ty: TypeId, miss: CFStmtId) Allocator.Error!void {
         var pending: std.ArrayList(PatternItem) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, .{ .pattern = root_pattern, .value = root_value, .ty = root_ty });
         while (pending.pop()) |item| {
-            const pattern = self.bodies().pattern(item.pattern);
-            switch (pattern.data) {
-                .assign => |binder| try self.binders.put(self.allocator, binder, item.value),
+            switch (self.bodies().patternData(item.pattern)) {
+                .assign => try self.binders.put(self.allocator, item.pattern, item.value),
                 .underscore => {},
                 .as => |as| {
-                    try self.binders.put(self.allocator, as.binder, item.value);
+                    try self.binders.put(self.allocator, item.pattern, item.value);
                     try pending.append(self.allocator, .{ .pattern = as.pattern, .value = item.value, .ty = item.ty });
                 },
                 .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern, .value = item.value, .ty = try self.structuralType(item.ty) }),
                 .applied_tag => |tag| {
                     const ty = item.ty;
-                    const name = try self.program.store.internName(self.view.nameStore().tagLabelText(tag.name));
+                    const name = try self.program.store.internName(self.view.nameStore().tagLabelText(self.bodies().tagLabel(tag.name)));
                     if (!try self.closed(ty)) {
                         try self.testDynamicTag(ty, name, tag.args, item.value, miss, &pending);
                         continue;
@@ -8411,26 +9465,27 @@ pub const Builder = struct {
                         try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = elems[index] });
                     }
                 },
-                .record_destructure => |destructs| {
+                .record_destructure => |destruct_ids| {
                     const ty = try self.structuralType(item.ty);
                     const record = switch (self.program.store.get(ty)) {
                         .record => |record| record,
-                        .empty_record => if (destructs.len == 0) continue else invariant("a record pattern names a field of the empty record"),
+                        .empty_record => if (destruct_ids.len == 0) continue else invariant("a record pattern names a field of the empty record"),
                         .primitive, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record pattern's type is not a record"),
                     };
                     const fields = self.program.store.fieldSpan(record.fields);
-                    for (destructs) |destruct| {
+                    for (destruct_ids) |destruct_id| {
+                        const destruct = self.bodies().recordDestruct(destruct_id);
                         const name = try self.program.store.internName(self.view.nameStore().recordFieldLabelText(destruct.label));
                         const sub = switch (destruct.kind) {
                             .required, .sub_pattern => |p| p,
                             .rest => |rest| {
                                 // `..` with nothing to bind reads nothing.
-                                if (self.bodies().pattern(rest).data == .underscore) continue;
+                                if (self.bodies().patternData(rest) == .underscore) continue;
                                 // The rest is the fields the pattern does
                                 // not name, read by name.
                                 const rest_ty = try self.patternType(rest);
                                 const rest_value = try self.localOf(rest_ty, .frame);
-                                try self.emitDyn(rest_value, .{ .adapt = .{ .src = item.value, .from = try self.descOf(item.ty), .to = try self.descOf(rest_ty) } });
+                                try self.emitAdapt(rest_value, item.value, item.ty, rest_ty);
                                 try pending.append(self.allocator, .{ .pattern = rest, .value = rest_value, .ty = rest_ty });
                                 continue;
                             },
@@ -8457,27 +9512,27 @@ pub const Builder = struct {
                             if (record.ext == null) invariant("a record pattern's field is absent from its type");
                             const field_ty = try self.patternType(sub);
                             const local = try self.localOf(field_ty, .view);
-                            try self.emitDyn(local, .{ .field_addr_named = .{ .base = item.value, .desc = try self.descOf(ty), .name = try self.nameDesc(name) } });
+                            try self.emitDyn(local, .{ .field_addr = .{ .base = item.value, .desc = try self.descOf(ty), .field_index = try self.fieldIndex(ty, name) } });
                             try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = field_ty });
                         }
                     }
                 },
                 .list => |list| try self.testListPattern(item, list.patterns, list.rest, miss, &pending),
-                .numeral_literal => |numeral| {
-                    if (numeral.guard) |guard| {
-                        try self.literalPatternGuard(item, guard, miss);
+                .numeral_literal => {
+                    if (self.bodies().literalPatternIsCustom(item.pattern)) {
+                        try self.literalPatternGuard(item, miss);
                     } else {
-                        const expected = try self.builtinNumeral(numeral.literal, item.ty);
+                        const expected = try self.builtinNumeral(self.bodies().numeralLiteral(@backingInt(item.pattern)), item.ty);
                         const matches = try self.closedLocal(.bool);
                         try self.emitLowLevel(matches, .num_is_eq, &.{ item.value, expected });
                         try self.branchOrMiss(matches, miss);
                     }
                 },
                 .str_literal => |literal| {
-                    if (literal.guard) |guard| {
-                        try self.literalPatternGuard(item, guard, miss);
+                    if (self.bodies().literalPatternIsCustom(item.pattern)) {
+                        try self.literalPatternGuard(item, miss);
                     } else {
-                        const expected = try self.strLiteral(self.bodies().stringLiteral(literal.literal));
+                        const expected = try self.strLiteral(self.bodies().text(literal));
                         const matches = try self.closedLocal(.bool);
                         try self.emitLowLevel(matches, .str_is_eq, &.{ item.value, expected });
                         try self.branchOrMiss(matches, miss);
@@ -8487,10 +9542,11 @@ pub const Builder = struct {
                     // The match binds each captured span as a `Str` view of
                     // the matched string.
                     const str_ty = try self.program.store.primitive(.str);
-                    const steps = try self.allocator.alloc(LIR.StrMatchStep, str.steps.len);
+                    const steps = try self.allocator.alloc(LIR.StrMatchStep, str.steps.span.len);
                     defer self.allocator.free(steps);
-                    for (steps, str.steps) |*out, str_step| {
-                        const delimiter = self.bodies().stringLiteral(str_step.delimiter);
+                    for (steps, 0..) |*out, step_index| {
+                        const str_step = self.bodies().strPatternStep(str.steps, @intCast(step_index));
+                        const delimiter = self.bodies().text(str_step.delimiter);
                         const capture: LIR.StrMatchCapture = if (str_step.capture) |capture_pattern| blk: {
                             const local = try self.closedLocal(.str);
                             try pending.append(self.allocator, .{ .pattern = capture_pattern, .value = local, .ty = str_ty });
@@ -8498,7 +9554,7 @@ pub const Builder = struct {
                         } else .discard;
                         out.* = .{ .capture = capture, .delimiter = .{ .backing = try self.store.insertString(delimiter), .offset = 0, .len = @intCast(delimiter.len) } };
                     }
-                    const prefix = self.bodies().stringLiteral(str.prefix);
+                    const prefix = self.bodies().text(str.prefix);
                     const then = try self.newHole();
                     try self.emitTerminal(.{ .str_match = .{
                         .source = item.value,
@@ -8515,14 +9571,14 @@ pub const Builder = struct {
                     } });
                     self.hole = then;
                 },
-                .runtime_error, .pending => invariant("an erroneous pattern reached Boxy pattern lowering, which code holding one never reaches"),
+                .runtime_error => invariant("an erroneous pattern reached Boxy pattern lowering, which code holding one never reaches"),
             }
         }
     }
 
     /// A list pattern: the length test (exact, or at least the items' count
     /// with a rest), then each item and the rest's sublist.
-    pub fn testListPattern(self: *Builder, item: PatternItem, items: []const CheckedPatternId, rest: ?checked.CheckedListRestPattern, miss: CFStmtId, pending: *std.ArrayList(PatternItem)) Allocator.Error!void {
+    pub fn testListPattern(self: *Builder, item: PatternItem, items: []const PatternId, rest: ?checked.CheckedListRestPattern, miss: CFStmtId, pending: *std.ArrayList(PatternItem)) Allocator.Error!void {
         const store = &self.program.store;
         const list_ty = try self.structuralType(item.ty);
         const elem_ty = switch (store.get(list_ty)) {
@@ -8549,7 +9605,7 @@ pub const Builder = struct {
             try pending.append(self.allocator, .{ .pattern = sub, .value = elem, .ty = elem_ty });
         }
         if (rest) |rest_info| if (rest_info.pattern) |rest_pattern| {
-            if (self.bodies().pattern(rest_pattern).data == .underscore) return;
+            if (self.bodies().patternData(rest_pattern) == .underscore) return;
             const rest_len = try self.closedLocal(.u64);
             try self.emitLowLevel(rest_len, .num_int_sub_wrap, &.{ len, count });
             // `{ len, start }` in field-name order.
@@ -8581,13 +9637,11 @@ pub const Builder = struct {
     }
 
     /// A literal pattern at a type whose literals convert through a method:
-    /// the pattern's binder holds the tested value, and the checked equality
-    /// against the converted literal decides the match.
-    pub fn literalPatternGuard(self: *Builder, item: PatternItem, guard: CheckedExprId, miss: CFStmtId) Allocator.Error!void {
-        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(item.pattern)].get() orelse
-            invariant("a converted literal pattern has no binder for its guard");
-        try self.binders.put(self.allocator, binder, item.value);
-        const matches = try self.lowerExprNow(guard);
+    /// the pattern, its own binder, holds the tested value, and the checked
+    /// equality against the converted literal decides the match.
+    pub fn literalPatternGuard(self: *Builder, item: PatternItem, miss: CFStmtId) Allocator.Error!void {
+        try self.binders.put(self.allocator, item.pattern, item.value);
+        const matches = try self.lowerNow(.{ .literal_pattern_guard = item.pattern });
         try self.branchOrMiss(matches, miss);
     }
 
@@ -8636,9 +9690,8 @@ pub const Builder = struct {
             }
             try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(variant), .layout_idx = .u32 } }, .next = undefined } });
         } else {
-            const desc = try self.descOf(ty);
-            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = desc } });
-            try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.nameDesc(name) } });
+            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = try self.descOf(ty) } });
+            try self.assignIndex(expected, try self.tagIndex(ty, name));
         }
         const result = try self.closedLocal(.bool);
         try self.emitLowLevel(result, .num_is_eq, &.{ actual, expected });
@@ -8650,17 +9703,18 @@ pub const Builder = struct {
 
     /// A record field access: each segment reads one field of the record
     /// the previous segment produced.
-    pub fn finishFieldAccess(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
-        const access = self.bodies().expr(expr_id).data.field_access;
+    pub fn finishFieldAccess(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        const access = self.bodies().exprData(expr_id).field_access;
         var value = self.popValue();
-        var record_ty = try self.exprType(access.receiver);
+        var record_ty = try self.valueType(access.receiver);
         var misses: std.ArrayList(CFStmtId) = .empty;
         defer misses.deinit(self.allocator);
         const present = try self.program.store.internName(@import("layouts.zig").present_label);
         // A path with a `.?` segment is one flat `Try(value, [MissingField])`,
         // which every exit of the path delivers to one join.
-        const optional = for (access.segments) |segment| {
-            if (segment.mode == .optional) break true;
+        const segment_count = access.segments.len;
+        const optional = for (0..segment_count) |position| {
+            if (self.bodies().fieldAccessSegment(access.segments, @intCast(position)).mode == .optional) break true;
         } else false;
         var result_join: ?struct { join: LIR.JoinPointId, after: CFStmtId, result: LocalId } = null;
         if (optional) {
@@ -8669,7 +9723,8 @@ pub const Builder = struct {
             const after = try self.declareMergeJoin(join, result, null);
             result_join = .{ .join = join, .after = after, .result = result };
         }
-        for (access.segments) |segment| {
+        for (0..segment_count) |segment_position| {
+            const segment = self.bodies().fieldAccessSegment(access.segments, @intCast(segment_position));
             const name = try self.program.store.internName(self.view.nameStore().recordFieldLabelText(segment.field_name));
             const structural = try self.structuralType(record_ty);
             const record = switch (self.program.store.get(structural)) {
@@ -8692,7 +9747,7 @@ pub const Builder = struct {
                 // A field of an open row's remainder: only the record's
                 // descriptor knows where it is.
                 stored = try self.localOf(slot_ty, .view);
-                try self.emitDyn(stored, .{ .field_addr_named = .{ .base = value, .desc = try self.descOf(structural), .name = try self.nameDesc(name) } });
+                try self.emitDyn(stored, .{ .field_addr = .{ .base = value, .desc = try self.descOf(structural), .field_index = try self.fieldIndex(structural, name) } });
             } else {
                 const index = position orelse invariant("a field access's field is absent from its record type");
                 const expected_kind: types.FieldKind = switch (segment.mode) {
@@ -8759,7 +9814,7 @@ pub const Builder = struct {
     /// Field `field_index` (of type `field_ty`) of the record or tuple
     /// `base` of type `ty`, as a borrowed read.
     pub fn readField(self: *Builder, ty: TypeId, base_local: LocalId, field_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
-        const local = try self.localOf(field_ty, if (try self.closed(ty)) .frame else .view);
+        const local = try self.localOf(field_ty, if (try self.closed(ty) or self.store.getLocal(base_local).product != .none) .frame else .view);
         try self.readFieldInto(local, ty, base_local, field_index, field_ty);
         return local;
     }
@@ -8768,27 +9823,42 @@ pub const Builder = struct {
     pub fn readFieldInto(self: *Builder, target: LocalId, ty: TypeId, base_local: LocalId, field_index: u32, field_ty: TypeId) Allocator.Error!void {
         if (try self.closed(ty)) {
             const base_layout = self.store.getLocal(base_local).layout_idx;
+            if (base_layout == .zst) {
+                // A zero-sized product has no stored fields. Its field is
+                // the same zero-bit value, independent of how the base was
+                // produced (including an immutable constant read).
+                if (self.store.getLocal(target).layout_idx != .zst) invariant("a zero-sized record has a field with storage");
+                return self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.local(base_local), .next = undefined } });
+            }
             if (self.program.result.layouts.getLayout(base_layout).tag != .struct_) {
                 try self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.field(base_local, field_index), .next = undefined } });
                 return;
             }
             return try self.readSlotInto(target, LIR.RefOp.field(base_local, field_index), field_ty, self.structFieldLayout(base_layout, field_index));
         }
+        if (self.store.getLocal(base_local).product != .none) {
+            // Independent representation storage permits an ownership take;
+            // retaining contents would not keep an interior address alive.
+            if (self.store.localDyn(target)) |dyn| {
+                if (dyn.storage == .view) self.store.getLocalPtr(target).dyn_storage = .frame;
+            }
+            return self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.field(base_local, field_index), .next = undefined } });
+        }
         // A field of an open row ranks among the remainder's fields too, so
-        // it is addressed by name.
+        // its position is the instantiation's.
         switch (self.program.store.get(try self.structuralType(ty))) {
             .record => |record| if (record.ext != null) {
                 const name = self.program.store.fieldSpan(record.fields)[field_index].name;
-                return try self.emitDyn(target, .{ .field_addr_named = .{ .base = base_local, .desc = try self.descOf(ty), .name = try self.nameDesc(name) } });
+                return try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .field_index = try self.fieldIndex(ty, name) } });
             },
             .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => {},
         }
-        try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .field_index = field_index } });
+        try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .field_index = .{ .immediate = field_index } } });
     }
 
     /// Test that the dynamic tag union `value` holds tag `name`, and queue
     /// its payloads against `args`.
-    pub fn testDynamicTag(self: *Builder, nominal_ty: TypeId, name: types.NameId, args: []const CheckedPatternId, value: LocalId, miss: CFStmtId, pending: anytype) Allocator.Error!void {
+    pub fn testDynamicTag(self: *Builder, nominal_ty: TypeId, name: types.NameId, args: []const PatternId, value: LocalId, miss: CFStmtId, pending: anytype) Allocator.Error!void {
         const store = &self.program.store;
         const ty = try self.structuralType(nominal_ty);
         const union_ty = switch (store.get(ty)) {
@@ -8796,11 +9866,9 @@ pub const Builder = struct {
             .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag pattern's type is not a tag union"),
         };
         const desc = try self.descOf(ty);
-        const name_local = try self.nameDesc(name);
         const actual = try self.closedLocal(.u32);
         try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = desc } });
-        const expected = try self.closedLocal(.u32);
-        try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = name_local } });
+        const expected = try self.indexLocal(try self.tagIndex(ty, name));
         const matches = try self.closedLocal(.bool);
         try self.emitLowLevel(matches, .num_is_eq, &.{ actual, expected });
         try self.branchOrMiss(matches, miss);
@@ -8825,7 +9893,7 @@ pub const Builder = struct {
 
     // -- Statements --
 
-    pub fn stepStmt(self: *Builder, stmt_id: CheckedStatementId) Allocator.Error!void {
+    pub fn stepStmt(self: *Builder, stmt_id: StatementId) Allocator.Error!void {
         const stmt = self.bodies().statement(stmt_id);
         self.region = stmt.source_region;
         switch (stmt.data) {
@@ -8833,43 +9901,41 @@ pub const Builder = struct {
                 // An annotation-only declaration (a method requesting its
                 // derivation) has no value, and every use of it resolves to
                 // what it requests.
-                if (self.bodies().expr(decl.expr).data == .anno_only) return;
+                if (self.bodies().exprData(decl.expr) == .anno_only) return;
                 // A recursive value's binders get slots before its value is
                 // built, which the callables in the value capture, and the
                 // slots are filled once the value is bound.
-                if (decl.recursive) {
+                if (self.bodies().declIsRecursive(stmt_id)) {
                     try self.allocRecursiveSlots(decl.pattern);
                     try self.push(.{ .fill_recursive_slots = decl.pattern });
                 }
                 // A scheme alias with a generalized scheme binds nothing:
                 // each use lowers its right-hand side at the use's
                 // instantiation (`lowerAliasUse`).
-                if (self.bodies().pattern_binder_by_pattern[@backingInt(decl.pattern)].get()) |binder| {
-                    if (self.bodies().patternBinder(binder).is_scheme_alias) {
-                        if (self.program.local_scopes.get(.{ .module = self.module, .expr = decl.expr })) |scope_id| {
-                            const scheme = try self.localScheme(scope_id);
-                            if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return;
-                        }
+                if (self.bodies().binder(decl.pattern).is_scheme_alias) {
+                    if (try self.program.localScope(self.module, decl.expr)) |scope_id| {
+                        const scheme = try self.localScheme(scope_id);
+                        if (!scheme.isEmpty()) return;
                     }
                 }
                 // A value that diverges binds nothing.
-                if (self.bodies().exprDiverges(decl.expr, self.inlineExpectMode())) {
+                if (try self.bodies().exprDiverges(decl.expr, self.inlineExpectMode())) {
                     try self.push(.discard);
                 } else {
-                    try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.exprType(decl.expr) } });
+                    try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.valueType(decl.expr) } });
                 }
                 try self.push(.{ .expr = decl.expr });
             },
             .var_ => |var_| {
-                if (self.bodies().exprDiverges(var_.expr, self.inlineExpectMode())) {
+                if (try self.bodies().exprDiverges(var_.expr, self.inlineExpectMode())) {
                     try self.push(.discard);
                 } else {
-                    try self.push(.{ .bind = .{ .pattern = var_.pattern, .ty = try self.exprType(var_.expr) } });
+                    try self.push(.{ .bind = .{ .pattern = var_.pattern, .ty = try self.valueType(var_.expr) } });
                 }
                 try self.push(.{ .expr = var_.expr });
             },
             .reassign => |reassign| {
-                try self.push(.{ .bind = .{ .pattern = reassign.pattern, .ty = try self.exprType(reassign.expr) } });
+                try self.push(.{ .bind = .{ .pattern = reassign.pattern, .ty = try self.valueType(reassign.expr) } });
                 try self.push(.{ .expr = reassign.expr });
             },
             .var_uninitialized => |var_| {
@@ -8877,13 +9943,13 @@ pub const Builder = struct {
                 try self.emitLinear(.{ .init_uninitialized = .{ .target = local, .next = undefined } });
                 try self.bindIrrefutable(var_.pattern, local, try self.patternType(var_.pattern));
             },
-            .while_ => |loop| try self.lowerLoop(loop, true),
+            .while_ => |loop| try self.lowerLoop(@backingInt(stmt_id), loop, true),
             // `while True`: the body runs unconditionally, and only a break
             // (in a breakable loop) leaves it.
-            .infinite_loop, .breakable_loop => |loop| try self.lowerLoop(loop, false),
+            .infinite_loop, .breakable_loop => |loop| try self.lowerLoop(@backingInt(stmt_id), loop, false),
             .for_ => |for_| {
                 try self.push(.discard);
-                try self.pushForLoop(for_.pattern, for_.expr, for_.body, for_.plan, for_.mutations);
+                try self.pushForLoop(@backingInt(stmt_id), for_.pattern, for_.expr, for_.body, self.bodies().iteratorForPlan(@backingInt(stmt_id)));
             },
             .break_ => {
                 if (self.loops.items.len == 0) invariant("a break outside every loop reached Boxy lowering");
@@ -8901,7 +9967,7 @@ pub const Builder = struct {
                 try self.push(.{ .expr = cond });
             },
             .crash => |literal| {
-                const message = try self.store.insertString(self.bodies().stringLiteral(literal));
+                const message = try self.store.insertString(self.bodies().text(literal));
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message } } });
             },
             .runtime_error => {
@@ -8910,11 +9976,13 @@ pub const Builder = struct {
             },
             .dbg => |expr| {
                 try self.push(.discard);
-                try self.push(.{ .finish_dbg = try self.exprType(expr) });
+                try self.push(.{ .finish_dbg = try self.valueType(expr) });
                 try self.push(.{ .expr = expr });
             },
             .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias => {},
             .promoted_proc => {},
+            // A method declaration checking rejected evaluates nothing.
+            .rejected_method_decl => {},
             .return_ => |ret| {
                 // The enclosing function returns the value; nothing after the
                 // statement is reached.
@@ -8922,18 +9990,15 @@ pub const Builder = struct {
                 try self.destination_types.put(self.allocator, ret.expr, self.currentWorker().ret);
                 try self.push(.{ .expr = ret.expr });
             },
-            .pending => invariant("a pending checked statement reached Boxy lowering, which reads only completed checking"),
         }
     }
 
     /// A condition-driven loop: a head join carrying the loop's mutated
     /// binders, entered first with their current values, and an exit join
     /// carrying them out.
-    pub fn lowerLoop(self: *Builder, loop: checked.CheckedConditionLoop, tests_condition: bool) Allocator.Error!void {
-        const binders: []const checked.PatternBinderId = if (loop.mutations) |plan| blk: {
-            const range = self.bodies().loopMutations(plan).binders;
-            break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
-        } else &.{};
+    /// A condition loop, the statement at CIR node `loop_node`.
+    pub fn lowerLoop(self: *Builder, loop_node: u32, loop: bodies_mod.ConditionLoop, tests_condition: bool) Allocator.Error!void {
+        const binders = try self.bodies().loopMutationBinders(loop_node);
         const exit_merge = try self.beginMerge(binders, .joined);
         const head_merge = try self.beginMerge(binders, .joined);
         const exit = self.freshJoin();
@@ -8959,22 +10024,23 @@ pub const Builder = struct {
         }
     }
 
-    pub fn pushForLoop(self: *Builder, pattern: CheckedPatternId, iterable: CheckedExprId, body: CheckedExprId, plan: ?static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
+    /// A `for` loop, the expression or statement at CIR node `loop_node`.
+    pub fn pushForLoop(self: *Builder, loop_node: u32, pattern: PatternId, iterable: ExprId, body: ExprId, plan: ?static_dispatch.IteratorForPlanId) Allocator.Error!void {
         const plan_id = plan orelse invariant("a for loop has no checked iterator plan");
         // A loop whose pattern checking rejected evaluates its iterable,
         // then crashes where it would begin: its pattern binds nothing.
         const item_ty = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)].item_ty;
-        if (try self.program.converter().hasError(self.module, item_ty) or try self.program.converter().hasError(self.module, self.bodies().pattern(pattern).ty)) {
+        if (try self.program.hasError(self.module, item_ty) or try self.program.hasError(self.module, self.bodies().patternType(pattern))) {
             try self.push(.{ .rejected_for = plan_id });
             try self.push(.{ .expr = iterable });
             return;
         }
         try self.push(.{ .unreachable_or_unit = {} });
         if (try self.iteratorChain(plan_id)) |chain| {
-            try self.forChainStart(pattern, body, plan_id, mutations, chain);
+            try self.forChainStart(loop_node, pattern, body, plan_id, chain);
             return;
         }
-        try self.push(.{ .for_start = .{ .pattern = pattern, .body = body, .plan = plan_id, .mutations = mutations } });
+        try self.push(.{ .for_start = .{ .loop = loop_node, .pattern = pattern, .body = body, .plan = plan_id } });
         try self.push(.{ .expr = iterable });
     }
 
@@ -8987,21 +10053,21 @@ pub const Builder = struct {
     pub const ChainLayer = union(enum) {
         list: ChainListSource,
         list_rev: ChainListSource,
-        str: struct { str: CheckedExprId },
+        str: struct { str: ExprId },
         /// An iterator value whose steps the loop takes through the `Iter`
         /// protocol, as a loop over the value alone does.
-        value: struct { iterator: CheckedExprId },
-        map: struct { transform: CheckedExprId, item_ty: TypeId },
-        keep_if: struct { predicate: CheckedExprId },
-        drop_if: struct { predicate: CheckedExprId },
+        value: struct { iterator: ExprId },
+        map: struct { transform: ExprId, item_ty: TypeId },
+        keep_if: struct { predicate: ExprId },
+        drop_if: struct { predicate: ExprId },
         /// The stamped `iter_with_index` worker: its counter starts at the
         /// second operand.
-        with_index: struct { start: CheckedExprId, item_ty: TypeId },
-        take_first: struct { count: CheckedExprId },
-        drop_first: struct { count: CheckedExprId },
+        with_index: struct { start: ExprId, item_ty: TypeId },
+        take_first: struct { count: ExprId },
+        drop_first: struct { count: ExprId },
     };
 
-    pub const ChainListSource = struct { list: CheckedExprId, item_ty: TypeId };
+    pub const ChainListSource = struct { list: ExprId, item_ty: TypeId };
 
     /// The structural chain of a `for` loop's iterable, innermost producer
     /// first, or null when the loop takes its steps through the `Iter`
@@ -9096,20 +10162,20 @@ pub const Builder = struct {
         };
         return switch (node.target.kind) {
             .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
-            .local_proc, .structural => null,
+            .local_proc, .structural, .callable_binding => null,
         };
     }
 
-    pub const ChainCall = struct { stamp: static_dispatch.IteratorProcedureId, operands: []const CheckedExprId };
+    pub const ChainCall = struct { stamp: static_dispatch.IteratorProcedureId, operands: []const ExprId };
 
     /// The stamped producer call `expr` is: a dispatch of a value result on
     /// the pure `Iter` protocol whose target the checker stamped, with its
     /// checked operand expressions (the receiver first). Null for any other
     /// expression.
-    fn chainCall(self: *Builder, expr: CheckedExprId) Allocator.Error!?ChainCall {
-        const plan_id = switch (self.bodies().expr(expr).data) {
-            .dispatch_call, .type_dispatch_call => |plan| plan orelse return null,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+    fn chainCall(self: *Builder, expr: ExprId) Allocator.Error!?ChainCall {
+        const plan_id = switch (self.bodies().exprData(expr)) {
+            .dispatch_call, .type_dispatch_call => self.bodies().dispatchPlan(@backingInt(expr)) orelse return null,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const call_plan = self.dispatchPlan(plan_id);
         // A `map` dispatch on a type with a map method carries the map
@@ -9124,11 +10190,11 @@ pub const Builder = struct {
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return null,
         }
         const operands = call_plan.argsSlice(self.view.view.static_dispatch_plans);
-        const exprs = try self.program.arena.allocator().alloc(CheckedExprId, operands.len);
+        const exprs = try self.program.arena.allocator().alloc(ExprId, operands.len);
         for (operands, exprs) |operand, *slot| {
             slot.* = switch (operand) {
                 .checked_expr => |operand_expr| operand_expr,
-                .generated_interpolation_segments, .generated_numeral, .generated_quote => return null,
+                .generated_interpolation_segments, .generated_numeral, .generated_quote, .literal_pattern_value, .literal_pattern_conversion => return null,
             };
         }
         const expected_operands: usize = switch (stamp) {
@@ -9174,7 +10240,7 @@ pub const Builder = struct {
     /// source steps, a `keep_if` or `drop_if` or `drop_first` skip
     /// continues with the state the inner producers advanced to, and a
     /// `with_index` counter advances only when its item is yielded.
-    fn forChainStart(self: *Builder, pattern: CheckedPatternId, body: CheckedExprId, plan_id: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId, chain: []const ChainLayer) Allocator.Error!void {
+    fn forChainStart(self: *Builder, loop_node: u32, pattern: PatternId, body: ExprId, plan_id: static_dispatch.IteratorForPlanId, chain: []const ChainLayer) Allocator.Error!void {
         const table = self.view.view.static_dispatch_plans;
         const plan = table.iterator_for_plans[@backingInt(plan_id)];
         const for_site = plan.forLoopSite();
@@ -9208,7 +10274,7 @@ pub const Builder = struct {
             slot.* = null;
             switch (layer) {
                 inline .list, .list_rev => |source, tag| {
-                    const list = try self.lowerExprNow(source.list);
+                    const list = try self.lowerNow(.{ .expr = source.list });
                     const list_ty = try self.exprType(source.list);
                     const len = try self.closedLocal(.u64);
                     try self.emitListLowLevel(len, .list_len, &.{list}, source.item_ty, list_ty);
@@ -9218,7 +10284,7 @@ pub const Builder = struct {
                     try state_init.append(self.allocator, if (tag == .list) try self.u64Literal(0) else len);
                 },
                 .str => |source| {
-                    const str = try self.lowerExprNow(source.str);
+                    const str = try self.lowerNow(.{ .expr = source.str });
                     const len = try self.closedLocal(.u64);
                     try self.emitLowLevel(len, .str_count_utf8_bytes, &.{str});
                     done.* = .{ .str = .{ .str = str, .len = len } };
@@ -9227,7 +10293,7 @@ pub const Builder = struct {
                     try state_init.append(self.allocator, try self.u64Literal(0));
                 },
                 .value => |source| {
-                    const iterator = try self.lowerExprNow(source.iterator);
+                    const iterator = try self.lowerNow(.{ .expr = source.iterator });
                     const iterator_ty = try self.exprType(source.iterator);
                     const step_name = (try self.builtinStepField(plan.next, iterator_ty)) orelse invariant("a chain's iterator value is not stepped by the builtin protocol");
                     done.* = .{ .value = .{ .iterator_ty = iterator_ty, .step_name = step_name } };
@@ -9236,26 +10302,26 @@ pub const Builder = struct {
                     try state_init.append(self.allocator, iterator);
                 },
                 .map => |adapter| {
-                    const transform = try self.lowerExprNow(adapter.transform);
+                    const transform = try self.lowerNow(.{ .expr = adapter.transform });
                     done.* = .{ .map = .{ .transform = transform, .fn_ty = try self.exprType(adapter.transform), .item_ty = adapter.item_ty } };
                 },
                 .keep_if => |adapter| {
-                    const predicate = try self.lowerExprNow(adapter.predicate);
+                    const predicate = try self.lowerNow(.{ .expr = adapter.predicate });
                     done.* = .{ .keep_if = .{ .predicate = predicate, .fn_ty = try self.exprType(adapter.predicate) } };
                 },
                 .drop_if => |adapter| {
-                    const predicate = try self.lowerExprNow(adapter.predicate);
+                    const predicate = try self.lowerNow(.{ .expr = adapter.predicate });
                     done.* = .{ .drop_if = .{ .predicate = predicate, .fn_ty = try self.exprType(adapter.predicate) } };
                 },
                 .with_index => |adapter| {
-                    const start = try self.lowerExprNow(adapter.start);
+                    const start = try self.lowerNow(.{ .expr = adapter.start });
                     done.* = .{ .with_index = .{ .item_ty = adapter.item_ty } };
                     slot.* = state_types.items.len;
                     try state_types.append(self.allocator, u64_ty);
                     try state_init.append(self.allocator, start);
                 },
                 inline .take_first, .drop_first => |adapter, tag| {
-                    const count = try self.lowerExprNow(adapter.count);
+                    const count = try self.lowerNow(.{ .expr = adapter.count });
                     done.* = if (tag == .take_first) .take_first else .drop_first;
                     slot.* = state_types.items.len;
                     try state_types.append(self.allocator, u64_ty);
@@ -9266,10 +10332,7 @@ pub const Builder = struct {
         const state_ty = try store.intern(.{ .tuple = state_types.items });
         const initial = try self.buildStruct(state_ty, state_init.items);
 
-        const binders: []const checked.PatternBinderId = if (mutations) |id| blk: {
-            const range = self.bodies().loopMutations(id).binders;
-            break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
-        } else &.{};
+        const binders = try self.bodies().loopMutationBinders(loop_node);
         const exit_merge = try self.beginMerge(binders, .joined);
         const head_merge = try self.beginMerge(binders, .joined);
         const exit = self.freshJoin();
@@ -9409,7 +10472,7 @@ pub const Builder = struct {
     /// `for pattern in iterable { body }`: the iterable's iterator is the
     /// loop's state; each step calls `next` and matches its Done, Skip, or
     /// One tag (design.md "Iterator `for`").
-    pub fn forStart(self: *Builder, pattern: CheckedPatternId, body: CheckedExprId, plan_id: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
+    pub fn forStart(self: *Builder, loop_node: u32, pattern: PatternId, body: ExprId, plan_id: static_dispatch.IteratorForPlanId) Allocator.Error!void {
         const table = self.view.view.static_dispatch_plans;
         const plan = table.iterator_for_plans[@backingInt(plan_id)];
         const iterable = self.popValue();
@@ -9418,10 +10481,7 @@ pub const Builder = struct {
         const step_ty = try self.convert(for_site.step_ty);
         const iterator = try self.emitDispatch(plan.iter.resolution, plan.iter.callable_ty, &.{iterable}, iterator_ty);
 
-        const binders: []const checked.PatternBinderId = if (mutations) |id| blk: {
-            const range = self.bodies().loopMutations(id).binders;
-            break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
-        } else &.{};
+        const binders = try self.bodies().loopMutationBinders(loop_node);
         const exit_merge = try self.beginMerge(binders, .joined);
         const head_merge = try self.beginMerge(binders, .joined);
         const exit = self.freshJoin();
@@ -9489,7 +10549,7 @@ pub const Builder = struct {
         };
         const stamp = switch (node.target.kind) {
             .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
-            .local_proc, .structural => return null,
+            .local_proc, .structural, .callable_binding => return null,
         };
         if (stamp != .next) return null;
         const owner: static_dispatch.IteratorOwner = switch (self.program.store.get(iterator_ty)) {
@@ -9521,9 +10581,8 @@ pub const Builder = struct {
             }
             try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(variant.index), .layout_idx = .u32 } }, .next = undefined } });
         } else {
-            const desc = try self.descOf(ty);
-            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = desc } });
-            try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.nameDesc(name) } });
+            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = try self.descOf(ty) } });
+            try self.assignIndex(expected, try self.tagIndex(ty, name));
         }
         const matches = try self.closedLocal(.bool);
         try self.emitLowLevel(matches, .num_is_eq, &.{ actual, expected });
@@ -9688,6 +10747,10 @@ pub const Builder = struct {
                     const fn_ty = try self.dispatchCallable(resolution, callable_ty);
                     return try self.emitErasedCall(try self.localMethodValue(node, fn_ty), fn_ty, args, result_ty);
                 }
+                if (node.target.kind == .callable_binding) {
+                    const fn_ty = try self.dispatchCallable(resolution, callable_ty);
+                    return try self.emitErasedCall(try self.callableBindingMethodValue(node.target.kind.callable_binding, fn_ty), fn_ty, args, result_ty);
+                }
                 const callee = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                 const call_fn = try self.dispatchCallable(resolution, callable_ty);
@@ -9699,17 +10762,16 @@ pub const Builder = struct {
                     .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                 };
                 defer self.allocator.free(instance.hidden);
-                const passed = try self.callDescriptorArgs(callee, instance.bound);
-                defer self.allocator.free(passed);
-                const all = try std.mem.concat(self.allocator, LocalId, &.{ args, instance.hidden, passed });
+                const worker_id = try self.program.directCallTarget(callee, instance.bound);
+                const all = try self.callArgs(args, worker_id, instance.hidden);
                 defer self.allocator.free(all);
                 const target = try self.localOf(instance.ret, .frame);
-                try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(callee).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
+                try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker_id).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
                 return try self.adaptValue(target, instance.ret, result_ty);
             },
             .evidence_dependent => |dependent| {
                 const fn_ty = (try self.scopeInterface(dependent.index)) orelse try self.convert(callable_ty);
-                return try self.emitErasedCall(try self.scopeDictionary(dependent.index), fn_ty, args, result_ty);
+                return try self.emitErasedCall(try self.materialize(try self.scopeDictionary(dependent.index)), fn_ty, args, result_ty);
             },
             .checked_error, .@"unreachable" => {
                 try self.emitDispatchCrash(if (resolution == .checked_error) .checked_error else .unreachable_value);
@@ -9720,7 +10782,7 @@ pub const Builder = struct {
         }
     }
 
-    pub fn loopTest(self: *Builder, body: CheckedExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId) Allocator.Error!void {
+    pub fn loopTest(self: *Builder, body: ExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId) Allocator.Error!void {
         const holes = try self.emitBoolSwitch(self.popValue());
         self.hole = holes.otherwise;
         try self.emitJump(exit, null);
@@ -9733,7 +10795,7 @@ pub const Builder = struct {
     /// Bind an irrefutable pattern (a parameter or a `decl`) to `value`.
     /// Destructuring binds through the same tests a match uses; an
     /// irrefutable pattern never takes their miss path.
-    pub fn bindIrrefutable(self: *Builder, pattern_id: CheckedPatternId, value: LocalId, ty: TypeId) Allocator.Error!void {
+    pub fn bindIrrefutable(self: *Builder, pattern_id: PatternId, value: LocalId, ty: TypeId) Allocator.Error!void {
         const miss = try self.newHole();
         try self.testPattern(pattern_id, value, ty, miss);
     }

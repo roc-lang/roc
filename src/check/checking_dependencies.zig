@@ -11,10 +11,6 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const Hash = base.ModuleIdentity.Hash;
 
-/// Domain-separated checking identity format. Its version is also folded into
-/// inference-cache admission; it is never an implementation-artifact key.
-pub const format_version: u32 = 3;
-
 /// Encode an interface scalar in fixed-width little-endian order.
 pub fn hashU32(hasher: *base.Sha256, value: u32) void {
     var bytes: [4]u8 = undefined;
@@ -102,14 +98,14 @@ pub const Scope = struct {
 pub fn bindOwners(env: *ModuleEnv, current: *const Scope) Allocator.Error!void {
     const previous = env.checking_dependency.owners.items.items;
     if (previous.len != current.owners.items.len) {
-        base.invariant("inference cache admission established the same owner-binding domain", .{});
+        base.invariant("typing cache admission established the same owner-binding domain", .{});
     }
     var replacements = std.AutoHashMapUnmanaged(Hash, Hash).empty;
     defer replacements.deinit(env.gpa);
     for (previous, current.owners.items) |old, new| {
         const entry = try replacements.getOrPut(env.gpa, old);
         if (entry.found_existing and !base.ModuleIdentity.eql(&entry.value_ptr.*, &new)) {
-            base.invariant("inference cache admission preserved nominal-owner equality", .{});
+            base.invariant("typing cache admission preserved nominal-owner equality", .{});
         }
         entry.value_ptr.* = new;
     }
@@ -121,7 +117,7 @@ pub fn bindOwners(env: *ModuleEnv, current: *const Scope) Allocator.Error!void {
         const replacement = replacements.get(old.*) orelse
             base.invariant("cached source owners were published in its explicit owner-binding scope", .{});
         const rebound = try identities.insert(env.gpa, &replacement);
-        if (rebound != i) base.invariant("inference cache admission preserved distinct nominal owners", .{});
+        if (rebound != i) base.invariant("typing cache admission preserved distinct nominal owners", .{});
     }
     var owners = try current.copyOwners(env.gpa);
     errdefer owners.deinit(env.gpa);

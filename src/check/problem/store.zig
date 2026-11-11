@@ -11,7 +11,6 @@ const checked_ids = @import("../checked_ids.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-const CIR = can.CIR;
 const CheckedExhaustivenessSiteId = checked_ids.CheckedExhaustivenessSiteId;
 const Problem = types.Problem;
 const ExtraStringIdx = types.ExtraStringIdx;
@@ -34,15 +33,9 @@ pub const Store = struct {
         destructure,
     };
 
-    pub const PendingStaticExhaustivenessMode = enum {
-        static,
-        empirical,
-    };
+    pub const PendingStaticExhaustivenessMode = can.ModuleEnv.ExhaustivenessObligation.Mode;
 
-    pub const ExhaustivenessSiteSource = union(enum) {
-        match_expr: CIR.Expr.Idx,
-        destructure_pattern: CIR.Pattern.Idx,
-    };
+    pub const ExhaustivenessSiteSource = can.ModuleEnv.ExhaustivenessObligation.Source;
 
     pub const PendingStaticExhaustiveness = struct {
         kind: EmpiricalSiteKind,
@@ -65,6 +58,14 @@ pub const Store = struct {
     extra_strings_backing: ByteList,
     /// Backing storage for missing patterns index arrays
     missing_patterns_backing: std.array_list.Managed(ExtraStringIdx),
+    /// Whether compile-time evaluation reported a problem here that the
+    /// store's module's checked cache entry cannot reproduce: a literal's
+    /// rejection or a literal root's failure, which the program's literal
+    /// roots decide again in every compilation; an exhaustiveness failure
+    /// another module's root reached; or a failure in another module named by
+    /// that module's package-qualified name, which is workspace information
+    /// rather than part of the entry's identity.
+    unreproducible_reports: bool = false,
 
     /// Allocation-free empty store, including after ownership transfer.
     pub fn initEmpty(gpa: Allocator) Self {
@@ -144,19 +145,6 @@ pub const Store = struct {
         });
     }
 
-    pub fn assignPendingStaticExhaustivenessSite(
-        self: *Self,
-        source: ExhaustivenessSiteSource,
-        site: CheckedExhaustivenessSiteId,
-    ) void {
-        for (self.pending_static_exhaustiveness.items) |*pending| {
-            if (!exhaustivenessSourcesEqual(pending.source, source)) continue;
-            pending.site = site;
-            return;
-        }
-        base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
-    }
-
     /// Record that a checker-selected compile-time root will execute this site.
     /// The pending diagnostic must therefore be decided empirically by that
     /// root rather than flushed as an unconditionally runtime-reachable error.
@@ -222,6 +210,8 @@ pub const Store = struct {
                     .invalid_nominal_decl_recursion,
                     .infinite_recursion,
                     .anonymous_recursion,
+                    .polymorphic_recursion,
+                    .local_type_escape,
                     .row_label_conflict,
                     .polymorphic_value,
                     .polymorphic_var_annotation,

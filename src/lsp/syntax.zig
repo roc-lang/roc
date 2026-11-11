@@ -916,7 +916,7 @@ pub const SyntaxChecker = struct {
         const builtin_modules = try self.allocator.create(eval.BuiltinModules);
         errdefer self.allocator.destroy(builtin_modules);
 
-        builtin_modules.* = try eval.BuiltinModules.init(self.allocator);
+        builtin_modules.* = try eval.BuiltinModules.init(self.allocator, self.std_io);
         self.builtin_modules = builtin_modules;
         return builtin_modules;
     }
@@ -1277,9 +1277,9 @@ pub const SyntaxChecker = struct {
         // Prefer lookup expression semantics when hovering over identifiers in
         // calls (e.g. `multiply(…)`): callers expect the callee's function type
         // and docs, not the enclosing call expression's return type.
-        var lookup_result_opt = cir_queries.findLookupAtOffset(module_env, target_offset);
+        var lookup_result_opt = cir_queries.findLookupNoWiderThan(module_env, target_offset, result.region);
         if (lookup_result_opt == null and result.region.start.offset != target_offset) {
-            lookup_result_opt = cir_queries.findLookupAtOffset(module_env, result.region.start.offset);
+            lookup_result_opt = cir_queries.findLookupNoWiderThan(module_env, result.region.start.offset, result.region);
         }
 
         var hover_type_var = if (lookup_result_opt) |lookup_result|

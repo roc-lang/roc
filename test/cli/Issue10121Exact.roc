@@ -17,9 +17,9 @@ main = {
 
     ok_encoded = Json.to_str(ok_original)
     missing_encoded = Json.to_str(missing_original)
-    ok_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+    ok_parsed : Try(Shape, [InvalidJson(Str)])
     ok_parsed = Json.parse(ok_encoded)
-    missing_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+    missing_parsed : Try(Shape, [InvalidJson(Str)])
     missing_parsed = Json.parse(missing_encoded)
 
     ok_round_trips =

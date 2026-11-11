@@ -809,6 +809,22 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// LDR (literal), 64-bit: load the word `offset_bytes` from this
+        /// instruction, which must be word aligned.
+        pub fn ldrLiteral64(self: *Self, dst: GeneralReg, offset_bytes: i32) Allocator.Error!void {
+            // LDR <Xt>, <label>
+            // 01 011 0 00 imm19 Rt
+            const offset_words: i19 = @intCast(@divExact(offset_bytes, 4));
+            const imm19: u19 = @bitCast(offset_words);
+            const inst: u32 = (0b01011000 << 24) | (@as(u32, imm19) << 5) | dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// An 8-byte literal in the instruction stream, which code skips.
+        pub fn literal64(self: *Self, value: u64) Allocator.Error!void {
+            try self.buf.appendSlice(self.allocator, &@as([8]u8, @bitCast(value)));
+        }
+
         /// B (unconditional branch)
         pub fn b(self: *Self, offset_bytes: i32) Allocator.Error!void {
             // B <label>
@@ -915,11 +931,6 @@ pub fn Emit(comptime target: RocTarget) type {
             std.debug.assert(dst != base);
             try self.movRegImm64(dst, @bitCast(@as(i64, offset)));
             try self.addRegRegReg(.w64, dst, base, dst);
-        }
-
-        /// LDAR: acquire-load one pointer-sized word, including its publication.
-        pub fn ldarRegMem(self: *Self, dst: GeneralReg, base: GeneralReg) Allocator.Error!void {
-            try self.emit32(0xc8dffc00 | (@as(u32, base.enc()) << 5) | dst.enc());
         }
 
         /// LDR (load register) with unsigned offset
@@ -2093,11 +2104,4 @@ test "pc-relative address sequence reaches targets past ADR's range" {
             );
         }
     }
-}
-
-test "boxy composition acquire load encoding" {
-    var asm_buf = LinuxEmit.init(std.testing.allocator);
-    defer asm_buf.deinit();
-    try asm_buf.ldarRegMem(.X0, .X1);
-    try std.testing.expectEqualSlices(u8, &.{ 0x20, 0xfc, 0xdf, 0xc8 }, asm_buf.buf.items);
 }

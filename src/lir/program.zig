@@ -37,24 +37,10 @@ pub const StaticDataExport = struct {
     /// Named by the digest of its content and defined weak: every unit of a
     /// program that carries this constant defines the same symbol, and a
     /// link keeps one definition for all of them. Never set with
-    /// `is_exported`, and never set on a mutable constant.
+    /// `is_exported`.
     content_named: bool = false,
-    /// Zero-initialized program-owned state, never pooled or named by content.
-    /// Its producer supplies a stable site identity in `symbol_name`.
-    is_mutable: bool = false,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
-    /// The capacities the empty lists inside this value were evaluated
-    /// with, by byte offset of each list's descriptor in `bytes`. A frozen
-    /// list's capacity word is its length, so the requests would otherwise
-    /// be lost; a runtime consumer rebuilding the value uses them.
-    empty_list_capacities: []const EmptyListCapacity = &.{},
-};
-
-/// The evaluated capacity of one empty list inside a frozen value.
-pub const EmptyListCapacity = struct {
-    offset: u64,
-    capacity: u64,
 };
 
 /// One explicit pointer relocation inside a readonly static-data symbol.
@@ -106,7 +92,6 @@ pub const FrozenStaticData = struct {
                 if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
             }
             self.allocator.free(item.relocations);
-            self.allocator.free(item.empty_list_capacities);
         }
         self.allocator.free(self.exports);
         self.* = undefined;
@@ -253,6 +238,8 @@ pub const ConstPlan = union(enum) {
     str,
     list: ConstPlanId,
     box: ConstPlanId,
+    /// A semantic Box(sequence), whose record is a view of its erased allocation.
+    boxed_sequence: BoxedSequencePlan,
     tuple: []const ConstPlanId,
     record: []const ConstPlanId,
     tag_union: []const ConstTagVariant,
@@ -265,6 +252,27 @@ pub const ConstPlan = union(enum) {
     /// A function value of a `.boxy` compile-time program, stored by what
     /// it captured (`postcheck.Boxy.StoredFn`).
     boxy_fn,
+};
+
+/// The semantic payload and committed record view of a boxed Iter or Stream.
+pub const BoxedSequencePlan = struct {
+    payload: ConstPlanId,
+    view_layout: layout.Idx,
+
+    /// The length and step plans in the builtin record's canonical logical order.
+    pub fn recordPlans(self: BoxedSequencePlan, plans: []const ConstPlan) [2]ConstPlanId {
+        var current = self.payload;
+        for (0..plans.len) |_| {
+            const plan = plans[@backingInt(current)];
+            if (plan == .named) {
+                current = plan.named.backing;
+                continue;
+            }
+            if (plan != .record or plan.record.len != 2) base.invariant("boxed sequence plan omitted its two-field record", .{});
+            return .{ plan.record[0], plan.record[1] };
+        }
+        base.invariant("boxed sequence plan contains a nominal cycle", .{});
+    }
 };
 
 /// Constant root metadata needed after LIR interpretation finishes.
@@ -326,13 +334,23 @@ pub const LiteralRootPlan = struct {
 pub const StaticDataValue = struct {
     /// Post-ARC guards reading this slot; threaded through ComptimeValueGuard.
     first_comptime_guard: ?u32 = null,
-    /// Null when completed frozen data or a stored node supplies this slot
-    /// directly.
+    /// Null when completed frozen data, a stored node, or a capture-free
+    /// callable supplies this slot directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
-    /// The stored list this value is frozen from, when it has no initializer
-    /// (`Mono.StoredStaticList`).
+    /// The completed ConstStore node frozen directly at its explicit layout
+    /// and storage plan, without an initializer procedure.
     stored: ?StoredStaticValue = null,
+    /// The capture-free erased callable of this procedure, which needs no
+    /// initializer: its value is the callable's payload (the function
+    /// pointer, no `on_drop`, no capture bytes) with the static refcount.
+    callable: ?LIR.LirProcSpecId = null,
+    /// Final constant data assembled by the compiler, never runtime LIR.
+    parts: ?StaticDataParts = null,
+    /// Another physical representation of this canonical completed root.
+    /// It shares the producer and failure status, and is filled by the data
+    /// writer, never by runtime conversion or allocation instructions.
+    representation_of: ?struct { slot: LIR.StaticDataId, storage: CaptureSlotStorage } = null,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {
@@ -349,6 +367,26 @@ pub const StaticDataValue = struct {
             },
         },
     } = null,
+};
+
+/// Explicit edges and representation of a completed constant. Children name
+/// immutable data slots; the target-data writer connects their bytes and
+/// relocations without generating a procedure that constructs the value.
+pub const StaticDataParts = struct {
+    kind: union(enum) {
+        word: u64,
+        product,
+        list,
+        box,
+        /// One sequence record child, with its committed step byte offset.
+        boxed_sequence: u32,
+        tag: u32,
+        callable: struct {
+            proc: LIR.LirProcSpecId,
+            on_drop: LIR.ErasedCallableOnDrop = .none,
+        },
+    },
+    children: []LIR.StaticDataId,
 };
 
 /// A list stored in a checked module's `ConstStore`, which static data
@@ -420,6 +458,10 @@ pub const Result = struct {
     /// (`LIR.LirProcSpec.exported`), roots of reachability and ARC beside
     /// `root_procs` (design.md "Per-Module Output").
     exported_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
+    /// The encoded needs list of each exported `.boxy` worker that takes a
+    /// type table, by its procedure's identity: what an importer fills the
+    /// worker's tables from (`postcheck.Boxy.Tables`).
+    boxy_table_needs: std.AutoHashMapUnmanaged(LIR.ProcIdentity, []const u8) = .empty,
     root_metadata: std.ArrayList(root.RootMetadata) = .empty,
     requested_layouts: std.ArrayList(RequestedLayout) = .empty,
     const_types: const_store.ConstTypeStore,
@@ -460,6 +502,7 @@ pub const Result = struct {
         self.lowering_modules.deinit(allocator);
         self.expect_site_ids.deinit(allocator);
         self.expect_sites.deinit(allocator);
+        for (self.static_data_values.items) |value| if (value.parts) |parts| allocator.free(parts.children);
         self.static_data_values.deinit(allocator);
         self.comptime_value_guards.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
@@ -476,6 +519,9 @@ pub const Result = struct {
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
         self.exported_procs.deinit(allocator);
+        var needs = self.boxy_table_needs.valueIterator();
+        while (needs.next()) |bytes| allocator.free(bytes.*);
+        self.boxy_table_needs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
     }
@@ -569,6 +615,7 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
             .str,
             .list,
             .box,
+            .boxed_sequence,
             .named,
             .boxy_fn,
             => {},

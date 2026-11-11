@@ -69,7 +69,7 @@ fn expectConstantListNotRebuilt(target: lir.CheckedPipeline.TargetConfig) (harne
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,
@@ -94,7 +94,17 @@ fn expectConstantListNotRebuilt(target: lir.CheckedPipeline.TargetConfig) (harne
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    try std.testing.expect(session.completed != null);
+    // The `.boxy` evaluator completed `space_bytes` before the Solved
+    // program was specialized, so that program restores the stored value
+    // and the runtime consumer continues it (design.md "Compile-Time
+    // Evaluation Under `.lss`").
+    try std.testing.expect(session.runtime_stages == .evaluation);
+    try std.testing.expect(space_bytes_evaluated: {
+        for (coord.appRootCheckedArtifact().compile_time_roots.roots) |root| {
+            if (root.kind == .constant and root.payload == .const_node) break :space_bytes_evaluated true;
+        }
+        break :space_bytes_evaluated false;
+    });
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();

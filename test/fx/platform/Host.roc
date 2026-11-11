@@ -43,6 +43,10 @@ Host :: {
     ## Release the boxed function currently stored by the host.
     release_stored_boxed! : () => {}
 
+    ## Release an opaque sequence without reading its private state.
+    release_boxed_iter! : Box(Iter(U8)) => {}
+    release_boxed_stream! : Box(Stream(U8)) => {}
+
     ## Reset boxed host capture drop counters.
     reset_boxed_drop_report! : () => {}
 

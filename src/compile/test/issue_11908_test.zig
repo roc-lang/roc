@@ -3,13 +3,32 @@ const std = @import("std");
 const check = @import("check");
 const CoreCtx = @import("ctx").CoreCtx;
 const roc_target = @import("roc_target");
+const lir = @import("lir");
 const compile_build = @import("../compile_build.zig");
 
 const TestError = compile_build.InitError || compile_build.BuildRootError ||
     std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError ||
     error{ TestExpectedEqual, TestUnexpectedResult };
 
-const Measurement = struct { statements: usize, locals: usize, unpacked_lists: usize };
+const Measurement = struct { statements: usize = 0, locals: usize = 0, unpacked_lists: usize = 0 };
+
+/// Measures each `.boxy` compile-time program as it is lowered, before it
+/// runs and before the checked constant can be restored from ConstStore.
+/// Abandoned rewrite rows count too: even transient IR must not grow with
+/// the number of literal elements.
+const ProgramMeasure = struct {
+    measurement: Measurement = .{},
+
+    fn observe(raw: *anyopaque, result: *const lir.Program.Result) std.mem.Allocator.Error!void {
+        const self: *ProgramMeasure = @ptrCast(@alignCast(raw));
+        const store = &result.store;
+        for (store.getCFStmts()) |stmt| {
+            if (stmt == .assign_list) self.measurement.unpacked_lists += 1;
+        }
+        self.measurement.statements += store.cfStmtCount();
+        self.measurement.locals += store.localCount();
+    }
+};
 
 /// Collects a build's stderr writes, such as compile-time `dbg` output, in
 /// memory rather than in the test process's stderr.
@@ -42,6 +61,8 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
     defer stderr_capture.bytes.deinit(gpa);
     build.filesystem.ctx = &stderr_capture;
     build.filesystem.vtable.writeStderr = StderrCapture.write;
+    var measure: ProgramMeasure = .{};
+    build.boxy_program_observer = .{ .context = &measure, .observe = ProgramMeasure.observe };
     try build.build(path);
     const coord = build.coordinator.?;
     try std.testing.expect(!coord.hasUserErrors());
@@ -72,22 +93,13 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
         const packed_list = value.list.packed_bytes;
         try std.testing.expectEqual(scalar, packed_list.element.?);
         try std.testing.expectEqual(expected.len / scalar.byteWidth(), packed_list.len);
-        try std.testing.expectEqualSlices(u8, expected, artifact.const_store.blobBytes(packed_list.bytes));
+        try std.testing.expectEqualSlices(u8, expected, artifact.const_store.blobData(packed_list.bytes));
     }
     try std.testing.expectEqual(@as(usize, 1), constants);
-    // Inspect the program used for the initial evaluation, before the checked
-    // constant can be restored from ConstStore. Include abandoned rewrite rows:
-    // even transient IR must not grow with the number of literal elements.
-    var measurement: Measurement = .{ .statements = 0, .locals = 0, .unpacked_lists = 0 };
-    for (coord.program_session.?.completed.?.programs()) |program| {
-        const store = &program.lir_result.store;
-        for (store.getCFStmts()) |stmt| {
-            if (stmt == .assign_list) measurement.unpacked_lists += 1;
-        }
-        measurement.statements += store.cfStmtCount();
-        measurement.locals += store.localCount();
-    }
-    return measurement;
+    // The constant reads no function value, so the `.boxy` evaluator
+    // completes it (design.md "Compile-Time Evaluation Under `.lss`").
+    try std.testing.expect(measure.measurement.statements != 0);
+    return measure.measurement;
 }
 
 test "issue 11908: numeric literal list evaluation has constant LIR size" {

@@ -1,5 +1,5 @@
 Shapes := [].{
-	Handler(a) := [H({ y : a } -> {})]
+	Handler(a) := [H(Box({ y : a } -> {}))]
 	Step := [Done, Emit(U64)]
-	Adder := (U64 -> U64)
+	Adder := Box(U64 -> U64)
 }

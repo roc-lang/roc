@@ -101,6 +101,8 @@ test "Solved-LIR finite capturing bodies lower deterministically on workers" {
 test "Solved-LIR runtime finite dispatch literals and patterns commit deterministically on workers" {
     // Runtime arguments keep the selected finite closure and string/list
     // patterns alive; constant-only initialization would not exercise admission.
+    // The byte list depends on text, so it is built by the worker rather
+    // than restored through the coordinator's aggregate static-data inventory.
     try harness.expectRuntimeWorkerParallelismDeterministicLir(.{ .app_body =
         \\choose = |flag, offset| if flag {
         \\    |value| value + offset
@@ -114,7 +116,7 @@ test "Solved-LIR runtime finite dispatch literals and patterns commit determinis
         \\        "" => 1.U64
         \\        _ => 2.U64
         \\    }
-        \\    bytes = if count == 0 Str.to_utf8("serial") else Str.to_utf8("parallel")
+        \\    bytes = Str.to_utf8(text)
         \\    first = match bytes {
         \\        [byte, ..] => byte.to_u64()
         \\        [] => 0.U64

@@ -1,4 +1,4 @@
-Value :: { first : (U64 -> U64) }.{
+Value :: { first : Box(U64 -> U64) }.{
 	value : Value
-	value = { first: |x| x }
+	value = { first: Box.box(|x| x) }
 }

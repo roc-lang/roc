@@ -349,7 +349,10 @@ pub const Constants = struct {
     /// 164: sorted array builders serialize zeroed entry padding and an
     ///      integer offset that the cache validator checks.
     /// 165: compile-time reads persist placement and semantic root identity.
-    pub const CACHE_VERSION = 168;
+    /// 177: checked-module entries store reproducible checking and evaluation
+    ///      reports beside body-local type context arguments, per-use
+    ///      anonymous structure and generated-codec recurrences.
+    pub const CACHE_VERSION = 177;
 };
 
 /// Configuration for the Roc cache system.
@@ -443,13 +446,6 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
     }
 
-    /// Inference capsules share the checked artifact compatibility domain.
-    pub fn getInferenceCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-        return std.fs.path.join(allocator, &.{ version_dir, "inference" });
-    }
-
     /// Exact platform/app composition results, separate from reusable modules.
     pub fn getPlatformPairingCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
@@ -508,20 +504,11 @@ pub const CacheStats = struct {
     canonicalized_bytes_read: u64 = 0,
     canonicalized_bytes_written: u64 = 0,
 
-    /// Inference capsules, separately from fully checked artifacts.
-    inference_hits: u64 = 0,
-    inference_misses: u64 = 0,
-    inference_invalidations: u64 = 0,
-    inference_stores: u64 = 0,
-    inference_store_failures: u64 = 0,
-    inference_bytes_read: u64 = 0,
-    inference_bytes_written: u64 = 0,
-
     const Self = @This();
 
     /// Which cache an operation belongs to. Every recording call names one, so
     /// no counter is shared between caches.
-    pub const Kind = enum { checked, canonicalized, inference };
+    pub const Kind = enum { checked, canonicalized };
 
     /// Record a cache miss.
     pub fn recordMiss(self: *Self) void {
@@ -549,10 +536,6 @@ pub const CacheStats = struct {
                 self.canonicalized_hits += 1;
                 self.canonicalized_bytes_read += bytes_read;
             },
-            .inference => {
-                self.inference_hits += 1;
-                self.inference_bytes_read += bytes_read;
-            },
         }
     }
 
@@ -561,7 +544,6 @@ pub const CacheStats = struct {
         switch (kind) {
             .checked => self.misses += 1,
             .canonicalized => self.canonicalized_misses += 1,
-            .inference => self.inference_misses += 1,
         }
     }
 
@@ -570,7 +552,6 @@ pub const CacheStats = struct {
         switch (kind) {
             .checked => self.invalidations += 1,
             .canonicalized => self.canonicalized_invalidations += 1,
-            .inference => self.inference_invalidations += 1,
         }
     }
 
@@ -585,10 +566,6 @@ pub const CacheStats = struct {
                 self.canonicalized_stores += 1;
                 self.canonicalized_bytes_written += bytes_written;
             },
-            .inference => {
-                self.inference_stores += 1;
-                self.inference_bytes_written += bytes_written;
-            },
         }
     }
 
@@ -597,7 +574,6 @@ pub const CacheStats = struct {
         switch (kind) {
             .checked => self.store_failures += 1,
             .canonicalized => self.canonicalized_store_failures += 1,
-            .inference => self.inference_store_failures += 1,
         }
     }
 };
