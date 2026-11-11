@@ -535,7 +535,7 @@ each one, and what kind of file each one produces:
 ```roc
 targets: {
     inputs_dir: "targets/",
-    x64linux: { inputs: ["crt1.o", "host.o", app] },
+    x64musl: { inputs: ["rcrt1.o", "libhost.a", app, "libc.a"] },
     arm64mac: { inputs: ["host.o", app] },
     wasm32: { inputs: ["host.wasm", app], output: Shared, exports: ["run"] },
 }
@@ -553,6 +553,21 @@ targets: {
 - A target can't have any other fields, and the WebAssembly ones only go on WebAssembly targets.
   A misspelled or misplaced field is an "Invalid Target Configuration" error rather than something
   `roc build` quietly ignores.
+
+Roc hosts must support relocatable code and data. Native executables always enable
+position-independent execution and address-space layout randomization (ASLR),
+on Linux, macOS, and Windows. There's no declaration or opt-out for this policy.
+It lets the OS randomize code addresses, which Roc's dictionary hash seed uses.
+
+Your host objects need position-independent code or the target format's equivalent
+relocation support. For example, ELF and Mach-O hosts can be compiled with `-fPIC`;
+Windows PE images carry base relocations for the loader.
+
+For a static Linux executable, your platform's startup code has to apply relocations
+before using stored pointers. Musl's `rcrt1.o` does this, but its ordinary `crt1.o`
+doesn't. macOS and Windows loaders perform relocation before startup. Roc doesn't
+inspect arbitrary startup code or substitute startup inputs: incompatible inputs
+can fail to link, and startup that skips required relocation can link and then crash.
 
 `global_base` is the first memory address the Roc program may use. Every address below it belongs
 to the host, which is what consoles like [WASM-4](https://wasm4.org) need: their hardware registers

@@ -186,6 +186,7 @@ comptime {
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(host_prelink);
+        std.testing.refAllDecls(@import("elf_pie_test.zig"));
         std.testing.refAllDecls(macho_host_prelink);
         std.testing.refAllDecls(macho_patch_link);
         std.testing.refAllDecls(coff_host_prelink);
@@ -1438,6 +1439,9 @@ fn generatePlatformHostShimFromLirData(
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
+        // The shim's hosted-function pointer tables need load-base
+        // relocations in both PIE executables and shared hosts.
+        .pic = true,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 
@@ -9706,25 +9710,6 @@ fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allo
     return roc_target.llvmFeatureString(allocator, std_target);
 }
 
-fn llvmObjectUsesPic(target: RocTarget, link_type: roc_target.OutputKind, fuzz: bool) bool {
-    // Every wasm32 output starts as a relocatable object that some linker
-    // consumes afterwards, and a shared link (`wasm-ld -shared`, emscripten
-    // SIDE_MODULE) rejects absolute data relocations. Emitting one flavour of
-    // wasm object keeps `output: Archive` linkable by a foreign linker; the
-    // final-link path resolves the PIC base globals to zero, so the wasm it
-    // produces still addresses data absolutely.
-    if (target.toCpuArch() == .wasm32) return true;
-    return link_type == .shared or fuzz;
-}
-
-test "LLVM fuzz output uses position-independent code" {
-    try std.testing.expect(llvmObjectUsesPic(.x64musl, .archive, true));
-    try std.testing.expect(llvmObjectUsesPic(.x64musl, .exe, true));
-    try std.testing.expect(llvmObjectUsesPic(.x64musl, .shared, false));
-    try std.testing.expect(!llvmObjectUsesPic(.x64musl, .archive, false));
-    try std.testing.expect(!llvmObjectUsesPic(.x64musl, .exe, false));
-}
-
 test "LLVM builds link the SHA-256 rounds each target's CPU features select" {
     const expected = [_]struct { RocTarget, Sha256Rounds }{
         // x86-64-v3 has no SHA extension, so no x86_64 feature level carries it.
@@ -9746,17 +9731,10 @@ test "LLVM builds link the SHA-256 rounds each target's CPU features select" {
     }
 }
 
-test "wasm32 LLVM objects are always position-independent" {
-    try std.testing.expect(llvmObjectUsesPic(.wasm32, .archive, false));
-    try std.testing.expect(llvmObjectUsesPic(.wasm32, .exe, false));
-    try std.testing.expect(llvmObjectUsesPic(.wasm32, .shared, false));
-}
-
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
     target: RocTarget,
-    link_type: roc_target.OutputKind,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
@@ -9819,11 +9797,8 @@ fn compileLlvmAppObject(
 
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
-    // Shared libraries, fuzz hosts and every wasm32 object need
-    // position-independent code; keep their objects separate from ordinary
-    // exe/archive objects.
-    const pic = llvmObjectUsesPic(target, link_type, args.fuzz);
-    const kind_suffix: []const u8 = if (pic) "_pic" else "";
+    // Archives must also remain linkable into relocatable executables and libraries.
+    const kind_suffix = "_pic";
     const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
     var tuning_hash = std.hash.Crc32.init();
     tuning_hash.update(llvm_cpu);
@@ -9867,7 +9842,7 @@ fn compileLlvmAppObject(
             .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
             .stack_checked = stack_checks,
         },
-        .pic = pic,
+        .pic = true,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
         .private_runtime = true,
     };
@@ -9992,7 +9967,6 @@ fn rocBuildWasmLlvm(
         ctx,
         args,
         target,
-        link_type,
         lowered,
         entrypoints,
         static_data_exports,
@@ -11159,7 +11133,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             ctx,
             args,
             target,
-            link_type,
             &lowered,
             entrypoints,
             static_data_exports,
@@ -11854,9 +11827,10 @@ const FastDevLink = struct {
             try host_symbols.collectHostExports(ctx.arena, ctx.io.std_io, try hostInputPaths(ctx, link_inputs)),
         }) else &.{};
 
+        const format = fastDevLinkFormat(target) orelse unreachable; // fastDevLinkApplies chose the target
         self.* = .{
             .spec = .{
-                .format = fastDevLinkFormat(target) orelse unreachable, // fastDevLinkApplies chose the target
+                .format = format,
                 .target = target,
                 .link_abi = buildLinkAbi(target, args.synthetic_default_platform),
                 .platform_files_pre = platform_files_pre.items,
@@ -11868,6 +11842,7 @@ const FastDevLink = struct {
                 .keep = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
                 .host_required = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
                 .shared = shared,
+                .pie = format == .elf and !shared,
                 .exports = exports,
             },
             .output = fast_dev_link.OutputFile.create(ctx.arena, final_output_path) catch |err| switch (err) {
@@ -11991,7 +11966,7 @@ const FastDevLink = struct {
         // A Mach-O or COFF host's key covers the provides' kinds and layout
         // sizes, which the images tell; its lookup waits for them.
         var provides: []const host_prelink.Provide = &.{};
-        if (self.spec.format == .macho or self.spec.format == .coff or self.spec.shared) {
+        if (self.spec.format == .macho or self.spec.format == .coff or self.spec.shared or self.spec.pie) {
             provides = try self.provideLayouts(ctx, support_view, units);
             if (self.job.outcome == .hashed) self.job.lookupWithLayouts(provides);
         }

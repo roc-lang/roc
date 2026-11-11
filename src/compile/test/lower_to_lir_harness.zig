@@ -117,7 +117,6 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
 pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     static_materialization.MaterializationError ||
     lir.CheckedPipeline.LowerResourceError ||
-    @import("static_data").MaterializationError ||
     std.Io.Dir.CreateDirPathError ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||

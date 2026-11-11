@@ -1,5 +1,8 @@
+//! Test host for HTTP-header parsing, including libc-free Linux execution.
+
 const std = @import("std");
 const builtin = @import("builtin");
+const builtins = @import("builtins");
 const host_alloc = @import("host_alloc");
 
 pub const std_options: std.Options = .{
@@ -176,11 +179,13 @@ comptime {
 
     switch (classifyPlatformOs(builtin.os.tag)) {
         .linux => {
+            @export(&linuxStartMain, .{ .name = "roc_http_linux_start_main", .visibility = .hidden });
             if (builtin.cpu.arch == .x86_64) {
                 @export(&linuxStartX86_64, .{ .name = "_start" });
-                @export(&linuxStartMain, .{ .name = "roc_http_linux_start_main", .visibility = .hidden });
+            } else if (builtin.cpu.arch == .aarch64) {
+                @export(&linuxStartAarch64, .{ .name = "_start" });
             } else {
-                @export(&linuxStart, .{ .name = "_start" });
+                @compileError("unsupported Linux test-host architecture");
             }
             @export(&linuxMemcpy, .{ .name = "memcpy", .visibility = .hidden });
             @export(&linuxMemmove, .{ .name = "memmove", .visibility = .hidden });
@@ -254,22 +259,33 @@ fn cMain(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     return serverMain();
 }
 
-fn linuxStart() callconv(.c) noreturn {
-    if (comptime builtin.os.tag != .linux) unreachable;
-    linux.exitGroup(serverMain());
-}
-
-fn linuxStartMain() callconv(.c) c_int {
+fn linuxStartMain(argc: usize, argv: [*][*:0]u8) callconv(.c) c_int {
+    @disableInstrumentation();
+    builtins.linux_static_pie.relocate(argc, argv);
     return serverMain();
 }
 
 fn linuxStartX86_64() callconv(.naked) noreturn {
     asm volatile (
+        \\mov (%%rsp), %%rdi
+        \\lea 8(%%rsp), %%rsi
+        \\and $-16, %%rsp
         \\call roc_http_linux_start_main
         \\movl %%eax, %%edi
         \\movl $231, %%eax
         \\syscall
         \\ud2
+    );
+}
+
+fn linuxStartAarch64() callconv(.naked) noreturn {
+    asm volatile (
+        \\ldr x0, [sp]
+        \\add x1, sp, #8
+        \\bl roc_http_linux_start_main
+        \\mov x8, #94
+        \\svc #0
+        \\brk #0
     );
 }
 

@@ -1728,6 +1728,9 @@ kind and its resolved value reference. It must not infer a procedure from source
 names, function type alone, body shape below the root expression, or post-check
 specialization results. Any wrapper, capture, conditional, call, or other
 function-valued computation remains an ordinary compile-time callable root.
+When platform pairing binds a required procedure, it records the resulting
+alias forwarding in the pairing's own callable templates and persists it with
+the pairing. The unpaired platform's templates remain unchanged.
 
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
@@ -1876,9 +1879,11 @@ as the scalar literal rather than a slot read, so range proving, loop
 versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
-record, or guard exists for the root. Small strings may likewise use their
-immediate representation. All aggregate values, including empty lists,
-records, tuples, tags, boxes, and captured functions, read immutable stored
+record, or guard exists for the root. Discriminant-only enums (including Bool)
+are scalar values for this rule, even though their layout is a tag union.
+Small strings may likewise use their immediate representation. All aggregate
+values, including empty lists, records, tuples, payload-bearing tags, boxes,
+and captured functions, read immutable stored
 data. There is no construction tree, runtime constructor, or fresh alternative
 for a completed value. Mutation uses the normal copy-on-write operation.
 Allocation capacity is not part of the frozen value; empty lists require no
@@ -15411,7 +15416,9 @@ Nothing a module emits depends on a module that imports it:
   (Pre-Specialized Integer List Workers); the
   wrappers of its `expect` and REPL roots are not, since nothing reaches them
   but a test plan's or a REPL's own roots, and each of those lowers as one
-  program whose roots may name modules no unit lowers;
+  program whose roots may name modules no unit lowers; exact procedure aliases
+  likewise emit no evaluator wrapper, because their checked forwarding metadata
+  directs every use to the referenced procedure rather than an evaluated value;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module never demands an
@@ -26507,6 +26514,23 @@ import library writer (`coff/ImportLibrary.zig`). A Mach-O link puts the
 unmapped `__DWARF` segment at `__LINKEDIT`'s address, as dyld requires a
 dylib's segments in address order.
 
+Roc hosts must support relocatable code and data. Native executables always
+enable PIE/ASLR: ELF and Mach-O use PIE, and PE retains base relocations and
+enables dynamic-base loading. There is no platform opt-in or migration guard.
+This lets the function-address dictionary seed follow OS address randomization.
+Generated objects, including archives for foreign linkers, are PIC.
+
+ELF PIE executables are a distinct host-link mode, not shared libraries.
+They use section-backed provides and the same dynamic relative-relocation
+table extension as shared hosts; absolute provides cannot track the load base.
+The host key distinguishes fixed executables, PIE executables and libraries.
+Program startup and library exports remain separate from relocation policy.
+Static PIE requires platform-supplied self-relocating startup (for example
+musl `rcrt1.o`). Platform authors own startup correctness; selecting PIE never
+substitutes startup inputs or infers compatibility from filenames. The
+compiler-owned Linux default platform applies relocations before initialization,
+without libc. macOS and Windows loaders relocate their images before startup.
+
 A `.boxy` dev `roc run` of an app without a platform header builds it
 against the synthetic default platform with a fast dev link and runs the
 binary, reusing every object `roc check` filed (Caching Under `.boxy`).
@@ -26627,10 +26651,10 @@ one cache entry per host (`host_prelink`, `macho/HostPrelink`,
 `coff/HostPrelink`, family `prelinked_host`). The generated object defines
 every `provides` symbol as a window the host's references resolve to at
 prelink time, which each build fills in: a jump to the entry wrapper for a
-procedure, the value's bytes for a data symbol. In an ELF host (Linux and
-the BSDs) the windows are absolute addresses at a fixed place in the app
+procedure, the value's bytes for a data symbol. In a fixed ELF executable binary
+(Linux and the BSDs) the windows are absolute addresses at a fixed place in the app
 region, and a provided value larger than its window is a reported build
-error. On macOS and Windows the
+error. For ELF PIE/shared hosts, macOS and Windows the
 windows are sections of the host itself, a procedure's 16 bytes of code for a
 long jump and a value's layout size of writable data, where the pointers in
 the copied value can be relocated; which provides are procedures and how
