@@ -44,13 +44,15 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 21 stores reproducible checking
+/// reflected in layout fingerprints. Version 24 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
-/// completion for both strategies, field-default identities in Boxy
-/// stored-function types, and integer list worker item-type bindings. It
-/// rejects every version 18 recipe format and the independent version 19 and
-/// 20 formats. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 21;
+/// completion and cached literal argument roots for both strategies,
+/// body-local type context arguments, generated-codec recurrences,
+/// field-default identities in Boxy stored-function types, and integer list
+/// worker item-type bindings. It rejects every version 18 recipe format and
+/// the independent version 19 through 23 formats. Platform-pairing entries
+/// share it.
+const checked_envelope_version: u32 = 24;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
@@ -149,8 +151,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xCC, 0xE5, 0xBD, 0x5B, 0x98, 0xB2, 0xA4, 0xD3, 0x9C, 0xC7, 0xB9, 0x22, 0xD4, 0xDE, 0x4B, 0xAE,
-        0x16, 0xD2, 0x27, 0xF7, 0x82, 0xC4, 0x93, 0x99, 0xD1, 0xED, 0xE5, 0x52, 0x31, 0xB4, 0x4B, 0xF9,
+        0xD9, 0x7E, 0x85, 0x61, 0x57, 0xF1, 0x3F, 0x89, 0xE1, 0x2D, 0x50, 0xC0, 0x48, 0x8A, 0xD5, 0xF1,
+        0x1A, 0x0D, 0x87, 0x98, 0xA0, 0x94, 0x83, 0x16, 0xFE, 0x19, 0x4E, 0x32, 0x7F, 0x0A, 0xFC, 0x3B,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

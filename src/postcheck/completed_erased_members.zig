@@ -33,11 +33,35 @@ pub const CompletedErasedMembers = struct {
         return .{ .frozen_fn = template.frozen_fn, .frozen_worker = template.frozen_worker, .frozen_context = template.frozen_context };
     }
 
-    /// Records every erased callable `program`'s frozen image holds. Members
-    /// that share one procedure have the same code, so each of them counts
-    /// as held.
+    /// Records every erased callable a completed value in `program`'s frozen
+    /// image holds: those its compile-time value slots reach. The image also
+    /// holds the static data the program's own code reads, such as its
+    /// capture-free callables, which no later program reads through a value.
+    /// Members that share one procedure have the same code, so each of them
+    /// counts as held.
     pub fn add(self: *CompletedErasedMembers, allocator: Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) Allocator.Error!void {
-        for (frozen.exports) |item| for (item.relocations) |relocation| {
+        const visited = try allocator.alloc(bool, frozen.exports.len);
+        defer allocator.free(visited);
+        @memset(visited, false);
+        var stack: std.ArrayList(u32) = .empty;
+        defer stack.deinit(allocator);
+        for (frozen.exports, 0..) |item, index| {
+            const slot = item.value_id orelse continue;
+            if (program.static_data_values.items[@backingInt(slot)].compile_time_root == null) continue;
+            visited[index] = true;
+            try stack.append(allocator, @intCast(index));
+        }
+        while (stack.pop()) |index| for (frozen.exports[index].relocations) |relocation| {
+            switch (relocation.target) {
+                .named => {},
+                .data_symbol => |target| {
+                    const raw = @backingInt(target);
+                    if (!visited[raw]) {
+                        visited[raw] = true;
+                        try stack.append(allocator, raw);
+                    }
+                },
+            }
             if (relocation.callable_capture_offset == null) continue;
             const proc = relocation.procedure orelse Common.invariant("frozen erased callable lacked its procedure");
             var found = false;

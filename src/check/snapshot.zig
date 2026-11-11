@@ -721,7 +721,9 @@ pub const Store = struct {
                         .fill = fill,
                         .ident = nominal_type.ident,
                         .origin_module = nominal_type.origin_module,
-                        .args = store.sliceNominalArgs(nominal_type),
+                        // A declaration in a function body's trailing
+                        // context arguments are never shown.
+                        .args = store.nominalDeclaredArgs(nominal_type),
                         .scratch_top = self.scratch_content.top(),
                     };
                     if (store.lookupNominalDecl(nominal_type)) |decl_idx| {

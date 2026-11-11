@@ -11,12 +11,33 @@ const std = @import("std");
 const erased = @import("erased_callable.zig");
 const host = @import("in_process_host.zig");
 
+/// The words of argument bytes a `Pending` holds itself. A pending call with
+/// more copies them to the heap.
+pub const inline_args_words = 16;
+const inline_args_bytes = inline_args_words * @sizeOf(usize);
+
+/// The alignment a packed argument block may need: that of its most aligned
+/// argument.
+const args_alignment = 16;
+
 /// One waiter's pending call, in its frame. Empty when `callable` is null.
+///
+/// Every field is a word, so the cell has the same number of words on every
+/// target. A backend reserving one zeroes its first `zeroed_words` words.
 pub const Pending = extern struct {
     callable: ?erased.CallableFnPtr = null,
+    /// A heap block no call reads, `spare_capacity` bytes long, which the
+    /// next argument block too large for `inline_args` is copied to. A chain
+    /// of such calls reuses the blocks it frees, and `drive` frees this one
+    /// when its chain ends.
+    spare: ?[*]u8 = null,
+    spare_capacity: usize = 0,
     closure: ?[*]u8 = null,
+    /// The call's argument bytes: `inline_args` when they fit there, a heap
+    /// block of `args_capacity` bytes otherwise, null when the call has none.
     args: ?[*]u8 = null,
     args_len: usize = 0,
+    args_capacity: usize = 0,
     /// Nonzero when the call transfers the reference it owns to `closure`
     /// through the erased ABI's reuse channel (an owned deferred call), so
     /// the callee consumes it; zero when the driver releases it after the
@@ -26,25 +47,19 @@ pub const Pending = extern struct {
     /// The tag on `invocation`'s address moves that word off its alignment,
     /// so it spans two of these.
     written_output: [2]usize = .{ 0, 0 },
-    /// Small packets live in the waiter, not in a host allocation. This is
-    /// byte storage: generated frames need only word alignment. The driver
-    /// moves it to aligned invocation storage before calling the callee.
-    inline_args: [inline_capacity]u8 = undefined,
+    /// Only `drive` reads these, copying them out before it makes the call,
+    /// so they need no more than word alignment.
+    inline_args: [inline_args_words]usize = undefined,
 };
-
-/// A storage representation boundary, not an argument-size restriction.
-/// Larger packets retain their exact producer-authored length and ownership.
-const inline_capacity = 32;
 
 // Every field before inline_args is a pointer-sized word or array of words.
 // Derive their count from the ABI declaration, not from the whole cell size.
 const pending_header_words = @offsetOf(Pending, "inline_args") / @sizeOf(usize);
 
-/// Target-width storage for a `Pending`. Its header consists of pointer-sized
-/// words, but inline argument bytes do not shrink on a 32-bit target.
-/// Only `callable` needs initializing.
+/// Target-width storage for a `Pending`: its header and its explicitly
+/// word-sized inline packet. Backends initialize `zeroed_words` leading words.
 pub fn pendingByteSize(word_size: u32) u32 {
-    return std.mem.alignForward(u32, pending_header_words * word_size + inline_capacity, pendingAlignment(word_size));
+    return std.mem.alignForward(u32, (pending_header_words + inline_args_words) * word_size, pendingAlignment(word_size));
 }
 
 /// The pending header requires target-word alignment; inline bytes require no more.
@@ -57,6 +72,16 @@ comptime {
     std.debug.assert(@offsetOf(Pending, "inline_args") % @sizeOf(usize) == 0);
     std.debug.assert(@sizeOf(Pending) == pendingByteSize(@sizeOf(usize)));
     std.debug.assert(@alignOf(Pending) == pendingAlignment(@sizeOf(usize)));
+}
+
+/// The leading words of a `Pending` a backend zeroes when it reserves one:
+/// `callable` and `spare`. The rest is written before it is read.
+pub const zeroed_words = 2;
+
+comptime {
+    std.debug.assert(@offsetOf(Pending, "callable") == 0);
+    std.debug.assert(@offsetOf(Pending, "spare") == @sizeOf(usize));
+    std.debug.assert(@sizeOf(Pending) % @sizeOf(usize) == 0);
 }
 
 /// The erased ABI's last argument as this runtime passes it: an address in
@@ -91,11 +116,26 @@ pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]
     std.debug.assert(pending.callable == null);
     // A call without arguments carries no argument bytes to copy out.
     var copied: ?[*]u8 = null;
+    var capacity: usize = 0;
     if (args_len != 0) {
-        const bytes: [*]u8 = if (args_len <= inline_capacity)
-            &pending.inline_args
-        else
-            @ptrCast(host.ops().allocRaw(args_len, 16));
+        const bytes: [*]u8 = if (args_len <= inline_args_bytes)
+            @ptrCast(&pending.inline_args)
+        else heap: {
+            if (pending.spare) |spare| {
+                pending.spare = null;
+                if (pending.spare_capacity >= args_len) {
+                    capacity = pending.spare_capacity;
+                    break :heap spare;
+                }
+                host.ops().dealloc(spare, args_alignment);
+            }
+            capacity = args_len;
+            break :heap @ptrCast(host.ops().allocRaw(args_len, args_alignment));
+        };
+        // Nothing is ever called with the cell's own bytes or its spare
+        // block as its arguments (`drive` copies inline bytes out first, and
+        // a heap block becomes spare only once its call returns), so these
+        // never overlap.
         @memcpy(bytes[0..args_len], args.?[0..args_len]);
         copied = bytes;
     }
@@ -103,10 +143,32 @@ pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]
     pending.closure = closure;
     pending.args = copied;
     pending.args_len = args_len;
+    pending.args_capacity = capacity;
     pending.transfer = @intFromBool(transfer);
 }
 
+/// Keep `block`, which no call reads any more, as `pending`'s spare when it
+/// is the larger, and free the other.
+fn keepSpare(pending: *Pending, block: [*]u8, capacity: usize) void {
+    if (pending.spare) |spare| {
+        if (pending.spare_capacity >= capacity) {
+            host.ops().dealloc(block, args_alignment);
+            return;
+        }
+        host.ops().dealloc(spare, args_alignment);
+    }
+    pending.spare = block;
+    pending.spare_capacity = capacity;
+}
+
 /// Tail-drive's result slot has the same concrete ABI throughout the chain.
+///
+/// A callee may read its arguments for as long as it runs: a dynamic argument
+/// stays at the address it arrived at. So each call's arguments live outside
+/// the cell until it returns, in this frame or in their heap block, leaving
+/// the cell free for the call it leaves pending, and for any chain driven in
+/// this same cell before it returns. A heap block becomes the cell's spare
+/// once its call returns, for the next large block in the chain.
 pub fn drive(pending: *Pending, ret: ?[*]u8) void {
     drivePending(pending, ret);
 }
@@ -121,27 +183,30 @@ pub fn drive(pending: *Pending, ret: ?[*]u8) void {
 /// uses its frame register, so a body kept in one block costs the square of
 /// its size there.
 noinline fn drivePending(pending: *Pending, ret: ?[*]u8) void {
+    var inline_copy: [inline_args_bytes]u8 align(args_alignment) = undefined;
     while (pending.callable) |callable| {
         pending.callable = null;
         const closure = pending.closure.?;
-        // The next deferral can overwrite the cell before this invocation
-        // finishes reading its arguments. Keep the active packet separate.
-        var active: [inline_capacity]u8 align(16) = undefined;
         const args_len = pending.args_len;
-        const heap_args = if (args_len > inline_capacity) pending.args else null;
-        const args = if (args_len == 0) null else if (heap_args) |bytes| bytes else blk: {
-            @memcpy(active[0..args_len], pending.inline_args[0..args_len]);
-            break :blk @as([*]u8, &active);
-        };
+        const capacity = pending.args_capacity;
         const transfer = pending.transfer != 0;
+        const args: ?[*]u8 = if (args_len == 0)
+            null
+        else if (args_len <= inline_args_bytes) copy: {
+            @memcpy(inline_copy[0..args_len], pending.args.?[0..args_len]);
+            break :copy &inline_copy;
+        } else pending.args;
         invoke(pending, callable, ret, args, erased.capturePtr(closure), if (transfer) closure else null);
-        const ops = host.ops();
         // This is the ownership transfer explicitly requested by ARC's
         // deferred-call statement, not a backend-inferred capture release:
         // the callee consumed the reference an owned call passed it, and
         // the driver releases every other.
-        if (!transfer) erased.decref(closure, ops);
-        if (heap_args) |bytes| ops.dealloc(bytes, 16);
+        if (!transfer) erased.decref(closure, host.ops());
+        if (args_len > inline_args_bytes) keepSpare(pending, args.?, capacity);
+    }
+    if (pending.spare) |spare| {
+        pending.spare = null;
+        host.ops().dealloc(spare, args_alignment);
     }
 }
 
@@ -179,6 +244,149 @@ const TestCalls = struct {
         deferCall(pending, @ptrCast(&step), closure, &next, next.len, false);
     }
 
+    /// Like `step`, with an argument block too large for the cell, whose
+    /// every word must arrive intact.
+    fn stepWide(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
+        const pending = callerCell(@ptrFromInt(out)).?;
+        const remaining = std.mem.readInt(u64, args.?[0..8], .little);
+        for (1..wide_words) |i| {
+            if (std.mem.readInt(u64, args.?[i * 8 ..][0..8], .little) != remaining +% i) {
+                std.mem.writeInt(u64, ret.?[0..8], 0, .little);
+                return;
+            }
+        }
+        if (remaining == 0) {
+            std.mem.writeInt(u64, ret.?[0..8], 42, .little);
+            return;
+        }
+        const closure = erased.allocate(@ptrCast(&stepWide), &drop, 0, ops);
+        var next: [wide_words * 8]u8 align(16) = undefined;
+        wideArgs(&next, remaining - 1);
+        deferCall(pending, @ptrCast(&stepWide), closure, &next, next.len, false);
+    }
+
+    const wide_words = inline_args_bytes / 8 + 3;
+
+    /// Like `stepWide`, with an argument block whose length cycles through
+    /// three sizes too large for the cell. Its second word is its length in
+    /// words.
+    fn stepVaried(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
+        const pending = callerCell(@ptrFromInt(out)).?;
+        const remaining = std.mem.readInt(u64, args.?[0..8], .little);
+        const words = std.mem.readInt(u64, args.?[8..16], .little);
+        if (words != variedWords(remaining)) {
+            std.mem.writeInt(u64, ret.?[0..8], 0, .little);
+            return;
+        }
+        for (2..words) |i| {
+            if (std.mem.readInt(u64, args.?[i * 8 ..][0..8], .little) != remaining +% i) {
+                std.mem.writeInt(u64, ret.?[0..8], 0, .little);
+                return;
+            }
+        }
+        if (remaining == 0) {
+            std.mem.writeInt(u64, ret.?[0..8], 42, .little);
+            return;
+        }
+        const closure = erased.allocate(@ptrCast(&stepVaried), &drop, 0, ops);
+        var next: [varied_max_words * 8]u8 align(16) = undefined;
+        const len = variedArgs(&next, remaining - 1);
+        deferCall(pending, @ptrCast(&stepVaried), closure, &next, len, false);
+    }
+
+    const varied_max_words = wide_words + 2 * 7;
+
+    fn variedWords(remaining: u64) u64 {
+        return wide_words + (remaining % 3) * 7;
+    }
+
+    /// Fills `bytes` for `stepVaried` and returns how many it used.
+    fn variedArgs(bytes: *[varied_max_words * 8]u8, remaining: u64) usize {
+        const words = variedWords(remaining);
+        std.mem.writeInt(u64, bytes[0..8], remaining, .little);
+        std.mem.writeInt(u64, bytes[8..16], words, .little);
+        for (2..words) |i| std.mem.writeInt(u64, bytes[i * 8 ..][0..8], remaining +% i, .little);
+        return words * 8;
+    }
+
+    fn wideArgs(bytes: *[wide_words * 8]u8, remaining: u64) void {
+        for (0..wide_words) |i| std.mem.writeInt(u64, bytes[i * 8 ..][0..8], remaining +% i, .little);
+    }
+
+    var forwards: std.atomic.Value(usize) = .init(0);
+    var overwritten: std.atomic.Value(bool) = .init(false);
+
+    /// Leaves a call to itself pending with its own incoming arguments, and
+    /// reads them again afterwards, as a callee does with a dynamic argument,
+    /// until it has run 100 times.
+    fn forward(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
+        const pending = callerCell(@ptrFromInt(out)).?;
+        if (forwards.fetchAdd(1, .monotonic) + 1 == 100) {
+            @memcpy(ret.?[0..16], args.?[0..16]);
+            return;
+        }
+        var before: [16]u8 = undefined;
+        @memcpy(&before, args.?[0..16]);
+        const closure = erased.allocate(@ptrCast(&forward), &drop, 0, ops);
+        deferCall(pending, @ptrCast(&forward), closure, args, 16, false);
+        if (!std.mem.eql(u8, &before, args.?[0..16])) overwritten.store(true, .monotonic);
+    }
+
+    /// Drives a chain of its own in the cell it was invoked from, as a
+    /// procedure handed its caller's cell does, then reads its arguments.
+    fn nested(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
+        const pending = callerCell(@ptrFromInt(out)).?;
+        var before: [16]u8 = undefined;
+        @memcpy(&before, args.?[0..16]);
+        const closure = erased.allocate(@ptrCast(&step), &drop, 0, ops);
+        var chain: [8]u8 = undefined;
+        std.mem.writeInt(u64, &chain, 5, .little);
+        deferCall(pending, @ptrCast(&step), closure, &chain, chain.len, false);
+        var chain_result: [8]u8 = undefined;
+        drive(pending, &chain_result);
+        if (!std.mem.eql(u8, &before, args.?[0..16])) overwritten.store(true, .monotonic);
+        @memcpy(ret.?[0..8], &chain_result);
+    }
+
+    /// Leaves `nested` pending with 16 argument bytes.
+    fn deferNested(ops: *RocOps, _: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
+        const pending = callerCell(@ptrFromInt(out)).?;
+        const closure = erased.allocate(@ptrCast(&nested), &drop, 0, ops);
+        deferCall(pending, @ptrCast(&nested), closure, args, 16, false);
+    }
+
+    /// Like `nested`, with argument blocks too large for the cell: the
+    /// chain it drives in its caller's cell takes and returns that cell's
+    /// spare block while this callee still reads its own.
+    fn nestedWide(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
+        const pending = callerCell(@ptrFromInt(out)).?;
+        var before: [wide_words * 8]u8 = undefined;
+        @memcpy(&before, args.?[0 .. wide_words * 8]);
+        const remaining = std.mem.readInt(u64, args.?[0..8], .little);
+        const closure = erased.allocate(@ptrCast(&stepWide), &drop, 0, ops);
+        var chain: [wide_words * 8]u8 align(16) = undefined;
+        wideArgs(&chain, 50);
+        deferCall(pending, @ptrCast(&stepWide), closure, &chain, chain.len, false);
+        var chain_result: [8]u8 = undefined;
+        drive(pending, &chain_result);
+        if (!std.mem.eql(u8, &before, args.?[0 .. wide_words * 8])) overwritten.store(true, .monotonic);
+        if (remaining == 0) {
+            @memcpy(ret.?[0..8], &chain_result);
+            return;
+        }
+        const next_closure = erased.allocate(@ptrCast(&nestedWide), &drop, 0, ops);
+        var next: [wide_words * 8]u8 align(16) = undefined;
+        wideArgs(&next, remaining - 1);
+        deferCall(pending, @ptrCast(&nestedWide), next_closure, &next, next.len, false);
+    }
+
+    /// Leaves `nestedWide` pending with its own arguments.
+    fn deferNestedWide(ops: *RocOps, _: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
+        const pending = callerCell(@ptrFromInt(out)).?;
+        const closure = erased.allocate(@ptrCast(&nestedWide), &drop, 0, ops);
+        deferCall(pending, @ptrCast(&nestedWide), closure, args, wide_words * 8, false);
+    }
+
     /// A host's callable, which writes the ABI's descriptor output.
     fn writesOutput(_: *RocOps, ret: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
         std.mem.writeInt(u64, ret.?[0..8], 7, .little);
@@ -187,9 +395,9 @@ const TestCalls = struct {
     }
 };
 
-test "pending cell storage preserves inline bytes across target pointer widths" {
-    try std.testing.expectEqual(@as(u32, 60), pendingByteSize(4));
-    try std.testing.expectEqual(@as(u32, 88), pendingByteSize(8));
+test "pending cell storage preserves its header and inline words at each target width" {
+    try std.testing.expectEqual(@as(u32, 104), pendingByteSize(4));
+    try std.testing.expectEqual(@as(u32, 208), pendingByteSize(8));
     try std.testing.expectEqual(@as(u32, 4), pendingAlignment(4));
     try std.testing.expectEqual(@as(u32, 8), pendingAlignment(8));
     try std.testing.expectEqual(@sizeOf(Pending), pendingByteSize(@sizeOf(usize)));
@@ -207,6 +415,93 @@ test "native callable trampoline preserves arguments and releases every deferred
     call(@ptrCast(&TestCalls.step), &result, &args, null, null);
     try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, &result, .little));
     try std.testing.expectEqual(@as(usize, 10000), TestCalls.drops.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
+test "native callable trampoline copies an argument block too large for the cell to the heap and frees it" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    TestCalls.drops.store(0, .monotonic);
+    var args: [TestCalls.wide_words * 8]u8 align(16) = undefined;
+    TestCalls.wideArgs(&args, 1000);
+    var result: [8]u8 = undefined;
+    call(@ptrCast(&TestCalls.stepWide), &result, &args, null, null);
+    try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, &result, .little));
+    try std.testing.expectEqual(@as(usize, 1000), TestCalls.drops.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+    // One closure per pending call, and two argument blocks for the whole
+    // chain: the one a call is reading and the one it leaves pending.
+    try std.testing.expectEqual(@as(usize, 1000 + 2), env.total_allocations);
+}
+
+test "a chain of argument blocks of varying sizes reuses its heap blocks, growing them only for a larger block" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    TestCalls.drops.store(0, .monotonic);
+    var args: [TestCalls.varied_max_words * 8]u8 align(16) = undefined;
+    _ = TestCalls.variedArgs(&args, 300);
+    var result: [8]u8 = undefined;
+    call(@ptrCast(&TestCalls.stepVaried), &result, &args, null, null);
+    try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, &result, .little));
+    try std.testing.expectEqual(@as(usize, 300), TestCalls.drops.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+    // Sizes cycle through three lengths, so after the first cycle the two
+    // blocks the chain holds are both the largest.
+    try std.testing.expect(env.total_allocations <= 300 + 6);
+}
+
+test "a chain of large argument blocks driven in the cell a callee was invoked from leaves the callee's arguments intact" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    TestCalls.drops.store(0, .monotonic);
+    TestCalls.overwritten.store(false, .monotonic);
+    var args: [TestCalls.wide_words * 8]u8 align(16) = undefined;
+    TestCalls.wideArgs(&args, 3);
+    var result: [8]u8 = undefined;
+    call(@ptrCast(&TestCalls.deferNestedWide), &result, &args, null, null);
+    try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, &result, .little));
+    try std.testing.expect(!TestCalls.overwritten.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
+test "a callee leaving a pending call with its own incoming arguments keeps them intact" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    TestCalls.drops.store(0, .monotonic);
+    TestCalls.forwards.store(0, .monotonic);
+    TestCalls.overwritten.store(false, .monotonic);
+    var args: [16]u8 align(16) = undefined;
+    for (&args, 0..) |*byte, i| byte.* = @intCast(i + 1);
+    var result: [16]u8 = undefined;
+    call(@ptrCast(&TestCalls.forward), &result, &args, null, null);
+    try std.testing.expectEqualSlices(u8, &args, &result);
+    try std.testing.expect(!TestCalls.overwritten.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 99), TestCalls.drops.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
+test "a chain driven in the cell a callee was invoked from leaves the callee's arguments intact" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    TestCalls.drops.store(0, .monotonic);
+    TestCalls.overwritten.store(false, .monotonic);
+    var args: [16]u8 align(16) = undefined;
+    for (&args, 0..) |*byte, i| byte.* = @intCast(i + 1);
+    var result: [8]u8 = undefined;
+    call(@ptrCast(&TestCalls.deferNested), &result, &args, null, null);
+    try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, &result, .little));
+    try std.testing.expect(!TestCalls.overwritten.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 7), TestCalls.drops.load(.monotonic));
     try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
 }
 
@@ -228,6 +523,7 @@ test "a callable writing its descriptor output leaves the cell's pending call al
     try std.testing.expectEqual(@as(?[*]u8, null), cell.closure);
     try std.testing.expectEqual(@as(?[*]u8, null), cell.args);
     try std.testing.expectEqual(@as(usize, 0), cell.args_len);
+    try std.testing.expectEqual(@as(?[*]u8, null), cell.spare);
     try std.testing.expectEqual(@as(?*Pending, &cell), callerCell(@ptrFromInt(invocation(&cell))));
     try std.testing.expectEqual(@as(u64, 7), std.mem.readInt(u64, &result, .little));
 }
@@ -254,6 +550,8 @@ test "threads driving deferred calls at once keep their chains apart" {
 }
 
 const PacketTest = struct {
+    const max_bytes = inline_args_bytes + 65;
+
     fn read(ops: *erased.RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, reuse: ?[*]u8, out: usize) callconv(.c) void {
         if (reuse) |owned| erased.decref(owned, ops);
         const bytes = args.?;
@@ -263,13 +561,13 @@ const PacketTest = struct {
         // the current packet AFTER deferral catches aliasing of active and
         // pending storage, even when both packets fit inline.
         if (len > 1) {
-            var next: [97]u8 = undefined;
-            const next_len: usize = if (len == 97) 33 else if (len == 33) 32 else if (len == 32) 31 else 1;
+            var next: [max_bytes]u8 = undefined;
+            const next_len: usize = if (len == max_bytes) inline_args_bytes + 1 else if (len == inline_args_bytes + 1) inline_args_bytes else if (len == inline_args_bytes) inline_args_bytes - 1 else 1;
             @memset(next[0..next_len], @intCast(next_len));
             const closure = erased.allocate(@ptrCast(&read), &TestCalls.drop, 0, ops);
             deferCall(pending, @ptrCast(&read), closure, &next, next_len, false);
         }
-        if (len == 33) {
+        if (len == inline_args_bytes + 1) {
             var nested: [8]u8 = undefined;
             call(@ptrCast(&TestCalls.writesOutput), &nested, null, null, null);
             if (std.mem.readInt(u64, &nested, .little) != 7) {
@@ -292,14 +590,14 @@ test "native callable packets preserve active bytes across inline and heap trans
     defer env.deinit();
     const saved = host.enter(env.getOps(), null);
     defer host.leave(saved);
-    for ([_]usize{ 1, 31, 32, 33, 97 }, [_]u8{ 1, 2, 3, 4, 5 }) |len, expected| {
+    for ([_]usize{ 1, inline_args_bytes - 1, inline_args_bytes, inline_args_bytes + 1, PacketTest.max_bytes }, [_]u8{ 1, 2, 3, 4, 5 }) |len, expected| {
         var cell: Pending = .{};
-        var source: [97]u8 = undefined;
+        var source: [PacketTest.max_bytes]u8 = undefined;
         @memset(source[0..len], @intCast(len));
         const closure = erased.allocate(@ptrCast(&PacketTest.read), &TestCalls.drop, 0, env.getOps());
         const before = env.getAllocationCount();
         deferCall(&cell, @ptrCast(&PacketTest.read), closure, &source, len, false);
-        try std.testing.expectEqual(before + @intFromBool(len > inline_capacity), env.getAllocationCount());
+        try std.testing.expectEqual(before + @intFromBool(len > inline_args_bytes), env.getAllocationCount());
         @memset(&source, 0); // Deferral owns the bytes, not the source address.
         var result = [_]u8{0};
         drive(&cell, &result);

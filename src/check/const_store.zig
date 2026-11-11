@@ -1583,6 +1583,73 @@ pub const ConstStore = struct {
         return self.blobData(str);
     }
 
+    /// Structural equality of two value graphs: scalars bitwise, blob and tag
+    /// bytes, children in order, and named types by declaring module. A named
+    /// type's checked occurrence (`named_type.ty`) is provenance, not value
+    /// identity. Function values are never equal; no compared graph holds one.
+    /// The walk's own tables live in `scratch`, never in either store's
+    /// allocator, for the reason `hashGraph` gives.
+    pub fn graphEql(self: *const ConstStore, scratch: Allocator, root: ConstNodeId, other: *const ConstStore, other_root: ConstNodeId) Allocator.Error!bool {
+        const Pair = struct { left: ConstNodeId, right: ConstNodeId };
+        var seen = std.AutoHashMap(Pair, void).init(scratch);
+        defer seen.deinit();
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(scratch);
+        try pending.append(scratch, .{ .left = root, .right = other_root });
+        while (pending.pop()) |pair| {
+            const entry = try seen.getOrPut(pair);
+            if (entry.found_existing) continue;
+            const left = self.get(pair.left);
+            const right = other.get(pair.right);
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+            switch (left) {
+                .pending, .fn_value => return false,
+                .boxy_fn => |function| {
+                    const right_function = right.boxy_fn;
+                    if (!sameBytes(self.blobData(function.recipe), other.blobData(right_function.recipe))) return false;
+                    if (function.captures.len != right_function.captures.len) return false;
+                    for (function.captures, right_function.captures) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
+                },
+                .zst => {},
+                .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
+                .str => |str| if (!sameBytes(self.blobData(str), other.blobData(right.str))) return false,
+                .crash => |str| if (!sameBytes(self.blobData(str), other.blobData(right.crash))) return false,
+                .checked_error => |str| if (!sameBytes(self.blobData(str), other.blobData(right.checked_error))) return false,
+                .box => |payload| try pending.append(scratch, .{ .left = payload, .right = right.box }),
+                .nominal => |nominal| {
+                    if (!std.meta.eql(nominal.named_type.module.bytes, right.nominal.named_type.module.bytes)) return false;
+                    try pending.append(scratch, .{ .left = nominal.backing, .right = right.nominal.backing });
+                },
+                .list => |list| {
+                    const right_list = right.list;
+                    if (std.meta.activeTag(list) != std.meta.activeTag(right_list)) return false;
+                    switch (list) {
+                        .nodes => |items| {
+                            if (items.len != right_list.nodes.len) return false;
+                            for (items, right_list.nodes) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
+                        },
+                        .packed_bytes => |packed_list| {
+                            const r = right_list.packed_bytes;
+                            if (packed_list.len != r.len or packed_list.element != r.element or packed_list.product_width != r.product_width) return false;
+                            if (!sameBytes(self.blobData(packed_list.bytes), other.blobData(r.bytes))) return false;
+                        },
+                        .empty => |capacity| if (capacity != right_list.empty) return false,
+                    }
+                },
+                inline .tuple, .record => |items, tag| {
+                    const right_items = @field(right, @tagName(tag));
+                    if (items.len != right_items.len) return false;
+                    for (items, right_items) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
+                },
+                .tag => |tag| {
+                    if (!base.Ident.textEql(tag.tag_name, right.tag.tag_name) or tag.payloads.len != right.tag.payloads.len) return false;
+                    for (tag.payloads, right.tag.payloads) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
+                },
+            }
+        }
+        return true;
+    }
+
     /// The modules a stored function's recipe names, by checked key: the
     /// recipe begins with their table (`postcheck.Boxy.StoredFn`).
     pub fn recipeModuleKeys(recipe: []const u8) []const [32]u8 {
@@ -2199,4 +2266,12 @@ test "ConstStore.hashGraph: walks in the caller's scratch, not the store's alloc
     var hasher = base.Sha256.init(.{});
     try store.hashGraph(gpa, root, &hasher, Context{});
     try std.testing.expectEqual(expected.finalResult(), hasher.finalResult());
+}
+
+fn sameBytes(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
 }

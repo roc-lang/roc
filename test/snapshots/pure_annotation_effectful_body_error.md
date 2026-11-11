@@ -93,7 +93,7 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 261)
+		(e-call (constraint-fn-var 260)
 			(e-lookup-local
 				(p-assign (ident "bad_function")))
 			(e-string

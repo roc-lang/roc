@@ -472,11 +472,12 @@ pub const ChildDebugOptions = struct {
     /// crash found with `.random` is reproduced by rerunning that test with
     /// `.{ .index = N }`.
     fail_alloc: ?FailAlloc = null,
-    /// Give each child a `std.heap.DebugAllocator` instead of an arena, with
-    /// `SingleThreadArena.pass_through` set so every free reaches it. Double
-    /// and invalid frees are then reported with their traces (traces need
-    /// `-Ddebug-gpa-traces=true`). Leaks are not: the child exits without
-    /// tearing the allocator down, since runners rely on arena semantics.
+    /// Give each child a `std.heap.DebugAllocator` instead of
+    /// `std.heap.smp_allocator`, with `SingleThreadArena.pass_through` set so
+    /// every free reaches it. Double and invalid frees are then reported with
+    /// their traces (traces need `-Ddebug-gpa-traces=true`). Leaks are not:
+    /// the child exits without tearing the allocator down, since runners leave
+    /// test results and other per-test memory for process exit to reclaim.
     debug_allocator: bool = false,
     /// Write each child's stderr to `<dir>/child_<index>.log`, headed by the
     /// test's name, instead of interleaving every child on the runner's stderr.
@@ -967,8 +968,13 @@ test "worker template strips stats and worker flags" {
 /// callbacks for test execution, serialization, and deserialization.
 pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
     return struct {
-        /// Run one test in the forked child. Called with an arena allocator
-        /// and the same timeout budget enforced by the parent watchdog.
+        /// Run one test in the forked child, with the same timeout budget
+        /// enforced by the parent watchdog. The test may leave memory
+        /// unfreed; the pool reclaims it once the result is serialized. The
+        /// forked child and the one-shot worker pass `std.heap.smp_allocator`
+        /// and reclaim by exiting; the persistent worker and the sequential
+        /// fallback, which run many tests in one process, pass an arena they
+        /// reset between tests.
         runTest: *const fn (std.Io, Allocator, Spec, u64) Result,
         /// Serialize a result to the pipe fd.
         ///
@@ -1130,14 +1136,16 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     std.debug.print("[child] test={d} name={s}\n", .{ test_idx, specs[test_idx].name });
                 }
 
-                var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+                // The child frees as it goes, so memory a test releases (ARC
+                // churn in deep programs especially) is reusable within the
+                // test; whatever it never frees is reclaimed by `_exit`.
                 var debug_allocator: std.heap.DebugAllocator(.{
                     .stack_trace_frames = build_options.debug_gpa_stack_trace_frames,
                 }) = .init;
                 const base_allocator = if (child_debug.debug_allocator) base: {
                     collections.SingleThreadArena.pass_through = true;
                     break :base debug_allocator.allocator();
-                } else arena.allocator();
+                } else std.heap.smp_allocator;
                 var injector: AllocationFailureInjector = undefined;
                 const allocator = if (child_debug.fail_alloc) |fail_alloc| injected: {
                     injector = AllocationFailureInjector.init(base_allocator, fail_alloc, test_idx);
@@ -1375,9 +1383,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 if (cli.worker_backend) |backend| {
                     if (cfg.applyWorkerBackend) |apply| apply(&spec, backend);
                 }
-                var arena = collections.SingleThreadArena.init(std.heap.smp_allocator);
-                defer arena.deinit();
-                const result = cfg.runTest(io, arena.allocator(), spec, timeoutForSpec(spec, timeout_ms));
+                // Process exit reclaims whatever the test leaves unfreed.
+                const result = cfg.runTest(io, std.heap.smp_allocator, spec, timeoutForSpec(spec, timeout_ms));
                 cfg.serialize(stdoutFd(), result);
                 return true;
             }

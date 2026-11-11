@@ -2245,6 +2245,18 @@ pub const Store = struct {
         return self.lookupNominalDeclByKey(nominal.origin_module, source_decl.statement);
     }
 
+    /// The arguments a nominal application gives its declaration's declared
+    /// formals: every argument but the trailing context arguments of a
+    /// declaration in a function body (design.md "Body-Local Type Context"),
+    /// which no source type and no printed type shows.
+    pub fn nominalDeclaredArgs(self: *const Self, nominal: NominalType) []Var {
+        const args = self.sliceNominalArgs(nominal);
+        const idx = self.lookupNominalDecl(nominal) orelse return args;
+        const context_len = self.getNominalDecl(idx).flags.context_len;
+        std.debug.assert(context_len <= args.len);
+        return args[0 .. args.len - context_len];
+    }
+
     /// Get a nominal declaration by index.
     pub fn getNominalDecl(self: *const Self, idx: NominalDecl.Idx) NominalDecl {
         return self.nominal_decls.get(idx).*;
@@ -2280,6 +2292,18 @@ pub const Store = struct {
     }
 
     // rank //
+
+    /// Mark a class a generalization boundary found to be anonymous structure
+    /// made in its own scope and left ungeneralized
+    /// (`DescriptorFlags.per_use_structure`). A frozen class never changes,
+    /// so no use can lift it and it stays shared.
+    pub fn markPerUseStructure(self: *Self, desc_idx: DescStore.Idx) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        var desc = self.descs.get(desc_idx);
+        if (desc.flags.frozen or desc.flags.per_use_structure) return;
+        desc.flags.per_use_structure = true;
+        try self.setDesc(desc_idx, desc);
+    }
 
     /// Set the rank for a descriptor
     pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) Allocator.Error!void {
@@ -2513,6 +2537,10 @@ pub const Store = struct {
         // an opened nominal backing component is that component.
         merged_desc.flags.nominal_backing_structure = a_data.desc.flags.nominal_backing_structure or
             b_data.desc.flags.nominal_backing_structure;
+        // Structure copied per use stays so only while it is nothing else: a
+        // class it merged with keeps its own sharing.
+        merged_desc.flags.per_use_structure = a_data.desc.flags.per_use_structure and
+            b_data.desc.flags.per_use_structure;
         // A defaulting decision about one side is a decision about the merged
         // class: the default it committed is the type both sides now share.
         merged_desc.flags.default_decided = a_data.desc.flags.default_decided or

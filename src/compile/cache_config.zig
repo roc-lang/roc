@@ -352,8 +352,12 @@ pub const Constants = struct {
     /// 175: platform invocation scheme uses and deferred diagnostic captures.
     /// 176: type-store columns serialize independently in declared field order.
     /// 177: checked-module entries store reproducible checking and evaluation
-    ///      reports beside independently serialized type-store columns.
-    pub const CACHE_VERSION = 177;
+    ///      reports beside body-local type context arguments, per-use
+    ///      anonymous structure and generated-codec recurrences.
+    /// 178: checked-module entries combine independently serialized type-store
+    ///      columns with body-local type context arguments, per-use anonymous
+    ///      structure and generated-codec recurrences.
+    pub const CACHE_VERSION = 178;
 };
 
 /// Configuration for the Roc cache system.
