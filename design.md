@@ -1901,6 +1901,11 @@ app module, and the readonly object binds every node globally so those
 references resolve; only slots with function-pointer relocations stay
 external declarations. Slot reads therefore fold to immediates and
 relocatable addresses instead of loads from a linker symbol.
+Self-contained glue generator objects instead own the complete retained frozen
+graph in their LLVM module, including callable and explicit helper relocations.
+They never embed compiler-process addresses: installed generators must survive
+another process. The loaded image outlives copying the generator's result,
+because returned values can borrow its immutable storage.
 A node whose bytes are all zero and that no relocation writes into is
 declared, not stored: the object writers place it in their format's zero-fill
 section (`.bss` for ELF and COFF, `__DATA,__bss` for Mach-O) by size and

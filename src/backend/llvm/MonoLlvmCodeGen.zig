@@ -408,6 +408,9 @@ pub const MonoLlvmCodeGen = struct {
     /// opaque copy from a linker symbol.
     static_data_exports: []const lir.Program.StaticDataExport = &.{},
     static_data_export_rows: std.AutoHashMap(u32, u32),
+    /// Self-contained objects own their entire frozen graph instead of
+    /// referring to a separately linked readonly-data object.
+    embed_static_data: bool = false,
     /// External declarations of readonly-object symbols, by name, so a
     /// symbol referenced from several constants is declared once.
     static_data_symbols: std.StringHashMap(LlvmBuilder.Constant),
@@ -1105,7 +1108,14 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         const procs = self.store.getProcSpecs();
+        const frozen_globals = if (self.embed_static_data) try self.declareFrozenData() else &.{};
+        defer if (self.embed_static_data) self.allocator.free(frozen_globals);
         try self.compileAllProcSpecs(procs);
+        for (frozen_globals, self.static_data_exports[0..frozen_globals.len]) |variable, data_export| {
+            const initializer = (try self.frozenExportConstant(data_export)) orelse
+                llvmInvariantFmt("materialized frozen data must have an LLVM constant representation", .{});
+            variable.setInitializer(initializer, builder) catch return error.OutOfMemory;
+        }
         for (self.static_data_rc_helpers) |helper_key| {
             _ = try self.declareRcHelper(helper_key, .atomic);
         }
@@ -1746,14 +1756,6 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Declares and compiles every procedure in dependency-index order.
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
-        // Standalone in-process objects have no separately linked readonly
-        // object. Declare the whole image first so cyclic data references
-        // and procedure bodies resolve through the same symbol map.
-        const static_globals = if (self.program_kind == .in_process and self.static_data_addresses == null)
-            try self.declareStaticDataDefinitions()
-        else
-            &.{};
-        defer self.allocator.free(static_globals);
         try self.ensureLocalScratch();
         try self.computeInlineEverywhere(procs);
         if (self.stack_checks) try self.computeStackCheckProcs(procs);
@@ -1772,11 +1774,6 @@ pub const MonoLlvmCodeGen = struct {
             const proc = procs[i];
             if (proc.is_static_initializer) continue;
             try self.compileProcBody(@fromBackingInt(i), proc);
-        }
-        const builder = self.builder orelse return error.CompilationFailed;
-        for (static_globals, self.static_data_exports[0..static_globals.len]) |variable, data_export| {
-            const image = (try self.frozenExportImage(data_export, true)) orelse return error.CompilationFailed;
-            variable.setInitializer(image.value, builder) catch return error.OutOfMemory;
         }
     }
 
@@ -9356,7 +9353,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Records frozen exports for standalone emission, or constant folding
     /// from the separate readonly object of a linked program.
-    pub fn setStaticDataExports(self: *MonoLlvmCodeGen, exports: []const lir.Program.StaticDataExport) Error!void {
+    pub fn setStaticDataExports(self: *MonoLlvmCodeGen, exports: []const lir.Program.StaticDataExport) Allocator.Error!void {
         self.static_data_exports = exports;
         self.static_data_export_rows.clearRetainingCapacity();
         for (exports, 0..) |data_export, row| {
@@ -9365,22 +9362,36 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn declareStaticDataDefinitions(self: *MonoLlvmCodeGen) Error![]LlvmBuilder.Variable.Index {
+    /// Declare the whole graph before its edges: shared and cyclic nodes must
+    /// name the same storage, including symbols pointing inside allocations.
+    fn declareFrozenData(self: *MonoLlvmCodeGen) Error![]LlvmBuilder.Variable.Index {
         const builder = self.builder orelse return error.CompilationFailed;
         const variables = try self.allocator.alloc(LlvmBuilder.Variable.Index, self.static_data_exports.len);
         errdefer self.allocator.free(variables);
-        for (self.static_data_exports, variables, 0..) |data_export, *variable, index| {
-            const image = (try self.frozenExportImage(data_export, false)) orelse return error.CompilationFailed;
-            const name = builder.strtabStringFmt(".roc.frozen.{d}", .{index}) catch return error.OutOfMemory;
-            variable.* = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
+        for (self.static_data_exports, variables) |data_export, *variable| {
+            const image = (try self.frozenExportImage(data_export, false)) orelse
+                llvmInvariantFmt("materialized frozen data must have an LLVM constant representation", .{});
+            variable.* = builder.addVariable(
+                builder.strtabStringFmt(".roc.frozen.{s}", .{data_export.symbol_name}) catch return error.OutOfMemory,
+                image.ty,
+                .default,
+            ) catch return error.OutOfMemory;
             variable.ptrConst(builder).global.setLinkage(.internal, builder);
-            variable.setMutability(.constant, builder);
+            // LLVM places constant zero arrays in rodata, storing every byte.
+            // Frozen zero-fill allocations are semantically immutable but use
+            // ordinary global storage so object emission can reserve BSS.
+            const zero_fill = data_export.relocations.len == 0 and std.mem.allEqual(u8, data_export.bytes, 0);
+            variable.setMutability(if (zero_fill) .global else .constant, builder);
             variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(data_export.alignment), builder);
-            const offset = builder.intConst(.i64, data_export.symbol_offset) catch return error.OutOfMemory;
+            std.debug.assert(data_export.symbol_offset <= data_export.bytes.len);
+            const offset = builder.intConst(self.ptrSizedIntType(), data_export.symbol_offset) catch return error.OutOfMemory;
             const address = builder.gepConst(.normal, .i8, variable.toConst(builder), null, &.{offset}) catch return error.OutOfMemory;
             const key = try self.allocator.dupe(u8, data_export.symbol_name);
-            errdefer self.allocator.free(key);
-            try self.static_data_symbols.put(key, address);
+            self.static_data_symbols.put(key, address) catch |err| {
+                self.allocator.free(key);
+                return err;
+            };
+            if (data_export.value_id) |id| try self.static_data_globals.put(@backingInt(id), address.toValue());
         }
         return variables;
     }
@@ -9394,6 +9405,7 @@ pub const MonoLlvmCodeGen = struct {
             return builder.castValue(.inttoptr, address, try self.ptrType()) catch return error.OutOfMemory;
         }
         if (self.static_data_globals.get(raw_id)) |value| return value;
+        if (self.embed_static_data) llvmInvariantFmt("every retained static-data slot must be materialized", .{});
 
         const builder = self.builder orelse return error.CompilationFailed;
         // A pack's object reads its own definition of every export.
@@ -9430,10 +9442,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// The image of a frozen export as a constant: its bytes, with each
-    /// relocation replaced by the target's address plus the addend. Linked
-    /// programs leave function pointers in their separate readonly object;
-    /// standalone in-process modules define the complete image themselves.
-    /// Unaligned pointer fields have no constant expression here.
+    /// relocation replaced by the target's address plus the addend. Null when
+    /// a separately linked slot cannot be embedded here. Self-contained
+    /// emission also resolves callable identities and unaligned pointer fields;
+    /// every materialized node must have a constant representation in that mode.
     fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
         const image = (try self.frozenExportImage(data_export, true)) orelse return null;
         return image.value;
@@ -9450,13 +9462,17 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!?struct { ty: LlvmBuilder.Type, value: if (with_value) LlvmBuilder.Constant else void } {
         const builder = self.builder orelse return error.CompilationFailed;
         if (data_export.relocations.len == 0) {
+            if (self.embed_static_data and std.mem.allEqual(u8, data_export.bytes, 0)) {
+                const ty = builder.arrayType(data_export.bytes.len, .i8) catch return error.OutOfMemory;
+                return .{ .ty = ty, .value = if (with_value) builder.zeroInitConst(ty) catch return error.OutOfMemory else {} };
+            }
             const bytes = builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
             return .{ .ty = bytes.typeOf(builder), .value = if (with_value) bytes else {} };
         }
         const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
-            if (relocation.kind == .function_pointer and self.program_kind != .in_process) return null;
-            if (relocation.offset % word != 0 or relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
+            if (!self.embed_static_data and (relocation.kind == .function_pointer or relocation.offset % word != 0)) return null;
+            if (relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
         }
         const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
         defer self.allocator.free(sorted);
@@ -9483,14 +9499,19 @@ pub const MonoLlvmCodeGen = struct {
             if (with_value) {
                 const target = switch (relocation.kind) {
                     .address => try self.staticDataSymbol(relocation.target_symbol_name),
-                    .function_pointer => function_pointer: {
-                        const target_fn = if (relocation.procedure) |proc|
-                            self.proc_registry.get(@backingInt(proc)) orelse return error.CompilationFailed
-                        else if (relocation.rc_helper) |helper|
-                            (try self.declareRcHelper(helper, .atomic)) orelse return error.CompilationFailed
-                        else
-                            return error.CompilationFailed;
-                        break :function_pointer target_fn.toConst(builder);
+                    .function_pointer => target: {
+                        // The data producer supplies callable identities; never
+                        // recover an ABI or helper from a symbol's spelling.
+                        if (relocation.rc_helper) |helper| {
+                            const function = (try self.declareRcHelper(helper, .atomic)) orelse
+                                llvmInvariantFmt("a frozen callback relocation must name a non-noop helper", .{});
+                            break :target function.toConst(builder);
+                        }
+                        const proc = relocation.procedure orelse
+                            llvmInvariantFmt("a frozen function relocation must name its LIR procedure", .{});
+                        const function = self.proc_registry.get(@backingInt(proc)) orelse
+                            llvmInvariantFmt("a frozen function must be retained and declared", .{});
+                        break :target function.toConst(builder);
                     },
                 };
                 const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
@@ -9515,6 +9536,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Declares a readonly-object symbol once and returns its address.
     fn staticDataSymbol(self: *MonoLlvmCodeGen, symbol_name: []const u8) Error!LlvmBuilder.Constant {
         if (self.static_data_symbols.get(symbol_name)) |existing| return existing;
+        if (self.embed_static_data) llvmInvariantFmt("every frozen data edge must name a declared node", .{});
         const builder = self.builder orelse return error.CompilationFailed;
         const key = self.allocator.dupe(u8, symbol_name) catch return error.OutOfMemory;
         errdefer self.allocator.free(key);
@@ -15258,6 +15280,65 @@ test "static-data slots with constant images are internal constants and function
     try std.testing.expect(callable.init == .no_init);
 }
 
+test "embedded frozen data declares cycles offsets and callable edges at both widths" {
+    const allocator = std.testing.allocator;
+    inline for (.{ std.Target.Cpu.Arch.wasm32, std.Target.Cpu.Arch.x86_64 }) |arch| {
+        const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = if (arch == .wasm32) .freestanding else .linux });
+        var store = lir.LirStore.init(allocator);
+        defer store.deinit();
+        var layouts = try layout.Store.init(allocator, if (arch == .wasm32) .u32 else .u64);
+        defer layouts.deinit();
+        const proc = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .bool }, .none);
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
+        defer codegen.deinit();
+        codegen.layout_store = &layouts;
+        codegen.embed_static_data = true;
+        const word = codegen.targetWordSize();
+        const edges = [_]lir.Program.StaticDataRelocation{
+            .{ .offset = 0, .target_symbol_name = "backing", .addend = -1 },
+            .{ .offset = word, .target_symbol_name = "unused-proc-spelling", .kind = .function_pointer, .procedure = proc },
+            .{ .offset = 2 * word, .target_symbol_name = "unused-helper-spelling", .kind = .function_pointer, .rc_helper = .{ .op = .decref, .layout_idx = .str } },
+        };
+        const cycle = [_]lir.Program.StaticDataRelocation{.{ .offset = 1, .target_symbol_name = "root", .addend = 1 }};
+        var exports = [_]lir.Program.StaticDataExport{
+            .{ .symbol_name = "root", .bytes = &@as([24]u8, @splat(0)), .alignment = word, .relocations = &edges },
+            .{ .symbol_name = "backing", .bytes = &@as([16]u8, @splat(0)), .symbol_offset = 1, .alignment = word, .relocations = &cycle },
+            .{ .symbol_name = "zero", .bytes = &@as([4096]u8, @splat(0)), .alignment = 16 },
+        };
+        // The root is this program's only static value, and static values are
+        // exported densely in root order, so its id is its export position.
+        const root_index: u32 = 0;
+        exports[root_index].value_id = @fromBackingInt(root_index);
+        try codegen.setStaticDataExports(&exports);
+        var builder = try codegen.createBuilder("embedded_frozen_data");
+        defer builder.deinit();
+        codegen.builder = &builder;
+        defer codegen.builder = null;
+        const variables = try codegen.declareFrozenData();
+        defer allocator.free(variables);
+        try codegen.declareProcSpec(proc, store.getProcSpec(proc));
+        for (variables, exports) |variable, data_export| {
+            const value = (try codegen.frozenExportConstant(data_export)).?;
+            try variable.setInitializer(value, &builder);
+        }
+        const slot = try codegen.staticDataGlobal(exports[root_index].value_id.?, 24);
+        try std.testing.expectEqual((try codegen.staticDataSymbol("root")).toValue(), slot);
+        try std.testing.expectEqual(@as(usize, 3), builder.variables.items.len);
+        for (builder.variables.items) |variable| {
+            try std.testing.expectEqual(.internal, variable.global.ptrConst(&builder).linkage);
+            try std.testing.expect(variable.init != .no_init);
+        }
+        try std.testing.expectEqual(.global, builder.variables.items[2].mutability);
+        var printed = std.Io.Writer.Allocating.init(allocator);
+        defer printed.deinit();
+        try builder.print(&printed.writer);
+        try std.testing.expect(std.mem.find(u8, printed.written(), "zeroinitializer") != null);
+        try std.testing.expect(std.mem.find(u8, printed.written(), "external global") == null);
+        try std.testing.expect(std.mem.find(u8, printed.written(), "unused-proc-spelling") == null);
+        try std.testing.expect(std.mem.find(u8, printed.written(), "unused-helper-spelling") == null);
+    }
+}
+
 test "standalone LLVM modules define cyclic frozen data and procedure pointers" {
     const allocator = std.testing.allocator;
     var store = lir.LirStore.init(allocator);
@@ -15283,6 +15364,7 @@ test "standalone LLVM modules define cyclic frozen data and procedure pointers" 
     var codegen = MonoLlvmCodeGen.initWithTarget(allocator, &store, target);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
+    codegen.embed_static_data = true;
     const exports = [_]lir.Program.StaticDataExport{
         .{
             .symbol_name = "first",
