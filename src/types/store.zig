@@ -342,10 +342,10 @@ pub const Store = struct {
     /// Relocate the self-contained type store and its explicit nominal lookup index.
     pub fn rebindSourceReferences(store: *Store, mapper: anytype) @TypeOf(mapper.*).Error!void {
         store.debugAssertUnsealed();
-        for (0..store.descs.backing.items.len) |i| {
-            var desc = store.descs.backing.items.get(i);
+        for (0..store.descs.backing.len()) |i| {
+            var desc = store.descs.backing.get(@fromBackingInt(@intCast(i)));
             try rebindSourceReferenceValue(&desc.content, mapper);
-            store.descs.backing.items.set(i, desc);
+            store.descs.backing.set(@fromBackingInt(@intCast(i)), desc);
         }
         for (store.nominal_decls.items()) |*decl| try rebindSourceReferenceValue(decl, mapper);
         for (store.nominal_decl_index.items()) |*entry| entry.statement = try mapper.node(entry.origin_module, entry.statement);
@@ -355,10 +355,10 @@ pub const Store = struct {
                 return if (a.origin_module == b.origin_module) a.statement < b.statement else @backingInt(a.origin_module) < @backingInt(b.origin_module);
             }
         }.lessThan);
-        for (0..store.record_fields.items.len) |i| {
-            var field = store.record_fields.items.get(i);
+        for (0..store.record_fields.len()) |i| {
+            var field = store.record_fields.get(@fromBackingInt(@intCast(i)));
             try rebindSourceReferenceValue(&field, mapper);
-            store.record_fields.items.set(i, field);
+            store.record_fields.set(@fromBackingInt(@intCast(i)), field);
         }
     }
 
@@ -453,11 +453,11 @@ pub const Store = struct {
         }
 
         for (self.vars.items()) |*var_| var_.* = self.representativeVar(var_.*);
-        for (0..self.record_fields.items.len) |index| {
-            var field = self.record_fields.items.get(index);
+        for (0..self.record_fields.len()) |index| {
+            var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
             field.presence.var_ = self.representativeVar(field.presence.var_);
             if (field.presence.presenceVar()) |presence| field.presence.presence_var = self.representativeVar(presence);
-            self.record_fields.items.set(index, field);
+            self.record_fields.set(@fromBackingInt(@intCast(index)), field);
         }
         for (self.nominal_decls.items()) |*decl| decl.backing = self.representativeVar(decl.backing);
 
@@ -716,8 +716,8 @@ pub const Store = struct {
     /// trail restored all union-find state to exactly its pre-savepoint values.
     const VerifyClone = struct {
         slots: []Slot,
-        descs: std.MultiArrayList(Desc),
-        root_metas: std.MultiArrayList(RootMeta),
+        descs: DescStore.DescSafeMultiList,
+        root_metas: RootMetaSafeMultiList,
         union_ranks: []u8,
         derived_map_plans: []DerivedMapPlanEntry,
         fn deinit(self: *VerifyClone, gpa: Allocator) void {
@@ -739,10 +739,10 @@ pub const Store = struct {
         const slots = try self.slots.toOwnedSlots(self.gpa);
         errdefer self.gpa.free(slots);
 
-        var descs = try self.descs.backing.items.clone(self.gpa);
+        var descs = try self.descs.backing.clone(self.gpa);
         errdefer descs.deinit(self.gpa);
 
-        var root_metas = try self.root_metas.items.clone(self.gpa);
+        var root_metas = try self.root_metas.clone(self.gpa);
         errdefer root_metas.deinit(self.gpa);
 
         const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items());
@@ -788,8 +788,8 @@ pub const Store = struct {
             .root_meta_trail_len = self.root_meta_trail.items.len,
             .union_rank_trail_len = self.union_rank_trail.items.len,
             .vars_len = self.vars.items().len,
-            .record_fields_len = self.record_fields.items.len,
-            .tags_len = self.tags.items.len,
+            .record_fields_len = self.record_fields.len(),
+            .tags_len = self.tags.len(),
             .interpolation_parts_len = self.interpolation_parts.items().len,
             .numeral_infos_len = self.numeral_infos.items().len,
             .interpolation_metadata_len = self.interpolation_metadata.items().len,
@@ -805,7 +805,7 @@ pub const Store = struct {
         std.debug.assert(!self.derived_map_plans_journaled);
         self.savepoint_active = true;
         self.savepoint_baseline_slots = @intCast(self.slots.len());
-        self.savepoint_baseline_descs = @intCast(self.descs.backing.items.len);
+        self.savepoint_baseline_descs = @intCast(self.descs.backing.len());
 
         return savepoint;
     }
@@ -898,12 +898,12 @@ pub const Store = struct {
         // the store fields (also the journaling threshold); the rest come from
         // the savepoint.
         self.slots.shrinkRetainingCapacity(self.savepoint_baseline_slots);
-        self.descs.backing.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
-        self.root_metas.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
+        self.descs.backing.shrinkRetainingCapacity(self.savepoint_baseline_descs);
+        self.root_metas.shrinkRetainingCapacity(self.savepoint_baseline_descs);
         self.union_ranks.shrinkRetainingCapacity(self.savepoint_baseline_slots);
         self.vars.shrinkRetainingCapacity(savepoint.vars_len);
-        self.record_fields.items.shrinkRetainingCapacity(savepoint.record_fields_len);
-        self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
+        self.record_fields.shrinkRetainingCapacity(savepoint.record_fields_len);
+        self.tags.shrinkRetainingCapacity(savepoint.tags_len);
         self.interpolation_parts.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
         self.numeral_infos.shrinkRetainingCapacity(savepoint.numeral_infos_len);
         self.interpolation_metadata.shrinkRetainingCapacity(savepoint.interpolation_metadata_len);
@@ -942,16 +942,16 @@ pub const Store = struct {
         std.debug.assert(self.slots.len() == vclone.slots.len);
         for (vclone.slots, 0..) |b, i| std.debug.assert(std.meta.eql(self.slots.get(@fromBackingInt(@intCast(i))), b));
 
-        std.debug.assert(self.descs.backing.items.len == vclone.descs.len);
+        std.debug.assert(self.descs.backing.len() == vclone.descs.len());
         var i: usize = 0;
-        while (i < vclone.descs.len) : (i += 1) {
-            std.debug.assert(std.meta.eql(self.descs.backing.items.get(i), vclone.descs.get(i)));
+        while (i < vclone.descs.len()) : (i += 1) {
+            std.debug.assert(std.meta.eql(self.descs.backing.get(@fromBackingInt(@intCast(i))), vclone.descs.get(@fromBackingInt(@intCast(i)))));
         }
 
-        std.debug.assert(self.root_metas.items.len == vclone.root_metas.len);
+        std.debug.assert(self.root_metas.len() == vclone.root_metas.len());
         i = 0;
-        while (i < vclone.root_metas.len) : (i += 1) {
-            std.debug.assert(std.meta.eql(self.root_metas.items.get(i), vclone.root_metas.get(i)));
+        while (i < vclone.root_metas.len()) : (i += 1) {
+            std.debug.assert(std.meta.eql(self.root_metas.get(@fromBackingInt(@intCast(i))), vclone.root_metas.get(@fromBackingInt(@intCast(i)))));
         }
 
         std.debug.assert(std.mem.eql(u8, self.union_ranks.items(), vclone.union_ranks));
@@ -3023,7 +3023,7 @@ const DescStore = struct {
 
     fn fromContents(backing: DescSafeMultiList) Self {
         var err_written = false;
-        for (backing.items.items(.content)) |content| {
+        for (backing.field(.content)) |content| {
             if (content == .err) err_written = true;
         }
         return .{ .backing = backing, .err_written = err_written };
@@ -3943,9 +3943,9 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         // internal cross-check.
         const before_slots = try store.slots.toOwnedSlots(gpa);
         defer gpa.free(before_slots);
-        var before_descs = try store.descs.backing.items.clone(gpa);
+        var before_descs = try store.descs.backing.clone(gpa);
         defer before_descs.deinit(gpa);
-        var before_root_metas = try store.root_metas.items.clone(gpa);
+        var before_root_metas = try store.root_metas.clone(gpa);
         defer before_root_metas.deinit(gpa);
         const before_union_ranks = try gpa.dupe(u8, store.union_ranks.items());
         defer gpa.free(before_union_ranks);
@@ -3975,15 +3975,15 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         for (before_slots, 0..) |x, slot_index| {
             try std.testing.expect(std.meta.eql(x, store.slots.get(@fromBackingInt(@intCast(slot_index)))));
         }
-        try std.testing.expectEqual(before_descs.len, store.descs.backing.items.len);
+        try std.testing.expectEqual(before_descs.len(), store.descs.backing.len());
         var i: usize = 0;
-        while (i < before_descs.len) : (i += 1) {
-            try std.testing.expect(std.meta.eql(before_descs.get(i), store.descs.backing.items.get(i)));
+        while (i < before_descs.len()) : (i += 1) {
+            try std.testing.expect(std.meta.eql(before_descs.get(@fromBackingInt(@intCast(i))), store.descs.backing.get(@fromBackingInt(@intCast(i)))));
         }
-        try std.testing.expectEqual(before_root_metas.len, store.root_metas.items.len);
+        try std.testing.expectEqual(before_root_metas.len(), store.root_metas.len());
         i = 0;
-        while (i < before_root_metas.len) : (i += 1) {
-            try std.testing.expect(std.meta.eql(before_root_metas.get(i), store.root_metas.items.get(i)));
+        while (i < before_root_metas.len()) : (i += 1) {
+            try std.testing.expect(std.meta.eql(before_root_metas.get(@fromBackingInt(@intCast(i))), store.root_metas.get(@fromBackingInt(@intCast(i)))));
         }
         try std.testing.expectEqualSlices(u8, before_union_ranks, store.union_ranks.items());
         try std.testing.expectEqual(before_vars_len, store.vars.items().len);
@@ -4641,7 +4641,7 @@ test "DescStore.Serialized roundtrip" {
     const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify using captured indices
-    try std.testing.expectEqual(@as(usize, 2), deserialized.backing.items.len);
+    try std.testing.expectEqual(@as(usize, 2), deserialized.backing.len());
     try std.testing.expectEqual(desc1, deserialized.get(desc_idx_1));
     try std.testing.expectEqual(desc2, deserialized.get(desc_idx_2));
 }

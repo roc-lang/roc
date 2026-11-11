@@ -433,8 +433,8 @@ pub const Store = struct {
 
         self.contents.shrinkRetainingCapacity(m.contents_len);
         self.content_indexes.shrinkRetainingCapacity(m.content_indexes_len);
-        self.record_fields.items.shrinkRetainingCapacity(m.record_fields_len);
-        self.tags.items.shrinkRetainingCapacity(m.tags_len);
+        self.record_fields.shrinkRetainingCapacity(m.record_fields_len);
+        self.tags.shrinkRetainingCapacity(m.tags_len);
         self.static_dispatch_constraints.shrinkRetainingCapacity(m.static_dispatch_constraints_len);
         self.formatted_strings_backing.shrinkRetainingCapacity(m.formatted_strings_backing_len);
     }
@@ -1081,7 +1081,7 @@ pub const Store = struct {
             switch (unwrapped.structure) {
                 .record => |record| {
                     // Gather all fields into fields_out
-                    const fields_out_top: u32 = @intCast(fields_out.items.len);
+                    const fields_out_top: u32 = @intCast(fields_out.len());
                     try self.gatherRecordFieldsHelp(record, gpa, fields_out);
                     const fields_out_range = fields_out.rangeToEnd(fields_out_top);
 

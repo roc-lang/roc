@@ -587,9 +587,9 @@ pub const Store = struct {
         try self.buildStructInternKeyFromFields(sort_key, fields);
         if (self.lookupInternedScratchKey()) |existing| return existing;
 
-        const fields_start = self.struct_fields.items.len;
+        const fields_start = self.struct_fields.len();
         for (fields) |field| {
-            const expected_idx = self.struct_fields.items.len;
+            const expected_idx = self.struct_fields.len();
             const idx = try self.struct_fields.append(self.allocator, field);
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
@@ -889,9 +889,9 @@ pub const Store = struct {
             return Layout.zst();
         }
 
-        const fields_start = self.struct_fields.items.len;
+        const fields_start = self.struct_fields.len();
         for (temp_fields.items) |field| {
-            const expected_idx = self.struct_fields.items.len;
+            const expected_idx = self.struct_fields.len();
             const idx = try self.struct_fields.append(self.allocator, field);
             std.debug.assert(@backingInt(idx) == expected_idx);
         }

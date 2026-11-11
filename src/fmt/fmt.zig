@@ -598,7 +598,7 @@ const Formatter = struct {
         fmt.ast.store.emptyScratch();
         const file = fmt.ast.store.getFile();
         const header = fmt.ast.store.getHeader(file.header);
-        const header_region = fmt.ast.store.nodes.items.items(.region)[@backingInt(file.header)];
+        const header_region = fmt.ast.store.nodes.field(.region)[@backingInt(file.header)];
         // Only flush comments before the header if it has its own tokens.
         // type_module, default_app, and malformed headers share the first statement's token,
         // so flushing here would duplicate the whitespace handling.
@@ -4028,7 +4028,7 @@ const Formatter = struct {
     }
 
     fn nodeRegion(fmt: *Formatter, idx: u32) AST.TokenizedRegion {
-        return fmt.ast.store.nodes.items.items(.region)[idx];
+        return fmt.ast.store.nodes.field(.region)[idx];
     }
 
     /// Mark the redundant `..` in one statement list's type annotations before

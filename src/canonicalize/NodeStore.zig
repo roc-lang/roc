@@ -4625,10 +4625,10 @@ pub fn finishFieldAccessPath(store: *NodeStore, builder: FieldAccessPathBuilder)
 pub fn rollbackFieldAccessPath(store: *NodeStore, builder: FieldAccessPathBuilder) void {
     const start: usize = @backingInt(builder.start);
     const end = start + builder.segment_count;
-    std.debug.assert(store.nodes.items.len >= start);
-    std.debug.assert(store.nodes.items.len <= end);
-    std.debug.assert(store.regions.items().len == store.nodes.items.len);
-    store.nodes.items.shrinkRetainingCapacity(start);
+    std.debug.assert(store.nodes.len() >= start);
+    std.debug.assert(store.nodes.len() <= end);
+    std.debug.assert(store.regions.items().len == store.nodes.len());
+    store.nodes.shrinkRetainingCapacity(start);
     store.regions.shrinkRetainingCapacity(start);
 }
 

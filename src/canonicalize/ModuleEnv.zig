@@ -5193,7 +5193,7 @@ pub fn ensureExposedSorted(self: *Self, allocator: std.mem.Allocator) void {
 /// Assert that nodes and regions are in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .debug) {
-        const cir_nodes = self.store.nodes.items.len;
+        const cir_nodes = self.store.nodes.len();
         const region_nodes = self.store.regions.len();
 
         if (!(cir_nodes == region_nodes)) {

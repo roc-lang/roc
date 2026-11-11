@@ -1052,16 +1052,15 @@ test "LIR image copies and round-trips every populated store field" {
         /// giving every column its own value sequence so a dropped or swapped
         /// field is detectable after view.
         fn multiList(comptime T: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!collections.SafeMultiList(T) {
-            var mal: std.MultiArrayList(T) = .{};
-            try mal.resize(alloc, count);
-            const slice = mal.slice();
-            inline for (@typeInfo(T).@"struct".field_names, 0..) |field_name, field_index| {
-                const column = slice.items(@field(std.MultiArrayList(T).Field, field_name));
-                for (column, 0..) |*value, i| {
-                    value.* = distinctValue(@FieldType(T, field_name), seed + field_index * 64 + i);
+            var list = try collections.SafeMultiList(T).initCapacity(alloc, count);
+            for (0..count) |i| {
+                var row: T = undefined;
+                inline for (@typeInfo(T).@"struct".field_names, 0..) |field_name, field_index| {
+                    @field(row, field_name) = distinctValue(@FieldType(T, field_name), seed + field_index * 64 + i);
                 }
+                _ = list.appendAssumeCapacity(row);
             }
-            return .{ .items = mal };
+            return list;
         }
         /// Assert two byte spans are equal and non-empty.
         fn expectBytesEq(a: []const u8, b: []const u8) error{ TestExpectedEqual, TestUnexpectedResult }!void {
