@@ -112,7 +112,26 @@ const Analysis = struct {
         const header, const body = switch (self.module.store.getStatement(statement)) {
             .s_alias_decl => |decl| .{ decl.header, decl.anno },
             .s_nominal_decl => |decl| .{ decl.header, decl.anno },
-            else => return null, // Rejected source and abstract where aliases have no backing.
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => return null, // Only alias and nominal declarations have a backing.
         };
         if (body == .placeholder) return null;
         const index: u32 = @intCast(self.nodes.items.len);
