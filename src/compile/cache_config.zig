@@ -358,7 +358,8 @@ pub const Constants = struct {
     /// 181: uncommitted record and tag tails replace per-use structure, type
     ///      stores list no widening field names, and checked variables record
     ///      uncommitted record tails.
-    pub const CACHE_VERSION = 181;
+    /// 182: descriptors record lift-only uncommitted record tails.
+    pub const CACHE_VERSION = 182;
 };
 
 /// Configuration for the Roc cache system.

@@ -24965,39 +24965,31 @@ fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView,
 }
 
 /// Where a walk of a worker's interface has reached a type, for sealing an
-/// uncommitted record tail (design.md "Sealed Result Rows"): whether a value
-/// there leaves the worker, whether the path passed through data, and whether
-/// a conversion at a call reaches it. A conversion reaches every position
-/// through data and through function types that are not inside data, since
-/// a call adapts a function value it passes or returns; it does not reach a
-/// function inside data, an evidence callable, or a nominal's arguments other
-/// than a list's, a box's, or a `Try`'s.
-const RecordTailPosition = packed struct(u3) {
-    positive: bool,
+/// uncommitted record tail (design.md "Sealed Result Rows"): whether the path
+/// passed through data, and whether a conversion at a call reaches it. A
+/// conversion reaches every position through data and through function types
+/// that are not inside data, since a call adapts a value it passes or
+/// receives, including a function value; it does not reach a function inside
+/// data, an evidence callable, or a nominal's arguments other than a list's,
+/// a box's, or a `Try`'s.
+const RecordTailPosition = packed struct(u2) {
     in_data: bool,
     unconvertible: bool,
 
-    const top: RecordTailPosition = .{ .positive = true, .in_data = false, .unconvertible = false };
-    const unconvertible_position: RecordTailPosition = .{ .positive = false, .in_data = false, .unconvertible = true };
+    const top: RecordTailPosition = .{ .in_data = false, .unconvertible = false };
+    const unconvertible_position: RecordTailPosition = .{ .in_data = false, .unconvertible = true };
 
     fn mask(self: RecordTailPosition) u8 {
-        return @as(u8, 1) << @as(u3, @bitCast(self));
+        return @as(u8, 1) << @as(u2, @bitCast(self));
     }
 
     fn data(self: RecordTailPosition) RecordTailPosition {
-        return .{ .positive = self.positive, .in_data = true, .unconvertible = self.unconvertible };
+        return .{ .in_data = true, .unconvertible = self.unconvertible };
     }
 
-    fn functionArg(self: RecordTailPosition) RecordTailPosition {
-        return .{ .positive = !self.positive, .in_data = false, .unconvertible = self.unconvertible or self.in_data };
-    }
-
-    fn functionResult(self: RecordTailPosition) RecordTailPosition {
-        return .{ .positive = self.positive, .in_data = false, .unconvertible = self.unconvertible or self.in_data };
-    }
-
-    fn convertsLeaving(self: RecordTailPosition) bool {
-        return self.positive and !self.unconvertible;
+    /// An argument or the result of a function type at this position.
+    fn functionPart(self: RecordTailPosition) RecordTailPosition {
+        return .{ .in_data = false, .unconvertible = self.unconvertible or self.in_data };
     }
 };
 
@@ -25227,11 +25219,13 @@ const SealedSchemeSlots = struct {
 
     /// Decide which uncommitted record tails seal (design.md "Sealed Result
     /// Rows"): those whose every occurrence in the worker's interface is
-    /// positive and convertible (`RecordTailPosition`), and whose constraints
-    /// closing the row discharges, when no argument holds a nominal over a
-    /// callable payload. A value of such a type crosses the worker's boundary
-    /// only by leaving it, and an instantiation can only give the tail absent
-    /// optional fields, which the call's conversion adds.
+    /// convertible (`RecordTailPosition`), and whose constraints closing the
+    /// row discharges, when no argument holds a nominal over a callable
+    /// payload. Every value of such a type crosses the worker's boundary where
+    /// a call's conversion reaches it. An instantiation can give the tail only
+    /// absent optional fields of a value leaving the worker, which the
+    /// conversion adds, or, for a lift-only tail, a nominal wrapper with
+    /// exactly the record's fields, which it removes or restores.
     fn sealRecordTails(
         self: *SealedSchemeSlots,
         variables: []const CheckedTypeId,
@@ -25264,16 +25258,16 @@ const SealedSchemeSlots = struct {
         var pending: std.ArrayList(Item) = .empty;
         defer pending.deinit(self.allocator);
         const top = RecordTailPosition.top;
-        try pending.append(self.allocator, .{ .ty = signature.ret, .position = top.functionResult() });
+        try pending.append(self.allocator, .{ .ty = signature.ret, .position = top.functionPart() });
         for (evidence_params) |param| try pending.append(self.allocator, .{ .ty = param.callable_ty, .position = RecordTailPosition.unconvertible_position });
-        for (signature.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = top.functionArg() });
+        for (signature.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = top.functionPart() });
         while (pending.pop()) |item| {
             const entry = try seen.getOrPut(self.allocator, item.ty);
             if (!entry.found_existing) entry.value_ptr.* = 0;
             if (entry.value_ptr.* & item.position.mask() != 0) continue;
             entry.value_ptr.* |= item.position.mask();
             if (self.record_candidates.getPtr(item.ty)) |eligible| {
-                if (!item.position.convertsLeaving()) eligible.* = false;
+                if (item.position.unconvertible) eligible.* = false;
                 continue;
             }
             const position = item.position;
@@ -25289,8 +25283,8 @@ const SealedSchemeSlots = struct {
                     try pending.append(self.allocator, .{ .ty = tag_union.ext, .position = position.data() });
                 },
                 .function => |function| {
-                    for (function.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = position.functionArg() });
-                    try pending.append(self.allocator, .{ .ty = function.ret, .position = position.functionResult() });
+                    for (function.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = position.functionPart() });
+                    try pending.append(self.allocator, .{ .ty = function.ret, .position = position.functionPart() });
                 },
                 .nominal => |nominal| {
                     const arg_position = if (nominalArgsArePlainData(nominal)) position.data() else RecordTailPosition.unconvertible_position;
@@ -25394,7 +25388,7 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
     }
 
     /// Whether an uncommitted record tail seals: every occurrence of it is
-    /// one a call's conversion reaches where a value leaves the worker, no
+    /// one a call's conversion reaches, no
     /// evidence callable mentions it, and no argument holds a callable whose
     /// interface the signature does not show.
     fn recordTailSealed(self: *SealedSchemeVarWalk, variable: CheckedTypeId, fn_root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
@@ -25406,14 +25400,14 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
         defer stack.deinit(self.allocator);
         var visited: collections.DenseMapUnmanaged(u64, void) = .empty;
         defer visited.deinit(self.allocator);
-        try stack.append(self.allocator, .{ .ty = signature.ret, .position = RecordTailPosition.top.functionResult() });
-        for (signature.args) |arg| try stack.append(self.allocator, .{ .ty = arg, .position = RecordTailPosition.top.functionArg() });
+        try stack.append(self.allocator, .{ .ty = signature.ret, .position = RecordTailPosition.top.functionPart() });
+        for (signature.args) |arg| try stack.append(self.allocator, .{ .ty = arg, .position = RecordTailPosition.top.functionPart() });
         while (stack.pop()) |item| {
             if (item.ty == variable) {
-                if (!item.position.convertsLeaving()) return false;
+                if (item.position.unconvertible) return false;
                 continue;
             }
-            const key = (@as(u64, @backingInt(item.ty)) << 3) | @as(u3, @bitCast(item.position));
+            const key = (@as(u64, @backingInt(item.ty)) << 2) | @as(u2, @bitCast(item.position));
             if ((try visited.getOrPut(self.allocator, key)).found_existing) continue;
             const position = item.position;
             switch (self.types.payload(item.ty)) {
@@ -25428,8 +25422,8 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
                     try stack.append(self.allocator, .{ .ty = tag_union.ext, .position = position.data() });
                 },
                 .function => |fn_type| {
-                    for (fn_type.args) |arg| try stack.append(self.allocator, .{ .ty = arg, .position = position.functionArg() });
-                    try stack.append(self.allocator, .{ .ty = fn_type.ret, .position = position.functionResult() });
+                    for (fn_type.args) |arg| try stack.append(self.allocator, .{ .ty = arg, .position = position.functionPart() });
+                    try stack.append(self.allocator, .{ .ty = fn_type.ret, .position = position.functionPart() });
                 },
                 .nominal => |nominal| {
                     const arg_position = if (nominalArgsArePlainData(nominal)) position.data() else RecordTailPosition.unconvertible_position;

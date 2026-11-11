@@ -125,6 +125,7 @@ const Fill = struct {
     /// "Uncommitted Record Tails").
     uncommitted_record_tail: bool,
     uncommitted_copy: bool,
+    uncommitted_lift_only: bool,
     annotation_tag_union: bool,
     uncommitted_tag_tail: bool,
 };
@@ -385,6 +386,7 @@ fn request(ctx: *CopyContext, source_var: Var) std.mem.Allocator.Error!bool {
         .host_fixed_row = resolved.desc.flags.host_fixed_row,
         .uncommitted_record_tail = resolved.desc.flags.uncommitted_record_tail,
         .uncommitted_copy = resolved.desc.flags.uncommitted_copy,
+        .uncommitted_lift_only = resolved.desc.flags.uncommitted_lift_only,
         .annotation_tag_union = resolved.desc.flags.annotation_tag_union,
         .uncommitted_tag_tail = resolved.desc.flags.uncommitted_tag_tail,
     };
@@ -553,6 +555,7 @@ fn finishFrame(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
             .host_fixed_row = fill.host_fixed_row,
             .uncommitted_record_tail = fill.uncommitted_record_tail,
             .uncommitted_copy = fill.uncommitted_copy,
+            .uncommitted_lift_only = fill.uncommitted_lift_only,
             .annotation_tag_union = fill.annotation_tag_union,
             .uncommitted_tag_tail = fill.uncommitted_tag_tail,
         },

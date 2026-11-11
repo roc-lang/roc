@@ -14,7 +14,7 @@ fn setupFailed(err: anytype) error{TestUnexpectedResult} {
 }
 
 const source =
-    \\module [parse, many, run, make, unit, ok_unit, listed, apply_one, reader, both_sides, nested_fn]
+    \\module [parse, many, run, make, unit, ok_unit, listed, apply_one, reader, both_sides, pattern_arg, folded, nested_fn]
     \\parse : Str -> Try(U8, [InvalidU8])
     \\parse = |text| if Str.is_empty(text) Err(InvalidU8) else Ok(1)
     \\many : Str -> List([Oops])
@@ -28,6 +28,8 @@ const source =
     \\apply_one = |n, f| f({ a: n })
     \\reader = |n| |m| { a: n, b: m }
     \\both_sides = |r, c| if c r else { a: 1.U8 }
+    \\pattern_arg = |{ w, h }| w * h
+    \\folded = |rs| List.fold(rs, 0, |acc, { w }| acc + w)
     \\nested_fn = |n| [|m| { a: n, b: m }]
 ;
 
@@ -83,10 +85,11 @@ test "a template's stored sealed slots match the independent scalar oracle" {
     try std.testing.expect(templates.templateEvidenceParams(run).len >= 1);
     try std.testing.expectEqual(@as(usize, 1), templates.templateSealedSlots(run).len);
 
-    // A returned record literal's uncommitted tail is sealed in each of these
-    // (design.md "Uncommitted Record Tails"): the worker takes no hidden
-    // descriptor for it, whatever else its scheme quantifies.
-    for ([_][]const u8{ "make", "unit", "ok_unit", "listed", "apply_one", "reader" }) |name| {
+    // A record's uncommitted tail is sealed in each of these wherever a value
+    // of it crosses the worker's boundary, leaving or entering (design.md
+    // "Uncommitted Record Tails"): the worker takes no hidden descriptor for
+    // it, whatever else its scheme quantifies.
+    for ([_][]const u8{ "make", "unit", "ok_unit", "listed", "apply_one", "reader", "both_sides", "pattern_arg", "folded" }) |name| {
         const template = findTemplate(artifact, name) orelse return error.TestUnexpectedResult;
         var tails: usize = 0;
         var sealed_tails: usize = 0;
@@ -104,9 +107,9 @@ test "a template's stored sealed slots match the independent scalar oracle" {
         try std.testing.expectEqual(@as(usize, 1), sealed_tails);
     }
 
-    // A tail on both sides of a function, or inside a function held in data,
-    // commits at the boundary: no scheme variable is an uncommitted tail.
-    for ([_][]const u8{ "both_sides", "nested_fn" }) |name| {
+    // A tail inside a function held in data commits at the boundary: no
+    // scheme variable is an uncommitted tail.
+    for ([_][]const u8{"nested_fn"}) |name| {
         const template = findTemplate(artifact, name) orelse return error.TestUnexpectedResult;
         for (templates.templateSchemeVars(template)) |variable| {
             switch (artifact.checked_types.view().payload(variable)) {

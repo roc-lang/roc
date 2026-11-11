@@ -5869,7 +5869,9 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
 /// other one commits to the empty record before anything is quantified
 /// (design.md "Uncommitted Record Tails").
 fn generalizeRank(self: *Self, env: *Env, roots: []const Var) Allocator.Error!void {
-    try self.collectQuantifiableTails(roots);
+    var entering: std.ArrayListUnmanaged(Var) = .empty;
+    defer entering.deinit(self.gpa);
+    try self.collectQuantifiableTails(roots, &entering);
     try self.generalizer.adjust(self.gpa, &env.var_pool, env.rank());
     if (self.generalizer.unquantified_tails.items.len != 0) {
         var tails: std.ArrayListUnmanaged(Var) = .empty;
@@ -5878,6 +5880,14 @@ fn generalizeRank(self: *Self, env: *Env, roots: []const Var) Allocator.Error!vo
         for (tails.items) |tail| try self.commitUncommittedTail(tail, env);
     }
     try self.generalizer.quantify(&env.var_pool, env.rank());
+    // A tail this boundary quantified where a value of its record enters the
+    // binding is lift-only (design.md "Uncommitted Record Tails").
+    for (entering.items) |tail| {
+        const resolved = self.types.resolveVar(tail);
+        if (resolved.desc.content != .flex or !resolved.desc.flags.uncommitted_record_tail) continue;
+        if (resolved.desc.rank != .generalized or resolved.desc.flags.uncommitted_lift_only) continue;
+        try self.types.markUncommittedLiftOnly(resolved.var_);
+    }
 }
 
 /// Commit an uncommitted tail. A record tail commits to the empty record by
@@ -5984,12 +5994,13 @@ const TailPosition = packed struct(u3) {
 };
 
 /// Fill `generalizer.quantifiable_tails` with the uncommitted record tails
-/// `roots` hold only where a value leaves the binding: every occurrence is
-/// positive (a function's result, a callback's argument, through data and
-/// further functions by polarity) and convertible, and the tail's own
-/// constraints the empty record discharges (design.md "Uncommitted Record
-/// Tails").
-fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!void {
+/// whose every occurrence in `roots` is convertible and whose own
+/// constraints the empty record discharges, and list in `entering` those of
+/// them with an occurrence where a value enters the binding (a negative
+/// one: an argument, a callback's result, through data and further
+/// functions by polarity), which stay lift-only (design.md "Uncommitted
+/// Record Tails").
+fn collectQuantifiableTails(self: *Self, roots: []const Var, entering: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
     const quantifiable = &self.generalizer.quantifiable_tails;
     quantifiable.clearRetainingCapacity();
     // A definition the platform provides to the host has a fixed host ABI, so
@@ -6037,7 +6048,8 @@ fn collectQuantifiableTails(self: *Self, roots: []const Var) Allocator.Error!voi
                     try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = TailPosition.unreachable_position });
                 }
                 if (resolved.desc.flags.uncommitted_record_tail) {
-                    const keeps = position.positive and !position.unconvertible and self.rowDefaultDischargesConstraints(flex.constraints);
+                    if (!position.positive and !position.unconvertible) try entering.append(self.gpa, resolved.var_);
+                    const keeps = !position.unconvertible and self.rowDefaultDischargesConstraints(flex.constraints);
                     if (keeps) {
                         if (!disqualified.contains(resolved.var_)) try quantifiable.put(resolved.var_, {});
                     } else {

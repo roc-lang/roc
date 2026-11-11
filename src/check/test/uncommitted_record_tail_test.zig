@@ -152,13 +152,14 @@ test "a record a returned function returns lifts at the call" {
     );
 }
 
-// Argument-side and both-sides record tails commit at the boundary
+// Tails where a value enters the binding stay quantified, lift-only
 
-test "a record pattern parameter of an unannotated function commits closed" {
-    try expectOneMismatch(
+test "a record pattern parameter of an unannotated function lifts at the call" {
+    try expectOk(
         \\Point := { x : U64, y : U64 }
         \\get_x = |{ x, y }| x + y
         \\n = get_x(Point.{ x: 1, y: 2 })
+        \\m = get_x({ x: 1, y: 2 })
     );
 }
 
@@ -170,25 +171,61 @@ test "a record pattern still lifts inside an annotated function" {
     );
 }
 
-test "a tail on both sides of a function commits closed" {
-    try expectOneMismatch(counter ++
+test "a tail on both sides of a function lifts at the call" {
+    try expectDefType(counter ++
         \\both = |r| if r.count > 0 r else { count: 0 }
         \\c : Counter
         \\c = both({ count: 1 })
-    );
+        \\p = both({ count: 2.U64 })
+    , "p", "{ count: U64 }");
 }
 
-test "a tail both passed to a callback and taken as an argument commits closed" {
-    try expectOneMismatch(counter ++
+test "a tail both passed to a callback and taken as an argument lifts at the call" {
+    try expectOk(counter ++
         \\pass = |f, r| f(if r.count > 0 r else { count: 0 })
         \\s = pass(Counter.describe, { count: 1 })
     );
 }
 
-test "a record pattern in a callback's own callback argument commits closed" {
-    try expectOneMismatch(counter ++
+test "a record pattern in a callback's own callback argument lifts at the call" {
+    try expectOk(counter ++
         \\feed = |f| f(|{ count }| count)
         \\n = feed(|g| g(Counter.{ count: 1 }))
+    );
+}
+
+test "a lift-only tail absorbs no optional field" {
+    try expectOneMismatch(
+        \\keep = |r| if r.a > 0 r else { a: 1.U8 }
+        \\x : { a : U8, b ?: U8 }
+        \\x = keep({ a: 2 })
+    );
+}
+
+test "a lift-only tail absorbs no defaulted field" {
+    try expectOneMismatch(
+        \\Cfg := { a : U8, b : U8 ?? 7 }
+        \\keep = |r| if r.a > 0 r else { a: 1.U8 }
+        \\c : Cfg
+        \\c = keep({ a: 2 })
+    );
+}
+
+test "a lift-only tail does not lift into a nominal with an extra optional field" {
+    try expectOneMismatch(
+        \\Wide := { x : U8, note ?: Str }
+        \\get_x = |{ x }| x
+        \\w : Wide
+        \\w = { x: 1 }
+        \\n = get_x(w)
+    );
+}
+
+test "a tail only results hold still absorbs an optional field" {
+    try expectOk(
+        \\make = |n| { a: n }
+        \\x : { a : U8, b ?: U8 }
+        \\x = make(2)
     );
 }
 

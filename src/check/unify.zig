@@ -2530,7 +2530,8 @@ const Unifier = struct {
     /// An uncommitted record tail meeting structure (design.md "Uncommitted
     /// Record Tails"): it commits to the empty record, or, in a construction
     /// relation, absorbs a row of optional or defaulted fields and keeps an
-    /// uncommitted tail of its own. Anything else is a mismatch.
+    /// uncommitted tail of its own, unless it is lift-only. Anything else is
+    /// a mismatch.
     fn unifyUncommittedWithStructure(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -2553,6 +2554,9 @@ const Unifier = struct {
             },
             .record => |record| {
                 if (record.fields.len() != 0) {
+                    // A value of a lift-only tail's record enters a body
+                    // compiled without these fields.
+                    if (tail.desc.flags.uncommitted_lift_only) return error.TypeMismatch;
                     if (self.row_width_relation == .exact) return error.TypeMismatch;
                     // A copy's values were built by a body compiled at its own
                     // type, so no construction here can materialize a default.
@@ -2567,6 +2571,7 @@ const Unifier = struct {
                     .flags = .{
                         .uncommitted_record_tail = true,
                         .uncommitted_copy = tail.desc.flags.uncommitted_copy,
+                        .uncommitted_lift_only = tail.desc.flags.uncommitted_lift_only,
                     },
                 });
                 _ = try self.scratch.fresh_vars.append(self.scratch.gpa, rest);

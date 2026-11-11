@@ -3,15 +3,15 @@ app [main!] { pf: platform "./platform/main.roc" }
 # Regression for https://github.com/roc-lang/roc/issues/11560
 #
 # An opaque nominal is related to its backing's structure inside the module
-# that declares it. `h` is unannotated and destructures a record with an
-# open row, and is called with the opaque `Pt(List(Str))`; Boxy planning
-# (`--specialize=no`) aligns the callee's record descriptors with the call's
-# backing record, and running it must produce `h(p) == ["hi"]`.
+# that declares it. `h` is unannotated and destructures a record, and is
+# called with the opaque `Pt(List(Str))`; Boxy planning (`--specialize=no`)
+# aligns the callee's record descriptors with the call's backing record, and
+# running it must produce `h(p) == ["hi"]`.
 
 Pt(a) :: { x : a, y : U64 }
 
 h = |p| match p {
-    { x, y: 2, .. } => x
+    { x, y: 2 } => x
     _ => []
 }
 

@@ -160,6 +160,12 @@ pub const DescriptorFlags = packed struct(u16) {
     /// one (design.md "Uncommitted Record Tails"). Copies carry it, and a
     /// merge keeps it while the class is a flex.
     uncommitted_copy: bool = false,
+    /// The class is an uncommitted record tail a generalization boundary
+    /// quantified although a value of its record enters the binding, so a
+    /// use's copy may lift its record into a nominal type or commit, but
+    /// absorbs no field at all (design.md "Uncommitted Record Tails"). Copies
+    /// carry it, and a merge keeps it while the class is a flex.
+    uncommitted_lift_only: bool = false,
     /// A tag union an annotation or type declaration wrote. Annotated
     /// structure never lifts into a nominal type, whatever its row's tail
     /// (design.md "Uncommitted Record Tails"). Copies carry it and a merge
@@ -173,7 +179,7 @@ pub const DescriptorFlags = packed struct(u16) {
     /// "Uncommitted Tag Tails"). Copies carry it; a merge keeps it unless the
     /// other side is an empty tag union without it.
     uncommitted_tag_tail: bool = false,
-    _padding: u3 = 0,
+    _padding: u2 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -189,6 +195,7 @@ pub const DescriptorFlags = packed struct(u16) {
             .host_fixed_row = self.host_fixed_row,
             .uncommitted_record_tail = self.uncommitted_record_tail,
             .uncommitted_copy = self.uncommitted_copy,
+            .uncommitted_lift_only = self.uncommitted_lift_only,
             .annotation_tag_union = self.annotation_tag_union,
             .uncommitted_tag_tail = self.uncommitted_tag_tail,
         };
