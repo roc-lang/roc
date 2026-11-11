@@ -15,10 +15,12 @@ pub inline fn relocate(argc: usize, argv: [*][*:0]u8) void {
     var phdr_count: usize = 0;
     var aux_index: usize = 0;
     while (auxv[aux_index].a_type != std.elf.AT.NULL) : (aux_index += 1) {
-        switch (auxv[aux_index].a_type) {
-            std.elf.AT.PHDR => phdr_address = auxv[aux_index].a_un.a_val,
-            std.elf.AT.PHNUM => phdr_count = auxv[aux_index].a_un.a_val,
-            else => {},
+        // Auxiliary vector keys are an open set of integers; only these two matter here.
+        const entry = auxv[aux_index];
+        if (entry.a_type == std.elf.AT.PHDR) {
+            phdr_address = entry.a_un.a_val;
+        } else if (entry.a_type == std.elf.AT.PHNUM) {
+            phdr_count = entry.a_un.a_val;
         }
     }
     @call(.always_inline, std.pie.relocate, .{@as([*]const std.elf.ElfN.Phdr, @ptrFromInt(phdr_address))[0..phdr_count]});

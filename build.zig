@@ -4856,6 +4856,17 @@ pub fn build(b: *std.Build) void {
                 target_path,
             );
         }
+        // The fx platform declares musl's self-relocating startup object as a
+        // link input for its musl targets, beside the host library.
+        if (fx_host_target_dir) |target_dir| {
+            if (fx_host_target.result.os.tag == .linux and fx_host_target.result.abi.isMusl()) {
+                test_fixtures.copy(
+                    copy_test_fx_host,
+                    muslStaticPieStartup(b, fx_host_target),
+                    b.pathJoin(&.{ "test/fx/platform/targets", target_dir, "rcrt1.o" }),
+                );
+            }
+        }
 
         const final_fx_host_step = &copy_test_fx_host.step;
 
@@ -4941,7 +4952,10 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 // util.buildIsolatedTestEnvMap touches std.c (Zig 0.16 requires explicit link_libc).
                 .link_libc = true,
-                .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
+                .imports = &.{
+                    .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
+                    .{ .name = "roc_target", .module = roc_modules.roc_target },
+                },
             }),
             .filters = test_filters,
         });

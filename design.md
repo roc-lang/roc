@@ -1728,7 +1728,7 @@ kind and its resolved value reference. It must not infer a procedure from source
 names, function type alone, body shape below the root expression, or post-check
 specialization results. Any wrapper, capture, conditional, call, or other
 function-valued computation remains an ordinary compile-time callable root.
-When platform pairing binds a required procedure, it publishes the resulting
+When platform pairing binds a required procedure, it records the resulting
 alias forwarding in the pairing's own callable templates and persists it with
 the pairing. The unpaired platform's templates remain unchanged.
 
@@ -4314,7 +4314,7 @@ platform. A warm build therefore prints the same reports in the same order, with
 the same exit code, as a cold one. A module with type errors is checked,
 evaluated, stored and reused like any other module: its errors are reports, its
 roots that reach code checking rejected are failed roots, and its importers
-check against the same artifact whether it was loaded or checked. `BuildEnv`
+check against the same checked module data whether it was loaded or checked. `BuildEnv`
 moves the reports into its output sink only after finalization or when
 aborting.
 
@@ -13773,7 +13773,7 @@ module's layouts, descriptors, and workers are a function of its own checked
 module and its imports' checked modules alone (Per-Module Output, below), so
 two modules never need to agree on anything a third module decided.
 
-A record field's default identity is part of its immutable semantic type,
+A record field's default identity is part of its immutable checked type,
 even though required and defaulted fields have identical inline layouts.
 Boxy interns and digests the declaring module's content identity and default
 expression identity, preserving them through substitution and stored-function
@@ -14940,7 +14940,7 @@ and Per-Module Output is the invariant that makes it possible:
   the digest of those records (`exportRecordsDigest`). An importer's key
   folds in the module's export digest, which combines that records digest
   with its imports' export digests (`Digests.recordExportsDigest`), so a
-  restored object's records are not hashed again. This is a semantic
+  restored object's records are not hashed again. This is a checked
   interface digest, never a payload-integrity hash. The v2 export digest
   composition changes hash bytes; object format 19 also incorporates stored
   field-default identities alongside integer worker bindings and invalidates
@@ -15244,11 +15244,11 @@ all its records succeeds.
 
 A checked module's own body index (`body_analyses.ModuleIndex`: which nodes
 its bodies reach, the top-level unit owning each, and per-binding declaration
-facts) follows the same rule one level down. It is a pure function of the
+data) follows the same rule one level down. It is a pure function of the
 module's CIR and promoted local procedures, so it is built on first demand into
-a write-once slot of the module's `BodyAnalyses`, like every other body fact,
-and is never serialized. Publishing a freshly checked module demands it, since
-publication reads it; installing a cached checked entry does not. A consumer
+a write-once slot of the module's `BodyAnalyses`, like every other body analysis,
+and is never serialized. Storing a freshly checked module demands it, since
+storing reads it; installing a cached checked entry does not. A consumer
 demands the index of every module whose bodies it reads before reading any:
 LSS lowering at its preparation (`CheckedModules.demandBodyIndexes`), literal
 demand, and platform pairing. Boxy registration and preparation demand none:
@@ -25685,7 +25685,7 @@ ELF PIE executables are a distinct host-link mode, not shared libraries.
 They use section-backed provides and the same dynamic relative-relocation
 table extension as shared hosts; absolute provides cannot track the load base.
 The host key distinguishes fixed executables, PIE executables and libraries.
-Executable startup and library exports remain separate from relocation policy.
+Program startup and library exports remain separate from relocation policy.
 Static PIE requires platform-supplied self-relocating startup (for example
 musl `rcrt1.o`). Platform authors own startup correctness; selecting PIE never
 substitutes startup inputs or infers compatibility from filenames. The
@@ -25812,7 +25812,7 @@ one cache entry per host (`host_prelink`, `macho/HostPrelink`,
 `coff/HostPrelink`, family `prelinked_host`). The generated object defines
 every `provides` symbol as a window the host's references resolve to at
 prelink time, which each build fills in: a jump to the entry wrapper for a
-procedure, the value's bytes for a data symbol. In a fixed ELF executable
+procedure, the value's bytes for a data symbol. In a fixed ELF executable binary
 (Linux and the BSDs) the windows are absolute addresses at a fixed place in the app
 region, and a provided value larger than its window is a reported build
 error. For ELF PIE/shared hosts, macOS and Windows the

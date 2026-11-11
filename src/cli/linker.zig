@@ -567,14 +567,12 @@ pub fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.
     const target_os = config.target_os orelse builtin.target.os.tag;
     const target_arch = config.target_arch orelse builtin.target.cpu.arch;
     const is_shared_lib = config.output_kind == .shared_lib;
-    const elf_pie = config.elf_pie orelse switch (target_os) {
-        .linux, .freebsd, .openbsd, .netbsd => !is_shared_lib,
-        else => false,
-    };
-    std.debug.assert(!elf_pie or (!is_shared_lib and switch (target_os) {
+    const target_is_elf = switch (roc_target.classifyOs(target_os)) {
         .linux, .freebsd, .openbsd, .netbsd => true,
-        else => false,
-    }));
+        .macos, .windows, .other => false,
+    };
+    const elf_pie = config.elf_pie orelse (target_is_elf and !is_shared_lib);
+    std.debug.assert(!elf_pie or (!is_shared_lib and target_is_elf));
 
     switch (target_os) {
         .macos => {

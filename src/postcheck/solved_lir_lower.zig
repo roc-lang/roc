@@ -7357,12 +7357,12 @@ const Lowerer = struct {
     /// Immediate candidates touch no shared static-data inventory, so the
     /// same rule governs worker admission and actual expression lowering.
     fn staticDataCandidateIsImmediate(self: *Lowerer, candidate: Mono.StaticDataCandidate, layout_idx: layout.Idx) bool {
-        const physical = self.result.layouts.getLayout(layout_idx);
-        return switch (physical.tag) {
-            .scalar => physical.getScalar().tag != .str or !candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()),
+        const candidate_layout = self.result.layouts.getLayout(layout_idx);
+        return switch (candidate_layout.tag) {
+            .scalar => candidate_layout.getScalar().tag != .str or !candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()),
             // Bool has the ordinary two-nullary-enum layout, not scalar's
             // tag. Discriminant-only enums have no payload to materialize.
-            .tag_union => self.result.layouts.getTagUnionInfo(physical).discriminant_offset == 0,
+            .tag_union => self.result.layouts.getTagUnionInfo(candidate_layout).discriminant_offset == 0,
             .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr, .hole, .dynamic => false,
         };
     }

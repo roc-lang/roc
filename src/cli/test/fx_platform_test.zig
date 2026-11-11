@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const roc_target = @import("roc_target");
 const testing = std.testing;
 const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
@@ -571,10 +572,10 @@ test "boxy provided static data exports are host-linkable readonly constants" {
 
 test "Linux executable builds use static PIE with platform-owned and default startup" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    const target = switch (builtin.cpu.arch) {
+    const target = switch (roc_target.classifyCpuArch(builtin.cpu.arch)) {
         .x86_64 => "--target=x64musl",
         .aarch64 => "--target=arm64musl",
-        else => return error.SkipZigTest,
+        .aarch64_be, .arm, .wasm32, .other => return error.SkipZigTest,
     };
     const allocator = testing.allocator;
     const io = testing.io;
