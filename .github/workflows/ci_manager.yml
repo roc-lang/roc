@@ -30,9 +30,10 @@ name: CI Manager
 # skipped on draft PRs.
 #
 # `perf` (ci_perf.yml) compares the PR's release roc with its base's on Linux,
-# macOS and Windows and fails on a confirmed slowdown. It reuses the Linux
-# release build of `bsd-build-hello-world` and, like the macOS and Windows
-# lanes, is skipped on draft PRs.
+# macOS and Windows and fails on a confirmed slowdown. `perf-build`
+# (ci_perf_build.yml) builds the binaries alongside `bsd-build-hello-world`,
+# whose Linux release build is the head binary. Like the macOS and Windows
+# lanes, both are skipped on draft PRs.
 #
 # Which MiniCI jobs each shard runs is defined in src/build/minici.zig
 # (`shards`); `static-checks` verifies that this file names every shard exactly
@@ -852,10 +853,17 @@ jobs:
           retention-days: 1
           overwrite: true
 
+  # Builds the release roc binaries `perf` compares, except the Linux head one
+  # from `bsd-build-hello-world`. See ci_perf_build.yml.
+  perf-build:
+    needs: check-changes
+    if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
+    uses: ./.github/workflows/ci_perf_build.yml
+
   # Fails on a slowdown of the PR's release roc that a second runner confirms.
   # See ci_perf.yml.
   perf:
-    needs: [check-changes, bsd-build-hello-world]
+    needs: [check-changes, bsd-build-hello-world, perf-build]
     if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
     uses: ./.github/workflows/ci_perf.yml
 
@@ -916,6 +924,7 @@ jobs:
       - arm64-linux-hello-world
       - bsd-build-hello-world
       - bsd-hello-world
+      - perf-build
       - perf
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -923,7 +932,7 @@ jobs:
     steps:
       # Every needed job must end with exactly the expected result, so a
       # cancelled or unexpectedly skipped job fails this check. The macOS and
-      # Windows lanes and `perf` may be skipped only on a draft PR.
+      # Windows lanes and the perf jobs may be skipped only on a draft PR.
       - name: Check workflow results
         shell: bash
         env:
@@ -941,6 +950,7 @@ jobs:
           ARM64_HELLO_WORLD: ${{ needs.arm64-linux-hello-world.result }}
           BSD_BUILD_HELLO_WORLD: ${{ needs.bsd-build-hello-world.result }}
           BSD_HELLO_WORLD: ${{ needs.bsd-hello-world.result }}
+          PERF_BUILD: ${{ needs.perf-build.result }}
           PERF: ${{ needs.perf.result }}
         run: |
           set -euo pipefail
@@ -975,6 +985,7 @@ jobs:
             expect minici-macos "$MINICI_MACOS" "$scarce"
             expect minici-build-windows "$BUILD_WINDOWS" "$scarce"
             expect minici-windows "$MINICI_WINDOWS" "$scarce"
+            expect perf-build "$PERF_BUILD" "$scarce"
             expect perf "$PERF" "$scarce"
           elif [ "$CHECK_CHANGES" = success ]; then
             echo "Docs-only change: the MiniCI lanes are not required."
