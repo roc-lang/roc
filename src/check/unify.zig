@@ -2585,7 +2585,8 @@ const Unifier = struct {
     }
 
     /// Whether a record row may still be lifted into a nominal type: the
-    /// final extension of its row is an unbound flex variable (design.md
+    /// final extension of its row is an unbound flex variable, or the empty
+    /// record an opening of a nominal declaration's backing minted (design.md
     /// "Uncommitted Record Tails").
     fn recordRowLiftable(self: *Self, ext: Var) bool {
         var current = ext;
@@ -2596,7 +2597,11 @@ const Unifier = struct {
                 .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
                 .structure => |flat_type| switch (flat_type) {
                     .record => |record| current = record.ext,
-                    .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return false,
+                    // A row closed against the row of an opening of a nominal
+                    // declaration's backing still lifts: the declaration
+                    // fixes only its own row.
+                    .empty_record => return resolved.desc.flags.nominal_backing_structure,
+                    .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return false,
                 },
                 .flex => return !resolved.desc.flags.bounded_row_ext,
                 .rigid, .field_presence, .err => return false,
@@ -2622,9 +2627,11 @@ const Unifier = struct {
                         if (resolved.desc.flags.annotation_tag_union) return false;
                         current = tag_union.ext;
                     },
-                    // A row closed by inference still lifts; one an
-                    // annotation or a commitment closed does not.
-                    .empty_tag_union => return resolved.desc.flags.uncommitted_tag_tail,
+                    // A row closed by inference still lifts, and so does
+                    // one closed against the row of an opening of a nominal
+                    // declaration's backing, which fixes only its own row;
+                    // one an annotation or a commitment closed does not.
+                    .empty_tag_union => return resolved.desc.flags.uncommitted_tag_tail or resolved.desc.flags.nominal_backing_structure,
                     .record, .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return false,
                 },
                 .flex => return !resolved.desc.flags.bounded_row_ext,

@@ -529,6 +529,12 @@ pub const Store = struct {
                 return true;
             },
             .flex => |flex| {
+                // An uncommitted record tail reads as the closed row it stands
+                // for (design.md "Uncommitted Record Tails").
+                if (resolved.desc.flags.uncommitted_record_tail) {
+                    try self.finishFrame(type_writer, fill, SnapshotContent{ .structure = .empty_record });
+                    return true;
+                }
                 if (flex.constraints.len() == 0) {
                     try self.finishFrame(type_writer, fill, SnapshotContent{ .flex = SnapshotFlex{
                         .name = flex.name,

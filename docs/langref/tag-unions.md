@@ -243,6 +243,28 @@ Here, `Ok(age)` and `Err(InvalidAge)` are structural tags, but since they're use
 This works as long as the structural tag is one that the nominal tag union actually has, with a
 compatible payload. `Ok(1, 2)` or `Maybe(5)` could not become a `Try`.
 
+It also only works for tags the compiler worked out the type of, not for a structural tag
+union type you wrote out in an annotation. An annotation means exactly the type it says:
+
+```roc
+Light := [Red, Green]
+
+pick_inferred = |n| if n > 0 Red else Green
+
+pick : U64 -> [Red, Green]
+pick = |n| if n > 0 Red else Green
+
+a : Light
+a = pick_inferred(1) # This is fine.
+
+b : Light
+b = pick(1) # ERROR! pick returns [Red, Green], which is not a Light.
+```
+
+Each call to `pick_inferred` decides for itself whether its result becomes a `Light`, so
+`pick_inferred(2)` can still be used as a plain `[Red, Green]` somewhere else. A call to `pick`
+can still be used as a wider structural tag union, like `[Red, Green, Blue]`.
+
 > Note that this doesn't work with [opaque](#opaque-tag-unions) tag unions outside the module
 > that defines them, since their tags are hidden there.
 

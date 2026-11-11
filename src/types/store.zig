@@ -203,9 +203,12 @@ pub const StaticDispatchRelationMerge = struct {
 ///
 /// Var maps to a SlotStore.Idx internally.
 /// An empty tag union a relation can no longer lift: written by an
-/// annotation, or committed after inference closed it.
+/// annotation, or committed after inference closed it. The empty tag union
+/// an opening of a nominal declaration's backing minted is the declaration's
+/// own row and decides nothing about the anonymous row it closes.
 fn committedEmptyTagUnion(desc: types.Descriptor) bool {
-    return desc.content == .structure and desc.content.structure == .empty_tag_union and !desc.flags.uncommitted_tag_tail;
+    return desc.content == .structure and desc.content.structure == .empty_tag_union and
+        !desc.flags.uncommitted_tag_tail and !desc.flags.nominal_backing_structure;
 }
 
 pub const Store = struct {
@@ -2588,7 +2591,7 @@ pub const Store = struct {
         merged_desc.flags.annotation_tag_union = a_data.desc.flags.annotation_tag_union or
             b_data.desc.flags.annotation_tag_union;
         // An inference-closed empty tag union stays uncommitted unless it
-        // meets one that is committed.
+        // meets one an annotation or a commitment closed.
         merged_desc.flags.uncommitted_tag_tail = merged_desc.content == .structure and
             merged_desc.content.structure == .empty_tag_union and
             (a_data.desc.flags.uncommitted_tag_tail or b_data.desc.flags.uncommitted_tag_tail) and

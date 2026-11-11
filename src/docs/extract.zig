@@ -2627,6 +2627,9 @@ fn extractRecord(
         const ext_resolved = types.resolveVar(ext);
         switch (ext_resolved.desc.content) {
             .flex => |flex| {
+                // An uncommitted record tail documents as the closed row it
+                // reads as (design.md "Uncommitted Record Tails").
+                if (ext_resolved.desc.flags.uncommitted_record_tail) break;
                 const ident_text: ?[]const u8 = if (flex.name) |ident_idx|
                     idents.getText(ident_idx)
                 else

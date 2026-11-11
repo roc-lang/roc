@@ -293,6 +293,23 @@ unit_x : Point
 unit_x = { x: 1, y: 0 }
 ```
 
+This works for a record literal, and for the record a function returns when nobody wrote
+the record's type in an annotation, but not for a record type you wrote out in an annotation.
+An annotation means exactly the type it says:
+
+```roc
+make_inferred = |x| { x, y: 0 }
+
+make : F64 -> { x : F64, y : F64 }
+make = |x| { x, y: 0 }
+
+a : Point
+a = make_inferred(1) # This is fine.
+
+b : Point
+b = make(1) # ERROR! make returns { x : F64, y : F64 }, which is not a Point.
+```
+
 Since a nominal record has a name, it can also have [methods](static-dispatch#methods):
 
 ```roc

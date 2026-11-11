@@ -25036,7 +25036,10 @@ const SealedSchemeSlots = struct {
         const signature = while (true) switch (self.types.payload(root)) {
             .alias => |alias| root = alias.backing,
             .function => |found| break found,
-            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {
+                self.candidates.clearRetainingCapacity();
+                return;
+            },
         };
         // LIFO: inspect arguments, then evidence, before walking the result.
         // A small external occurrence can disqualify every candidate without
@@ -36714,8 +36717,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x0A, 0xBC, 0x4C, 0x9F, 0xDF, 0x6E, 0xB2, 0x5A, 0xC0, 0x12, 0xD5, 0xFB, 0x22, 0x0B, 0x65, 0x47,
-        0xDB, 0xAA, 0x5E, 0x4F, 0x19, 0x9B, 0xD2, 0x13, 0x38, 0xEE, 0x5B, 0x59, 0x95, 0x60, 0x80, 0x55,
+        0x0B, 0x52, 0x23, 0xE0, 0x96, 0x29, 0x78, 0x04, 0x1E, 0xAD, 0x5F, 0x7B, 0x80, 0xAB, 0x65, 0x0F,
+        0xF9, 0x9A, 0xDA, 0xB9, 0x8E, 0x98, 0x08, 0xE3, 0xCB, 0x02, 0xFF, 0x94, 0x13, 0x8B, 0xC3, 0x40,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

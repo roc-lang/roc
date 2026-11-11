@@ -1128,7 +1128,10 @@ test "unify - issue 11024 - empty nominal row absorption respects field kinds an
                     try env.mkUnknownRecordField("field", presence, value),
                 })).content);
                 const nominal = try store.freshFromContent(try env.mkNominalType("Cfg", backing, &.{}));
-                const empty = try store.freshFromContent(.{ .structure = .empty_record });
+                // A `{}` literal: no fields over an uncommitted tail.
+                const tail = try store.fresh();
+                try store.markUncommittedRecordTail(tail);
+                const empty = try store.freshFromContent((try env.mkRecord(&.{}, tail)).content);
                 const a = if (order == 0) nominal else empty;
                 const b = if (order == 0) empty else nominal;
                 const result = if (exact) try env.unifyExact(a, b) else try env.unifyWriteNoReport(a, b);
@@ -1141,9 +1144,14 @@ test "unify - issue 11024 - empty nominal row absorption respects field kinds an
                 const omissions = env.scratch.absorbed_record_defaults.items.items;
                 try std.testing.expectEqual(@as(usize, if (accepts and kind == .defaulted) 1 else 0), omissions.len);
                 if (omissions.len != 0) {
-                    try std.testing.expectEqual(empty, omissions[0].record_var);
+                    try std.testing.expectEqual(tail, omissions[0].record_var);
                     try std.testing.expectEqual(default_id, omissions[0].default);
                 }
+
+                // A committed empty record never lifts.
+                const committed = try store.freshFromContent(.{ .structure = .empty_record });
+                const committed_result = if (order == 0) try env.unifyWriteNoReport(nominal, committed) else try env.unifyWriteNoReport(committed, nominal);
+                try std.testing.expectEqual(Result.mismatch, committed_result);
             }
         }
     }
@@ -1178,7 +1186,9 @@ test "unify - issue 11024 - zero-field nominal backing stays structural across c
         const backing = try store.freshFromContent((try env.mkRecordClosed(&.{})).content);
         const nominal = try store.freshFromContent(try env.mkNominalType("Cfg", backing, &.{}));
         for (0..2) |_| {
-            const empty = try store.freshFromContent(.{ .structure = .empty_record });
+            const tail = try store.fresh();
+            try store.markUncommittedRecordTail(tail);
+            const empty = try store.freshFromContent((try env.mkRecord(&.{}, tail)).content);
             const result = if (order == 0)
                 try env.unifyExact(nominal, empty)
             else
@@ -1203,17 +1213,23 @@ test "unify - empty nominal type with empty tag union (nominal on left)" {
         try env.mkNominalType("Empty", backing_var, &[_]Var{}),
     );
 
-    // Create empty tag union: []
+    // Create an empty tag union inference closed: []
     const empty_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try env.module_env.types.markUncommittedTagTail(empty_var);
+    const empty_union = try env.module_env.types.freshFromContent((try env.mkTagUnion(&.{}, empty_var)).content);
 
     // Unify: Empty ~ []
-    const result = try env.unify(nominal_var, empty_var);
+    const result = try env.unify(nominal_var, empty_union);
 
     // Should succeed and merge to nominal type
     try std.testing.expectEqual(.unified, result);
-    const resolved = env.module_env.types.resolveVar(empty_var);
+    const resolved = env.module_env.types.resolveVar(empty_union);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+
+    // A committed empty tag union never lifts.
+    const committed = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try std.testing.expect((try env.unify(nominal_var, committed)).isProblem());
 }
 
 test "unify - empty tag union with empty nominal type (nominal on right)" {
@@ -1221,8 +1237,10 @@ test "unify - empty tag union with empty nominal type (nominal on right)" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create empty tag union: []
+    // Create an empty tag union inference closed: []
     const empty_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    try env.module_env.types.markUncommittedTagTail(empty_var);
+    const empty_union = try env.module_env.types.freshFromContent((try env.mkTagUnion(&.{}, empty_var)).content);
 
     // Create nominal type: Empty := []
     const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
@@ -1231,11 +1249,11 @@ test "unify - empty tag union with empty nominal type (nominal on right)" {
     );
 
     // Unify: [] ~ Empty
-    const result = try env.unify(empty_var, nominal_var);
+    const result = try env.unify(empty_union, nominal_var);
 
     // Should succeed and merge to nominal type
     try std.testing.expectEqual(.unified, result);
-    const resolved = env.module_env.types.resolveVar(empty_var);
+    const resolved = env.module_env.types.resolveVar(empty_union);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
 }

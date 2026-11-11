@@ -5895,6 +5895,46 @@ fn commitUncommittedTail(self: *Self, tail: Var, env: *Env) Allocator.Error!void
     _ = try self.unify(tail, empty, env);
 }
 
+/// Commit every uncommitted record tail `root`'s data reaches (record
+/// fields, tuple items, tag payloads, alias and nominal arguments) to the
+/// empty record. A derivation decided against those exact shapes is a
+/// commitment point (design.md "Uncommitted Record Tails").
+fn commitUncommittedRecordTailsIn(self: *Self, root: Var, env: *Env) Allocator.Error!void {
+    var tails: std.ArrayListUnmanaged(Var) = .empty;
+    defer tails.deinit(self.gpa);
+    var seen: collections.DenseMapUnmanaged(Var, void) = .empty;
+    defer seen.deinit(self.gpa);
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        if ((try seen.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex => if (resolved.desc.flags.uncommitted_record_tail) try tails.append(self.gpa, resolved.var_),
+            .rigid, .field_presence, .err => {},
+            .alias => |alias| {
+                try pending.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+                try pending.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+                    try pending.append(self.gpa, record.ext);
+                },
+                .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| try pending.appendSlice(self.gpa, self.types.sliceVars(args));
+                    try pending.append(self.gpa, tag_union.ext);
+                },
+                .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
+    for (tails.items) |tail| try self.commitUncommittedTail(tail, env);
+}
+
 /// Where a walk of a binding's type has reached a var: in a function's own
 /// result through data alone, or anywhere else.
 const TailPosition = enum { result_data, elsewhere };
@@ -37367,7 +37407,6 @@ fn methodCallArgContext(
 /// Whether a type contains no type variables at all: no flex, rigid, or
 /// presence vars, and no error content.
 fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
-
     self.var_set.clearRetainingCapacity();
     defer self.var_set.clearRetainingCapacity();
     const visited = &self.var_set;
@@ -38294,7 +38333,6 @@ fn copyVarWithSourceSubstitutions(
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
-
 
     // First, reset state
     self.var_map.clearRetainingCapacity();
@@ -56933,6 +56971,10 @@ fn satisfyDerivedMapConstraint(
     // otherwise read as type variables and defeat the unambiguous-payload
     // judgment (design.md: closeTagRowsForDerivation).
     _ = try self.closeTagRowsForDerivation(dispatcher_var, env, .all_tag_rows);
+    // The derivation decides its plan against the exact payloads, so a
+    // payload record's uncommitted tail commits here (design.md "Uncommitted
+    // Record Tails").
+    try self.commitUncommittedRecordTailsIn(dispatcher_var, env);
     var tags = std.ArrayList(types_mod.Tag).empty;
     defer tags.deinit(self.gpa);
     const analysis = (try self.analyzeDerivedMap(dispatcher_var, env, region, &tags)) orelse return .unsupported;

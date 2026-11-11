@@ -355,7 +355,10 @@ pub const Constants = struct {
     ///      deferred diagnostic captures.
     /// 179: stored function recipes name modules the storing module imports.
     /// 180: type stores list the names of their optional and defaulted fields.
-    pub const CACHE_VERSION = 180;
+    /// 181: uncommitted record and tag tails replace per-use structure, type
+    ///      stores list no widening field names, and checked variables record
+    ///      uncommitted record tails.
+    pub const CACHE_VERSION = 181;
 };
 
 /// Configuration for the Roc cache system.
