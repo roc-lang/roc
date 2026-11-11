@@ -1,0 +1,96 @@
+on:
+  workflow_call:
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+name: Perf build
+
+# Builds the release roc binaries that ci_perf.yml compares: the base (the PR
+# merge commit's first parent) for Linux, macOS and Windows, and the head (the
+# merge commit) for macOS and Windows. The Linux head binary comes from
+# `bsd-build-hello-world` in ci_manager.yml, which runs alongside this.
+#
+# Everything builds on Linux, the macOS and Windows binaries by
+# cross-compiling, so the scarce runners only benchmark.
+
+jobs:
+  perf-build:
+    name: perf-build (${{ matrix.side }} ${{ matrix.os }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - side: base
+            os: linux
+            target: ''
+          - side: base
+            os: macos
+            target: -Dtarget=aarch64-macos-none
+          - side: head
+            os: macos
+            target: -Dtarget=aarch64-macos-none
+          - side: base
+            os: windows
+            target: -Dtarget=x86_64-windows-gnu
+          - side: head
+            os: windows
+            target: -Dtarget=x86_64-windows-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+        with:
+          fetch-depth: 2
+
+      # The base is the merge commit's first parent: the tip of the target
+      # branch that GitHub merged this PR into. It is built in its own worktree
+      # so the workflow keeps using this commit's local actions.
+      - name: Check out the base
+        if: matrix.side == 'base'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/base" HEAD^1
+          git -C "$RUNNER_TEMP/base" log -1 --oneline
+          echo "BUILD_DIR=$RUNNER_TEMP/base" >> "$GITHUB_ENV"
+
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.17.1
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          # See the same step in `minici-build-linux` in ci_manager.yml.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: build release roc
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: cd "${BUILD_DIR:-.}" && zig build build-release ${{ matrix.target }}
+          retry_count: 3
+
+      - name: Collect roc
+        shell: bash
+        env:
+          EXE: ${{ matrix.os == 'windows' && '.exe' || '' }}
+        run: |
+          set -euo pipefail
+          mkdir perf-bin
+          cp "${BUILD_DIR:-.}/zig-out/bin/roc$EXE" perf-bin/
+          ls -l perf-bin
+
+      - name: Upload roc
+        uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
+        with:
+          name: roc-${{ matrix.side }}-${{ matrix.os }}
+          path: perf-bin
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true

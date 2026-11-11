@@ -410,8 +410,13 @@ setup_slot! = |root, side, index, bench| {
 	}
 }
 
-command_args : Bench, Slot, List(Str) -> List(OsStr)
-command_args = |bench, slot, extra| bench.args.join_map(
+## Every run builds to its own path: Windows can keep a just-written
+## executable locked, so overwriting the previous one fails.
+out_path : Slot, U64 -> Path
+out_path = |slot, run| path_of("${slot.out.display()}-${run.to_str()}")
+
+command_args : Bench, Slot, List(Str), U64 -> List(OsStr)
+command_args = |bench, slot, extra, run| bench.args.join_map(
 	|arg|
 		if arg == "{file}" {
 			no_cache =
@@ -421,37 +426,46 @@ command_args = |bench, slot, extra| bench.args.join_map(
 				}
 			no_cache.concat(extra).map(OsStr.from_str).append(slot.file.to_os_str())
 		} else if arg == "{out}" {
-			[OsStr.from_str("--output=${slot.out.display()}")]
+			[OsStr.from_str("--output=${out_path(slot, run).display()}")]
 		} else {
 			[OsStr.from_str(arg)]
 		},
 )
 
-roc_command : Path, Bench, Slot, List(Str) -> Cmd.Command
-roc_command = |roc, bench, slot, extra|
+roc_command : Path, Bench, Slot, List(Str), U64 -> Cmd.Command
+roc_command = |roc, bench, slot, extra, run|
 	Cmd.new(roc.to_os_str())
-		.args(command_args(bench, slot, extra))
+		.args(command_args(bench, slot, extra, run))
 		.env("ROC_CACHE_DIR", slot.cache.to_os_str())
+
+failure_details : Cmd.Output -> Str
+failure_details = |output| "${Str.inspect(output.status)}\n${last_lines(output.stderr_utf8_lossy(), 15)}"
 
 ## Run untimed and report whether the benchmark works with this compiler.
 try_run! : Path, Bench, Slot => Try([Passed, Failed(Str)], _)
 try_run! = |roc, bench, slot| {
-	output = roc_command(roc, bench, slot, []).run!()?
+	output = roc_command(roc, bench, slot, [], 0).run!()?
 	match output.status {
 		Exited(0) => Ok(Passed)
-		status => Ok(Failed("${Str.inspect(status)}\n${last_lines(output.stderr_utf8_lossy(), 15)}"))
+		_ => Ok(Failed(failure_details(output)))
 	}
 }
 
-time_run! : Path, Bench, Slot => Try(F64, _)
-time_run! = |roc, bench, slot| {
-	cmd = roc_command(roc, bench, slot, []).stdout(Null).stderr(Null)
+time_run! : Path, Bench, Slot, U64 => Try(F64, _)
+time_run! = |roc, bench, slot, run| {
+	cmd = roc_command(roc, bench, slot, [], run).stdout(Null)
 	start = Monotonic.now!()
 	output = cmd.run!()?
 	elapsed = start.elapsed!()
+	if bench.args.contains("{out}") {
+		_ = Path.delete!(out_path(slot, run))
+		{}
+	} else {
+		{}
+	}
 	match output.status {
 		Exited(0) => Ok(U64.to_f64(elapsed.to_nanos()) / 1_000_000.0)
-		status => Err(RunFailed("${bench.name} failed with ${roc.display()} mid-run: ${Str.inspect(status)}"))
+		_ => Err(RunFailed("${bench.name} failed with ${roc.display()} mid-run: ${failure_details(output)}"))
 	}
 }
 
@@ -655,12 +669,12 @@ run_round! = |states, active, round, record, sides| {
 		base_first = coin!()?
 		times =
 			if base_first {
-				b = time_run!(sides.base, state.bench, state.base)?
-				h = time_run!(sides.head, state.bench, state.head)?
+				b = time_run!(sides.base, state.bench, state.base, round)?
+				h = time_run!(sides.head, state.bench, state.head, round)?
 				{ b, h }
 			} else {
-				h = time_run!(sides.head, state.bench, state.head)?
-				b = time_run!(sides.base, state.bench, state.base)?
+				h = time_run!(sides.head, state.bench, state.head, round)?
+				b = time_run!(sides.base, state.bench, state.base, round)?
 				{ b, h }
 			}
 		if record {
@@ -1069,7 +1083,7 @@ diagnose! = |args| {
 		_ = try_run!(base_roc, bench, base)?
 		_ = try_run!(head_roc, bench, head)?
 		timings = phase_timings!(bench, base_roc, base, head_roc, head, 1000 + $index * 100)?
-		rss = peak_rss!(os, bench, base_roc, base, head_roc, head)?
+		rss = peak_rss!(os, bench, base_roc, base, head_roc, head, 3000 + $index * 100)?
 		cachegrind =
 			if has_valgrind {
 				cachegrind_counts!(bench, base_roc, base, head_roc, head, 2000 + $index * 100)?
@@ -1153,8 +1167,8 @@ phase_timings! = |bench, base_roc, base, head_roc, head, first_round| {
 	while $i < 5 {
 		prepare!(bench, base, first_round + $i)?
 		prepare!(bench, head, first_round + $i)?
-		$base_runs = $base_runs.append(parse_timings(roc_command(base_roc, bench, base, ["--timings"]).run!()?.stderr_utf8_lossy()))
-		$head_runs = $head_runs.append(parse_timings(roc_command(head_roc, bench, head, ["--timings"]).run!()?.stderr_utf8_lossy()))
+		$base_runs = $base_runs.append(parse_timings(roc_command(base_roc, bench, base, ["--timings"], first_round + $i).run!()?.stderr_utf8_lossy()))
+		$head_runs = $head_runs.append(parse_timings(roc_command(head_roc, bench, head, ["--timings"], first_round + $i).run!()?.stderr_utf8_lossy()))
 		$i = $i + 1
 	}
 	phase_median = |runs, phase| median(runs.join_map(|run| run.keep_if(|t| t.phase == phase).map(|t| t.ms)))
@@ -1179,8 +1193,8 @@ phase_timings! = |bench, base_roc, base, head_roc, head, first_round| {
 }
 
 ## Peak resident memory from `/usr/bin/time`, median of three runs per side.
-peak_rss! : Str, Bench, Path, Slot, Path, Slot => Try(Str, _)
-peak_rss! = |os, bench, base_roc, base, head_roc, head| {
+peak_rss! : Str, Bench, Path, Slot, Path, Slot, U64 => Try(Str, _)
+peak_rss! = |os, bench, base_roc, base, head_roc, head, first_round| {
 	time_bin = path_of("/usr/bin/time")
 	if os == "windows" or !(Path.exists!(time_bin) ?? Bool.False) {
 		Ok("")
@@ -1190,9 +1204,10 @@ peak_rss! = |os, bench, base_roc, base, head_roc, head| {
 			var $samples = []
 			var $i = 0
 			while $i < 3 {
+				prepare!(bench, slot, first_round + $i)?
 				output =
 					Cmd.new(time_bin.to_os_str())
-						.args([OsStr.from_str(flag), roc.to_os_str()].concat(command_args(bench, slot, [])))
+						.args([OsStr.from_str(flag), roc.to_os_str()].concat(command_args(bench, slot, [], first_round + $i)))
 						.env("ROC_CACHE_DIR", slot.cache.to_os_str())
 						.run!()?
 				match max_rss_kb(os, output.stderr_utf8_lossy()) {
@@ -1250,7 +1265,7 @@ cachegrind_counts! = |bench, base_roc, base, head_roc, head, round| {
 						OsStr.from_str("--cachegrind-out-file=/dev/null"),
 						OsStr.from_str("--log-file=${log.display()}"),
 						roc.to_os_str(),
-					].concat(command_args(bench, slot, ["--jobs=1"])),
+					].concat(command_args(bench, slot, ["--jobs=1"], round)),
 				)
 				.env("ROC_CACHE_DIR", slot.cache.to_os_str())
 				.stdout(Null)
