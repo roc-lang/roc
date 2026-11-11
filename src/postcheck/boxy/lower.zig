@@ -3308,8 +3308,16 @@ pub const Program = struct {
     /// Whether one of two nodes is the backing of a padded nominal of no named
     /// fields and the other the empty record, which has no storage.
     pub fn paddedAgainstEmpty(a: types.Node, b: types.Node) bool {
-        return a == .empty_record and b == .record and b.record.declared != null or
-            b == .empty_record and a == .record and a.record.declared != null;
+        return a == .empty_record and b == .record and recordDiffersFromEmpty(b.record) or
+            b == .empty_record and a == .record and recordDiffersFromEmpty(a.record);
+    }
+
+    /// Whether a record and the empty record can be two types of one value
+    /// stored differently: a padded nominal's record, which has storage, or a
+    /// closed record a use widened with absent optional fields (design.md
+    /// "Uncommitted Record Tails").
+    fn recordDiffersFromEmpty(record: types.Record) bool {
+        return record.declared != null or record.ext == null;
     }
 
     /// Whether `ty` is a tag union, through the backing of a nominal.

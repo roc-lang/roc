@@ -8045,6 +8045,9 @@ pub const Builder = struct {
             switch (from) {
                 .record => |record| {
                     if (!store.sameRecordOrder(record, to.record)) return true;
+                    // A closed record a use widened with absent optional
+                    // fields holds their presence slots.
+                    if (record.ext == null and to.record.ext == null and record.fields.len != to.record.fields.len) return true;
                     for (store.fieldSpan(to.record.fields)) |to_field| {
                         for (store.fieldSpan(record.fields)) |from_field| {
                             if (from_field.name == to_field.name) try pending.append(self.allocator, .{ from_field.ty, to_field.ty });

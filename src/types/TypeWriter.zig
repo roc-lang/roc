@@ -1295,7 +1295,13 @@ fn gatherRow(
         // for a cyclic row; a row that terminates on its own never revisits.
         if ((try self.ext_seen.getOrPut(resolved.var_)).found_existing) return .invalid;
         switch (resolved.desc.content) {
-            .flex => |flex| return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } },
+            .flex => |flex| {
+                // An uncommitted record tail stands for no field a program
+                // can read, so it renders as the closed row it reads as
+                // (design.md "Uncommitted Record Tails").
+                if (kind == .record and resolved.desc.flags.uncommitted_record_tail) return .empty_record;
+                return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } };
+            },
             .rigid => |rigid| return .{ .rigid = rigid },
             .alias => |alias| ext = self.types.getAliasBackingVar(alias),
             .structure => |flat_type| switch (kind) {

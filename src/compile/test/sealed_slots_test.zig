@@ -14,13 +14,17 @@ fn setupFailed(err: anytype) error{TestUnexpectedResult} {
 }
 
 const source =
-    \\module [parse, many, run]
+    \\module [parse, many, run, make, unit, ok_unit, listed]
     \\parse : Str -> Try(U8, [InvalidU8])
     \\parse = |text| if Str.is_empty(text) Err(InvalidU8) else Ok(1)
     \\many : Str -> List([Oops])
     \\many = |_| [Oops]
     \\run : a -> Try(U8, [Oops]) where [a.go : a -> Try(U8, [Oops])]
     \\run = |x| x.go()
+    \\make = |n| { count: n }
+    \\unit = |_n| {}
+    \\ok_unit = |_n| Ok({})
+    \\listed = |n| [{ a: n }]
 ;
 
 test "a template's stored sealed slots match the independent scalar oracle" {
@@ -74,6 +78,27 @@ test "a template's stored sealed slots match the independent scalar oracle" {
     const run = findTemplate(artifact, "run") orelse return error.TestUnexpectedResult;
     try std.testing.expect(templates.templateEvidenceParams(run).len >= 1);
     try std.testing.expectEqual(@as(usize, 1), templates.templateSealedSlots(run).len);
+
+    // A returned record literal's uncommitted tail is sealed in each of these
+    // (design.md "Uncommitted Record Tails"): the worker takes no hidden
+    // descriptor for it, whatever else its scheme quantifies.
+    for ([_][]const u8{ "make", "unit", "ok_unit", "listed" }) |name| {
+        const template = findTemplate(artifact, name) orelse return error.TestUnexpectedResult;
+        var tails: usize = 0;
+        var sealed_tails: usize = 0;
+        const sealed_slots = templates.templateSealedSlots(template);
+        for (templates.templateSchemeVars(template), 0..) |variable, slot| {
+            switch (artifact.checked_types.view().payload(variable)) {
+                .flex => |flex| if (flex.uncommitted_record_tail) {
+                    tails += 1;
+                    if (std.mem.findScalar(u32, sealed_slots, @intCast(slot)) != null) sealed_tails += 1;
+                },
+                else => {},
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), tails);
+        try std.testing.expectEqual(@as(usize, 1), sealed_tails);
+    }
 }
 
 fn findTemplate(artifact: *const CheckedArtifact.CheckedModuleArtifact, name: []const u8) ?*const CheckedArtifact.CheckedProcedureTemplate {

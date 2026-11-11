@@ -2774,6 +2774,12 @@ fn CheckedTypeVariableOf(comptime Constraints: type) type {
         /// can. `.boxy` seals such a scheme variable to the empty row (design.md
         /// "Sealed Result Rows").
         bounded_row_ext: bool = false,
+        /// An uncommitted record tail (design.md "Uncommitted Record Tails"):
+        /// every instantiation commits it to the empty record or gives it
+        /// absent optional fields. `.boxy` seals such a scheme variable to
+        /// the empty record where it occurs only in a result's data
+        /// (design.md "Sealed Result Rows").
+        uncommitted_record_tail: bool = false,
 
         /// A build form owning a copy of this read form's constraints.
         pub fn toBuild(self: Self, allocator: Allocator) Allocator.Error!CheckedTypeVariableBuild {
@@ -2784,6 +2790,7 @@ fn CheckedTypeVariableOf(comptime Constraints: type) type {
                 .row_default = self.row_default,
                 .row_default_discharges_constraints = self.row_default_discharges_constraints,
                 .bounded_row_ext = self.bounded_row_ext,
+                .uncommitted_record_tail = self.uncommitted_record_tail,
             };
         }
     };
@@ -3502,6 +3509,7 @@ pub const StoredTypeVariable = struct {
     row_default: ?RowDefault = null,
     row_default_discharges_constraints: bool = false,
     bounded_row_ext: bool = false,
+    uncommitted_record_tail: bool = false,
 };
 
 /// POD form of `CheckedAliasType`: `args` is a range into `type_id_pool`.
@@ -4394,6 +4402,7 @@ fn checkedTypeVariableAlphaStep(
     if (left.numeric_default_phase != right.numeric_default_phase or
         left.row_default != right.row_default or
         left.bounded_row_ext != right.bounded_row_ext or
+        left.uncommitted_record_tail != right.uncommitted_record_tail or
         left.constraints.len() != right.constraints.len())
     {
         return false;
@@ -5958,6 +5967,7 @@ fn cloneCheckedTypeBuildVariable(
         .row_default = variable.row_default,
         .row_default_discharges_constraints = variable.row_default_discharges_constraints,
         .bounded_row_ext = variable.bounded_row_ext,
+        .uncommitted_record_tail = variable.uncommitted_record_tail,
     };
 }
 
@@ -24961,6 +24971,9 @@ const SealedSchemeSlots = struct {
     allocator: Allocator,
     types: CheckedTypeStoreView,
     candidates: collections.DenseMapUnmanaged(CheckedTypeId, bool) = .empty,
+    /// Uncommitted record tails (`CheckedTypeVariable.uncommitted_record_tail`)
+    /// still eligible to seal.
+    record_candidates: collections.DenseMapUnmanaged(CheckedTypeId, bool) = .empty,
     seen: collections.DenseMapUnmanaged(CheckedTypeId, u8) = .empty,
     pending: std.ArrayList(Step) = .empty,
     expanded: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
@@ -24974,6 +24987,7 @@ const SealedSchemeSlots = struct {
 
     fn deinit(self: *SealedSchemeSlots) void {
         self.candidates.deinit(self.allocator);
+        self.record_candidates.deinit(self.allocator);
         self.seen.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
@@ -24984,6 +24998,24 @@ const SealedSchemeSlots = struct {
         fn_root: CheckedTypeId,
         evidence_params: []const static_dispatch.EvidenceParamRecord,
         slots: *std.ArrayList(u32),
+    ) Allocator.Error!void {
+        try self.sealTagRows(variables, fn_root, evidence_params);
+        try self.sealRecordTails(variables, fn_root, evidence_params);
+        // The maps record facts about variables, not slot numbers. Retain
+        // original order and every slot even when two slots name one variable.
+        for (variables, 0..) |variable, slot| {
+            const sealed = (self.candidates.get(variable) orelse false) or (self.record_candidates.get(variable) orelse false);
+            if (sealed) try slots.append(self.allocator, @intCast(slot));
+        }
+    }
+
+    /// Decide which bounded tag-row tails seal: those only the result's
+    /// coercion reach holds.
+    fn sealTagRows(
+        self: *SealedSchemeSlots,
+        variables: []const CheckedTypeId,
+        fn_root: CheckedTypeId,
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
     ) Allocator.Error!void {
         self.candidates.clearRetainingCapacity();
         self.seen.clearRetainingCapacity();
@@ -25029,7 +25061,10 @@ const SealedSchemeSlots = struct {
                 .argument, .ordinary => {
                     if (step.mode == .argument) switch (payload) {
                         .nominal => |nominal| switch (nominal.representation) {
-                            .local_box_payload_capability, .imported_box_payload_capability => return,
+                            .local_box_payload_capability, .imported_box_payload_capability => {
+                                self.candidates.clearRetainingCapacity();
+                                return;
+                            },
                             .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
                         },
                         .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
@@ -25056,10 +25091,101 @@ const SealedSchemeSlots = struct {
                 },
             }
         }
-        // The map records facts about variables, not slot numbers. Retain
-        // original order and every slot even when two slots name one variable.
-        for (variables, 0..) |variable, slot| {
-            if (self.candidates.get(variable) orelse false) try slots.append(self.allocator, @intCast(slot));
+    }
+
+    /// Decide which uncommitted record tails seal (design.md "Sealed Result
+    /// Rows"): those that occur only in the result's data (record fields,
+    /// tuple items, tag payloads, alias and nominal arguments), never in an
+    /// argument, an evidence callable, or a function type, and whose
+    /// constraints closing the row discharges. A value of such a type crosses
+    /// the worker's boundary only by leaving it, and an instantiation can
+    /// only give the tail absent optional fields, which the call adds.
+    fn sealRecordTails(
+        self: *SealedSchemeSlots,
+        variables: []const CheckedTypeId,
+        fn_root: CheckedTypeId,
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
+    ) Allocator.Error!void {
+        self.record_candidates.clearRetainingCapacity();
+        for (variables) |variable| {
+            const payload = self.types.payload(variable);
+            const eligible = switch (payload) {
+                .flex => |flex| flex.uncommitted_record_tail and flex.row_default == .empty_record and payload.variableSealsToRowDefault(),
+                .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+            };
+            if (eligible) try self.record_candidates.put(self.allocator, variable, true);
+        }
+        if (self.record_candidates.count() == 0) return;
+
+        var root = fn_root;
+        const signature = while (true) switch (self.types.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .function => |found| break found,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {
+                self.record_candidates.clearRetainingCapacity();
+                return;
+            },
+        };
+        const Position = enum(u2) { result_data, elsewhere, argument };
+        const Item = struct { ty: CheckedTypeId, position: Position };
+        var seen: collections.DenseMapUnmanaged(CheckedTypeId, u3) = .empty;
+        defer seen.deinit(self.allocator);
+        var pending: std.ArrayList(Item) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .ty = signature.ret, .position = .result_data });
+        for (evidence_params) |param| try pending.append(self.allocator, .{ .ty = param.callable_ty, .position = .elsewhere });
+        for (signature.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = .argument });
+        while (pending.pop()) |item| {
+            const entry = try seen.getOrPut(self.allocator, item.ty);
+            if (!entry.found_existing) entry.value_ptr.* = 0;
+            const bit = @as(u3, 1) << @backingInt(item.position);
+            if (entry.value_ptr.* & bit != 0) continue;
+            entry.value_ptr.* |= bit;
+            if (self.record_candidates.getPtr(item.ty)) |eligible| {
+                if (item.position != .result_data) eligible.* = false;
+                continue;
+            }
+            const payload = self.types.payload(item.ty);
+            const inner: Position = switch (item.position) {
+                .result_data => switch (payload) {
+                    .function => .elsewhere,
+                    else => .result_data,
+                },
+                .elsewhere, .argument => item.position,
+            };
+            if (item.position == .argument) switch (payload) {
+                .nominal => |nominal| switch (nominal.representation) {
+                    // A nominal over a callable payload hides its callable's
+                    // interface in its methods.
+                    .local_box_payload_capability, .imported_box_payload_capability => {
+                        self.record_candidates.clearRetainingCapacity();
+                        return;
+                    },
+                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
+                },
+                else => {},
+            };
+            switch (payload) {
+                .alias => |alias| {
+                    for (alias.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = inner });
+                    try pending.append(self.allocator, .{ .ty = alias.backing, .position = inner });
+                },
+                .record => |record| {
+                    for (0..record.fields.len()) |index| try pending.append(self.allocator, .{ .ty = record.fields.get(index).ty, .position = inner });
+                    try pending.append(self.allocator, .{ .ty = record.ext, .position = inner });
+                },
+                .tuple => |items| for (items) |item_ty| try pending.append(self.allocator, .{ .ty = item_ty, .position = inner }),
+                .tag_union => |tag_union| {
+                    for (0..tag_union.tags.len()) |index| for (tag_union.tags.get(index).args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = inner });
+                    try pending.append(self.allocator, .{ .ty = tag_union.ext, .position = inner });
+                },
+                .function => |function| {
+                    for (function.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = inner });
+                    try pending.append(self.allocator, .{ .ty = function.ret, .position = inner });
+                },
+                .nominal => |nominal| for (nominal.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = inner }),
+                .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            }
         }
     }
 
@@ -25132,6 +25258,11 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
     /// it involves.
     pub fn sealed(self: *SealedSchemeVarWalk, variable: CheckedTypeId, fn_root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
         const payload = self.types.payload(variable);
+        const record_tail = switch (payload) {
+            .flex => |flex| flex.uncommitted_record_tail and flex.row_default == .empty_record and payload.variableSealsToRowDefault(),
+            .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+        };
+        if (record_tail) return self.recordTailSealed(variable, fn_root, evidence_params);
         const bounded = switch (payload) {
             .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
             .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
@@ -25150,6 +25281,41 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
         // its methods, so a parameter holding one may involve any variable.
         for (evidence_params) |param| {
             if (try self.mentionsVariable(param.callable_ty, variable)) return false;
+        }
+        return !try self.argumentsHoldCallablePayload(fn_root);
+    }
+
+    /// Whether an uncommitted record tail seals: it occurs only in the
+    /// result's data, outside every function type there, and no argument
+    /// holds a callable whose interface the signature does not show.
+    fn recordTailSealed(self: *SealedSchemeVarWalk, variable: CheckedTypeId, fn_root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
+        const signature = self.function(fn_root) orelse return false;
+        for (signature.args) |arg| if (try self.mentionsVariable(arg, variable)) return false;
+        for (evidence_params) |param| if (try self.mentionsVariable(param.callable_ty, variable)) return false;
+        const allocator = self.allocator;
+        self.reached.clearRetainingCapacity();
+        self.reached_seen.clearRetainingCapacity();
+        try self.reached.append(allocator, signature.ret);
+        while (self.reached.pop()) |ty| {
+            if ((try self.reached_seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (self.types.payload(ty)) {
+                .function => if (try self.mentionsVariable(ty, variable)) return false,
+                .alias => |alias| {
+                    try self.reached.appendSlice(allocator, alias.args);
+                    try self.reached.append(allocator, alias.backing);
+                },
+                .record => |record| {
+                    for (0..record.fields.len()) |index| try self.reached.append(allocator, record.fields.get(index).ty);
+                    try self.reached.append(allocator, record.ext);
+                },
+                .tuple => |items| try self.reached.appendSlice(allocator, items),
+                .tag_union => |tag_union| {
+                    for (0..tag_union.tags.len()) |index| try self.reached.appendSlice(allocator, tag_union.tags.get(index).args);
+                    try self.reached.append(allocator, tag_union.ext);
+                },
+                .nominal => |nominal| try self.reached.appendSlice(allocator, nominal.args),
+                .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+            }
         }
         return !try self.argumentsHoldCallablePayload(fn_root);
     }
@@ -33105,6 +33271,7 @@ const CheckedTypeStoreImportProjector = struct {
             .row_default = variable.row_default,
             .row_default_discharges_constraints = variable.row_default_discharges_constraints,
             .bounded_row_ext = variable.bounded_row_ext,
+            .uncommitted_record_tail = variable.uncommitted_record_tail,
         };
     }
 

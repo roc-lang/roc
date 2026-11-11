@@ -213,6 +213,7 @@ pub const SealedTypeView = struct {
                     .row_default = self.rowDefault(var_, resolved.desc.content),
                     .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
                     .bounded_row_ext = variable_facts.bounded_row_ext,
+                    .uncommitted_record_tail = resolved.desc.flags.uncommitted_record_tail,
                 } };
             },
             .rigid => |rigid| {
