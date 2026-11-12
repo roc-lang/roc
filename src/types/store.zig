@@ -1630,6 +1630,17 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// Record that an empty record or tag union is the commitment of an
+    /// uncommitted tail its binding compared or hashed (design.md "Methods On
+    /// Open Rows").
+    pub fn markComparedPlain(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const resolved = try self.resolveWriteTarget(target_var);
+        var desc = resolved.desc;
+        desc.flags.compared_plain = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
     /// Make a fresh empty tag union an uncommitted tag tail (design.md
     /// "Uncommitted Tag Tails").
     pub fn markUncommittedTagTail(self: *Self, target_var: Var) Allocator.Error!void {
@@ -2592,6 +2603,9 @@ pub const Store = struct {
         // construction minted joins its class.
         const a_constructed = a_data.desc.flags.uncommitted_record_tail and !a_data.desc.flags.record_pattern_tail;
         const b_constructed = b_data.desc.flags.uncommitted_record_tail and !b_data.desc.flags.record_pattern_tail;
+        // A row committed because its binding compared it as a plain one
+        // stays one.
+        merged_desc.flags.compared_plain = a_data.desc.flags.compared_plain or b_data.desc.flags.compared_plain;
         merged_desc.flags.record_pattern_tail = merged_desc.content == .flex and
             (a_data.desc.flags.record_pattern_tail or b_data.desc.flags.record_pattern_tail) and
             !a_constructed and !b_constructed;

@@ -1483,6 +1483,18 @@ open_numeral_literals: std.ArrayListUnmanaged(OpenNumeralLiteral) = .empty,
 /// instantiated types, so a rejected part fails at that use rather than at the
 /// interpolation inside the reusable definition.
 instantiated_interpolation_owners: std.ArrayListUnmanaged(InstantiatedInterpolationOwner) = .empty,
+/// Every flex row variable holding requirements for the record or tag union
+/// it ends (design.md "Methods On Open Rows"). When the module finishes, each
+/// that no scheme quantified closes, which decides its requirements against
+/// the plain type; it is read only then, against the settled solved state.
+open_row_holders: std.ArrayListUnmanaged(Var) = .empty,
+/// The expression that fails when a requirement a row variable holds fails,
+/// keyed by the requirement's callable var: the first one it was held with,
+/// which for a requirement copied from a scheme is the use that instantiated
+/// it. Holding a requirement on a row
+/// variable keeps it there, so its failure is reported at that use when the
+/// row is later decided.
+open_row_failure_exprs: collections.DenseMapUnmanaged(Var, StaticDispatchConstraint.Provenance.OptExprIdx) = .empty,
 /// Each `is_eq`/`to_hash` obligation a derivation gave a row's extension, with
 /// the row whose extension it is, so a rejected one is reported as being about
 /// the tags or fields the extension stands for.
@@ -2049,6 +2061,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .open_numeral_literals = .settled,
     .instantiated_interpolation_owners = .keyed,
     .row_extension_derivations = .keyed,
+    .open_row_holders = .settled,
+    .open_row_failure_exprs = .keyed,
     .interpolation_part_numerals = .keyed,
     .retired_literal_dispatch_plans = .keyed,
     .conflicted_default_literal_vars = .frame_partitioned,
@@ -14833,6 +14847,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.closeTopLevelValueRows(&env);
     try self.commitUncommittedTails(&env);
     try self.closeValueRowTailsCarryingDerivations(&env);
+    try self.closeOpenRowsHoldingRequirements(&env);
     if (try self.anyDeferredDispatchReceiverResolved(&env)) {
         try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
@@ -39877,6 +39892,7 @@ const Probe = struct {
     open_numeral_literals_len: usize,
     instantiated_interpolation_owners_len: usize,
     row_extension_derivations_len: usize,
+    open_row_holders_len: usize,
     instantiated_literal_conversion_uses_len: usize,
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
@@ -39941,6 +39957,7 @@ const Probe = struct {
         self.check.open_numeral_literals.shrinkRetainingCapacity(self.open_numeral_literals_len);
         self.check.instantiated_interpolation_owners.shrinkRetainingCapacity(self.instantiated_interpolation_owners_len);
         self.check.row_extension_derivations.shrinkRetainingCapacity(self.row_extension_derivations_len);
+        self.check.open_row_holders.shrinkRetainingCapacity(self.open_row_holders_len);
         self.check.instantiated_literal_conversion_uses.shrinkRetainingCapacity(self.instantiated_literal_conversion_uses_len);
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
         // Scheme-use evidence recorded during the probe can reference fresh
@@ -40034,6 +40051,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
     const instantiated_interpolation_owners_len = self.instantiated_interpolation_owners.items.len;
     const row_extension_derivations_len = self.row_extension_derivations.items.len;
+    const open_row_holders_len = self.open_row_holders.items.len;
     const instantiated_literal_conversion_uses_len = self.instantiated_literal_conversion_uses.items.len;
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     const scheme_uses_len = self.cir.scheme_uses.items.items.len;
@@ -40077,6 +40095,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .open_numeral_literals_len = open_numeral_literals_len,
         .instantiated_interpolation_owners_len = instantiated_interpolation_owners_len,
         .row_extension_derivations_len = row_extension_derivations_len,
+        .open_row_holders_len = open_row_holders_len,
         .instantiated_literal_conversion_uses_len = instantiated_literal_conversion_uses_len,
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
@@ -44653,6 +44672,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
 
     try self.relateSameMethodRequirementsAtBoundary(roots, env);
     try self.relateUndischargedInterpolationParts(env);
+    try self.closeUnreachedOpenRowsAtBoundary(roots, env);
 
     try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
 
@@ -51343,7 +51363,7 @@ fn closeRecursiveDispatch(
             .constraint_callable => |source| {
                 if (!varListContains(determined_callables.items, self.types.resolveVar(source.callable_var).var_)) return null;
             },
-            .erased_row_remainder, .scheme_requirement => return null,
+            .open_row_value, .scheme_requirement => return null,
         }
         try determined_callables.append(self.gpa, self.types.resolveVar(param.constraint.fn_var).var_);
         for (param.callable_contracts) |contract| {
@@ -52017,6 +52037,13 @@ inline fn processDeferredDispatchEntry(
     };
     defer self.passOnDeferredEntryFailureExpr(env, &ownership);
 
+    // A requirement a row variable holds is about the record or tag union
+    // that row ends (design.md "Methods On Open Rows"): now that the row has
+    // content, it is decided against that value.
+    if (self.holdsOpenRowValueRelations(deferred_constraint.constraints)) {
+        try self.redispatchOpenRowValueRelations(env, deferred_constraint);
+        return .next;
+    }
     const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
     const dispatcher_content = dispatcher_resolved.desc.content;
     dispatch_resolution: while (true) {
@@ -52665,6 +52692,14 @@ inline fn processDeferredDispatchEntry(
                 dispatcher_content.structure == .empty_record or
                 dispatcher_content.structure == .empty_tag_union))
         {
+            // A record or tag union whose row ends in a row variable is some
+            // type with these fields or tags: each call supplies it, so the
+            // row variable holds the requirement until then (design.md
+            // "Methods On Open Rows").
+            if (self.openRowOf(dispatcher_resolved.var_)) |row| {
+                try self.holdOnOpenRow(env, deferred_constraint, row);
+                break :dispatch_resolution;
+            }
             // Anonymous structural types (records, tuples, tag unions) have
             // derived methods only when all their components support them.
             // iterRange re-fetches each item through the SafeList, so it stays valid even if
@@ -52686,6 +52721,13 @@ inline fn processDeferredDispatchEntry(
                     );
                     continue;
                 };
+                // Comparing or hashing a record or tag union that ends in an
+                // uncommitted tail decides those methods against the plain
+                // type, so the tail commits (design.md "Methods On Open Rows").
+                switch (kind) {
+                    .equality, .hash => try self.commitComparedRowTail(dispatcher_resolved.var_, env),
+                    .parser, .encoder, .map, .map_effectful => {},
+                }
                 switch (try self.satisfyDerivedForShape(
                     kind,
                     .{ .flat = dispatcher_content.structure },
@@ -53580,26 +53622,43 @@ fn varDeriveComponentObligations(
                 // The boolean walk already rejected these; nothing to delegate.
                 .fn_pure, .fn_effectful, .fn_unbound => {},
                 .empty_record, .empty_tag_union => {},
-                .record => |record| {
-                    for (0..record.fields.count) |offset| {
-                        const presence = self.types.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                        try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .admit_rigids = admit_rigids });
+                .record, .tag_union => if (self.openRowOf(resolved.var_) != null) {
+                    // A record or tag union whose row ends in a row variable
+                    // is answered as a whole by the value each call supplies
+                    // (design.md "Methods On Open Rows").
+                    if (!admit_rigids) _ = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner, .value);
+                } else {
+                    // Compared as the plain type: its uncommitted tail commits.
+                    try self.commitComparedRowTail(resolved.var_, env);
+                    switch (flat_type) {
+                        .record => |record| for (0..record.fields.count) |offset| {
+                            const presence = self.types.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                            try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .admit_rigids = admit_rigids });
+                        },
+                        .tag_union => |tag_union| for (0..tag_union.tags.count) |tag_offset| {
+                            const tag_args = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
+                            for (0..tag_args.count) |offset| {
+                                try pending.append(self.gpa, .{ .var_ = self.types.getVarAt(tag_args, @intCast(offset)), .admit_rigids = admit_rigids });
+                            }
+                        },
+                        else => unreachable,
                     }
-                    try pending.append(self.gpa, .{ .var_ = record.ext, .admit_rigids = admit_rigids, .row_extension = .{ .row = resolved.var_, .kind = .record } });
+                    // A further segment of the same row adds its own fields
+                    // or tags.
+                    const ext = switch (flat_type) {
+                        .record => |record| record.ext,
+                        .tag_union => |tag_union| tag_union.ext,
+                        else => unreachable,
+                    };
+                    switch (self.types.resolveVar(ext).desc.content) {
+                        .structure, .alias => try pending.append(self.gpa, .{ .var_ = ext, .admit_rigids = admit_rigids }),
+                        .flex, .rigid, .err, .field_presence => {},
+                    }
                 },
                 .tuple => |tuple| {
                     for (0..tuple.elems.count) |offset| {
                         try pending.append(self.gpa, .{ .var_ = self.types.getVarAt(tuple.elems, @intCast(offset)), .admit_rigids = admit_rigids });
                     }
-                },
-                .tag_union => |tag_union| {
-                    for (0..tag_union.tags.count) |tag_offset| {
-                        const tag_args = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
-                        for (0..tag_args.count) |offset| {
-                            try pending.append(self.gpa, .{ .var_ = self.types.getVarAt(tag_args, @intCast(offset)), .admit_rigids = admit_rigids });
-                        }
-                    }
-                    try pending.append(self.gpa, .{ .var_ = tag_union.ext, .admit_rigids = admit_rigids, .row_extension = .{ .row = resolved.var_, .kind = .tag_union } });
                 },
                 .nominal_type => |nominal| blk: {
                     const method_lookup = self.nominalEqHashMethod(nominal, derivation) orelse break :blk;
@@ -54368,6 +54427,217 @@ fn derivedCodecShapeSupport(self: *Self, direction: DerivedCodecDirection, shape
             .flat => |flat| .{ .flat = flat },
         }),
     };
+}
+
+/// Whether a deferred relation's constraints are requirements a row
+/// variable holds for the record or tag union that row ends (design.md
+/// "Methods On Open Rows"). A row variable holds no other kind.
+fn holdsOpenRowValueRelations(self: *Self, range: StaticDispatchConstraint.SafeList.Range) bool {
+    const constraints = self.types.sliceStaticDispatchConstraints(range);
+    if (constraints.len == 0 or constraints[0].receiver != .open_row_value) return false;
+    for (constraints) |constraint| std.debug.assert(constraint.receiver == .open_row_value);
+    return true;
+}
+
+/// The record or tag union a requirement a row variable holds is about:
+/// its method's first argument.
+fn openRowValueReceiver(self: *Self, constraint: StaticDispatchConstraint) Var {
+    const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse unreachable;
+    return self.types.sliceVars(func.args)[0];
+}
+
+/// Queue each requirement `entry`'s row variable holds as a relation on the
+/// record or tag union it is about.
+fn redispatchOpenRowValueRelations(self: *Self, env: *Env, entry: DeferredConstraintCheck) Allocator.Error!void {
+    var constraints = self.types.static_dispatch_constraints.iterRange(entry.constraints);
+    while (constraints.next()) |constraint| {
+        var at_value = constraint;
+        at_value.receiver = .holder;
+        var redirected = entry;
+        redirected.var_ = self.openRowValueReceiver(at_value);
+        if (self.open_row_failure_exprs.get(at_value.fn_var)) |failure_expr| redirected.failure_expr = failure_expr;
+        redirected.constraints = try self.types.appendStaticDispatchConstraints(&.{at_value});
+        _ = try env.deferred_static_dispatch_constraints.append(self.gpa, redirected);
+    }
+}
+
+/// The final extension of a record's or tag union's row, followed through
+/// record or tag segments and aliases.
+fn rowFinalExt(self: *Self, var_: Var) ?Var {
+    var current = var_;
+    var guard = types_mod.debug.IterationGuard.init("rowFinalExt");
+    var first = true;
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .record => |record| current = record.ext,
+                .tag_union => |tag_union| current = tag_union.ext,
+                .empty_record, .empty_tag_union => return if (first) null else resolved.var_,
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return null,
+            },
+            .flex, .rigid => return if (first) null else resolved.var_,
+            .err, .field_presence => return null,
+        }
+        first = false;
+    }
+}
+
+/// The row variable a record's or tag union's row ends in, when it ends in
+/// one that a call supplies: a rigid an annotation names, or a flex row
+/// variable that is neither an uncommitted record tail nor an annotation's
+/// implicitly opened row (design.md "Methods On Open Rows").
+fn openRowOf(self: *Self, var_: Var) ?Var {
+    const ext = self.rowFinalExt(var_) orelse return null;
+    const resolved = self.types.resolveVar(ext);
+    return switch (resolved.desc.content) {
+        .rigid => resolved.var_,
+        .flex => if (resolved.desc.flags.uncommitted_record_tail or resolved.desc.flags.bounded_row_ext) null else resolved.var_,
+        .structure, .alias, .err, .field_presence => null,
+    };
+}
+
+/// Hold `entry`'s relations on the open row `row` its receiver ends in, as
+/// requirements about that receiver. An annotation's rigid row states the
+/// requirements it holds in its `where` clause, which the rigid relation
+/// checks as for any annotated type variable.
+fn holdOnOpenRow(self: *Self, env: *Env, entry: DeferredConstraintCheck, row: Var) Allocator.Error!void {
+    if (self.types.resolveVar(row).desc.content == .rigid) {
+        var at_rigid = entry;
+        at_rigid.var_ = row;
+        _ = try env.deferred_static_dispatch_constraints.append(self.gpa, at_rigid);
+        return;
+    }
+    var constraints = self.types.static_dispatch_constraints.iterRange(entry.constraints);
+    while (constraints.next()) |constraint| {
+        if (entry.failure_expr != .none) {
+            const recorded = try self.open_row_failure_exprs.getOrPut(self.gpa, constraint.fn_var);
+            if (!recorded.found_existing) recorded.value_ptr.* = entry.failure_expr;
+        }
+        if (self.rowHoldsRequirement(row, constraint.fn_var)) continue;
+        var held = constraint;
+        held.receiver = .open_row_value;
+        const range = try self.types.appendStaticDispatchConstraints(&.{held});
+        const holder = try self.freshFromContent(.{ .flex = Flex{ .name = null, .constraints = range } }, env, self.getRegionAt(row));
+        _ = try self.runUnifyWithDispatchOwner(holder, row, env, .{}, .{ .recorded = entry.owner_group_index });
+        try self.recordSchemeRequirementCandidate(row, held, .creation, null, false);
+    }
+    try self.open_row_holders.append(self.gpa, row);
+}
+
+/// Whether the open row `row` already holds the requirement whose callable
+/// var is `fn_var`.
+fn rowHoldsRequirement(self: *Self, row: Var, fn_var: Var) bool {
+    const resolved = self.types.resolveVar(row);
+    const flex = switch (resolved.desc.content) {
+        .flex => |flex| flex,
+        .rigid, .alias, .structure, .err, .field_presence => return false,
+    };
+    const fn_root = self.types.resolveVar(fn_var).var_;
+    for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |held| {
+        if (self.types.resolveVar(held.fn_var).var_ == fn_root) return true;
+    }
+    return false;
+}
+
+/// Close every open row still holding requirements that no scheme
+/// quantified, once the module has solved: nothing can widen it any more,
+/// so it is the plain record or tag union its fields or tags make, and
+/// closing it decides its requirements against that type (design.md
+/// "Methods On Open Rows").
+fn closeOpenRowsHoldingRequirements(self: *Self, env: *Env) Allocator.Error!void {
+    for (self.open_row_holders.items) |holder| {
+        const resolved = self.types.resolveVar(holder);
+        if (resolved.desc.rank == .generalized) continue;
+        _ = try self.closeOpenRowHoldingRequirements(resolved.var_, env);
+    }
+}
+
+/// Close every open row of this boundary's rank still holding requirements
+/// that no root reaches: no use of the bindings can supply its type, so it
+/// is the plain record or tag union its fields or tags make, and its
+/// requirements are decided against that type in this definition (design.md
+/// "Methods On Open Rows"). The rows the boundary has already decided or
+/// generalized leave the list.
+fn closeUnreachedOpenRowsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
+    if (self.open_row_holders.items.len == 0) return;
+    std.debug.assert(self.probe_depth == 0 and !self.commit_probe_active);
+    const rank = env.rank();
+    var any_at_rank = false;
+    var write: usize = 0;
+    for (self.open_row_holders.items) |holder| {
+        const resolved = self.types.resolveVar(holder);
+        if (resolved.desc.content != .flex or resolved.desc.rank == .generalized) continue;
+        if (resolved.desc.rank == rank) any_at_rank = true;
+        self.open_row_holders.items[write] = resolved.var_;
+        write += 1;
+    }
+    self.open_row_holders.shrinkRetainingCapacity(write);
+    if (!any_at_rank) return;
+
+    var reached = collections.DenseMap(Var, void).init(self.gpa);
+    defer reached.deinit();
+    for (roots) |root| try self.collectReachableVars(root.interface, &reached);
+    var closed = false;
+    var index: usize = 0;
+    while (index < self.open_row_holders.items.len) : (index += 1) {
+        const resolved = self.types.resolveVar(self.open_row_holders.items[index]);
+        if (resolved.desc.rank != rank or reached.contains(resolved.var_)) continue;
+        if (try self.closeOpenRowHoldingRequirements(resolved.var_, env)) closed = true;
+    }
+    if (closed) {
+        try self.checkStaticDispatchConstraints(env, false);
+        try self.checkAllConstraints(env);
+    }
+}
+
+/// Close `row` to the empty row of its kind when it is still a flex row
+/// variable holding requirements; returns whether it did.
+fn closeOpenRowHoldingRequirements(self: *Self, row: Var, env: *Env) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(row);
+    const flex = switch (resolved.desc.content) {
+        .flex => |flex| flex,
+        .rigid, .alias, .structure, .err, .field_presence => return false,
+    };
+    const held = for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+        if (constraint.receiver == .open_row_value) break constraint;
+    } else return false;
+    const empty_row: Content = switch (self.types.resolveThroughAliases(self.openRowValueReceiver(held)).desc.content) {
+        .structure => |flat| switch (flat) {
+            .record => .{ .structure = .empty_record },
+            .tag_union => .{ .structure = .empty_tag_union },
+            .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => unreachable,
+        },
+        .flex, .rigid, .alias, .err, .field_presence => unreachable,
+    };
+    const empty = try self.freshFromContent(empty_row, env, self.getRegionAt(resolved.var_));
+    _ = try self.unify(resolved.var_, empty, env);
+    return true;
+}
+
+/// Commit the uncommitted tail a compared or hashed record or tag union
+/// ends in: the comparison decided its methods against the plain type
+/// (design.md "Methods On Open Rows"). The empty row it commits to records
+/// why, for the report of a use that makes it a nominal type.
+fn commitComparedRowTail(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
+    const ext = self.rowFinalExt(var_) orelse return;
+    const resolved = self.types.resolveVar(ext);
+    switch (resolved.desc.content) {
+        .flex => if (resolved.desc.flags.uncommitted_record_tail) {
+            try self.commitUncommittedTail(resolved.var_, env);
+            try self.types.markComparedPlain(ext);
+        },
+        .structure => |flat| switch (flat) {
+            .empty_tag_union => if (resolved.desc.flags.uncommitted_tag_tail) {
+                try self.types.commitUncommittedTagTail(resolved.var_);
+                try self.types.markComparedPlain(resolved.var_);
+            },
+            .empty_record, .record, .tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => {},
+        },
+        .rigid, .alias, .err, .field_presence => {},
+    }
 }
 
 /// How `satisfyDerivedForShape` left a derived-method obligation.

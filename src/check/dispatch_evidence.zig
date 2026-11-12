@@ -109,7 +109,9 @@ pub const EvidenceParam = struct {
         /// Exact checked expression whose dispatch constraint introduced the
         /// callable containing this parameter.
         constraint_callable: ConstraintCallableSource,
-        erased_row_remainder,
+        /// A requirement a row variable holds for the record or tag union that
+        /// row ends (design.md "Methods On Open Rows").
+        open_row_value,
         /// An explicit composite codec relation owned by the binding scheme.
         scheme_requirement,
     };
@@ -707,7 +709,7 @@ fn emitConstraints(
     constraints: StaticDispatchConstraint.SafeList.Range,
     entry: StackEntry,
     source: WalkSource,
-    erased_row_remainder: bool,
+    open_row_value: bool,
     scratch: *Scratch,
     out: *std.ArrayListUnmanaged(EvidenceParam),
 ) Allocator.Error!void {
@@ -719,7 +721,7 @@ fn emitConstraints(
             try out.append(gpa, .{
                 .dispatcher_var = dispatcher_root,
                 .constraint = constraint,
-                .source = if (erased_row_remainder) .erased_row_remainder else switch (source) {
+                .source = if (open_row_value) .open_row_value else switch (source) {
                     .scheme_callable => .scheme_callable,
                     .constraint_callable => |constraint_callable| .{ .constraint_callable = constraint_callable },
                 },

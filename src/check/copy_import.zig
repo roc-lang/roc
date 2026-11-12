@@ -126,6 +126,7 @@ const Fill = struct {
     uncommitted_record_tail: bool,
     uncommitted_copy: bool,
     record_pattern_tail: bool,
+    compared_plain: bool,
     annotation_tag_union: bool,
     uncommitted_tag_tail: bool,
 };
@@ -387,6 +388,7 @@ fn request(ctx: *CopyContext, source_var: Var) std.mem.Allocator.Error!bool {
         .uncommitted_record_tail = resolved.desc.flags.uncommitted_record_tail,
         .uncommitted_copy = resolved.desc.flags.uncommitted_copy,
         .record_pattern_tail = resolved.desc.flags.record_pattern_tail,
+        .compared_plain = resolved.desc.flags.compared_plain,
         .annotation_tag_union = resolved.desc.flags.annotation_tag_union,
         .uncommitted_tag_tail = resolved.desc.flags.uncommitted_tag_tail,
     };
@@ -556,6 +558,7 @@ fn finishFrame(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
             .uncommitted_record_tail = fill.uncommitted_record_tail,
             .uncommitted_copy = fill.uncommitted_copy,
             .record_pattern_tail = fill.record_pattern_tail,
+            .compared_plain = fill.compared_plain,
             .annotation_tag_union = fill.annotation_tag_union,
             .uncommitted_tag_tail = fill.uncommitted_tag_tail,
         },

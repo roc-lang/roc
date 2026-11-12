@@ -671,6 +671,12 @@ pub const RecordTailRefusal = struct {
         /// The use asked for an optional or defaulted field the record was
         /// built without.
         added_field,
+        /// The binding compared or hashed the record as a plain one, so it
+        /// stays one (design.md "Methods On Open Rows").
+        compared_plain,
+        /// The binding compared or hashed the tag union as a plain one, so it
+        /// stays one.
+        compared_plain_tags,
     };
 };
 

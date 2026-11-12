@@ -167,6 +167,11 @@ pub const DescriptorFlags = packed struct(u16) {
     /// apart rather than builds. Only a diagnostic about the record reads it
     /// (design.md "Uncommitted Record Tails"). Copies carry it.
     record_pattern_tail: bool = false,
+    /// An empty record or tag union an uncommitted tail committed to because
+    /// its binding compared or hashed the record or tag union it ends, as a
+    /// plain one (design.md "Methods On Open Rows"). Only the report of a use
+    /// that makes it a nominal type reads it. Copies carry it.
+    compared_plain: bool = false,
     /// A tag union an annotation or type declaration wrote. Annotated
     /// structure never lifts into a nominal type, whatever its row's tail
     /// (design.md "Uncommitted Record Tails"). Copies carry it and a merge
@@ -180,7 +185,7 @@ pub const DescriptorFlags = packed struct(u16) {
     /// "Uncommitted Tag Tails"). Copies carry it; a merge keeps it unless the
     /// other side is an empty tag union without it.
     uncommitted_tag_tail: bool = false,
-    _padding: u2 = 0,
+    _padding: u1 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -197,6 +202,7 @@ pub const DescriptorFlags = packed struct(u16) {
             .uncommitted_record_tail = self.uncommitted_record_tail,
             .uncommitted_copy = self.uncommitted_copy,
             .record_pattern_tail = self.record_pattern_tail,
+            .compared_plain = self.compared_plain,
             .annotation_tag_union = self.annotation_tag_union,
             .uncommitted_tag_tail = self.uncommitted_tag_tail,
         };
@@ -1188,6 +1194,8 @@ pub const StaticDispatchConstraint = struct {
     /// literal). Kind-specific flags (binop negation, literal kind) live
     /// *inside* the variant, so they can't exist without or apart from it.
     origin: Origin,
+    /// Which value the method is called on.
+    receiver: Receiver = .holder,
     /// A numeric literal conversion's facts in the owning type store's
     /// `numeral_infos`; present exactly when `origin` is the `numeral`
     /// literal kind. Like the interpolation part range, it is relative to the
@@ -1322,6 +1330,18 @@ pub const StaticDispatchConstraint = struct {
     };
 
     /// Tracks where a static dispatch constraint originated from
+    /// Which value a static-dispatch constraint dispatches on.
+    pub const Receiver = enum(u8) {
+        /// The variable that holds the constraint.
+        holder,
+        /// The record or tag union whose row ends in the row variable that
+        /// holds the constraint: the first argument of `fn_var` (design.md
+        /// "Methods On Open Rows"). The row variable carries the requirement
+        /// through generalization, instantiation, and import copying, and the
+        /// requirement is decided against that value once its type is known.
+        open_row_value,
+    };
+
     pub const Origin = union(enum) {
         /// From binary operator desugaring (e.g., +, -, *). `negated` is true when
         /// the source operator was `!=` rather than `==`.

@@ -5639,6 +5639,54 @@ pub const ReportBuilder = struct {
                     try self.renderNominalConstructorHint(report, nominal, null);
                 }
             },
+            .compared_plain => {
+                const nominal = refusal.nominal orelse unreachable;
+                try D.renderSlice(&.{
+                    D.bytes("The function this record came from compared or hashed it as a plain record, so it can't become a"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, report);
+                try report.document.addLineBreaks(2);
+                const constructor = try std.fmt.allocPrint(self.gpa, "{s}.{{ ... }}", .{self.nominalDisplayName(nominal)});
+                defer self.gpa.free(constructor);
+                try D.renderSlice(&.{
+                    D.bytes("Hint:").withAnnotation(.emphasized),
+                    D.bytes("If you want a"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(", you can write").withNoPrecedingSpace(),
+                    D.bytes(try report.addOwnedString(constructor)).withAnnotation(.inline_code),
+                    D.bytes("instead of"),
+                    D.bytes("{ ... }").withAnnotation(.inline_code),
+                    D.bytes("where this record is built, so the function compares it as a"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(". You can also give the function that builds it a type annotation that says it's a").withNoPrecedingSpace(),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, report);
+            },
+            .compared_plain_tags => {
+                const nominal = refusal.nominal orelse unreachable;
+                try D.renderSlice(&.{
+                    D.bytes("The function this value came from compared or hashed it as a plain tag union, so it can't become a"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, report);
+                try report.document.addLineBreaks(2);
+                const qualifier = try std.fmt.allocPrint(self.gpa, "{s}.", .{self.nominalDisplayName(nominal)});
+                defer self.gpa.free(qualifier);
+                try D.renderSlice(&.{
+                    D.bytes("Hint:").withAnnotation(.emphasized),
+                    D.bytes("If you want a"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(", you can write its tags with"),
+                    D.bytes(try report.addOwnedString(qualifier)).withAnnotation(.inline_code),
+                    D.bytes("in front where this value is built, so the function compares it as a"),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(". You can also give the function that builds it a type annotation that says it's a").withNoPrecedingSpace(),
+                    D.typeIdent(nominal).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                }, self, report);
+            },
             .added_field => {
                 const field = refusal.field orelse unreachable;
                 if (refusal.taken_apart) {

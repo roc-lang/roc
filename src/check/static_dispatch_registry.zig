@@ -1764,7 +1764,11 @@ pub const EvidenceParamSource = union(enum) {
     /// the receiver by relating the selected targets of its requirements.
     use_site_only,
     explicit_default: NumericDefaultPhase,
-    erased_row_remainder,
+    /// A requirement a row variable holds for the record or tag union that
+    /// row ends (design.md "Methods On Open Rows"). `slot` is the row
+    /// variable's; `dispatcher_ty` is the record or tag union, whose type at
+    /// each instantiation answers the requirement.
+    open_row_value,
 };
 
 /// Where a procedure target's nested evidence comes from. `from_target` is a
@@ -1797,7 +1801,7 @@ pub fn procedureEvidenceSchema(params: []const EvidenceParamRecord) ProcedureEvi
             } else {
                 return .requires_record;
             },
-            .constraint_callable, .use_site_only, .erased_row_remainder => return .requires_record,
+            .constraint_callable, .use_site_only, .open_row_value => return .requires_record,
         }
     }
     if (scheme_requirements == params.len) return .from_target;

@@ -2150,7 +2150,15 @@ const Unifier = struct {
             .a_is_nominal => vars.b.desc,
             .b_is_nominal => vars.a.desc,
         };
-        if (!self.tagRowLiftable(anon_desc, anon_tag_union.ext)) return error.TypeMismatch;
+        if (!self.tagRowLiftable(anon_desc, anon_tag_union.ext)) {
+            if (self.rowEndsComparedPlain(anon_tag_union.ext)) self.refuseRecordTail(.{
+                .kind = .compared_plain_tags,
+                .nominal = nominal_type.ident.ident_idx,
+                .field = null,
+                .taken_apart = false,
+            });
+            return error.TypeMismatch;
+        }
 
         // If this nominal is opaque and we're not in the origin module, error
         if (!nominal_type.canLiftInner(self.self_module_identity)) {
@@ -2254,7 +2262,15 @@ const Unifier = struct {
         defer trace.end();
 
         if (anonIsNominalBackingStructure(vars, direction)) return error.TypeMismatch;
-        if (!self.recordRowLiftable(anon_record_ext)) return error.TypeMismatch;
+        if (!self.recordRowLiftable(anon_record_ext)) {
+            if (self.rowEndsComparedPlain(anon_record_ext)) self.refuseRecordTail(.{
+                .kind = .compared_plain,
+                .nominal = nominal_type.ident.ident_idx,
+                .field = null,
+                .taken_apart = false,
+            });
+            return error.TypeMismatch;
+        }
 
         // If this nominal is opaque and we're not in the origin module, error
         if (!nominal_type.canLiftInner(self.self_module_identity)) {
@@ -2712,6 +2728,28 @@ const Unifier = struct {
                     },
                     .flex, .rigid, .field_presence, .err => return false,
                 }
+            }
+        }
+    }
+
+    /// Whether a row ends, through record or tag segments and aliases, in the
+    /// empty row an uncommitted tail committed to because its binding compared
+    /// or hashed the value as a plain one (design.md "Methods On Open Rows").
+    fn rowEndsComparedPlain(self: *Self, ext: Var) bool {
+        var current = ext;
+        var guard = types_mod.debug.IterationGuard.init("rowEndsComparedPlain");
+        while (true) {
+            guard.tick();
+            const resolved = self.types_store.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .record => |record| current = record.ext,
+                    .tag_union => |tag_union| current = tag_union.ext,
+                    .empty_record, .empty_tag_union => return resolved.desc.flags.compared_plain,
+                    .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return false,
+                },
+                .flex, .rigid, .field_presence, .err => return false,
             }
         }
     }

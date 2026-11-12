@@ -14179,7 +14179,7 @@ const EvidencePass = struct {
                     }
                     param.path = .{ .last = parent, .len = param.path.len + 1 };
                 },
-                .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => {},
+                .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .open_row_value => {},
             }
             try self.evidence_params_pool.append(self.allocator, param);
         }
@@ -14688,7 +14688,7 @@ const EvidencePass = struct {
                             checkedArtifactInvariant("constraint-callable evidence source type was not published", .{}),
                     } };
                 },
-                .erased_row_remainder => .erased_row_remainder,
+                .open_row_value => .open_row_value,
                 .scheme_requirement => .scheme_requirement,
             };
             const published_path: static_dispatch.EvidencePath = switch (source) {
@@ -14696,7 +14696,7 @@ const EvidencePass = struct {
                     .last = try self.publishPathNode(path_nodes, param.path_node),
                     .len = param.path_len,
                 },
-                .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => .{},
+                .scheme_requirement, .use_site_only, .explicit_default, .open_row_value => .{},
             };
             const contract_start: u32 = @intCast(self.evidence_param_callables.items.len);
             for (param.callable_contracts) |contract| {
@@ -14706,7 +14706,7 @@ const EvidencePass = struct {
             try self.evidence_params_pool.append(self.allocator, .{
                 .callable_contracts = .{ .start = contract_start, .len = @intCast(param.callable_contracts.len) },
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
-                .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
+                .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, if (source == .open_row_value) self.openRowValueOf(param.constraint) else param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
@@ -15240,7 +15240,16 @@ const EvidencePass = struct {
                     dispatcher_var = self.types.getAliasBackingVar(alias);
                     continue :redirect;
                 },
-                .structure => {
+                .structure => |flat| {
+                    // A record or tag union whose row ends in a row variable
+                    // is answered by what each use supplies: its row variable
+                    // holds the requirement (design.md "Methods On Open Rows").
+                    switch (flat) {
+                        .record, .tag_union => if (self.openRowOfStructure(resolved.var_)) |row| {
+                            return self.resolveVarObligation(row, method, structural_kind, constraint_fn_var, chain, policy);
+                        },
+                        .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => {},
+                    }
                     if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
                         if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
                             return switch (found) {
@@ -15524,7 +15533,7 @@ const EvidencePass = struct {
             switch (param.source) {
                 .scheme_callable => if (param.path.len == 0) return false,
                 .constraint_callable, .use_site_only => {},
-                .scheme_requirement, .explicit_default, .erased_row_remainder => return false,
+                .scheme_requirement, .explicit_default, .open_row_value => return false,
             }
         }
         return true;
@@ -16126,6 +16135,38 @@ const EvidencePass = struct {
         return evidence;
     }
 
+    /// The record or tag union a requirement a row variable holds is about:
+    /// its method's first argument.
+    fn openRowValueOf(self: *EvidencePass, constraint: types.StaticDispatchConstraint) Var {
+        const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse unreachable;
+        return self.types.sliceVars(func.args)[0];
+    }
+
+    /// The row variable a record's or tag union's row ends in, when that row
+    /// is still open: a rigid, or a flex that is not an uncommitted record
+    /// tail or an annotation's implicitly opened row.
+    fn openRowOfStructure(self: *EvidencePass, var_: Var) ?Var {
+        var current = var_;
+        var first = true;
+        var guard = types.debug.IterationGuard.init("openRowOfStructure");
+        while (true) {
+            guard.tick();
+            const resolved = self.types.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.types.getAliasBackingVar(alias),
+                .structure => |flat| switch (flat) {
+                    .record => |record| current = record.ext,
+                    .tag_union => |tag_union| current = tag_union.ext,
+                    .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return null,
+                },
+                .rigid => return if (first) null else resolved.var_,
+                .flex => return if (first or resolved.desc.flags.uncommitted_record_tail or resolved.desc.flags.bounded_row_ext) null else resolved.var_,
+                .err, .field_presence => return null,
+            }
+            first = false;
+        }
+    }
+
     fn evidenceContextForRecordParam(
         self: *EvidencePass,
         pairs: []const ModuleEnv.SchemeUsePair,
@@ -16140,6 +16181,13 @@ const EvidencePass = struct {
         // callable it copies, so an unpaired callable is shared with the use,
         // exactly like an unpaired receiver.
         const fresh_fn = self.pairForResolved(pairs, fn_root) orelse param.constraint.fn_var;
+        // A requirement a row variable holds is about the record or tag union
+        // that row ends: at this use, the value its method's copy is called on
+        // (design.md "Methods On Open Rows").
+        if (param.constraint.receiver == .open_row_value) {
+            const func = self.types.resolveThroughAliases(fresh_fn).desc.content.unwrapFunc() orelse unreachable;
+            return try self.evidenceContext(param, self.types.sliceVars(func.args)[0], fresh_fn);
+        }
         return try self.evidenceContext(param, fresh_dispatcher, fresh_fn);
     }
 
@@ -16457,7 +16505,7 @@ const EvidencePass = struct {
         param: EvidenceParam,
     ) Allocator.Error!static_dispatch.CheckedEvidence {
         if (try self.evidenceForRecordParam(pairs, param, .defer_resolution)) |evidence| return evidence;
-        if (param.path_len == 0 or param.source == .constraint_callable or param.source == .erased_row_remainder) {
+        if (param.path_len == 0 or param.source == .constraint_callable or param.source == .open_row_value) {
             return (try self.evidenceForRecordParam(pairs, param, .commit)).?;
         }
         const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
@@ -16656,7 +16704,7 @@ test "procedure evidence schema positively classifies callable paths and pathles
 
     var pathless_params = params;
     pathless_params[1].path = .{};
-    pathless_params[1].source = .erased_row_remainder;
+    pathless_params[1].source = .open_row_value;
     const pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = pathless_params[0..],
     };
@@ -31372,6 +31420,25 @@ pub const CheckedModuleArtifact = struct {
     /// reported here at the boundary (in debug builds, where `verifyComplete`
     /// runs)—not a lowering panic. Returns the first failure found, or
     /// null when the artifact is total.
+    /// Whether an evidence parameter's dispatcher is the scheme variable in
+    /// its slot: that variable itself, or for a requirement a row variable
+    /// holds, the record or tag union whose row ends in it (design.md
+    /// "Methods On Open Rows").
+    fn evidenceParamDispatchesSlot(types_view: CheckedTypeStoreView, param: static_dispatch.EvidenceParamRecord, slot_ty: CheckedTypeId) bool {
+        if (param.source != .open_row_value) return param.dispatcher_ty == slot_ty;
+        var current = param.dispatcher_ty;
+        var first = true;
+        while (true) {
+            switch (types_view.payload(current)) {
+                .alias => |alias| current = alias.backing,
+                .record => |record| current = record.ext,
+                .tag_union => |tag_union| current = tag_union.ext,
+                else => return !first and current == slot_ty,
+            }
+            first = false;
+        }
+    }
+
     pub fn validateDispatchEvidence(self: *const CheckedModuleArtifact) Allocator.Error!?DispatchEvidenceFailure {
         const table = &self.static_dispatch_plans;
         const type_view = self.typesView();
@@ -31752,7 +31819,7 @@ pub const CheckedModuleArtifact = struct {
                 if (param.source == .scheme_requirement or slot >= template.scheme_vars.len) {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
                 }
-                if (templates.scheme_vars_pool[template.scheme_vars.start + slot] != param.dispatcher_ty) {
+                if (!evidenceParamDispatchesSlot(self.typesView(), param, templates.scheme_vars_pool[template.scheme_vars.start + slot])) {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
                 }
             }
@@ -31950,7 +32017,7 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => template.checked_fn_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
+                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value => {
                         if (param.path.len != 0) {
                             return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = template.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         }
@@ -31975,7 +32042,7 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => scope.scheme_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
+                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value => {
                         if (param.path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         continue;
                     },
@@ -31994,7 +32061,7 @@ pub const CheckedModuleArtifact = struct {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 };
                 if (param.source == .scheme_requirement or slot >= scope.scheme_vars.len or
-                    templates.scheme_vars_pool[scope.scheme_vars.start + slot] != param.dispatcher_ty)
+                    !evidenceParamDispatchesSlot(self.typesView(), param, templates.scheme_vars_pool[scope.scheme_vars.start + slot]))
                 {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 }
