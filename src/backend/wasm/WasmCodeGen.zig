@@ -12050,8 +12050,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // list emptied in place when uniquely owned.
         .list_clear => {
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-            // Clearing goes through the sublist builtin, which keeps a uniquely
-            // owned allocation.
+            // Clearing goes through the clear builtin, which keeps a uniquely
+            // owned allocation and the capacity static data records.
             const clear_abi = self.builtinInternalListAbi("wasm.list_clear.builtin_list_abi", ll.ret_layout);
             if (self.external_calls == .builtin_relocs and clear_abi.elem_size != 0) {
                 const fields = try self.loadRocListFields(list_local);
@@ -12061,12 +12061,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitRocListFields(fields);
                 try self.emitI32Const(@intCast(clear_abi.elem_align));
                 try self.emitI32Const(@intCast(clear_abi.elem_size));
-                try self.emitI64Const(0);
-                try self.emitI64Const(0);
                 try self.emitI32Const(@intCast(callbacks.elements_refcounted));
                 try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
                 try self.emitI32Const(updateModeImmForArg(ll.unique_args, 0));
-                try self.emitBuiltinCall(.list_sublist);
+                try self.emitBuiltinCall(.list_clear);
                 try self.emitFpOffset(result_offset);
                 return;
             }

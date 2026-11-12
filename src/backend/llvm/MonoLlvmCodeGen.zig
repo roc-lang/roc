@@ -11546,8 +11546,11 @@ pub const MonoLlvmCodeGen = struct {
         } else {
             try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
             try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-            try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
-            try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
+            // `list_clear` has its own builtin, which takes no window.
+            if (op != .list_clear) {
+                try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
+                try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
+            }
             try self.appendListElementRcArgs(&call_args, abi, false, true);
             try self.appendUpdateModeArg(&call_args, unique_args);
             try self.callBuiltinVoid(LowLevelBuiltins.listOp(op), call_args.types.items, call_args.values.items);

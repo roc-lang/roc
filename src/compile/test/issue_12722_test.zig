@@ -52,8 +52,8 @@ test "issue 12722: top-level constant stores split_on pieces of a compile-time h
         const value = artifact.const_store.get(root.payload.const_node);
         if (value != .list) continue;
         list_constants += 1;
-        try std.testing.expect(value.list == .nodes);
-        const nodes = value.list.nodes;
+        try std.testing.expect(value.list.items == .nodes);
+        const nodes = value.list.items.nodes;
         try std.testing.expectEqual(expected.len, nodes.len);
         for (expected, nodes) |expected_piece, node| {
             const piece = artifact.const_store.get(node);

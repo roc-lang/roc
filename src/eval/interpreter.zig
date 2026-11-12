@@ -5958,13 +5958,11 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 if (crash_boundary.set() != 0) return self.crashError();
                 var elem_rc_ctx = self.listElementRcContext(list_elems);
-                const result = builtins.list.listSublist(
+                const result = builtins.list.listClear(
                     source_list,
                     info.alignment,
                     info.width,
                     elems_rc,
-                    0,
-                    0,
                     if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
                     if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     updateModeForArg0(ll.unique_args),

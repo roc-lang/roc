@@ -113,16 +113,16 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
         constants += 1;
         try std.testing.expect(root.payload == .const_node);
         const value = artifact.const_store.get(root.payload.const_node);
-        try std.testing.expect(value == .list and value.list == .nodes);
-        try std.testing.expectEqual(literal_count, value.list.nodes.len);
-        for (value.list.nodes, 0..) |node, index| {
+        try std.testing.expect(value == .list and value.list.items == .nodes);
+        try std.testing.expectEqual(literal_count, value.list.items.nodes.len);
+        for (value.list.items.nodes, 0..) |node, index| {
             const word = artifact.const_store.get(node);
             try std.testing.expect(word == .nominal);
             const bytes = artifact.const_store.get(word.nominal.backing);
-            try std.testing.expect(bytes == .list and bytes.list == .packed_bytes);
+            try std.testing.expect(bytes == .list and bytes.list.items == .packed_bytes);
             const expected = try std.fmt.allocPrint(gpa, "w{d}", .{index});
             defer gpa.free(expected);
-            try std.testing.expectEqualStrings(expected, artifact.const_store.blobData(bytes.list.packed_bytes.bytes));
+            try std.testing.expectEqualStrings(expected, artifact.const_store.blobData(bytes.list.items.packed_bytes.bytes));
         }
     }
     try std.testing.expectEqual(@as(usize, 1), constants);

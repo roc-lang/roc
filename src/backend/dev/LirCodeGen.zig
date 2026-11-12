@@ -8020,15 +8020,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return try self.callListSublistWindow(ll, list_abi, list_off, .{ .mem = record_off + start_field_off }, .{ .mem = record_off + len_field_off });
         }
 
-        /// Call the sublist builtin with the zero-length window from index
-        /// zero: `List.clear`.
+        /// Call the clear builtin: `List.clear`.
         fn callListClear(self: *Self, ll: anytype, list_loc: ValueLocation) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const list_abi = builtinInternalListAbi(ls, "dev.callListClear.builtin_list_abi", ll.ret_layout);
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             if (list_abi.elem_size_align.size == 0) return self.emitZstList(null);
 
-            return try self.callListSublistWindow(ll, list_abi, list_off, .{ .imm = 0 }, .{ .imm = 0 });
+            const result_offset = self.codegen.allocStackSlot(roc_list_size);
+            const rc = try self.listElemCallbacks(list_abi, .decref);
+            try self.callListBuiltin(list_abi, rc, &.{
+                .{ .lea = result_offset }, .{ .list = list_off }, .elem_abi, .elem_rc, .{ .imm = updateModeImmForArg0(ll.unique_args) },
+            }, LowLevelBuiltins.listOp(.list_clear));
+            return listStackAt(result_offset);
         }
 
         fn callListDropAt(self: *Self, ll: anytype, list_loc: ValueLocation, index_loc: ValueLocation) Allocator.Error!ValueLocation {

@@ -26,6 +26,10 @@ const RocStr = builtins.str.RocStr;
 const RuntimeValueAddress = struct {
     ptr: usize,
     len: usize,
+    /// A list's evaluated capacity, which its stored node records. Two views
+    /// of one allocation with the same length can differ in it: a seamless
+    /// slice has none beyond its window.
+    capacity: u64,
     plan: u32,
     layout: u32,
     storage: LirProgram.CaptureSlotStorage,
@@ -264,7 +268,7 @@ pub const Writer = struct {
     };
 
     const StoreFinish = union(enum) {
-        list: checked.ConstNodeId,
+        list: struct { node: checked.ConstNodeId, capacity: u64 },
         box: checked.ConstNodeId,
         tuple: checked.ConstNodeId,
         record: checked.ConstNodeId,
@@ -415,7 +419,7 @@ pub const Writer = struct {
             .list => |elem_plan| blk: {
                 if (try self.storeListLeaf(node, elem_plan, layout_idx, value)) return;
                 try self.appendListRequests(children, elem_plan, layout_idx, value);
-                break :blk .{ .list = node };
+                break :blk .{ .list = .{ .node = node, .capacity = self.listCapacity(layout_idx, value) } };
             },
             .box => |elem_plan| blk: {
                 try self.appendBoxRequest(children, elem_plan, layout_idx, value);
@@ -530,7 +534,7 @@ pub const Writer = struct {
         const nodes = self.store_nodes.items[frame.nodes_start..][0..frame.requests_len];
         const capture_types = self.store_capture_types.items[frame.capture_types_start..][0..frame.slots.len];
         switch (frame.finish) {
-            .list => |node| self.store.fill(node, .{ .list = .{ .nodes = nodes } }),
+            .list => |list| self.store.fill(list.node, .{ .list = .{ .items = .{ .nodes = nodes }, .capacity = list.capacity } }),
             .box => |node| self.store.fill(node, .{ .box = nodes[0] }),
             .tuple => |node| self.store.fill(node, .{ .tuple = nodes }),
             .record => |node| self.store.fill(node, .{ .record = nodes }),
@@ -592,20 +596,29 @@ pub const Writer = struct {
             writerInvariant("list const plan had non-list layout");
         }
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+        const capacity = self.listCapacity(layout_idx, value);
         if (roc_list.len() == 0) {
-            self.store.fill(target_node, .{ .list = .{ .empty = roc_list.getCapacity() } });
+            self.store.fill(target_node, .{ .list = .{ .items = .empty, .capacity = capacity } });
             return true;
         }
         if (self.planIsScalar(elem_plan)) {
-            try self.storePackedList(target_node, layout_value, roc_list);
+            try self.storePackedList(target_node, layout_value, roc_list, capacity);
             return true;
         }
         const elem_layout = if (layout_value.tag == .list_of_zst) layout.Idx.zst else layout_value.getIdx();
         if (try self.productPlan(elem_plan, elem_layout)) |plan| {
-            try self.storeProductList(target_node, plan, roc_list);
+            try self.storeProductList(target_node, plan, roc_list, capacity);
             return true;
         }
         return false;
+    }
+
+    /// The capacity the list at `value` was evaluated with, in items. A list
+    /// of zero-sized items holds no allocation, so its capacity is its length.
+    fn listCapacity(self: *const Writer, layout_idx: layout.Idx, value: Value) u64 {
+        const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+        if (self.program.layouts.getLayout(layout_idx).tag == .list_of_zst) return roc_list.len();
+        return roc_list.getCapacity();
     }
 
     fn appendListRequests(
@@ -852,7 +865,7 @@ pub const Writer = struct {
         return if (self.product_plans.getPtr(key).?.*) |*value| value else null;
     }
 
-    fn storeProductList(self: *Writer, node: checked.ConstNodeId, plan: *const lir.PackedData.Plan, list: *const RocList) Allocator.Error!void {
+    fn storeProductList(self: *Writer, node: checked.ConstNodeId, plan: *const lir.PackedData.Plan, list: *const RocList, capacity: u64) Allocator.Error!void {
         const byte_len = std.math.mul(usize, list.len(), plan.packed_width) catch unreachable; // packed leaves are disjoint parts of an element, so this is at most memory_len
         const memory_len = std.math.mul(usize, list.len(), plan.memory_width) catch unreachable; // the list's elements occupy this many bytes of live memory
         const memory = if (memory_len == 0) &.{} else list.bytes.?[0..memory_len];
@@ -862,12 +875,12 @@ pub const Writer = struct {
             plan.encode(try self.store.reserveBlobData(byte_len), memory, list.len(), builtin.cpu.arch.endian());
             break :blk try self.store.commitBlobData(byte_len);
         };
-        self.store.fill(node, .{ .list = .{ .packed_bytes = .{
+        self.store.fill(node, .{ .list = .{ .items = .{ .packed_bytes = .{
             .bytes = data,
             .len = try checkedU32(list.len()),
             .element = null,
             .product_width = plan.packed_width,
-        } } });
+        } }, .capacity = capacity } });
     }
 
     fn planIsScalar(self: *const Writer, root: LirProgram.ConstPlanId) bool {
@@ -936,6 +949,7 @@ pub const Writer = struct {
         target_node: checked.ConstNodeId,
         list_layout: layout.Layout,
         roc_list: *const RocList,
+        capacity: u64,
     ) Error!void {
         if (list_layout.tag != .list) writerInvariant("packed scalar list had non-list layout");
         const elem_layout = list_layout.getIdx();
@@ -956,11 +970,11 @@ pub const Writer = struct {
             }
         }
         const data = try self.store.commitBlobData(byte_len);
-        self.store.fill(target_node, .{ .list = .{ .packed_bytes = .{
+        self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
             .bytes = data,
             .len = try checkedU32(roc_list.len()),
             .element = element,
-        } } });
+        } }, .capacity = capacity } });
     }
 
     fn cloneCaptureType(self: *Writer, ty: const_store.ConstTypeId) Error!const_store.ConstTypeId {
@@ -1108,6 +1122,7 @@ pub const Writer = struct {
         };
         return if (ptr) |raw| .{
             .ptr = raw,
+            .capacity = if (layout_value.tag == .list) self.listCapacity(layout_idx, value) else 0,
             .len = switch (layout_value.tag) {
                 .list => blk: {
                     const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
@@ -1391,8 +1406,8 @@ test "const store writer stores each string's own bytes when strings share an al
 
     const list_value = artifact.const_store.get(stored.const_node);
     try testing.expect(list_value == .list);
-    try testing.expect(list_value.list == .nodes);
-    const nodes = list_value.list.nodes;
+    try testing.expect(list_value.list.items == .nodes);
+    const nodes = list_value.list.items.nodes;
     try testing.expectEqual(@as(usize, 2), nodes.len);
     const expected = [_][]const u8{ "a", text[2..] };
     for (expected, nodes) |expected_piece, node| {
@@ -1490,14 +1505,14 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     try testing.expect(str_value == .str);
     const list_value = artifact.const_store.get(stored_list.const_node);
     try testing.expect(list_value == .list);
-    try testing.expect(list_value.list == .packed_bytes);
-    const scalar_bytes = list_value.list.packed_bytes;
+    try testing.expect(list_value.list.items == .packed_bytes);
+    const scalar_bytes = list_value.list.items.packed_bytes;
     try testing.expectEqual(@as(u32, 20 * 1024), scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u8, scalar_bytes.element);
     try testing.expectEqual(str_value.str, scalar_bytes.bytes);
     try testing.expectEqualSlices(u8, bytes, artifact.const_store.blobData(scalar_bytes.bytes));
 
-    const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.packed_bytes;
+    const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.items.packed_bytes;
     try testing.expectEqual(@as(u32, 10 * 1024), u16_scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u16, u16_scalar_bytes.element);
 
@@ -1508,7 +1523,8 @@ test "const store writer stores 20KB scalar lists as shared blob" {
         .capacity_or_alloc_ptr = RocList.encodeCapacity(bytes.len),
     };
     const stored_empty_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_empty_list) });
-    try testing.expectEqual(@as(u64, bytes.len), artifact.const_store.get(stored_empty_list.const_node).list.empty);
+    try testing.expect(artifact.const_store.get(stored_empty_list.const_node).list.items == .empty);
+    try testing.expectEqual(@as(u64, bytes.len), artifact.const_store.get(stored_empty_list.const_node).list.capacity);
     try testing.expectEqual(str_value.str, u16_scalar_bytes.bytes);
 }
 

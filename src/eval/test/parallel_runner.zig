@@ -214,7 +214,7 @@ fn constF32ListMatches(
     list: check.ConstStore.ConstList,
     expected: []const u32,
 ) bool {
-    return switch (list) {
+    return switch (list.items) {
         .nodes => |items| blk: {
             if (items.len != expected.len) break :blk false;
             for (items, expected) |item, bits| {
@@ -240,7 +240,7 @@ fn constF64ListMatches(
     list: check.ConstStore.ConstList,
     expected: []const u64,
 ) bool {
-    return switch (list) {
+    return switch (list.items) {
         .nodes => |items| blk: {
             if (items.len != expected.len) break :blk false;
             for (items, expected) |item, bits| {

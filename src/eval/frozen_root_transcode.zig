@@ -279,10 +279,15 @@ const Builder = struct {
     fn list(self: *Builder, job: Job, sp: Program.ConstPlanId, tp: Program.ConstPlanId) Allocator.Error!void {
         const count = self.readWord(job.source.offsetBy(self.sourceWord()));
         try self.graph.writeWord(job.dest.offsetBy(self.graph.word()), count);
-        try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(count));
         const physical = self.graph.program.layouts.getLayout(job.layout_idx);
-        if (count == 0 or physical.tag == .list_of_zst) return;
         const source_physical = self.source_program.layouts.getLayout(job.source_layout);
+        // The capacity the list was evaluated with travels with it. A list
+        // of zero-sized items holds no allocation, so on either side it has
+        // no capacity beyond its length.
+        const source_capacity = builtins.list.RocList.decodeCapacityForWidth(self.readWord(job.source.offsetBy(2 * self.sourceWord())));
+        const capacity = if (physical.tag == .list_of_zst or source_physical.tag == .list_of_zst) count else source_capacity;
+        try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(capacity));
+        if (capacity == 0 or physical.tag == .list_of_zst) return;
         const sl: layout.Idx = if (source_physical.tag == .list_of_zst) .zst else source_physical.getIdx();
         const tl = physical.getIdx();
         // Zero-sized source elements have no allocation. Their destination

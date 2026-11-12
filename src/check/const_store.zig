@@ -625,15 +625,37 @@ pub const ConstPackedList = struct {
     }
 };
 
-/// List data stored either as child nodes or packed fixed-product bytes.
-pub const ConstList = union(enum) {
+/// A list's items, stored either as child nodes or packed fixed-product
+/// bytes.
+pub const ConstListItems = union(enum) {
     nodes: []const ConstNodeId,
     packed_bytes: ConstPackedList,
-    /// An empty list, with the capacity it was evaluated with. A frozen or
-    /// restored descriptor cannot carry a capacity beyond its length, so the
-    /// request travels on the value and the runtime rebuilds the list as
-    /// the `with_capacity` it came from.
-    empty: u64,
+    empty,
+
+    /// The number of items.
+    pub fn len(self: ConstListItems) u64 {
+        return switch (self) {
+            .nodes => |items| items.len,
+            .packed_bytes => |packed_list| packed_list.len,
+            .empty => 0,
+        };
+    }
+};
+
+/// A list: its items and the capacity it was evaluated with.
+pub const ConstList = struct {
+    items: ConstListItems,
+    /// How many items the list had room for when its evaluation finished,
+    /// never fewer than it holds. Capacity is part of the value: the
+    /// descriptor a runtime program reads records it, and the copy that
+    /// first gives the program storage of its own keeps it, so a list
+    /// built by `List.with_capacity` at compile time still reserves once.
+    capacity: u64,
+
+    /// A list holding `items` with no spare capacity.
+    pub fn exact(items: ConstListItems) ConstList {
+        return .{ .items = items, .capacity = items.len() };
+    }
 };
 
 /// Compile-time constant stored in checked module data.
@@ -677,10 +699,13 @@ const StoredValue = union(enum) {
     zst,
     scalar: ConstScalar,
     str: ConstStr,
-    list: union(enum) {
-        nodes: ConstRange,
-        packed_bytes: ConstPackedList,
-        empty: u64,
+    list: struct {
+        items: union(enum) {
+            nodes: ConstRange,
+            packed_bytes: ConstPackedList,
+            empty,
+        },
+        capacity: u64,
     },
     box: ConstNodeId,
     tuple: ConstRange,
@@ -1271,11 +1296,17 @@ pub const ConstStore = struct {
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
             .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = try self.appendNodes(function.captures) } },
-            .list => |list| .{ .list = switch (list) {
-                .nodes => |items| .{ .nodes = try self.appendNodes(items) },
-                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
-                .empty => |capacity| .{ .empty = capacity },
-            } },
+            .list => |list| blk: {
+                if (list.capacity < list.items.len()) constStoreInvariant("list capacity is below its length");
+                break :blk .{ .list = .{
+                    .items = switch (list.items) {
+                        .nodes => |items| .{ .nodes = try self.appendNodes(items) },
+                        .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                        .empty => .empty,
+                    },
+                    .capacity = list.capacity,
+                } };
+            },
             .tuple => |items| .{ .tuple = try self.appendNodes(items) },
             .record => |items| .{ .record = try self.appendNodes(items) },
             .tag => |tag| blk: {
@@ -1511,10 +1542,13 @@ pub const ConstStore = struct {
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
             .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = self.nodeSlice(function.captures) } },
-            .list => |list| .{ .list = switch (list) {
-                .nodes => |r| .{ .nodes = self.nodeSlice(r) },
-                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
-                .empty => |capacity| .{ .empty = capacity },
+            .list => |list| .{ .list = .{
+                .items = switch (list.items) {
+                    .nodes => |r| .{ .nodes = self.nodeSlice(r) },
+                    .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                    .empty => .empty,
+                },
+                .capacity = list.capacity,
             } },
             .tuple => |r| .{ .tuple = self.nodeSlice(r) },
             .record => |r| .{ .record = self.nodeSlice(r) },
@@ -1620,18 +1654,19 @@ pub const ConstStore = struct {
                 },
                 .list => |list| {
                     const right_list = right.list;
-                    if (std.meta.activeTag(list) != std.meta.activeTag(right_list)) return false;
-                    switch (list) {
+                    if (list.capacity != right_list.capacity) return false;
+                    if (std.meta.activeTag(list.items) != std.meta.activeTag(right_list.items)) return false;
+                    switch (list.items) {
                         .nodes => |items| {
-                            if (items.len != right_list.nodes.len) return false;
-                            for (items, right_list.nodes) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                            if (items.len != right_list.items.nodes.len) return false;
+                            for (items, right_list.items.nodes) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
                         },
                         .packed_bytes => |packed_list| {
-                            const r = right_list.packed_bytes;
+                            const r = right_list.items.packed_bytes;
                             if (packed_list.len != r.len or packed_list.element != r.element or packed_list.product_width != r.product_width) return false;
                             if (!sameBytes(self.blobData(packed_list.bytes), other.blobData(r.bytes))) return false;
                         },
-                        .empty => |capacity| if (capacity != right_list.empty) return false,
+                        .empty => {},
                     }
                 },
                 inline .tuple, .record => |items, tag| {
@@ -1698,18 +1733,20 @@ pub const ConstStore = struct {
                     hasher.update(&context.moduleDigest(nominal.named_type.module));
                     try pending.append(self.allocator, nominal.backing);
                 },
-                .list => |list| switch (list) {
+                .list => |list| switch (list.items) {
                     .nodes => |items| {
+                        hasher.update(std.mem.asBytes(&list.capacity));
                         hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
                         try pending.appendSlice(self.allocator, items);
                     },
                     .packed_bytes => |packed_list| {
+                        hasher.update(std.mem.asBytes(&list.capacity));
                         hasher.update(std.mem.asBytes(&packed_list.len));
                         hasher.update(std.mem.asBytes(&packed_list.product_width));
                         hasher.update(if (packed_list.element) |element| @tagName(element) else "product");
                         hashBytes(hasher, self.blobData(packed_list.bytes));
                     },
-                    .empty => |capacity| hasher.update(std.mem.asBytes(&capacity)),
+                    .empty => hasher.update(std.mem.asBytes(&list.capacity)),
                 },
                 inline .tuple, .record => |items| {
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
@@ -1847,7 +1884,7 @@ pub const ConstStore = struct {
                     .fn_value => |fn_id| try pending.append(self.allocator, .{ .fn_value = .{ .id = fn_id, .delayed_depth = node.delayed_depth } }),
                     .box => |child| try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } }),
                     .nominal => |nominal| try pending.append(self.allocator, .{ .value = .{ .id = nominal.backing, .delayed_depth = node.delayed_depth } }),
-                    .list => |list| switch (list) {
+                    .list => |list| switch (list.items) {
                         .nodes => |children| for (children) |child| {
                             try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
                         },
@@ -1925,7 +1962,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // owns and frees the slices it hands to `append`/`appendFn`.
     const list_items = try gpa.dupe(ConstNodeId, &.{ a, b });
     defer gpa.free(list_items);
-    const list = try store.append(.{ .list = .{ .nodes = list_items } });
+    const list = try store.append(.{ .list = .{ .items = .{ .nodes = list_items }, .capacity = 8 } });
     const tag_payloads = try gpa.dupe(ConstNodeId, &.{a});
     defer gpa.free(tag_payloads);
     const tag_name = try gpa.dupe(u8, "Ok");
@@ -1936,18 +1973,18 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
     const hello = try store.addBlobData("hello");
     const str = try store.append(.{ .str = hello });
-    const packed_list = try store.append(.{ .list = .{ .packed_bytes = .{
+    const packed_list = try store.append(.{ .list = .{ .items = .{ .packed_bytes = .{
         .bytes = sd,
         .len = 11,
         .element = .u8,
-    } } });
-    const product_list = try store.append(.{ .list = .{ .packed_bytes = .{
+    } }, .capacity = 64 } });
+    const product_list = try store.append(.{ .list = .exact(.{ .packed_bytes = .{
         .bytes = try store.addBlobData("ello world"),
         .len = 2,
         .element = null,
         .product_width = 5,
-    } } });
-    const empty_list = try store.append(.{ .list = .{ .empty = 4096 } });
+    } }) });
+    const empty_list = try store.append(.{ .list = .{ .items = .empty, .capacity = 4096 } });
     // A function value with a capture (exercises capture_pool).
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const private_backing_ty = try store.type_store.append(.{ .record = .{} });
@@ -2044,20 +2081,24 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(@as(u64, 7), loaded.get(a).scalar.u64);
     try std.testing.expectEqual(@as(i32, -3), loaded.get(b).scalar.i32);
     // List range resolves to the same node ids
-    try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list.nodes);
+    try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list.items.nodes);
+    try std.testing.expectEqual(@as(u64, 8), loaded.get(list).list.capacity);
     // Tag name + payloads
     const loaded_tag = loaded.get(tag).tag;
     try std.testing.expectEqualStrings("Ok", loaded_tag.tag_name);
     try std.testing.expectEqualSlices(ConstNodeId, &.{a}, loaded_tag.payloads);
     // String backing
     try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
-    const loaded_packed = loaded.get(packed_list).list.packed_bytes;
+    const loaded_packed = loaded.get(packed_list).list.items.packed_bytes;
+    try std.testing.expectEqual(@as(u64, 64), loaded.get(packed_list).list.capacity);
     try std.testing.expectEqual(sd, loaded_packed.bytes);
     try std.testing.expectEqualStrings("hello world", loaded.blobData(loaded_packed.bytes));
-    const loaded_product = loaded.get(product_list).list.packed_bytes;
+    const loaded_product = loaded.get(product_list).list.items.packed_bytes;
+    try std.testing.expectEqual(@as(u64, 2), loaded.get(product_list).list.capacity);
     try std.testing.expectEqual(@as(?ConstPackedScalar, null), loaded_product.element);
     try std.testing.expectEqual(@as(u32, 5), loaded_product.byteWidth());
-    try std.testing.expectEqual(@as(u64, 4096), loaded.get(empty_list).list.empty);
+    try std.testing.expect(loaded.get(empty_list).list.items == .empty);
+    try std.testing.expectEqual(@as(u64, 4096), loaded.get(empty_list).list.capacity);
     try std.testing.expectEqual(@as(u32, 2), loaded_product.len);
     try std.testing.expectEqualStrings("ello world", loaded.blobData(loaded_product.bytes));
     // Function captures

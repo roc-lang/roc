@@ -70,6 +70,12 @@ pub const RocList = extern struct {
         return encodeCapacityGeneric(u64, capacity);
     }
 
+    /// Decode a big-list capacity word read from a target whose pointer
+    /// width may differ from the host's.
+    pub fn decodeCapacityForWidth(encoded_capacity: u64) u64 {
+        return encoded_capacity >> capacity_shift;
+    }
+
     pub inline fn decodeCapacity(encoded_capacity: usize) usize {
         return encoded_capacity >> capacity_shift;
     }
@@ -411,6 +417,26 @@ pub const RocList = extern struct {
         return !self.isSeamlessSlice() and self.isExclusive(update_mode, roc_ops);
     }
 
+    /// Returns true when this list's storage is immutable static data: a
+    /// literal or a completed compile-time value. Its allocation carries the
+    /// static refcount, so it is never unique, never written and never freed.
+    pub fn isStaticData(self: RocList, roc_ops: *RocOps) bool {
+        return utils.rcConstant(@bitCast(self.refcount(roc_ops)));
+    }
+
+    /// The capacity a fresh copy of this list's items starts with.
+    ///
+    /// Static data stands for a value the program would otherwise have built
+    /// for itself, and its descriptor records the capacity that value has. The
+    /// copy that first gives the program storage of its own is that value, so
+    /// it keeps the recorded capacity: a list built by `List.with_capacity`
+    /// at compile time still reserves once at runtime. A copy of a list some
+    /// other reference holds is sized by the items it copies instead, since
+    /// that list's spare capacity belongs to whoever still owns it.
+    pub fn copyCapacity(self: RocList, roc_ops: *RocOps) usize {
+        return if (self.isStaticData(roc_ops)) self.getCapacity() else self.length;
+    }
+
     fn refcount(self: RocList, roc_ops: *RocOps) usize {
         // Reduced debug output - only print on potential issues
         if (self.getCapacity() == 0 and !self.isSeamlessSlice()) {
@@ -445,7 +471,8 @@ pub const RocList = extern struct {
             return self;
         }
 
-        if (self.isEmpty()) {
+        const capacity = self.copyCapacity(roc_ops);
+        if (capacity == 0) {
             // Empty is not necessarily unique on it's own.
             // The list could have capacity and be shared.
             self.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
@@ -453,8 +480,9 @@ pub const RocList = extern struct {
         }
 
         // unfortunately, we have to clone
-        const new_list = RocList.list_allocate(alignment, self.length, element_width, elements_refcounted, roc_ops);
+        const new_list = RocList.allocateWithCapacity(alignment, self.length, capacity, element_width, elements_refcounted, roc_ops);
 
+        // A nonzero capacity means both lists point into an allocation.
         var old_bytes: [*]u8 = @as([*]u8, @ptrCast(self.bytes));
         var new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_list.bytes));
 
@@ -497,6 +525,26 @@ pub const RocList = extern struct {
         };
     }
 
+    /// A list of `length` items in a fresh allocation with room for
+    /// `capacity`, which is at least `length`. The items are uninitialized.
+    pub fn allocateWithCapacity(
+        elem_alignment: u32,
+        length: usize,
+        capacity: usize,
+        element_width: usize,
+        elements_refcounted: bool,
+        roc_ops: *RocOps,
+    ) RocList {
+        std.debug.assert(length <= capacity);
+        var list = list_allocate(elem_alignment, capacity, element_width, elements_refcounted, roc_ops);
+        list.length = length;
+        return list;
+    }
+
+    /// A list whose allocation holds at least `new_length` items, with this
+    /// list's items at its start and `new_length` as its length. An
+    /// allocation this list cannot reuse is copied, and the copy keeps the
+    /// capacity `copyCapacity` gives it when that exceeds `new_length`.
     pub fn reallocate(
         self: RocList,
         alignment: u32,
@@ -522,7 +570,9 @@ pub const RocList = extern struct {
                     return result;
                 }
             }
-            return self.reallocateFresh(alignment, new_length, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
+            var copy = self.reallocateFresh(alignment, @max(new_length, self.copyCapacity(roc_ops)), element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
+            copy.length = new_length;
+            return copy;
         }
         return RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_ops);
     }
@@ -676,14 +726,18 @@ pub fn listReserve(
 /// run of growing operations on it amortized-linear. An allocation that
 /// already fits is kept as-is; otherwise the result is at least one geometric
 /// step. Only an allocation that grows in place carries its slack into future
-/// operations, so only that path steps from the capacity. A fresh copy steps
-/// from the length instead: its capacity then tracks the elements it holds,
-/// rather than compounding on every operation on a list that stays shared.
+/// operations, so that path steps from the capacity, and so does the copy of
+/// static data, which keeps the capacity its descriptor records
+/// (`RocList.copyCapacity`). Any other fresh copy steps from the length
+/// instead: its capacity then tracks the elements it holds, rather than
+/// compounding on every operation on a list that stays shared.
 fn amortizedCapacity(list: RocList, needed: usize, element_width: usize, update_mode: UpdateMode, roc_ops: *RocOps) usize {
     const reuses_allocation = list.canReuseAllocation(update_mode, roc_ops);
     const capacity = list.getCapacity();
     if (reuses_allocation and needed <= capacity) return needed;
-    const growth_base: usize = if (reuses_allocation) capacity else list.len();
+    const keeps_capacity = reuses_allocation or list.isStaticData(roc_ops);
+    if (keeps_capacity and needed <= capacity) return capacity;
+    const growth_base: usize = if (keeps_capacity) capacity else list.len();
     return @max(needed, utils.geometricGrowth(growth_base, element_width));
 }
 
@@ -1450,6 +1504,44 @@ pub fn listSublist(
     return RocList.empty();
 }
 
+/// `List.clear`: the empty list that keeps `list`'s capacity.
+///
+/// A list whose allocation can be reused keeps it. Static data records the
+/// capacity of the value it stands for (`RocList.copyCapacity`), so clearing
+/// it allocates that capacity. Any other list leaves its allocation to its
+/// other owners and clears to the empty list with no allocation. The result
+/// is never a seamless slice and never shares an allocation, which is the
+/// op's `result_unique` claim (`base/LowLevel.zig`).
+pub fn listClear(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    if (list.canReuseAllocation(update_mode, roc_ops)) {
+        if (elements_refcounted) {
+            if (list.bytes) |source_ptr| {
+                var i: usize = 0;
+                while (i < list.len()) : (i += 1) {
+                    dec(dec_context, source_ptr + i * element_width);
+                }
+            }
+        }
+        var output = list;
+        output.length = 0;
+        return output;
+    }
+    // A slice's capacity is its window, which is no reservation to keep.
+    const capacity = if (!list.isSeamlessSlice() and list.isStaticData(roc_ops)) list.getCapacity() else 0;
+    list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+    if (capacity == 0) return RocList.empty();
+    return RocList.allocateWithCapacity(alignment, 0, capacity, element_width, elements_refcounted, roc_ops);
+}
+
 /// Remove element at specified index, shifting remaining elements.
 ///
 /// An `.InPlace` update mode means the caller proved the list unique, so the
@@ -1547,14 +1639,15 @@ pub fn listDropAt(
             return new_list;
         }
 
-        const output = RocList.list_allocate(
+        const output = RocList.allocateWithCapacity(
             alignment,
             size - 1,
+            list.copyCapacity(roc_ops),
             element_width,
             elements_refcounted,
             roc_ops,
         );
-        const target_ptr = output.bytes orelse unreachable; // size >= 2 here, so list_allocate gets a nonzero length and returns non-null bytes
+        const target_ptr = output.bytes orelse unreachable; // size >= 2 here, so the allocation holds at least one item and its bytes are non-null
 
         const head_size = drop_index * element_width;
         @memcpy(target_ptr[0..head_size], source_ptr[0..head_size]);
@@ -1826,7 +1919,16 @@ pub fn listConcat(
         return resized_list_b;
     }
 
-    const output = RocList.list_allocate(alignment, total_length, element_width, elements_refcounted, roc_ops);
+    // Neither allocation can be reused, so the items go into a fresh one. It
+    // is sized as the consuming paths above size theirs when a side is static
+    // data, which keeps its recorded capacity, and exactly otherwise.
+    const output_capacity = if (list_a.isStaticData(roc_ops))
+        amortizedCapacity(list_a, total_length, element_width, update_mode_a, roc_ops)
+    else if (list_b.isStaticData(roc_ops))
+        amortizedCapacity(list_b, total_length, element_width, update_mode_b, roc_ops)
+    else
+        total_length;
+    const output = RocList.allocateWithCapacity(alignment, total_length, output_capacity, element_width, elements_refcounted, roc_ops);
 
     const target = output.bytes orelse unreachable; // total_length is nonzero because both lists are non-empty past the isEmpty checks above
     const source_a = list_a.bytes orelse unreachable; // both lists are non-empty past the isEmpty checks above, and non-empty lists have non-null bytes
@@ -2559,6 +2661,155 @@ test "RocList list_allocate sizes the allocation exactly" {
         try std.testing.expectEqual(exact_size, list.len());
         try std.testing.expect(!list.isEmpty());
     }
+}
+
+/// Static storage for one test list of `u64` items: the static refcount
+/// word, then the items. `list` is the frozen form of a value with `len`
+/// items and room for `capacity`.
+fn StaticTestList(comptime len: usize) type {
+    return struct {
+        words: [1 + len]usize,
+
+        fn init(items: [len]u64) @This() {
+            var words: [1 + len]usize = undefined;
+            words[0] = @bitCast(utils.REFCOUNT_STATIC_DATA);
+            for (items, 0..) |item, index| words[1 + index] = item;
+            return .{ .words = words };
+        }
+
+        fn list(self: *@This(), capacity: usize) RocList {
+            return .{
+                .bytes = @ptrCast(@as([*]usize, &self.words) + 1),
+                .length = len,
+                .capacity_or_alloc_ptr = RocList.encodeCapacity(capacity),
+            };
+        }
+    };
+}
+
+test "a static list is never unique and its copy keeps the recorded capacity" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    var storage = StaticTestList(2).init(.{ 10, 20 });
+    const static_list = storage.list(100);
+    try std.testing.expect(static_list.isStaticData(ops));
+    try std.testing.expect(!static_list.isUnique(ops));
+    try std.testing.expectEqual(@as(usize, 100), static_list.copyCapacity(ops));
+    try std.testing.expectEqual(@as(u64, 0), listSlackUnique(static_list, ops));
+
+    const owned = static_list.makeUnique(@alignOf(u64), @sizeOf(u64), false, null, rcNone, null, rcNone, ops);
+    defer owned.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    try std.testing.expect(owned.isUnique(ops));
+    try std.testing.expectEqual(@as(usize, 2), owned.len());
+    try std.testing.expectEqual(@as(usize, 100), owned.getCapacity());
+    try std.testing.expectEqualSlices(u64, &.{ 10, 20 }, owned.elements(u64).?[0..2]);
+    // The static storage is untouched.
+    try std.testing.expectEqual(@as(usize, @bitCast(utils.REFCOUNT_STATIC_DATA)), storage.words[0]);
+}
+
+test "a shared list's copy is sized by its items" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    var shared = listWithCapacity(100, @alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    shared.length = 2;
+    shared.elements(u64).?[0] = 10;
+    shared.elements(u64).?[1] = 20;
+    shared.incref(1, false, ops);
+    defer shared.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    try std.testing.expect(!shared.isStaticData(ops));
+    try std.testing.expectEqual(@as(usize, 2), shared.copyCapacity(ops));
+
+    const owned = shared.makeUnique(@alignOf(u64), @sizeOf(u64), false, null, rcNone, null, rcNone, ops);
+    defer owned.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    try std.testing.expectEqual(@as(usize, 2), owned.getCapacity());
+}
+
+test "appending to a static list reserves its recorded capacity once" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    // The frozen form of `List.with_capacity(100)`: no items, and a pointer
+    // just past a static refcount word.
+    var storage = StaticTestList(0).init(.{});
+    var list = storage.list(100);
+    try std.testing.expect(!list.isUnique(ops));
+
+    list = listReserveForAppend(list, @alignOf(u64), 1, @sizeOf(u64), false, null, rcNone, null, rcNone, .Immutable, ops);
+    defer list.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    try std.testing.expect(list.isUnique(ops));
+    try std.testing.expectEqual(@as(usize, 0), list.len());
+    try std.testing.expectEqual(@as(usize, 100), list.getCapacity());
+
+    // Every later append fits the one allocation.
+    const allocation = list.bytes;
+    var appended: usize = 0;
+    while (appended < 100) : (appended += 1) {
+        list = listReserveForAppend(list, @alignOf(u64), 1, @sizeOf(u64), false, null, rcNone, null, rcNone, .Immutable, ops);
+        list.length += 1;
+    }
+    try std.testing.expect(list.bytes == allocation);
+    try std.testing.expectEqual(@as(usize, 100), list.getCapacity());
+}
+
+test "a static list outgrown by one operation grows from its recorded capacity" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    var storage = StaticTestList(3).init(.{ 1, 2, 3 });
+    // A literal has no spare capacity, so the copy takes one geometric step
+    // from its three items, as a uniquely owned list of three would.
+    const literal = listReserveForAppend(storage.list(3), @alignOf(u64), 1, @sizeOf(u64), false, null, rcNone, null, rcNone, .Immutable, ops);
+    defer literal.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    try std.testing.expectEqual(utils.geometricGrowth(3, @sizeOf(u64)), literal.getCapacity());
+    try std.testing.expectEqual(@as(usize, 3), literal.len());
+
+    // An explicit reserve past the recorded capacity is sized exactly.
+    const reserved = listReserve(storage.list(5), @alignOf(u64), 40, @sizeOf(u64), false, null, rcNone, null, rcNone, .Immutable, ops);
+    defer reserved.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    try std.testing.expectEqual(@as(usize, 43), reserved.getCapacity());
+
+    // One within it keeps the recorded capacity.
+    const kept = listReserve(storage.list(50), @alignOf(u64), 40, @sizeOf(u64), false, null, rcNone, null, rcNone, .Immutable, ops);
+    defer kept.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    try std.testing.expectEqual(@as(usize, 50), kept.getCapacity());
+    try std.testing.expectEqual(@as(usize, 3), kept.len());
+}
+
+test "listClear keeps a unique allocation, a static list's capacity, and nothing of a shared list" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    var unique = listWithCapacity(8, @alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    unique.length = 3;
+    const unique_allocation = unique.bytes;
+    const cleared_unique = listClear(unique, @alignOf(u64), @sizeOf(u64), false, null, rcNone, .Immutable, ops);
+    defer cleared_unique.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    try std.testing.expect(cleared_unique.bytes == unique_allocation);
+    try std.testing.expectEqual(@as(usize, 0), cleared_unique.len());
+    try std.testing.expectEqual(@as(usize, 8), cleared_unique.getCapacity());
+
+    var storage = StaticTestList(2).init(.{ 10, 20 });
+    const cleared_static = listClear(storage.list(100), @alignOf(u64), @sizeOf(u64), false, null, rcNone, .Immutable, ops);
+    defer cleared_static.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    try std.testing.expect(cleared_static.isUnique(ops));
+    try std.testing.expect(!cleared_static.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 0), cleared_static.len());
+    try std.testing.expectEqual(@as(usize, 100), cleared_static.getCapacity());
+
+    var shared = listWithCapacity(8, @alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    shared.length = 3;
+    shared.incref(1, false, ops);
+    defer shared.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, ops);
+    const cleared_shared = listClear(shared, @alignOf(u64), @sizeOf(u64), false, null, rcNone, .Immutable, ops);
+    try std.testing.expectEqual(@as(usize, 0), cleared_shared.getCapacity());
+    try std.testing.expect(cleared_shared.bytes == null);
 }
 
 test "listReleaseExcessCapacity functionality" {
