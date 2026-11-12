@@ -341,8 +341,8 @@ const Builder = struct {
                 .offset = result.dest.offset,
                 .target_symbol_name = proc_name,
                 .kind = .function_pointer,
-                .callable_capture_offset = capture_offset,
-                .procedure = resolved.proc,
+                .callable_capture_offset = .some(capture_offset),
+                .procedure = .some(resolved.proc),
             });
             const on_drop: ?layout.RcHelperKey = switch (entry.on_drop) {
                 .none => null,
@@ -392,7 +392,7 @@ fn invariant(comptime message: []const u8) noreturn {
 
 fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.StaticDataId {
     const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
-    try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = idx });
+    try program.static_data_values.append(program.store.allocator, .{ .initializer = .none, .layout_idx = idx });
     return id;
 }
 
@@ -628,8 +628,8 @@ test "native root export preserves erased callable procedure and drop helper ide
     const payload_pointer = exports[0].relocations[0];
     const payload_export = exports[@backingInt(payload_pointer.target.data_symbol)];
     try std.testing.expectEqual(@as(usize, 4), payload_export.relocations.len);
-    try std.testing.expectEqual(proc, payload_export.relocations[0].procedure.?);
-    try std.testing.expectEqual(builtins.erased_callable.capture_offset, payload_export.relocations[0].callable_capture_offset.?);
+    try std.testing.expectEqual(proc, payload_export.relocations[0].procedure.get().?);
+    try std.testing.expectEqual(builtins.erased_callable.capture_offset, payload_export.relocations[0].callable_capture_offset.get().?);
     try std.testing.expectEqual(layout.RcHelperKey{ .op = .host_drop, .layout_idx = .str }, payload_export.relocations[1].rc_helper.?);
     try std.testing.expectEqual(layout.RcHelperKey{ .op = .incref, .layout_idx = .str }, payload_export.relocations[2].rc_helper.?);
     const copied_header = payload_export.bytes[@intCast(payload_pointer.addend)..][0 .. 2 * word_size];

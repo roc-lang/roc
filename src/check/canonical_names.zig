@@ -179,23 +179,30 @@ pub const NestedProcSiteKey = struct {
     site: NestedProcSiteId,
 };
 
+/// An optional `NestedProcSiteKey` at its own size.
+pub const OptionalNestedProcSiteKey = collections.OptionalStruct(NestedProcSiteKey, "site");
+
 /// Public `ProcBaseKey` declaration.
 pub const ProcBaseKey = struct {
     module_name: ModuleNameId,
-    export_name: ?ExportNameId,
+    export_name: collections.OptionalId(ExportNameId),
     kind: ProcBaseKind,
     ordinal: u32,
     /// Source definition ordinal within the checked CIR module, when this
     /// procedure originates from a source definition.
-    source_def_idx: ?u32 = null,
+    source_def_idx: collections.OptionalU32 = .none,
     /// Explicit nested source site for local functions, closures, and desugared
-    /// nested procedures. Null for ordinary top-level source procedures.
-    nested_proc_site: ?NestedProcSiteKey = null,
+    /// nested procedures. Absent for ordinary top-level source procedures.
+    nested_proc_site: OptionalNestedProcSiteKey = .none,
     /// Owning mono specialization for lifted local procedures. This is part of
     /// procedure identity because the same nested source site can be lifted from
     /// different monomorphic owner instantiations.
     owner_mono_specialization: ?MonoSpecializationKey = null,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(ProcBaseKey) == 140);
+}
 
 /// Public `NominalTypeKey` declaration.
 ///
@@ -618,11 +625,11 @@ pub const CanonicalNameStore = struct {
         try self.scratch_key.print(self.allocator, "proc:{d}:{s}:{d}:{d}:{d}|", .{
             @backingInt(key.module_name),
             @tagName(key.kind),
-            if (key.export_name) |name| @backingInt(name) else std.math.maxInt(u32),
+            if (key.export_name.get()) |name| @backingInt(name) else std.math.maxInt(u32),
             key.ordinal,
-            key.source_def_idx orelse std.math.maxInt(u32),
+            key.source_def_idx.get() orelse std.math.maxInt(u32),
         });
-        try appendOptionalNestedProcSiteKey(&self.scratch_key, key.nested_proc_site, self.allocator);
+        try appendOptionalNestedProcSiteKey(&self.scratch_key, key.nested_proc_site.get(), self.allocator);
         try appendOptionalMonoSpecializationKey(&self.scratch_key, key.owner_mono_specialization, self.allocator);
 
         if (self.proc_base_by_key.get(self.scratch_key.items)) |existing| return existing;
@@ -987,7 +994,7 @@ test "canonical names read sharing borrows names and prepared ranks without allo
     const tag_a = try names.internTagLabel("A");
     const proc = try names.internProcBase(.{
         .module_name = module,
-        .export_name = export_name,
+        .export_name = .some(export_name),
         .kind = .checked_source,
         .ordinal = 7,
     });
@@ -1146,7 +1153,7 @@ test "canonical name prefix views stay readable while their store grows" {
     const external_name = try source.internExternalSymbolName("roc_main");
     const proc_base = try source.internProcBase(.{
         .module_name = module_name,
-        .export_name = export_name,
+        .export_name = .some(export_name),
         .kind = .checked_source,
         .ordinal = 7,
     });
@@ -1175,7 +1182,7 @@ test "canonical name prefix views stay readable while their store grows" {
     try std.testing.expectEqualStrings("main!", view.exportNameText(export_name));
     try std.testing.expectEqualStrings("roc_main", view.externalSymbolNameText(external_name));
     try std.testing.expectEqual(module_name, view.procBase(proc_base).module_name);
-    try std.testing.expectEqual(export_name, view.procBase(proc_base).export_name.?);
+    try std.testing.expectEqual(export_name, view.procBase(proc_base).export_name.get().?);
 }
 
 test "proc base identity includes nested owner mono specialization" {
@@ -1185,10 +1192,10 @@ test "proc base identity includes nested owner mono specialization" {
     const module_name = try names.internModuleName("Main");
     const owner_base = try names.internProcBase(.{
         .module_name = module_name,
-        .export_name = null,
+        .export_name = .none,
         .kind = .checked_source,
         .ordinal = 1,
-        .source_def_idx = 1,
+        .source_def_idx = .some(1),
     });
     const first_template_index: u32 = 0;
     const owner_template = ProcedureTemplateRef{
@@ -1209,10 +1216,10 @@ test "proc base identity includes nested owner mono specialization" {
     };
     const lifted_i64 = try names.internProcBase(.{
         .module_name = module_name,
-        .export_name = null,
+        .export_name = .none,
         .kind = .checked_source,
         .ordinal = 2,
-        .nested_proc_site = nested_site,
+        .nested_proc_site = .some(nested_site),
         .owner_mono_specialization = .{
             .template = owner_template,
             .requested_mono_fn_ty = i64_key,
@@ -1220,10 +1227,10 @@ test "proc base identity includes nested owner mono specialization" {
     });
     const lifted_str = try names.internProcBase(.{
         .module_name = module_name,
-        .export_name = null,
+        .export_name = .none,
         .kind = .checked_source,
         .ordinal = 2,
-        .nested_proc_site = nested_site,
+        .nested_proc_site = .some(nested_site),
         .owner_mono_specialization = .{
             .template = owner_template,
             .requested_mono_fn_ty = str_key,
@@ -1248,14 +1255,14 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
 
     const pb = try store.internProcBase(.{
         .module_name = m,
-        .export_name = exp,
+        .export_name = .some(exp),
         .kind = .checked_source,
         .ordinal = 7,
     });
     // dedup returns the same ref
     try std.testing.expectEqual(pb, try store.internProcBase(.{
         .module_name = m,
-        .export_name = exp,
+        .export_name = .some(exp),
         .kind = .checked_source,
         .ordinal = 7,
     }));
@@ -1303,7 +1310,7 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
     // proc base resolves by id against the relocated SafeList
     const loaded_pb = loaded.procBase(pb);
     try std.testing.expectEqual(m, loaded_pb.module_name);
-    try std.testing.expectEqual(@as(?ExportNameId, exp), loaded_pb.export_name);
+    try std.testing.expectEqual(@as(?ExportNameId, exp), loaded_pb.export_name.get());
     try std.testing.expectEqual(@as(u32, 7), loaded_pb.ordinal);
 }
 

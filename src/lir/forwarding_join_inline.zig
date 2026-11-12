@@ -68,7 +68,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
 /// The same explicit eligibility contract is used by serial and worker drivers.
 pub fn rewritableProcBody(store: *const LirStore, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
     const spec = store.getProcSpecImmediate(proc);
-    return if (spec.iterator_fusion_scope) spec.body else null;
+    return if (spec.iterator_fusion_scope) spec.body.get() else null;
 }
 
 /// Rewrite one procedure to a fixed point. The caller reserves the fresh join
@@ -111,7 +111,7 @@ pub fn runProcWithScratch(
 
 fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!?Candidate {
     const proc = store.getProcSpecImmediate(proc_id);
-    const proc_body = proc.body orelse return null;
+    const proc_body = proc.body.get() orelse return null;
     var incoming_edges = try reachableIncomingEdgeCounts(store, proc_body, allocator, analysis);
     defer incoming_edges.deinit();
     var forwarded = try forwardedJoins(store, proc_body, allocator, analysis);
@@ -454,7 +454,7 @@ test "forwarding join inline eligibility is scope and body, not ABI" {
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{value}),
         .frame_locals = try store.addLocalSpan(&.{value}),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u64,
         .abi = .erased_callable,
         .iterator_fusion_scope = true,
@@ -463,7 +463,7 @@ test "forwarding join inline eligibility is scope and body, not ABI" {
     store.getProcSpecPtr(proc).iterator_fusion_scope = false;
     try std.testing.expectEqual(null, rewritableProcBody(&store, proc));
     store.getProcSpecPtr(proc).iterator_fusion_scope = true;
-    store.getProcSpecPtr(proc).body = null;
+    store.getProcSpecPtr(proc).body = .none;
     try std.testing.expectEqual(null, rewritableProcBody(&store, proc));
 }
 
@@ -568,14 +568,14 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
         .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
-        .body = outer_stmt,
+        .body = .some(outer_stmt),
         .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, one, copied }),
         .ret_layout = .u64,
     }, .none);
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten_outer = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.?);
+    const rewritten_outer = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.get().?);
     try testing.expect(rewritten_outer.* == .join);
     try testing.expectEqual(inner_id, rewritten_outer.join.id);
     const moved = store.getCFStmtImmediate(rewritten_outer.join.body);
@@ -664,14 +664,14 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
         .identity = LIR.ProcIdentity.forTest(3),
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
-        .body = outer_stmt,
+        .body = .some(outer_stmt),
         .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, one, copied, shared_result }),
         .ret_layout = .u64,
     }, .none);
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.?);
+    const rewritten = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.get().?);
     try testing.expect(rewritten.* == .join);
     try testing.expectEqual(inner_id, rewritten.join.id);
     const moved_prefix = store.getCFStmtImmediate(rewritten.join.body);
@@ -738,14 +738,14 @@ test "forwarding join inline preserves recursive outer join declarations" {
         .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
-        .body = outer_stmt,
+        .body = .some(outer_stmt),
         .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, one }),
         .ret_layout = .u64,
     }, .none);
 
     try run(&store, &layouts);
 
-    const preserved = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
+    const preserved = store.getCFStmt(store.getProcSpecImmediate(proc).body.get().?);
     try testing.expect(preserved == .join);
     try testing.expectEqual(outer_id, preserved.join.id);
     try testing.expectEqual(outer_back_edge, preserved.join.body);
@@ -797,14 +797,14 @@ test "forwarding join inline preserves owning continuation parameters" {
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{source}),
         .iterator_fusion_scope = true,
-        .body = outer_stmt,
+        .body = .some(outer_stmt),
         .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, source }),
         .ret_layout = .str,
     }, .none);
 
     try run(&store, &layouts);
 
-    const preserved = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
+    const preserved = store.getCFStmt(store.getProcSpecImmediate(proc).body.get().?);
     try testing.expect(preserved == .join);
     try testing.expectEqual(outer_id, preserved.join.id);
     try testing.expectEqual(outer_body, preserved.join.body);

@@ -371,6 +371,6 @@ fn dummyMonoTypeField(raw: u32, ty: Mono.Type.TypeId) Mono.Type.Field {
     return .{
         .name = @fromBackingInt(@intCast(raw)),
         .ty = ty,
-        .default = null,
+        .default = .none,
     };
 }

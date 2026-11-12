@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const check = @import("check");
+const collections = @import("collections");
 
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
@@ -19,22 +20,9 @@ pub const TypeVarId = enum(u32) {
     }
 };
 
-/// A `TypeVarId` or none, at the width of one id. `Store.add` refuses the
-/// sentinel id, so `none` never names a variable.
-pub const MaybeTypeVarId = enum(u32) {
-    none = std.math.maxInt(u32),
-    _,
-
-    pub fn of(ty: ?TypeVarId) MaybeTypeVarId {
-        const present = ty orelse return .none;
-        return @fromBackingInt(@backingInt(present));
-    }
-
-    pub fn get(self: MaybeTypeVarId) ?TypeVarId {
-        if (self == .none) return null;
-        return @fromBackingInt(@backingInt(self));
-    }
-};
+/// A `TypeVarId` or none, at the width of one id. Absence is zero, so
+/// tables of these start from zeroed memory.
+pub const MaybeTypeVarId = collections.OptionalId(TypeVarId);
 
 /// Slice descriptor for type, field, tag, capture, or member arrays.
 pub const Span = extern struct {
@@ -55,8 +43,8 @@ pub const Span = extern struct {
 pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeVarId,
-    value_ty: ?TypeVarId = null,
-    default: ?MonoType.FieldDefault,
+    value_ty: MaybeTypeVarId = .none,
+    default: MonoType.OptionalFieldDefault,
 };
 
 /// Tag-union variant type entry.
@@ -70,12 +58,16 @@ pub const Tag = struct {
 pub const Capture = struct {
     local: @import("../monotype_lifted/ast.zig").LocalId,
     symbol: Common.Symbol,
-    binder: ?check.CheckedBodies.BinderId,
-    capture_id: ?check.CheckedModule.CaptureId = null,
-    checked_capture_id: ?check.CheckedModule.CaptureId = null,
+    binder: collections.OptionalId(check.CheckedBodies.BinderId),
+    capture_id: collections.OptionalId(check.CheckedModule.CaptureId) = .none,
+    checked_capture_id: collections.OptionalId(check.CheckedModule.CaptureId) = .none,
     capture_kind: check.CheckedModule.ConstCaptureKind = .lexical,
     ty: TypeVarId,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(Capture) == 64);
+}
 
 /// Function member of a lambda set.
 pub const FnMember = struct {
@@ -100,13 +92,9 @@ pub const Content = union(enum) {
         named_type: MonoType.NamedType,
         def: MonoType.TypeDef,
         kind: MonoType.NamedKind,
-        builtin_owner: ?static_dispatch.BuiltinOwner = null,
+        builtin_owner: collections.OptionalEnum(static_dispatch.BuiltinOwner) = .none,
         args: Span,
-        backing: ?struct {
-            ty: TypeVarId,
-            use: MonoType.BackingUse,
-            authority: MonoType.BackingAuthority = .checked_public,
-        } = null,
+        backing: OptionalNamedBacking = .none,
         /// Declared fields for a nominal/opaque record backing; empty otherwise.
         declared_order: Span = Span.empty(),
     },
@@ -153,6 +141,21 @@ pub const Content = union(enum) {
 
 /// Payload stored by `Content.named`.
 pub const NamedContent = std.meta.fieldInfo(Content, .named).type;
+
+/// The backing of a named type: its type and how far later stages may read it.
+pub const NamedBacking = struct {
+    ty: TypeVarId,
+    use: MonoType.BackingUse,
+    authority: MonoType.BackingAuthority = .checked_public,
+};
+
+/// An optional `NamedBacking` at its own size.
+pub const OptionalNamedBacking = collections.OptionalStruct(NamedBacking, "ty");
+
+comptime {
+    std.debug.assert(@sizeOf(NamedContent) == 152);
+    std.debug.assert(@sizeOf(Field) == 20);
+}
 
 /// Payload stored by `Content.erased`.
 pub const ErasedContent = std.meta.fieldInfo(Content, .erased).type;
@@ -211,15 +214,15 @@ test "lambda solved named backing preserves generated-private authority" {
         .def = undefined,
         .kind = .@"opaque",
         .args = Span.empty(),
-        .backing = .{
+        .backing = .some(.{
             .ty = @fromBackingInt(@intCast(1)),
             .use = .runtime_layout_only,
             .authority = .generated_private,
-        },
+        }),
     } };
     try std.testing.expectEqual(
         MonoType.BackingAuthority.generated_private,
-        content.named.backing.?.authority,
+        content.named.backing.get().?.authority,
     );
 }
 
@@ -320,7 +323,7 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
-        if (self.vars.items.len >= @backingInt(MaybeTypeVarId.none)) return error.OutOfMemory;
+        if (self.vars.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
         const id: TypeVarId = @fromBackingInt(@as(u32, @intCast(self.vars.items.len)));
         try self.vars.ensureUnusedCapacity(self.allocator, 1);
         try self.analysis_changes.ensureUnusedCapacity(self.allocator, 1);
@@ -613,9 +616,9 @@ test "lambda solved empty spans use shared empty descriptor" {
 
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
-    const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = null }});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = .none }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @fromBackingInt(@intCast(2)), .checked_name = @fromBackingInt(@intCast(2)), .payloads = nonempty_span }});
-    const nonempty_captures = try store.addCaptures(&.{.{ .local = @fromBackingInt(@intCast(3)), .symbol = @fromBackingInt(@intCast(4)), .binder = null, .ty = unit }});
+    const nonempty_captures = try store.addCaptures(&.{.{ .local = @fromBackingInt(@intCast(3)), .symbol = @fromBackingInt(@intCast(4)), .binder = .none, .ty = unit }});
     const nonempty_members = try store.addMembers(&.{.{ .lambda = @fromBackingInt(@intCast(5)), .captures = nonempty_captures }});
     try std.testing.expect(nonempty_span.len == 1);
     try std.testing.expect(nonempty_fields.len == 1);

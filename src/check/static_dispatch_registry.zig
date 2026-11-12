@@ -804,10 +804,10 @@ pub const MethodRegistryEntry = struct {
     /// `to_inspect`, or its declaration was rejected (`target` is `null`).
     /// Only `inspectOverride` reads it; ordinary method dispatch ignores
     /// it.
-    inspect_override: ?CheckedTypeId = null,
+    inspect_override: collections.OptionalId(CheckedTypeId) = .none,
     /// The evidence of inspection's use of this override at
     /// `inspect_override`, published with the module's dispatch evidence.
-    inspect_evidence: ?EvidenceNodeId = null,
+    inspect_evidence: collections.OptionalId(EvidenceNodeId) = .none,
 };
 
 /// The `to_inspect` method generic inspection calls for an owner, the checked
@@ -853,12 +853,12 @@ pub const MethodRegistry = struct {
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
         const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
-        const callable_ty = found.inspect_override orelse return null;
+        const callable_ty = found.inspect_override.get() orelse return null;
         return .{
             .target = found.target orelse
                 std.debug.panic("checked static dispatch registry invariant violated: rejected declaration was recorded as an inspect override", .{}),
             .callable_ty = callable_ty,
-            .evidence = found.inspect_evidence orelse
+            .evidence = found.inspect_evidence.get() orelse
                 base.invariant("checked static dispatch registry invariant violated: inspect override had no published use evidence", .{}),
         };
     }
@@ -928,7 +928,7 @@ pub const MethodRegistry = struct {
                 try entries.append(allocator, .{
                     .key = method_key,
                     .target = null,
-                    .inspect_override = null,
+                    .inspect_override = .none,
                 });
                 continue;
             }
@@ -945,10 +945,10 @@ pub const MethodRegistry = struct {
                         const export_name = try names.internExportIdent(idents, method_ident);
                         const proc_base = try names.internProcBase(.{
                             .module_name = module_name,
-                            .export_name = export_name,
+                            .export_name = .some(export_name),
                             .kind = .checked_source,
                             .ordinal = @backingInt(def_idx),
-                            .source_def_idx = @backingInt(def_idx),
+                            .source_def_idx = .some(@backingInt(def_idx)),
                         });
                         break :blk .{ .procedure = .{
                             .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
@@ -970,7 +970,7 @@ pub const MethodRegistry = struct {
                     try entries.append(allocator, .{
                         .key = method_key,
                         .target = null,
-                        .inspect_override = null,
+                        .inspect_override = .none,
                     });
                     continue;
                 },
@@ -1010,11 +1010,11 @@ pub const MethodRegistry = struct {
                 // generic code that never hold a local procedure's declaration
                 // context, so only a procedure or a stored top-level value
                 // can be one.
-                .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
+                .inspect_override = .of(if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
                     (std.meta.activeTag(target_kind) == .procedure or std.meta.activeTag(target_kind) == .callable_binding))
                     try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
                 else
-                    null,
+                    null),
             });
         }
 
@@ -1659,8 +1659,8 @@ pub const EvidenceNode = struct {
     target: MethodTarget,
     /// Exact checked dispatcher type that selected this target. Defaulted
     /// literal evidence has no concrete source type and records null.
-    dispatcher_ty: ?CheckedTypeId = null,
-    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
+    dispatcher_ty: collections.OptionalId(CheckedTypeId) = .none,
+    generated_codec_derivation: collections.OptionalId(GeneratedCodecDerivationId) = .none,
     instantiation: EvidenceTargetInstantiation,
     nested: EvidenceNested = .{ .resolved = .{} },
     /// Range into `StaticDispatchPlanTable.site_substitutions`: the checked
@@ -1741,10 +1741,10 @@ pub const EvidenceParamRecord = struct {
     /// `DispatchRefScope.scheme_vars`): the substitution entry this
     /// obligation's receiver is read from. Composite scheme requirements are
     /// supplied by checked evidence and have no quantified-variable slot.
-    slot: ?u32,
+    slot: collections.OptionalU32,
     /// Checker-recorded derived implementation permitted when the concrete
     /// dispatcher has no registered method target.
-    structural: ?StructuralKind = null,
+    structural: collections.OptionalEnum(StructuralKind) = .none,
     source: EvidenceParamSource = .scheme_callable,
     path: EvidencePath = .{},
 };
@@ -1870,8 +1870,8 @@ pub const StaticDispatchCallPlan = struct {
     args: artifact_serialize.Span = .{},
     result_mode: StaticDispatchResultMode,
     /// Exact generated-codec contract selected for a structural parser or
-    /// encoder call. Null for every other resolution kind.
-    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
+    /// encoder call. Absent for every other resolution kind.
+    generated_codec_derivation: collections.OptionalId(GeneratedCodecDerivationId) = .none,
     /// Assigned by `resolveTotalDispatchPlans` during CheckedModule construction; the default is
     /// a construction placeholder the pass overwrites for every plan.
     resolution: CheckedCallResolution = .checked_error,
@@ -1881,6 +1881,13 @@ pub const StaticDispatchCallPlan = struct {
         return table.operand_pool[self.args.start .. self.args.start + self.args.len];
     }
 };
+
+comptime {
+    std.debug.assert(@sizeOf(StaticDispatchCallPlan) == 88);
+    std.debug.assert(@sizeOf(EvidenceNode) == 184);
+    std.debug.assert(@sizeOf(EvidenceParamRecord) == 44);
+    std.debug.assert(@sizeOf(MethodRegistryEntry) == 176);
+}
 
 /// Public `StaticDispatchPlanId` declaration.
 pub const StaticDispatchPlanId = enum(u32) { _ };
@@ -1920,9 +1927,13 @@ pub const GeneratedCodecCall = struct {
     method_role: u32,
     dispatcher_ty: CheckedTypeId,
     callable_ty: CheckedTypeId,
-    subject_ty: ?CheckedTypeId = null,
+    subject_ty: collections.OptionalId(CheckedTypeId) = .none,
     resolution: GeneratedCodecCallResolution = .pending,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(GeneratedCodecCall) == 28);
+}
 
 /// Exact checked contract for one compiler-generated codec instantiation.
 pub const GeneratedCodecDerivation = struct {
@@ -2496,7 +2507,7 @@ pub const StaticDispatchPlanTable = struct {
                     .method_role = method_role.?,
                     .dispatcher_ty = dispatcher_ty,
                     .callable_ty = callable_ty,
-                    .subject_ty = subject_ty,
+                    .subject_ty = .of(subject_ty),
                 });
             }
             try generated_codec_derivations.append(allocator, .{
@@ -3453,7 +3464,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
                 } },
                 .callable_ty = @fromBackingInt(@intCast(11)),
             },
-            .dispatcher_ty = @fromBackingInt(@intCast(12)),
+            .dispatcher_ty = .some(@fromBackingInt(@intCast(12))),
             .instantiation = .{ .callable = @fromBackingInt(@intCast(13)) },
             .nested = .{ .resolved = .{ .start = 0, .len = 1 } },
         }};
@@ -3515,7 +3526,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         try std.testing.expectEqual(@as(?u32, 1), lookupPlanKV(loaded.by_node, 11));
 
         const node = loaded.evidenceNode(@fromBackingInt(@intCast(fixtureTableIndex(0))));
-        try std.testing.expectEqual(@as(?CheckedTypeId, @fromBackingInt(@intCast(12))), node.dispatcher_ty);
+        try std.testing.expectEqual(@as(?CheckedTypeId, @fromBackingInt(@intCast(12))), node.dispatcher_ty.get());
         try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(13))), node.instantiation.callable);
         const nested = loaded.nestedEvidence(node);
         try std.testing.expectEqual(@as(usize, 1), nested.len);
