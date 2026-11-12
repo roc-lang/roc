@@ -1228,6 +1228,9 @@ const CollectedTypeRepr = union(enum) {
     erased_callable: struct { signature: ?CollectedFunctionSignature },
     record: struct { name: []const u8, anonymous: bool, fields: []const CollectedRecordField },
     tag_union: struct { name: []const u8, tags: []const CollectedTagInfo },
+    /// An opaque pointer target: a list element or box payload with no
+    /// committed layout (see `ValuePosition`). `name` is its Roc type as
+    /// written, for display only.
     unknown: struct { name: []const u8 },
 };
 
@@ -1352,9 +1355,16 @@ const ArtifactKeyMap = std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, *con
 /// Where a checked type sits inside the value being converted.
 ///
 /// A type held by value, including a boundary argument, result, or provided
-/// value, must have a committed layout of its own. Behind a
-/// heap indirection (a list element or a box payload) the host only ever sees
-/// a pointer, so a variable can remain an opaque pointer target.
+/// value, must have a committed layout of its own, and so must everything it
+/// holds by value in turn: record fields, tuple elements, tag payloads, and
+/// nominal backings. Behind a heap indirection (a list element or a box
+/// payload) the host only ever sees a pointer, so a type with no committed
+/// layout is an opaque pointer target there. That covers a bare unresolved
+/// variable and equally any aggregate holding one by value at any depth,
+/// since one field of unknown size leaves the aggregate's size and every
+/// later offset unknown. Each heap indirection decides this for its own
+/// target, so a variable behind a further indirection inside a payload
+/// (`Box({ items : List(model) })`) leaves that payload fully described.
 const ValuePosition = enum {
     by_value,
     heap_indirect,
@@ -2056,7 +2066,7 @@ const TypeTable = struct {
         const value_name = self.boundary_value_name orelse "";
         self.unresolved_error = try std.fmt.allocPrint(
             self.gpa,
-            "The type `{s}` from module `{s}`{s}{s}{s} still has an unresolved type variable, so it has no committed memory layout and glue cannot generate bindings for it. Give the type a concrete layout (for example, box the value across the host boundary) so its size is known.",
+            "The type `{s}` from module `{s}`{s}{s}{s} still has an unresolved type variable, so it has no committed memory layout and glue cannot generate bindings for it. The host holds this value directly, so its size must be known. Put the type variable, or any value that contains it, in a `Box`: the host then holds only an opaque pointer.",
             .{
                 type_name,
                 module_name,
@@ -2255,13 +2265,31 @@ const TypeTable = struct {
             self.gpa.free(popped.arg_keys);
         };
 
-        const repr = self.convertCheckedType(artifact, checked_type, position) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.UnresolvedByValue => {
-                // The innermost composite holding the variable by value is the
-                // type the user can act on; outer types keep its message.
-                try self.recordUnresolvedByValue(artifact, checked_type);
-                return error.UnresolvedByValue;
+        const repr: CollectedTypeRepr = switch (position) {
+            .by_value => self.convertCheckedType(artifact, checked_type) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnresolvedByValue => {
+                    // The innermost composite holding the variable by value is the
+                    // type the user can act on; outer types keep its message.
+                    try self.recordUnresolvedByValue(artifact, checked_type);
+                    return error.UnresolvedByValue;
+                },
+            },
+            .heap_indirect => repr: {
+                // Whether the target has a committed layout is decided by
+                // attempting its conversion. On failure everything the attempt
+                // registered is undone, so no partial description of the
+                // target survives, and the entry reserved above becomes the
+                // opaque pointer target.
+                const mark = self.beginSpeculation();
+                defer self.endSpeculation();
+                break :repr self.convertCheckedType(artifact, checked_type) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.UnresolvedByValue => {
+                        self.rollbackSpeculation(mark);
+                        break :repr .{ .unknown = .{ .name = try self.typeStringAllocBound(artifact, checked_type) } };
+                    },
+                };
             },
         };
 
@@ -2503,14 +2531,17 @@ const TypeTable = struct {
     /// the compiler boxed the slot but the child's repr is a by-value type,
     /// the slot gets the child's box wrapper entry and that wrapper is what is
     /// attached with the box layout; the child itself is attached with the
-    /// payload layout through the wrapper.
+    /// payload layout through the wrapper. An opaque pointer target is never
+    /// wrapped: the layout committed for its type describes nothing the host
+    /// can rely on, boxed or not.
     fn childSlotFor(
         self: *TypeTable,
         store: *const layout.Store,
         child: u64,
         layout_idx: layout.Idx,
     ) Allocator.Error!ChildSlot {
-        if (layoutIsBox(store.getLayout(layout_idx)) and self.entries.items[@intCast(child)].repr != .box) {
+        const child_repr = self.entries.items[@intCast(child)].repr;
+        if (layoutIsBox(store.getLayout(layout_idx)) and child_repr != .box and child_repr != .unknown) {
             const slot = try self.box_wrappers.getOrPut(self.gpa, child);
             if (!slot.found_existing) {
                 const wrapper: u64 = @intCast(self.entries.items.len);
@@ -2534,6 +2565,17 @@ const TypeTable = struct {
         entry_idx: u64,
         layout_idx: layout.Idx,
     ) Allocator.Error!void {
+        if (self.entries.items[@intCast(entry_idx)].repr == .unknown) {
+            // An opaque pointer target has no host-knowable layout. Whatever
+            // the compiler committed for its type stands in for variables the
+            // application has yet to choose, so none of it is a fact about the
+            // value the host will hold a pointer to, and the entry carries no
+            // size of its own.
+            if (self.entries.items[@intCast(entry_idx)].abi == null) {
+                self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, .zst, self.entries.items[@intCast(entry_idx)].repr);
+            }
+            return;
+        }
         const layout_val = store.getLayout(layout_idx);
         if (self.entries.items[@intCast(entry_idx)].abi) |abi| {
             const size_align = abiSizeAlign(store, layout_val);
@@ -2667,7 +2709,7 @@ const TypeTable = struct {
                 }
                 self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, self.entries.items[@intCast(entry_idx)].repr);
             },
-            .unknown,
+            .unknown => unreachable, // answered before the committed layout is read
             .unit,
             .bool_,
             .dec,
@@ -3040,18 +3082,16 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
-        position: ValuePosition,
     ) TypeTableError!CollectedTypeRepr {
         const payload = checkedTypePayload(artifact, checked_type);
         return switch (payload) {
             .pending => glueInvariant("pending checked type reached glue type table", .{}),
             .field_kind, .err => glueInvariant("erroneous checked type reached glue type table", .{}),
-            .flex => |variable| try self.convertTypeVariable(variable, position, "flex"),
-            .rigid => |variable| try self.convertTypeVariable(variable, position, "rigid"),
-            .alias => |alias| try self.convertCheckedType(artifact, alias.backing, position),
+            .flex, .rigid => |variable| try convertTypeVariable(variable),
+            .alias => |alias| try self.convertCheckedType(artifact, alias.backing),
             .record => |record| try self.convertRecord(artifact, record.fields, record.ext),
             .tuple => |items| try self.convertTuple(artifact, items),
-            .nominal => |nominal| try self.convertNominal(artifact, nominal, position),
+            .nominal => |nominal| try self.convertNominal(artifact, nominal),
             .function => |func| try self.convertFunc(artifact, func),
             .empty_record, .empty_tag_union => .unit,
             .tag_union => |tag_union| try self.convertTagUnion(artifact, tag_union.tags, tag_union.ext),
@@ -3060,25 +3100,16 @@ const TypeTable = struct {
 
     /// A checked type variable that checking left unresolved. One with a
     /// default has the representation `defaultedVariableRepr` assigns; one
-    /// without is only representable behind a heap indirection.
-    fn convertTypeVariable(
-        self: *TypeTable,
-        variable: CheckedArtifact.CheckedTypeVariable,
-        position: ValuePosition,
-        kind_name: []const u8,
-    ) TypeTableError!CollectedTypeRepr {
-        if (defaultedVariableRepr(variable)) |repr| return repr;
-        return switch (position) {
-            .heap_indirect => .{ .unknown = .{ .name = try self.gpa.dupe(u8, kind_name) } },
-            .by_value => error.UnresolvedByValue,
-        };
+    /// without has no committed layout, which `getOrInsert` answers according
+    /// to the position of the type holding it.
+    fn convertTypeVariable(variable: CheckedArtifact.CheckedTypeVariable) error{UnresolvedByValue}!CollectedTypeRepr {
+        return defaultedVariableRepr(variable) orelse error.UnresolvedByValue;
     }
 
     fn convertNominal(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         nominal: CheckedArtifact.CheckedNominalType,
-        position: ValuePosition,
     ) TypeTableError!CollectedTypeRepr {
         const display_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
 
@@ -3203,7 +3234,7 @@ const TypeTable = struct {
             // The backing may itself be a formal (`Wrapper(a) := a`), which the
             // bindings just established resolve to the application's argument.
             const backing = try self.substituteFormal(lookup.artifact, decl.backing);
-            break :open_blk try self.convertCheckedType(backing.artifact, backing.checked_type, position);
+            break :open_blk try self.convertCheckedType(backing.artifact, backing.checked_type);
         } else glueInvariant("nominal glue conversion could not find declaration backing", .{});
 
         if (backing_repr == .record) {
@@ -4709,8 +4740,8 @@ test "issue 12760: boundary layout requirements survive memoization and callable
         \\
         \\Alias(a) :: a
         \\Wrapper(a) := a
-        \\probe : Model, Alias(Model), Wrapper(Model), Box(Model), Box((Model -> Model)), Box((U64 -> U64)) -> Model
-        \\probe = |model, _, _, _, _, _| model
+        \\probe : Model, Alias(Model), Wrapper(Model), { value : Model, tag : I32 }, Box(Model), Box((Model -> Model)), Box((U64 -> U64)), Box({ value : Model, tag : I32 }) -> Model
+        \\probe = |model, _, _, _, _, _, _, _| model
     });
     const cwd = try tmp.dir.realPathFileAlloc(io, ".", gpa);
     defer gpa.free(cwd);
@@ -4738,7 +4769,7 @@ test "issue 12760: boundary layout requirements survive memoization and callable
     try std.testing.expectEqual(@as(usize, 1), artifact.provided_exports.exports.len);
     const procedure = artifact.provided_exports.exports[0].procedure;
     const signature = CheckedArtifact.checkedFunctionPayload(&artifact.checked_types, procedure.checked_type, "test provided procedure");
-    try std.testing.expectEqual(@as(usize, 6), signature.args.len);
+    try std.testing.expectEqual(@as(usize, 8), signature.args.len);
 
     // Signature conversion visits the result first. Both kinds of procedure
     // boundary reject an unresolved result, before registering any arguments.
@@ -4755,9 +4786,10 @@ test "issue 12760: boundary layout requirements survive memoization and callable
         try std.testing.expect(std.mem.find(u8, result_table.unresolved_error.?, "probe") != null);
     }
 
-    // Exercise bare variables, aliases and nominal backings in both memo
-    // tables, with either the opaque use or the rejected value use first.
-    for (signature.args[0..3]) |ty| {
+    // Exercise bare variables, aliases, nominal backings and an aggregate
+    // holding the variable by value in both memo tables, with either the
+    // opaque use or the rejected value use first.
+    for (signature.args[0..4]) |ty| {
         for ([_]u32{ 0, 1 }) |open_ctx| {
             for ([_]bool{ false, true }) |opaque_first| {
                 var table = TypeTable.init(gpa, &artifacts);
@@ -4792,24 +4824,35 @@ test "issue 12760: boundary layout requirements survive memoization and callable
     // The same unknown type can still be carried behind a real box. A
     // directly boxed callable stays representable, but a callable over the
     // unknown type must not advertise a fabricated ABI.
-    const boxed = try table.getOrInsertRoot(artifact, signature.args[3]);
+    const boxed = try table.getOrInsertRoot(artifact, signature.args[4]);
     try std.testing.expect(table.entries.items[@intCast(boxed)].repr == .box);
     const before_callable = table.entries.items.len;
-    const opaque_box = try table.getOrInsertRoot(artifact, signature.args[4]);
+    const opaque_box = try table.getOrInsertRoot(artifact, signature.args[5]);
     const opaque_callable = table.entries.items[@intCast(opaque_box)].repr.box.inner_id;
     try std.testing.expect(table.entries.items[@intCast(opaque_callable)].repr.erased_callable.signature == null);
     try std.testing.expect(table.unresolved_error == null);
     try std.testing.expectEqual(before_callable + 2, table.entries.items.len);
-    const concrete_box = try table.getOrInsertRoot(artifact, signature.args[5]);
+    const concrete_box = try table.getOrInsertRoot(artifact, signature.args[6]);
     const concrete_callable = table.entries.items[@intCast(concrete_box)].repr.box.inner_id;
     try std.testing.expect(table.entries.items[@intCast(concrete_callable)].repr.erased_callable.signature != null);
     try std.testing.expect(table.unresolved_error == null);
-    try std.testing.expectEqual(boxed, try table.getOrInsertRoot(artifact, signature.args[3]));
+    try std.testing.expectEqual(boxed, try table.getOrInsertRoot(artifact, signature.args[4]));
+
+    // A box over an aggregate holding the unknown type by value is a box over
+    // one opaque target. Nothing of the aggregate's partial description (its
+    // `tag` field) stays in the table.
+    const before_record_box = table.entries.items.len;
+    const record_box = try table.getOrInsertRoot(artifact, signature.args[7]);
+    const record_payload = table.entries.items[@intCast(record_box)].repr.box.inner_id;
+    try std.testing.expect(table.entries.items[@intCast(record_payload)].repr == .unknown);
+    try std.testing.expect(table.unresolved_error == null);
+    try std.testing.expectEqual(before_record_box + 2, table.entries.items.len);
 
     // Checking's defaults still commit a standalone representation.
-    try std.testing.expect((try table.convertTypeVariable(.{ .row_default = .empty_record }, .by_value, "flex")) == .unit);
-    try std.testing.expect((try table.convertTypeVariable(.{ .row_default = .empty_tag_union }, .by_value, "rigid")) == .unit);
-    try std.testing.expect((try table.convertTypeVariable(.{ .numeric_default_phase = .mono_specialization }, .by_value, "flex")) == .dec);
+    try std.testing.expect((try TypeTable.convertTypeVariable(.{ .row_default = .empty_record })) == .unit);
+    try std.testing.expect((try TypeTable.convertTypeVariable(.{ .row_default = .empty_tag_union })) == .unit);
+    try std.testing.expect((try TypeTable.convertTypeVariable(.{ .numeric_default_phase = .mono_specialization })) == .dec);
+    try std.testing.expectError(error.UnresolvedByValue, TypeTable.convertTypeVariable(.{}));
 }
 
 // Lock the schema-directed marshaller against the actual checked glue platform.

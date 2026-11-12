@@ -85,6 +85,16 @@ by-value types before running a generator. An actual box can carry an unknown
 payload, and an erased callable can remain opaque when its invocation signature
 has no standalone representation.
 
+"By value" follows the value all the way down: a record field, tuple element,
+tag payload, or nominal backing is held by value by whatever holds its parent.
+A `Box` payload or `List` element is held through a pointer instead, and each
+one is described on its own terms. If it has a committed layout it gets its
+typed description; if it does not, because it is an unresolved type variable or
+holds one by value at any depth, it is one `RocUnknown` entry and the box is an
+opaque `RocBox`. Generators never receive a partial struct for such a payload,
+and its `AbiLayout` carries no size. A payload that reaches the variable only
+through a further `Box` or `List` keeps its typed description.
+
 The glue script input is targetless. It carries no concrete Roc build target,
 OS, or architecture, and `roc glue` has no `--target` flag: running it on any
 machine produces the same generated source for a given platform and glue

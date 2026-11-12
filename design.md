@@ -26507,6 +26507,26 @@ and may not change allocation headers. A descriptor word inside the opaque
 capture bytes of a compiler-created callable is capture content, not a change
 to the value shape.
 
+A value the host holds directly (a hosted or provided argument or result,
+provided data, and everything such a value holds by value in turn: record
+fields, tuple items, tag payloads, and nominal backings) must have a
+committed layout, so an unresolved type variable there is a glue error. A
+`Box` payload or `List` item is different: the host holds only a pointer to
+it. Glue therefore describes each such heap target on its own terms. A target
+with a committed layout gets its full typed description. A target without one
+is a single `RocUnknown` entry, whether it is a bare unresolved variable or an
+aggregate holding one by value at any depth, because one field of unknown size
+leaves the aggregate's size and every later field's offset unknown. Glue emits
+no partial description of such a target (no struct, no field list, no size),
+and the layout the compiler committed for its type with the variable sealed is
+not a fact about the value the application will supply. So `Box(Wrap(Model))`
+with `Wrap(m) := { model : m, n : U64 }` is the same opaque `RocBox` as
+`Box(Model)`, and `List(Wrap(Model))` is described exactly as `List(Model)`
+is. Each heap target is decided separately, so a variable behind a further
+indirection inside a payload (`Box({ boxed : Box(model), items : List(model)
+})`) leaves that payload a typed struct whose fields are the opaque box and
+list.
+
 When glue represents an unknown value as `RocUnknown` or `RocBox(RocUnknown)`,
 the host sees an opaque pointer-shaped value. The compiler must not expect the
 host to provide a payload descriptor for it. If a boxy wrapper needs a payload

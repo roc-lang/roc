@@ -816,6 +816,7 @@ const CustomCase = enum {
     glue_generic_callable_arg,
     glue_hosted_erased_generic_callback,
     glue_boxed_sequences,
+    glue_boxed_app_type,
     glue_application_only_requires,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
@@ -2708,6 +2709,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
     .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
     .{ .id = 0, .suite = .glue, .name = "issue 12887: boxed sequences are opaque owning handles in every generator", .body = .{ .custom = .glue_boxed_sequences } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
@@ -6618,6 +6620,7 @@ fn runCustomCase(
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
         .glue_hosted_erased_generic_callback => customGlueHostedErasedGenericCallback(io, allocator, &env, &timer, timeout_ms),
         .glue_boxed_sequences => customGlueBoxedSequences(io, allocator, &env, &timer, timeout_ms),
+        .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -19255,6 +19258,68 @@ fn customGlueBoxedSequences(io: std.Io, allocator: Allocator, env: *const CaseEn
             "pub inner: RocErasedCallable",
         },
         .absent = &.{ "len_if_known", "IterStep", "StreamStep" },
+    });
+}
+
+fn customGlueBoxedAppType(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // The host only ever holds a pointer to a box's contents. A payload that
+    // holds the application's type by value at any depth (nominal, record,
+    // tuple, tag union, nested, recursive) has no layout the host can know,
+    // so its box is the same opaque `RocBox` as `Box(Model)` and no payload
+    // type is emitted for it; a list of such elements matches `List(Model)`.
+    // A payload that reaches the application's type only through a further
+    // box or list, or not at all, keeps its typed payload, and a by-value
+    // record holding an opaque box is an ordinary struct with a pointer field.
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/boxed-app-type/main.roc", .{
+        .zig = &.{
+            "pub extern fn take_nominal(arg0: RocBox) callconv(.c) u64;",
+            "pub extern fn take_record(arg0: RocBox) callconv(.c) u64;",
+            "pub extern fn take_tuple(arg0: RocBox) callconv(.c) u64;",
+            "pub extern fn take_tag_union(arg0: RocBox) callconv(.c) u64;",
+            "pub extern fn take_nested(arg0: RocBox) callconv(.c) u64;",
+            "pub extern fn take_recursive(arg0: RocBox) callconv(.c) u64;",
+            "pub extern fn take_bare(arg0: RocBox) callconv(.c) u64;",
+            "pub extern fn take_list(arg0: RocListWith(*anyopaque, false)) callconv(.c) u64;",
+            "pub extern fn take_bare_list(arg0: RocListWith(*anyopaque, false)) callconv(.c) u64;",
+            "pub extern fn take_indirect(arg0: *TypesIndirect) callconv(.c) u64;",
+            "pub extern fn take_known(arg0: *TypesKnown) callconv(.c) u64;",
+            "    @\"state\": RocBox,",
+            "    @\"boxed\": RocBox,",
+            "    @\"items\": RocListWith(*anyopaque, false),",
+        },
+        .c = &.{
+            "extern uint64_t take_nominal(RocBox arg0);",
+            "extern uint64_t take_record(RocBox arg0);",
+            "extern uint64_t take_tuple(RocBox arg0);",
+            "extern uint64_t take_tag_union(RocBox arg0);",
+            "extern uint64_t take_nested(RocBox arg0);",
+            "extern uint64_t take_recursive(RocBox arg0);",
+            "extern uint64_t take_bare(RocBox arg0);",
+            "extern uint64_t take_list(RocList arg0);",
+            "extern uint64_t take_bare_list(RocList arg0);",
+            "extern uint64_t take_indirect(TypesIndirect* arg0);",
+            "extern uint64_t take_known(TypesKnown* arg0);",
+            "    RocBox state;",
+            "    RocBox boxed;",
+            "ROC_STATIC_ASSERT(sizeof(TypesIndirect) == 40, \"TypesIndirect size mismatch\");",
+            "ROC_STATIC_ASSERT(sizeof(TypesIndirect) == 24, \"TypesIndirect size mismatch\");",
+        },
+        .rust = &.{
+            "pub fn take_nominal(arg0: RocBox) -> u64;",
+            "pub fn take_record(arg0: RocBox) -> u64;",
+            "pub fn take_tuple(arg0: RocBox) -> u64;",
+            "pub fn take_tag_union(arg0: RocBox) -> u64;",
+            "pub fn take_nested(arg0: RocBox) -> u64;",
+            "pub fn take_recursive(arg0: RocBox) -> u64;",
+            "pub fn take_bare(arg0: RocBox) -> u64;",
+            "pub fn take_list(arg0: RocListWith<*mut c_void, false>) -> u64;",
+            "pub fn take_bare_list(arg0: RocListWith<*mut c_void, false>) -> u64;",
+            "pub fn take_indirect(arg0: *mut TypesIndirect) -> u64;",
+            "pub fn take_known(arg0: *mut TypesKnown) -> u64;",
+            "    pub state: RocBox,",
+            "    pub boxed: RocBox,",
+        },
+        .absent = &.{ "TypesWrap", "TypesSlot", "TypesDeep", "TypesTree", "Types.Wrap", "Types.Slot", "Types.Deep", "Types.Tree", "Loaded" },
     });
 }
 
