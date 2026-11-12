@@ -965,10 +965,11 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
 /// root that specialization registers, under `compileTimeTarget`. Neither the
 /// roots nor the policy depend on the command, so every command that checks
 /// a program performs the same evaluation. A runtime consumer
-/// (`runtime_roots`, which must be among `program_roots`) continues that
-/// specialization when it evaluated nothing but literal roots of the program
-/// roots, and otherwise a specialization of the program roots alone, made
-/// after evaluation from the completed values (`planRoots`).
+/// (`runtime_roots`, whose requests must be `program_roots`' requests in the
+/// same order; see `runtimeRootPositions`) continues that specialization when
+/// it evaluated nothing but literal roots of the program roots, and otherwise
+/// a specialization of the program roots alone, made after evaluation from
+/// the completed values (`planRoots`).
 pub fn finalizeProgram(
     allocator: Allocator,
     modules: []const ProgramModule,
@@ -3092,9 +3093,13 @@ pub fn lowerBoxyRuntime(
 }
 
 /// Where each runtime request sits in the specialized program's root plan.
-/// A runtime consumer continues the program compile-time evaluation
-/// specialized, so everything it lowers is among the program roots that
-/// specialization started from.
+/// A runtime consumer continues a specialization whose plan evaluates no
+/// compile-time root and leads with every program root, in order
+/// (`planRoots`), and its requests are those program roots in the same
+/// order, so request `i` is root `i`.
+/// Positions are never recovered by comparing requests: two modules with
+/// identical content share one checked artifact, so their roots are equal
+/// requests that still belong to distinct test-plan entries.
 fn runtimeRootPositions(
     allocator: Allocator,
     program_roots: lir.CheckedPipeline.RootRequestSet,
@@ -3110,14 +3115,16 @@ fn runtimeRootPositions(
         finalizationInvariant("runtime consumer requested layouts the program roots omit");
     if (!std.meta.eql(runtime_roots.static_data_requests, program_roots.static_data_requests) and runtime_roots.static_data_requests.len != 0)
         finalizationInvariant("runtime consumer requested static data the program roots omit");
-    const positions = try allocator.alloc(u32, runtime_roots.requests.len);
-    for (runtime_roots.requests, positions) |request, *position| {
-        for (program_roots.requests, 0..) |program_request, index| {
-            if (!std.meta.eql(program_request, request)) continue;
-            position.* = @intCast(index);
-            break;
-        } else finalizationInvariant("runtime consumer named a root compile-time evaluation did not specialize");
+    if (runtime_roots.requests.len != program_roots.requests.len)
+        finalizationInvariant("runtime consumer's requests differ from the program roots compile-time evaluation specialized");
+    if (std.debug.runtime_safety) {
+        for (runtime_roots.requests, program_roots.requests) |request, program_request| {
+            if (!std.meta.eql(program_request, request))
+                finalizationInvariant("runtime consumer's requests differ from the program roots compile-time evaluation specialized");
+        }
     }
+    const positions = try allocator.alloc(u32, runtime_roots.requests.len);
+    for (positions, 0..) |*position, index| position.* = @intCast(index);
     return positions;
 }
 
