@@ -16939,6 +16939,81 @@ test "RC field takes through a complete projection repeated in a join body" {
     try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.source);
 }
 
+test "RC field takes through a nested complete projection whose outer read repeats in a join body" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12957: a record holds
+    // a record of a record of a list and a scalar. The outer and inner
+    // records are projected before a switch whose taken branch consumes the
+    // list and jumps to a join, and the outer record is projected again in
+    // the join's body to read the scalar. The inner projection's take covers
+    // the outer projection on its way to the root, so the second outer
+    // projection is an alias of the first, and the list moves out of the
+    // dying record without a retain.
+    const inner_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const middle_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = inner_layout },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const wrapper_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = middle_layout },
+    });
+    const list = try f.local(f.list_i64);
+    const scalar = try f.local(.i64);
+    const inner = try f.local(inner_layout);
+    const middle = try f.local(middle_layout);
+    const wrapper = try f.local(wrapper_layout);
+    const first_middle = try f.local(middle_layout);
+    const first_inner = try f.local(inner_layout);
+    const taken = try f.local(f.list_i64);
+    const changed = try f.local(f.list_i64);
+    const cell = try f.local(f.list_i64);
+    const second_middle = try f.local(middle_layout);
+    const tag = try f.local(.i64);
+    const result = try f.local(inner_layout);
+    const cond = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const make_result = try f.assignStruct(result, &.{ cell, tag }, ret);
+    const read_tag = try f.assignRefField(tag, second_middle, 1, make_result);
+    const project_again = try f.assignRefField(second_middle, wrapper, 0, read_tag);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize = try f.setLocal(cell, changed, .initialize_join_param, jump);
+    const reverse = try f.assignLowLevel(changed, &.{taken}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), initialize);
+    const read_list = try f.assignRefField(taken, first_inner, 0, reverse);
+    const branch = try f.switchStmt(cond, read_list, try f.crash("stop"), null);
+    const project_inner = try f.assignRefField(first_inner, first_middle, 0, branch);
+    const project_first = try f.assignRefField(first_middle, wrapper, 0, project_inner);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{cell}),
+        .body = project_again,
+        .remainder = project_first,
+    } }, .test_fixture);
+    const make_wrapper = try f.assignStruct(wrapper, &.{middle}, join);
+    const make_middle = try f.assignStruct(middle, &.{ inner, scalar }, make_wrapper);
+    const make_inner = try f.assignStruct(inner, &.{ list, scalar }, make_middle);
+    const assign_scalar = try f.assignI64(scalar, 0, make_inner);
+    const body = try f.assignList(list, &.{}, assign_scalar);
+    _ = try f.addProc(&.{cond}, body, inner_layout);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(first_middle, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(first_inner, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(wrapper, .incref));
+    const second_projection_stmt = f.store.getCFStmt(project_again);
+    try testing.expect(second_projection_stmt == .assign_ref);
+    try testing.expect(second_projection_stmt.assign_ref.op.kind == .local);
+    try testing.expectEqual(first_middle, second_projection_stmt.assign_ref.op.source);
+}
+
 test "RC complete projection after a rebind of its root keeps its own read" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

@@ -22792,14 +22792,31 @@ When one ownership place is read repeatedly by ownership-complete struct-field
 or tag-payload reads along a single control-flow path, dismantle analysis
 chooses the earliest same-root, same-layout read that dominates each later read
 and rewrites those later reads as explicit local aliases before ARC solving.
-That rewrite is materialized only when the representative commits a dismantle
-plan, and a canonicalized read is classified by that same plan: under a
-committed representative it is an occurrence of the representative (a whole
-use when its target is emitted owned, a transparent alias when it stays
-borrowed), and otherwise it stays an ordinary field read of its root. Candidates are solved
-representatives first; a representative is a complete field read whose layout
-is a proper part of its root's layout, so the order is acyclic and each
-deferred read is settled exactly once.
+Representatives are struct or tag-union reads.
+That rewrite is materialized only when the representative holds a committed
+take: it lies on the access path of a committed projected container, or it is
+a struct representative that commits a dismantle plan of its own. A tag-union
+representative holds a take only through an access path, because a container
+keyed by a tag union belongs to the union root its payload view dismantles.
+A projected container's commit marks every read on its access path up to its
+root, following ownership-complete projections and borrowed same-value
+aliases, and marks each canonicalized read on that path through its
+representative. Marks always extend to the root, so a walk ends at the first
+marked read, and a recursive call-graph component that retracts its plans
+retracts these marks with them. A canonicalized read is classified by that
+same commitment: under a representative holding a take it is an occurrence of
+the representative (a whole use when its target is emitted owned, a
+transparent alias when it stays borrowed), and otherwise it stays an ordinary
+field read of its root.
+A deferred read is settled by the candidate its source resolves to, which is
+the root or any candidate between the root and a projected container below it.
+Candidates are therefore solved representatives first, and each projected
+container before the nearest candidate above it on its access path, which
+precedes the next candidate above it in turn. Both kinds of edge lead from a
+read to a candidate above it on its access path, so the order is acyclic and
+each deferred read is settled exactly once; debug builds check that no
+access-path mark lands on a representative a deferred read was already
+settled against.
 A root therefore never commits a take on a read that is emitted as an alias of
 a container already holding the root's unit.
 The borrow solve runs before dismantle, so the solution adopts each
