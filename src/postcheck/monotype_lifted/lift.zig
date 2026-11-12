@@ -379,24 +379,15 @@ fn checkOperandSpan(program: *const Ast.Program, fn_id: Ast.FnId, operand_span: 
     return null;
 }
 
-/// A lifted function id or none, at the width of one id; `Program` never
-/// gives a function the sentinel id.
-const MaybeFnId = enum(u32) {
-    none = std.math.maxInt(u32),
-    _,
+/// A lifted function id or none, at the width of one id; zero is none.
+const MaybeFnId = collections.OptionalId(Ast.FnId);
 
-    fn of(fn_id: Ast.FnId) MaybeFnId {
-        return @fromBackingInt(@backingInt(fn_id));
-    }
-
-    fn get(self: MaybeFnId) ?Ast.FnId {
-        if (self == .none) return null;
-        return @fromBackingInt(@backingInt(self));
-    }
-};
-
-const DefMap = []MaybeFnId;
-const NestedDefMap = []MaybeFnId;
+/// Each definition's lifted function, written for every definition as soon
+/// as the table is made.
+const DefMap = collections.WriteFirstSlice(Ast.FnId);
+const NestedDefMap = collections.WriteFirstSlice(Ast.FnId);
+/// Each Monotype function's lifted function, absent until registered. Read
+/// before written, so it starts cleared to absent (zero).
 const FnMap = []MaybeFnId;
 
 const MonoFnBody = struct {
@@ -439,8 +430,8 @@ const Lifter = struct {
             .output = output,
             .expr_done = expr_done,
             .stmt_done = stmt_done,
-            .def_map = &.{},
-            .nested_def_map = &.{},
+            .def_map = .empty,
+            .nested_def_map = .empty,
             .fn_map = &.{},
             .fn_bodies = .empty,
             .nested_fn_ids = collections.DenseMap(Ast.FnId, void).init(allocator),
@@ -458,8 +449,8 @@ const Lifter = struct {
         self.nested_fn_ids.deinit();
         self.fn_bodies.deinit(self.allocator);
         if (self.fn_map.len > 0) self.allocator.free(self.fn_map);
-        if (self.nested_def_map.len > 0) self.allocator.free(self.nested_def_map);
-        if (self.def_map.len > 0) self.allocator.free(self.def_map);
+        self.nested_def_map.deinit(self.allocator);
+        self.def_map.deinit(self.allocator);
         self.stmt_done.deinit(self.allocator);
         self.expr_done.deinit(self.allocator);
     }
@@ -468,22 +459,20 @@ const Lifter = struct {
         self.fn_map = try self.allocator.alloc(MaybeFnId, self.source.fns.len);
         @memset(self.fn_map, .none);
 
-        self.def_map = try self.allocator.alloc(MaybeFnId, self.source.defs.len);
-        @memset(self.def_map, .none);
+        self.def_map = try DefMap.init(self.allocator, self.source.defs.len);
 
         for (self.source.defs, 0..) |def, index| {
             const fn_id = try self.output.reserveFnSlot();
             try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = def.body });
-            self.def_map[index] = .of(fn_id);
-            if (def.fn_id) |source_fn_id| self.registerFn(source_fn_id, fn_id);
+            self.def_map.set(index, fn_id);
+            if (def.fn_id.get()) |source_fn_id| self.registerFn(source_fn_id, fn_id);
         }
 
-        self.nested_def_map = try self.allocator.alloc(MaybeFnId, self.source.nested_defs.len);
-        @memset(self.nested_def_map, .none);
+        self.nested_def_map = try NestedDefMap.init(self.allocator, self.source.nested_defs.len);
         for (self.source.nested_defs, 0..) |def, index| {
             const fn_id = try self.output.reserveFnSlot();
             try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = .{ .roc = def.body } });
-            self.nested_def_map[index] = .of(fn_id);
+            self.nested_def_map.set(index, fn_id);
             try self.nested_fn_ids.put(fn_id, {});
             self.registerFn(def.fn_id, fn_id);
         }
@@ -491,13 +480,11 @@ const Lifter = struct {
         try self.computeCaptureFixpoint();
 
         for (self.source.defs, 0..) |def, index| {
-            try self.lowerTopLevelDef(self.def_map[index].get() orelse
-                Common.invariant("Monotype definition was not reserved before lifting"), def);
+            try self.lowerTopLevelDef(self.def_map.get(index), def);
         }
 
         for (self.source.nested_defs, 0..) |def, index| {
-            try self.lowerNestedDef(self.nested_def_map[index].get() orelse
-                Common.invariant("Monotype nested definition was not reserved before lifting"), def);
+            try self.lowerNestedDef(self.nested_def_map.get(index), def);
         }
 
         for (0..self.output.fnCount()) |index| {
@@ -510,9 +497,8 @@ const Lifter = struct {
 
         for (self.source.roots) |root| {
             const raw = @backingInt(root.def);
-            if (raw >= self.def_map.len) Common.invariant("Monotype root references a missing definition");
-            const fn_id = self.def_map[raw].get() orelse
-                Common.invariant("Monotype root definition was not lifted");
+            if (raw >= self.def_map.len()) Common.invariant("Monotype root references a missing definition");
+            const fn_id = self.def_map.get(raw);
             try self.output.addRoot(.{
                 .fn_id = fn_id,
                 .request = root.request,
@@ -523,9 +509,8 @@ const Lifter = struct {
         // Literal roots keep their positions, which are their ids.
         for (self.source.literal_roots) |root| {
             const raw = @backingInt(root.def);
-            if (raw >= self.def_map.len) Common.invariant("Monotype literal root references a missing definition");
-            const fn_id = self.def_map[raw].get() orelse
-                Common.invariant("Monotype literal root definition was not lifted");
+            if (raw >= self.def_map.len()) Common.invariant("Monotype literal root references a missing definition");
+            const fn_id = self.def_map.get(raw);
             try self.output.addLiteralRoot(.{
                 .fn_id = fn_id,
                 .module = root.module,
@@ -534,11 +519,10 @@ const Lifter = struct {
         }
 
         for (self.source.layout_requests) |request| {
-            const fn_id = if (request.def) |def| blk: {
+            const fn_id = if (request.def.get()) |def| blk: {
                 const raw = @backingInt(def);
-                if (raw >= self.def_map.len) Common.invariant("Monotype static data layout request references a missing definition");
-                break :blk self.def_map[raw].get() orelse
-                    Common.invariant("Monotype static data layout request definition was not lifted");
+                if (raw >= self.def_map.len()) Common.invariant("Monotype static data layout request references a missing definition");
+                break :blk self.def_map.get(raw);
             } else null;
             try self.output.addLayoutRequest(.{
                 .checked_type = request.checked_type,
@@ -574,7 +558,7 @@ const Lifter = struct {
             },
             .hosted => .hosted,
         };
-        var source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
+        var source = if (def.fn_id.get()) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
         if (source) |*template| template.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
@@ -582,10 +566,10 @@ const Lifter = struct {
             // A served body already passed this normalization. Its scope is
             // part of source identity even though no body remains to rewrite.
             .root_identity = def.root_identity,
-            .signature = if (def.fn_id) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
+            .signature = .of(if (def.fn_id.get()) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.?.mono_fn_ty,
-            } else null,
+            } else null),
             .args = def.args,
             .captures = .empty(),
             .body = body,
@@ -601,14 +585,14 @@ const Lifter = struct {
         const shapes = self.output.finishFnShapes(outer_shapes);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@backingInt(fn_id)]);
         var source = self.nestedSource(def.fn_id, def.fn_def);
-        source.frozen_fn = def.fn_id;
+        source.frozen_fn = .some(def.fn_id);
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
-            .signature = switch (self.source.fnSignatureRelation(def.fn_id)) {
+            .signature = .of(switch (self.source.fnSignatureRelation(def.fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.mono_fn_ty,
-            },
+            }),
             .args = def.args,
             .captures = capture_span,
             .body = .{ .roc = def.body },
@@ -786,9 +770,8 @@ const Lifter = struct {
             },
             .def_ref => |def_id| {
                 const raw = @backingInt(def_id);
-                if (raw >= self.def_map.len) Common.invariant("Monotype definition reference was outside the definition table");
-                const fn_id = self.def_map[raw].get() orelse
-                    Common.invariant("Monotype definition reference reached lifting before its function was registered");
+                if (raw >= self.def_map.len()) Common.invariant("Monotype definition reference was outside the definition table");
+                const fn_id = self.def_map.get(raw);
                 const captures = try self.captureExprSpanForFn(fn_id, expr_id);
                 output.setExprData(expr_id, .{ .fn_ref = .{
                     .fn_id = fn_id,
@@ -839,7 +822,7 @@ const Lifter = struct {
                 for (0..branches.len) |branch_index| {
                     const branch = GuardedList.at(branches, branch_index);
                     try children.stmts(branch.bindings);
-                    if (branch.guard) |guard| try children.child(guard);
+                    if (branch.guard.get()) |guard| try children.child(guard);
                     try children.child(branch.body);
                 }
             },
@@ -992,14 +975,14 @@ const Lifter = struct {
         const shapes = self.output.finishFnShapes(finish.outer_shapes);
         const capture_span = try self.output.addTypedLocalSpan(finish.captures);
         var source = self.source.fnSource(lambda.fn_id);
-        source.frozen_fn = lambda.fn_id;
+        source.frozen_fn = .some(lambda.fn_id);
         self.output.setFn(fn_id, .{
             .symbol = self.symbols.fresh(),
             .source = source,
-            .signature = switch (self.source.fnSignatureRelation(lambda.fn_id)) {
+            .signature = .of(switch (self.source.fnSignatureRelation(lambda.fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.mono_fn_ty,
-            },
+            }),
             .args = lambda.args,
             .captures = capture_span,
             .body = .{ .roc = lambda.body },
@@ -1842,7 +1825,7 @@ fn CaptureWalk(comptime Visitor: type) type {
                         for (0..bindings.len) |binding_index| {
                             try walk.push(.{ .stmt = .{ .stmt = GuardedList.at(bindings, binding_index), .ctx = ctx } });
                         }
-                        if (branch.guard) |guard| try walk.child(guard, ctx);
+                        if (branch.guard.get()) |guard| try walk.child(guard, ctx);
                         try walk.child(branch.body, ctx);
                         try walk.push(.end_scope);
                     }
@@ -2518,7 +2501,7 @@ fn shapeContent(types: *const MonoType.Store, ty: MonoType.TypeId) MonoType.Cont
     while (true) {
         const content = types.get(current);
         if (content == .named) {
-            if (content.named.backing) |backing| {
+            if (content.named.backing.get()) |backing| {
                 current = backing.ty;
                 continue;
             } else {

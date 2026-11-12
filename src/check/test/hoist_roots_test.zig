@@ -46,8 +46,8 @@ test "hoist roots selected for referenced closed local binding chain" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 2), roots.len);
-    try std.testing.expect(roots[0].pattern != null);
-    try std.testing.expect(roots[1].pattern != null);
+    try std.testing.expect(roots[0].pattern != .none);
+    try std.testing.expect(roots[1].pattern != .none);
 }
 
 test "hoist roots selected for closed ordinary call binding RHS" {
@@ -64,7 +64,7 @@ test "hoist roots selected for closed ordinary call binding RHS" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
-    try std.testing.expect(roots[0].pattern != null);
+    try std.testing.expect(roots[0].pattern != .none);
     try expectExprTag(&test_env, roots[0].expr, .e_call);
 }
 
@@ -84,7 +84,7 @@ test "hoist roots selected for closed local block with internal locals" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
-    try std.testing.expect(roots[0].pattern != null);
+    try std.testing.expect(roots[0].pattern != .none);
     try expectExprTag(&test_env, roots[0].expr, .e_block);
 }
 
@@ -99,7 +99,7 @@ test "hoist roots selected for direct closed ordinary call function body" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern.get());
     try expectExprTag(&test_env, roots[0].expr, .e_call);
 }
 
@@ -149,7 +149,7 @@ test "hoist roots selected for direct closed arithmetic function body" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern.get());
     try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
 }
 
@@ -168,8 +168,8 @@ test "hoist roots select closed ordinary call dependencies first" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 2), roots.len);
-    try std.testing.expect(roots[0].pattern != null);
-    try std.testing.expect(roots[1].pattern != null);
+    try std.testing.expect(roots[0].pattern != .none);
+    try std.testing.expect(roots[1].pattern != .none);
     try expectExprTag(&test_env, roots[1].expr, .e_call);
 }
 
@@ -187,7 +187,7 @@ test "hoist roots select closed ordinary call child expressions" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern.get());
     try expectExprTag(&test_env, roots[0].expr, .e_call);
 }
 
@@ -207,7 +207,7 @@ test "hoist roots selected for closed pure static dispatch call binding RHS" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
-    try std.testing.expect(roots[0].pattern != null);
+    try std.testing.expect(roots[0].pattern != .none);
     try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
 }
 
@@ -224,7 +224,7 @@ test "hoist roots selected for direct closed static dispatch function body" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern.get());
     try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
 }
 
@@ -311,7 +311,7 @@ test "non-iterator methods sharing iterator producer names remain hoistable" {
         const roots = test_env.checker.selectedHoistedRoots();
         // The binding root, then the guarded `List.len` root in the branch.
         try std.testing.expectEqual(@as(usize, 2), roots.len);
-        try std.testing.expect(roots[0].pattern != null);
+        try std.testing.expect(roots[0].pattern != .none);
         try std.testing.expect(!roots[0].guarded);
         try std.testing.expect(roots[1].guarded);
         const root_expr = test_env.module_env.store.getExpr(roots[0].expr);
@@ -445,7 +445,7 @@ test "hoist roots selected for closed nested lambda body child" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern.get());
     try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
 }
 
@@ -780,7 +780,7 @@ test "hoist roots selected for record destructure extraction binders" {
     try std.testing.expectEqual(@as(usize, 2), roots.len);
     try expectPatternExtractionRoot(roots[0]);
     try std.testing.expect(!test_env.checker.selectedHoistedRootIsTopLevel(roots[0]));
-    try std.testing.expect(roots[1].pattern != null);
+    try std.testing.expect(roots[1].pattern != .none);
     try std.testing.expect(!test_env.checker.selectedHoistedRootIsTopLevel(roots[1]));
 }
 
@@ -798,10 +798,10 @@ test "hoist roots selected for tuple destructure extraction binders" {
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 4), roots.len);
-    try std.testing.expect(roots[0].pattern != null);
+    try std.testing.expect(roots[0].pattern != .none);
     try expectPatternExtractionRoot(roots[1]);
     try expectPatternExtractionRoot(roots[2]);
-    try std.testing.expect(roots[3].pattern != null);
+    try std.testing.expect(roots[3].pattern != .none);
 }
 
 test "hoist roots selected for tag payload extraction binders" {
@@ -818,7 +818,7 @@ test "hoist roots selected for tag payload extraction binders" {
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 2), roots.len);
     try expectPatternExtractionRoot(roots[0]);
-    try std.testing.expect(roots[1].pattern != null);
+    try std.testing.expect(roots[1].pattern != .none);
 }
 
 test "refutable closed destructure selects validation root without live binders" {
@@ -837,7 +837,7 @@ test "refutable closed destructure selects validation root without live binders"
         .expr, .pattern_extraction, .pattern_error, .valueless_binding => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern.get());
 }
 
 test "unused concrete binder retains refutable destructure validation root" {
@@ -905,7 +905,7 @@ test "hoist roots selected for nested tag payload extraction binders" {
     try std.testing.expectEqual(@as(usize, 3), roots.len);
     try expectPatternExtractionRoot(roots[0]);
     try expectPatternExtractionRoot(roots[1]);
-    try std.testing.expect(roots[2].pattern != null);
+    try std.testing.expect(roots[2].pattern != .none);
 }
 
 test "hoist roots selected for nested record and tuple destructure extraction binders" {
@@ -923,7 +923,7 @@ test "hoist roots selected for nested record and tuple destructure extraction bi
     try std.testing.expectEqual(@as(usize, 3), roots.len);
     try expectPatternExtractionRoot(roots[0]);
     try expectPatternExtractionRoot(roots[1]);
-    try std.testing.expect(roots[2].pattern != null);
+    try std.testing.expect(roots[2].pattern != .none);
 }
 
 test "hoist roots selected for record rest extraction binders" {
@@ -940,7 +940,7 @@ test "hoist roots selected for record rest extraction binders" {
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 2), roots.len);
     try expectPatternExtractionRoot(roots[0]);
-    try std.testing.expect(roots[1].pattern != null);
+    try std.testing.expect(roots[1].pattern != .none);
 }
 
 test "hoist roots publish top-level destructure binders used by executable roots" {
@@ -1207,13 +1207,13 @@ test "hoist roots are not selected for many unused closed locals" {
 }
 
 fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) error{ TestUnexpectedResult, TestExpectedEqual, ExpectedPatternExtractionRoot }!void {
-    try std.testing.expect(root.pattern != null);
+    try std.testing.expect(root.pattern != .none);
     const extraction = switch (root.body) {
         .pattern_extraction => |extraction| extraction,
         .expr, .pattern_validation, .pattern_error, .valueless_binding => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(root.expr, extraction.base_expr);
-    try std.testing.expectEqual(root.pattern.?, extraction.result_pattern);
+    try std.testing.expectEqual(root.pattern.get().?, extraction.result_pattern);
     try std.testing.expect(extraction.scrutinee_pattern != extraction.result_pattern);
 }
 
@@ -1370,7 +1370,7 @@ test "hoist roots are not selected for branch-local binding dependencies" {
 
     try test_env.assertNoErrors();
     for (test_env.checker.selectedHoistedRoots()) |root| {
-        try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), root.pattern);
+        try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), root.pattern.get());
     }
 }
 
@@ -1635,7 +1635,7 @@ test "hoist roots selected for whole closed conditional expressions" {
     try expectOnlyComptimeConditionWarnings(&test_env, 1);
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 1), roots.len);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern.get());
     try expectExprTag(&test_env, roots[0].expr, .e_if);
 }
 
@@ -1705,7 +1705,7 @@ test "hoist roots select the pure receiver binding of an effectful static dispat
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const root_region = test_env.module_env.store.getExprRegion(roots[0].expr);
     try std.testing.expectEqualStrings("{ x: 42.I64 }", test_env.module_env.getSource(root_region));
-    try std.testing.expect(roots[0].pattern != null);
+    try std.testing.expect(roots[0].pattern != .none);
 }
 
 test "hoist roots are not selected when an effectful function argument is called" {

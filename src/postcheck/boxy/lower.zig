@@ -590,11 +590,14 @@ pub fn listIntTemplateWorkerIdentity(link_name: [32]u8, template: checked_names.
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// A scheme variable's related type, absent when no relation fixed it.
+pub const Related = collections.OptionalId(TypeId);
+
 /// The kind variables of a scheme (design.md "Field Kinds"): the value type of
 /// each variable's field, null for a variable that is no kind, and the kind
 /// variables, each after those its value type mentions.
 pub const SchemeKinds = struct {
-    payloads: []const ?TypeId = &.{},
+    payloads: collections.OptionalIndexColumn(TypeId).View = .{},
     order: []const u32 = &.{},
 };
 
@@ -833,7 +836,7 @@ pub const Program = struct {
             }
         }
         for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
-            const site_expr = site.checked_expr orelse continue;
+            const site_expr = site.checked_expr.get() orelse continue;
             try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
             // A closure's site is also its lambda's, which names its worker.
             const site_data = view.bodies().exprData(site_expr);
@@ -1087,14 +1090,14 @@ pub const Program = struct {
                     hasher.update(&try self.typeContent(field.ty));
                     hasher.update(&[_]u8{@backingInt(field.kind)});
                     hashWord(&hasher, field.slot_variable);
-                    hasher.update(&[_]u8{@intFromBool(field.default != null)});
-                    if (field.default) |default| {
+                    hasher.update(&[_]u8{@intFromBool(field.default.get() != null)});
+                    if (field.default.get()) |default| {
                         hasher.update(&self.modules.get(default.module).view.module_identity.stable_hash);
                         hashWord(&hasher, default.expr_node);
                     }
                 }
-                try self.hashOptionalType(&hasher, record.ext);
-                if (record.declared) |declared| {
+                try self.hashOptionalType(&hasher, record.ext.get());
+                if (record.declared.get()) |declared| {
                     hasher.update(&[_]u8{1});
                     try self.hashTypes(&hasher, store.span(declared.padding));
                     const slots = store.declaredSlots(declared);
@@ -1198,7 +1201,7 @@ pub const Program = struct {
             .list, .box => |elem| try out.append(allocator, elem),
             .tuple => |items| try out.appendSlice(allocator, store.span(items)),
             .record => |record| {
-                if (record.ext) |ext| try out.append(allocator, ext);
+                if (record.ext.get()) |ext| try out.append(allocator, ext);
                 const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
                 try out.appendSlice(allocator, storage);
@@ -1239,7 +1242,7 @@ pub const Program = struct {
         } else {
             proc.ret_layout = dynamic_layout;
             const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
-            proc.dyn_result = try store.addLocal(.{ .layout_idx = dynamic_layout, .dyn = .{ .desc = desc, .storage = .result } });
+            proc.dyn_result = .of(try store.addLocal(.{ .layout_idx = dynamic_layout, .dyn = .{ .desc = desc, .storage = .result } }));
         }
     }
 
@@ -1418,7 +1421,7 @@ pub const Program = struct {
         const literal_requirements = templates.templateLiteralRequirements(&template);
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
-            const sealed_dispatcher = if (param.slot) |slot|
+            const sealed_dispatcher = if (param.slot.get()) |slot|
                 std.mem.findScalar(u32, sealed_slots, slot) != null and self.converter().platformIdentity(module_index, checked_scheme_vars[slot]) == null
             else
                 false;
@@ -1739,25 +1742,25 @@ pub const Program = struct {
 
     /// The relation of `relateVariablesAll`, leaving variables the types do
     /// not relate null.
-    pub fn relateVariablesPartial(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize) Allocator.Error![]?TypeId {
+    pub fn relateVariablesPartial(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize) Allocator.Error![]Related {
         return try self.relateVariablesRows(allocator, roots, count, null);
     }
 
     /// `relateVariablesPartial`, also marking in `row_vars` each variable
     /// related as an open tag row's remainder: the actual row's tags the open
     /// row does not name (design.md "Row Joins", `.boxy`).
-    pub fn relateVariablesRows(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool) Allocator.Error![]?TypeId {
+    pub fn relateVariablesRows(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool) Allocator.Error![]Related {
         const store = &self.store;
-        const bound = try allocator.alloc(?TypeId, count);
+        const bound = try allocator.alloc(Related, count);
         defer allocator.free(bound);
-        @memset(bound, null);
+        @memset(bound, .none);
         var pending: std.ArrayList([2]TypeId) = .empty;
         defer pending.deinit(allocator);
         try pending.appendSlice(allocator, roots);
         while (pending.pop()) |pair| {
             const formal = store.get(pair[0]);
             if (formal == .variable) {
-                bound[formal.variable] = pair[1];
+                bound[formal.variable] = .some(pair[1]);
                 continue;
             }
             const other = store.get(pair[1]);
@@ -1795,7 +1798,7 @@ pub const Program = struct {
                                 // A kind variable takes the field's storage
                                 // on the other side.
                                 if (field.kind == .variable_slot) {
-                                    bound[field.slot_variable] = try self.layouts.fieldStorage(candidate);
+                                    bound[field.slot_variable] = .some(try self.layouts.fieldStorage(candidate));
                                     if (row_vars) |marks| {
                                         if (field.slot_variable < marks.len) marks[field.slot_variable] = true;
                                     }
@@ -1804,14 +1807,14 @@ pub const Program = struct {
                         }
                         if (!named) try residual.append(allocator, candidate);
                     }
-                    if (record.ext) |ext| {
-                        const remainder = if (residual.items.len == 0 and other.record.ext == null)
+                    if (record.ext.get()) |ext| {
+                        const remainder = if (residual.items.len == 0 and other.record.ext == .none)
                             try store.emptyRecord()
                         else
-                            try store.intern(.{ .record = .{ .fields = residual.items, .ext = other.record.ext } });
+                            try store.intern(.{ .record = .{ .fields = residual.items, .ext = other.record.ext.get() } });
                         try pending.append(allocator, .{ ext, remainder });
                     }
-                    if (record.declared != null and other.record.declared != null) {
+                    if (record.declared.get() != null and other.record.declared.get() != null) {
                         for (store.paddingTypes(record), store.paddingTypes(other.record)) |a, b| try pending.append(allocator, .{ a, b });
                     }
                 },
@@ -1844,7 +1847,7 @@ pub const Program = struct {
                 .primitive, .empty_record, .variable => {},
             }
         }
-        return try allocator.dupe(?TypeId, bound);
+        return try allocator.dupe(Related, bound);
     }
 
     /// The kind variables among `count` scheme variables that the types
@@ -1852,8 +1855,7 @@ pub const Program = struct {
     /// kind variable's scheme relates it to one field, so to one value type.
     pub fn schemeKinds(self: *Program, roots: []const TypeId, count: usize) Allocator.Error!SchemeKinds {
         const arena = self.arena.allocator();
-        const payloads = try arena.alloc(?TypeId, count);
-        @memset(payloads, null);
+        var payloads = try collections.OptionalIndexColumn(TypeId).initFilled(arena, count);
         var found: std.ArrayList(u32) = .empty;
         defer found.deinit(self.allocator);
         var pending: std.ArrayList(TypeId) = .empty;
@@ -1866,13 +1868,13 @@ pub const Program = struct {
             switch (self.store.get(ty)) {
                 .record => |record| {
                     for (self.store.fieldSpan(record.fields)) |field| {
-                        if (field.kind == .variable_slot and payloads[field.slot_variable] == null) {
-                            payloads[field.slot_variable] = field.ty;
+                        if (field.kind == .variable_slot and !payloads.isPresent(field.slot_variable)) {
+                            payloads.set(field.slot_variable, field.ty);
                             try found.append(self.allocator, field.slot_variable);
                         }
                         try pending.append(self.allocator, field.ty);
                     }
-                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                    if (record.ext.get()) |ext| try pending.append(self.allocator, ext);
                     try pending.appendSlice(self.allocator, self.store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, self.store.span(items)),
@@ -1900,7 +1902,7 @@ pub const Program = struct {
             const before = placed;
             for (found.items) |index| {
                 if (done[index]) continue;
-                const nested = try self.kindsMentioned(payloads[index].?, payloads.len);
+                const nested = try self.kindsMentioned(payloads.get(index).?, payloads.len());
                 defer self.allocator.free(nested);
                 const ready = for (nested) |other| {
                     if (!done[other]) break false;
@@ -1912,7 +1914,7 @@ pub const Program = struct {
             }
             if (placed == before) invariant("a field kind's value type mentions the kind itself, as no finite type does");
         }
-        return .{ .payloads = payloads, .order = order };
+        return .{ .payloads = payloads.view(), .order = order };
     }
 
     /// The kind variables `root` mentions.
@@ -1929,7 +1931,7 @@ pub const Program = struct {
     /// variable of the enclosing scope, stays.
     pub fn resolveKindSlots(self: *Program, kinds: SchemeKinds, bound: []TypeId) Allocator.Error!void {
         for (kinds.order) |index| {
-            const payload = kinds.payloads[index].?;
+            const payload = kinds.payloads.get(index).?;
             if (self.store.committedKindOf(bound[index])) |kind| {
                 const value = try self.substitute(self.allocator, payload, bound);
                 bound[index] = switch (kind) {
@@ -2012,7 +2014,7 @@ pub const Program = struct {
                 switch (node) {
                     .record => |record| {
                         for (self.store.fieldSpan(record.fields)) |field| try stack.append(allocator, .{ .ty = field.ty, .expanded = false });
-                        if (record.ext) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
+                        if (record.ext.get()) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
                         for (self.store.paddingTypes(record)) |padding| try stack.append(allocator, .{ .ty = padding, .expanded = false });
                     },
                     .tuple => |items| for (self.store.span(items)) |item| try stack.append(allocator, .{ .ty = item, .expanded = false }),
@@ -2070,19 +2072,19 @@ pub const Program = struct {
                             try fields.append(allocator, substituted);
                         }
                     }
-                    var ext: ?TypeId = if (record.ext) |ext| done.get(ext).? else null;
+                    var ext: ?TypeId = if (record.ext.get()) |ext| done.get(ext).? else null;
                     if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
                         .empty_record => ext = null,
                         .record => |ext_record| {
                             try fields.appendSlice(allocator, self.store.fieldSpan(ext_record.fields));
-                            ext = ext_record.ext;
+                            ext = ext_record.ext.get();
                         },
                         .variable => {},
                         .primitive, .tuple, .tag_union, .list, .box, .nominal, .function => invariant("a record row's remainder substituted to a non-record type"),
                     };
                     // A declared order's slots index its row, which no
                     // substitution of its closed remainder extends.
-                    if (record.declared) |declared| {
+                    if (record.declared.get()) |declared| {
                         const padding = try allocator.alloc(TypeId, declared.padding.len);
                         defer allocator.free(padding);
                         for (self.store.span(declared.padding), padding) |ty, *slot| slot.* = done.get(ty).?;
@@ -2286,7 +2288,7 @@ pub const Program = struct {
                 .primitive, .empty_record, .variable, .function => {},
                 .record => |record| {
                     for (store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
-                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                    if (record.ext.get()) |ext| try pending.append(self.allocator, ext);
                     try pending.appendSlice(self.allocator, store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, store.span(items)),
@@ -2338,7 +2340,7 @@ pub const Program = struct {
             requirement.* = .{
                 .module = key.module,
                 .method = param.method,
-                .structural = param.structural,
+                .structural = param.structural.get(),
                 .dispatcher = try self.converter().convert(key.module, param.dispatcher_ty, env),
                 .callable = try self.converter().convert(key.module, param.callable_ty, env),
             };
@@ -2472,14 +2474,14 @@ pub const Program = struct {
         defer self.allocator.free(related);
         try self.relateThroughTargetRequirements(target, related);
         const bound = try self.arena.allocator().alloc(TypeId, count);
-        for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty orelse try self.converter().sealedScheme(target_worker.module, variable);
+        for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty.get() orelse try self.converter().sealedScheme(target_worker.module, variable);
         try self.resolveKindSlots(target_worker.kinds, bound);
         return try self.targetRequirements(target, bound);
     }
 
     /// Fill the scheme variables of `target` that `related` leaves unrelated
     /// from the requirements of its own evidence parameters.
-    pub fn relateThroughTargetRequirements(self: *Program, target: WorkerId, related: []?TypeId) Allocator.Error!void {
+    pub fn relateThroughTargetRequirements(self: *Program, target: WorkerId, related: []Related) Allocator.Error!void {
         const target_worker = self.worker(target).*;
         if (target_worker.dictionary_params.len == 0) return;
         const key = switch (target_worker.key) {
@@ -2500,7 +2502,7 @@ pub const Program = struct {
     /// method whose own type, related back to the requirement's callable,
     /// determines the variables that callable names, until no requirement
     /// determines more.
-    pub fn relateThroughRequirements(self: *Program, module_index: ModuleIndex, vars: []const checked.CheckedTypeId, params: []const static_dispatch.EvidenceParamRecord, related: []?TypeId) Allocator.Error!void {
+    pub fn relateThroughRequirements(self: *Program, module_index: ModuleIndex, vars: []const checked.CheckedTypeId, params: []const static_dispatch.EvidenceParamRecord, related: []Related) Allocator.Error!void {
         const count = vars.len;
         const partial = try self.allocator.alloc(TypeId, count);
         defer self.allocator.free(partial);
@@ -2511,13 +2513,13 @@ pub const Program = struct {
         var changed = true;
         while (changed) {
             changed = false;
-            for (related, partial, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(index)));
+            for (related, partial, 0..) |ty, *slot, index| slot.* = ty.get() orelse try self.store.variable(placeholder_base + @as(u32, @intCast(index)));
             const env: types.Env = .{ .module = module_index, .vars = vars, .bound = partial };
             for (params) |param| {
                 const dispatcher = try self.converter().convert(module_index, param.dispatcher_ty, env);
                 if (try self.mentionsPlaceholder(dispatcher)) continue;
                 const callable = try self.converter().convert(module_index, param.callable_ty, env);
-                const method_target = switch (try self.resolveRequirement(.{ .module = module_index, .method = param.method, .structural = param.structural, .dispatcher = dispatcher, .callable = callable })) {
+                const method_target = switch (try self.resolveRequirement(.{ .module = module_index, .method = param.method, .structural = param.structural.get(), .dispatcher = dispatcher, .callable = callable })) {
                     .target => |method_target| method_target,
                     .structural, .crash, .scope_variable, .derived, .callable_eval => continue,
                 };
@@ -2530,15 +2532,15 @@ pub const Program = struct {
                 defer self.allocator.free(method_related);
                 const method_bound = try self.allocator.alloc(TypeId, method_related.len);
                 defer self.allocator.free(method_bound);
-                for (method_related, method_bound, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(count + index)));
+                for (method_related, method_bound, 0..) |ty, *slot, index| slot.* = ty.get() orelse try self.store.variable(placeholder_base + @as(u32, @intCast(count + index)));
                 const method_ty = try self.substitute(self.allocator, method_formal, method_bound);
                 const back = try self.relateVariablesPartial(self.allocator, &.{.{ try self.converter().convert(module_index, param.callable_ty, own_env), method_ty }}, count);
                 defer self.allocator.free(back);
                 for (related, back) |*slot, determined| {
-                    if (slot.* != null) continue;
-                    const ty = determined orelse continue;
+                    if (slot.* != .none) continue;
+                    const ty = determined.get() orelse continue;
                     if (try self.mentionsPlaceholder(ty)) continue;
-                    slot.* = ty;
+                    slot.* = .some(ty);
                     changed = true;
                 }
             }
@@ -2559,7 +2561,7 @@ pub const Program = struct {
                 .primitive, .empty_record => {},
                 .record => |record| {
                     for (self.store.fieldSpan(record.fields)) |field| try stack.append(self.allocator, field.ty);
-                    if (record.ext) |ext| try stack.append(self.allocator, ext);
+                    if (record.ext.get()) |ext| try stack.append(self.allocator, ext);
                     try stack.appendSlice(self.allocator, self.store.paddingTypes(record));
                 },
                 .tuple => |items| try stack.appendSlice(self.allocator, self.store.span(items)),
@@ -2756,10 +2758,10 @@ pub const Program = struct {
         const key: WorkerKey = .{ .default = .{ .module = module_index, .expr = expr } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        try view.bodies().demandIndex();
         // The default's type is the field's type at a fresh instantiation of
         // its declaration's parameters (design.md "Defaulted Fields"): each
         // construction takes the types its field gives those variables.
+        try view.bodies().demandIndex();
         const default_ty = view.bodies().exprType(expr);
         const scheme_vars = try self.converter().typeVariables(self.arena.allocator(), module_index, default_ty);
         const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.len);
@@ -3155,7 +3157,7 @@ pub const Program = struct {
         const struct_idx = self.result.layouts.getLayout(failure_layout).getStruct().idx;
         const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = failure_layout,
             .compile_time_root = .{
                 .module = module_key,
@@ -3171,7 +3173,7 @@ pub const Program = struct {
         });
         const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = try self.layouts.layoutOf(ty),
             .compile_time_root = .{
                 .module = module_key,
@@ -3252,7 +3254,7 @@ pub const Program = struct {
                 .record => |record| {
                     // A closed record widened with omitted optional fields
                     // needs their presence slots even when field order agrees.
-                    if (!store.sameRecordOrder(record, to.record) or (record.ext == null and to.record.ext == null and record.fields.len != to.record.fields.len)) switch (pair.place) {
+                    if (!store.sameRecordOrder(record, to.record) or (record.ext == .none and to.record.ext == .none and record.fields.len != to.record.fields.len)) switch (pair.place) {
                         .data => result = .record_order,
                         .root_function, .signature_data => return .function,
                         .nested_function => invariant(nested_function_storage),
@@ -3266,7 +3268,7 @@ pub const Program = struct {
                             try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = inner });
                         }
                     }
-                    if (record.ext != null and to.record.ext != null) try pending.append(self.allocator, .{ .from = record.ext.?, .to = to.record.ext.?, .place = inner });
+                    if (record.ext != .none and to.record.ext != .none) try pending.append(self.allocator, .{ .from = record.ext.get().?, .to = to.record.ext.get().?, .place = inner });
                 },
                 .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
                 .tag_union => |tag_union| {
@@ -3308,8 +3310,8 @@ pub const Program = struct {
     /// Whether one of two nodes is the backing of a padded nominal of no named
     /// fields and the other the empty record, which has no storage.
     pub fn paddedAgainstEmpty(a: types.Node, b: types.Node) bool {
-        return a == .empty_record and b == .record and b.record.declared != null or
-            b == .empty_record and a == .record and a.record.declared != null;
+        return a == .empty_record and b == .record and b.record.declared.get() != null or
+            b == .empty_record and a == .record and a.record.declared.get() != null;
     }
 
     /// Whether `ty` is a tag union, through the backing of a nominal.
@@ -3436,7 +3438,7 @@ fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerI
                 .generic => "",
                 .list_int => |item| item.nameSuffix(),
             };
-            break :blk if (name_store.procBase(template.proc_base).export_name) |export_name|
+            break :blk if (name_store.procBase(template.proc_base).export_name.get()) |export_name|
                 .{ .module = moduleUnlessPrefixed(module_name, name_store.exportNameText(export_name)), .text = name_store.exportNameText(export_name), .suffix = suffix }
             else
                 .{ .module = module_name, .text = "template", .number = @backingInt(key.template), .suffix = suffix };
@@ -3592,7 +3594,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     defer schema_roots.deinit(allocator);
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
-        const root_id = request.compile_time_root orelse continue;
+        const root_id = request.compile_time_root.get() orelse continue;
         const source_module = if (input.roots.source_modules.len == 0)
             program.modules.views.items[0].index
         else
@@ -3620,7 +3622,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             // A literal argument root whose value holds a function is
             // validated and discarded: nothing stores its value (design.md
             // "Literal Arguments").
-            const validate_only = if (request.compile_time_root) |root_id| blk: {
+            const validate_only = if (request.compile_time_root.get()) |root_id| blk: {
                 const root = program.module(source_module).view.compile_time_roots.root(root_id);
                 break :blk if (root.literal_argument) |argument| argument.validate_only else false;
             } else false;
@@ -3668,7 +3670,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 .const_locator = request.const_locator,
                 .layout_idx = try program.layouts.layoutOf(worker.ret),
                 .plan = plan,
-                .initializer = worker.proc,
+                .initializer = .some(worker.proc),
             });
         }
     }
@@ -3699,7 +3701,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const view = program.module(key.module);
                     const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
                     const names = view.nameStore();
-                    const export_name = names.procBase(template.proc_base).export_name orelse break :blk switch (key.binding) {
+                    const export_name = names.procBase(template.proc_base).export_name.get() orelse break :blk switch (key.binding) {
                         .generic => "boxy.template",
                         .list_int => |item| try std.fmt.allocPrint(program.arena.allocator(), "boxy.template{s}", .{item.nameSuffix()}),
                     };
@@ -3744,7 +3746,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         defer program.allocator.free(forwarded_roots);
         @memset(forwarded_roots, false);
         for (view.view.callable_eval_templates.templates) |callable| {
-            if (callable.forwarded_lookup != null) forwarded_roots[@backingInt(callable.root)] = true;
+            if (callable.forwarded_lookup.get() != null) forwarded_roots[@backingInt(callable.root)] = true;
         }
         for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
             if (!unitEmitsTemplate(view, template, forwarded_roots)) continue;
@@ -3983,7 +3985,7 @@ const HostBoundaryGraph = struct {
                 try edges.append(allocator, .{ .node = item, .position = @intCast(index) });
             },
             .record => |record| {
-                if (record.ext != null) invariant("an open record reached a host boundary");
+                if (record.ext != .none) invariant("an open record reached a host boundary");
                 // Storage interning can grow the store under its own spans.
                 const fields = try allocator.dupe(types.Field, program.store.fieldSpan(record.fields));
                 defer allocator.free(fields);
@@ -4109,7 +4111,7 @@ test "Boxy field default identity survives substitution and stable type digests"
         const number = try store.primitive(.u8);
         var fields = [_]types.Field{.{ .name = name, .ty = variable, .kind = .inline_slot }};
         for (0..3) |variant| {
-            fields[0].default = if (variant == 0) null else .{ .module = @fromBackingInt(@intCast(round)), .expr_node = @intCast(variant * 10) };
+            fields[0].default = .of(if (variant == 0) null else .{ .module = @fromBackingInt(@intCast(round)), .expr_node = @intCast(variant * 10) });
             const generic = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
             const concrete = try program.substitute(allocator, generic, &.{number});
             const field = store.fieldSpan(store.get(concrete).record.fields)[0];

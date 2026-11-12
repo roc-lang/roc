@@ -51,7 +51,7 @@ const ProcBuilder = struct {
             .identity = LIR.ProcIdentity.programLocal("test", self.store.next_synthetic_symbol),
             .args = try self.store.addLocalSpan(args),
             .frame_locals = try self.store.addLocalSpan(self.locals.items),
-            .body = body,
+            .body = .some(body),
             .ret_layout = ret_layout,
         }, .none);
     }
@@ -465,7 +465,7 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
     var visited = collections.DenseMap(CFStmtId, void).init(allocator);
     defer visited.deinit();
 
-    const body = store.getProcSpecImmediate(proc_id).body orelse return false;
+    const body = store.getProcSpecImmediate(proc_id).body.get() orelse return false;
     try work.append(allocator, body);
     while (work.pop()) |stmt_id| {
         const entry = try visited.getOrPut(stmt_id);
@@ -670,7 +670,7 @@ test "trmc'd repeat is leak-free and allocation-exact when consumed" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(10),
         .args = try store.addLocalSpan(&.{root_n}),
-        .body = call_repeat,
+        .body = .some(call_repeat),
         .ret_layout = .u64,
     }, .none);
     store.getProcSpecPtr(root).frame_locals = try store.addLocalSpan(&.{ root_n, list, root_zero });
@@ -742,7 +742,7 @@ fn buildCountdownProc(allocator: Allocator, b: *ProcBuilder, store: *LirStore) T
 
     store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
     const tail_sites = try tail_builder.finish(store);
-    store.getProcSpecPtr(proc).tail_calls = tail_sites;
+    store.getProcSpecPtr(proc).tail_calls = .of(tail_sites);
     store.tail_call_builder = null;
     return proc;
 }
@@ -835,7 +835,7 @@ test "tce loop-back copies swapped params through temps" {
     store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
 
     const tail_sites = try tail_builder.finish(&store);
-    store.getProcSpecPtr(proc).tail_calls = tail_sites;
+    store.getProcSpecPtr(proc).tail_calls = .of(tail_sites);
     store.tail_call_builder = null;
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpecImmediate(proc).tail_transform);
@@ -987,7 +987,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
 
     const tail_sites = try tail_builder.finish(&store);
-    store.getProcSpecPtr(proc).tail_calls = tail_sites;
+    store.getProcSpecPtr(proc).tail_calls = .of(tail_sites);
     store.tail_call_builder = null;
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpecImmediate(proc).tail_transform);
@@ -1187,14 +1187,14 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
         const ret_ra = try store.addCFStmt(.{ .ret = .{ .value = ra } }, .test_fixture);
         const call_b = try store.addCFStmt(.{ .assign_call = .{ .target = ra, .proc = mutual_b, .args = try store.addLocalSpan(&.{}), .next = ret_ra } }, .test_fixture);
         const pa = store.getProcSpecPtr(mutual_a);
-        pa.body = call_b;
+        pa.body = .some(call_b);
         pa.frame_locals = try store.addLocalSpan(&.{ra});
 
         const rb = try b.addLocal(allocator, .u64);
         const ret_rb = try store.addCFStmt(.{ .ret = .{ .value = rb } }, .test_fixture);
         const call_a = try store.addCFStmt(.{ .assign_call = .{ .target = rb, .proc = mutual_a, .args = try store.addLocalSpan(&.{}), .next = ret_rb } }, .test_fixture);
         const pb = store.getProcSpecPtr(mutual_b);
-        pb.body = call_a;
+        pb.body = .some(call_a);
         pb.frame_locals = try store.addLocalSpan(&.{rb});
     }
 
@@ -1230,7 +1230,7 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
         store.setProcSpecBody(proc, switch_stmt);
         store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
         const sites = try tail_builder.finish(&store);
-        store.getProcSpecPtr(proc).tail_calls = sites;
+        store.getProcSpecPtr(proc).tail_calls = .of(sites);
         break :blk proc;
     };
 
@@ -1317,7 +1317,7 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
     store.setProcSpecBody(proc, body);
     store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
     const sites = try builder.finish(&store);
-    store.getProcSpecPtr(proc).tail_calls = sites;
+    store.getProcSpecPtr(proc).tail_calls = .of(sites);
     store.tail_call_builder = null;
     const frame_before = store.getProcSpecImmediate(proc).frame_locals;
     const stmts_before = store.cfStmtCount();
@@ -1431,7 +1431,7 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
             .next = after_call,
         } }, .test_fixture);
         store.setProcSpecBody(proc, call);
-        store.getProcSpecPtr(proc).dyn_result = result;
+        store.getProcSpecPtr(proc).dyn_result = .of(result);
         store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
         const sites = try builder.finish(&store);
         store.tail_call_builder = null;
@@ -1523,7 +1523,7 @@ test "tce parallel transfers preserve every small source graph" {
         store.setProcSpecBody(proc, body);
         store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
         const sites = try builder.finish(&store);
-        store.getProcSpecPtr(proc).tail_calls = sites;
+        store.getProcSpecPtr(proc).tail_calls = .of(sites);
         store.tail_call_builder = null;
         const frame_before = store.getProcSpecImmediate(proc).frame_locals;
         const locals_before = store.localCount();
@@ -1617,7 +1617,7 @@ test "tce reuses scratch across shrinking and growing procedure frames" {
         frame.* = try store.addLocalSpan(b.locals.items);
         store.getProcSpecPtr(proc.*).frame_locals = frame.*;
         const sites = try builder.finish(&store);
-        store.getProcSpecPtr(proc.*).tail_calls = sites;
+        store.getProcSpecPtr(proc.*).tail_calls = .of(sites);
     }
     try lir.Trmc.run(&store, &layouts);
     for (widths, procs, frames) |width, proc, old_frame| {
@@ -1675,13 +1675,13 @@ test "tce emits an identity loop directly into the original call" {
     } }, call_origin);
     store.setProcSpecBody(proc, call);
     const sites = try builder.finish(&store);
-    store.getProcSpecPtr(proc).tail_calls = sites;
+    store.getProcSpecPtr(proc).tail_calls = .of(sites);
     store.tail_call_builder = null;
     const stmts_before = store.cfStmtCount();
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(stmts_before + 2, store.cfStmtCount());
     try std.testing.expectEqualDeep(loc, store.stmtLoc(call));
-    const join = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.?).join;
+    const join = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.get().?).join;
     try std.testing.expectEqual(call, join.body);
     try std.testing.expectEqual(join.id, store.getCFStmtImmediate(call).jump.target);
     try std.testing.expect(store.getCFStmtImmediate(ret).* == .ret);

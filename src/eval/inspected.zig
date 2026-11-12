@@ -1277,7 +1277,7 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
         };
         while (true) {
             switch (resources.checked_artifact.const_store.get(node)) {
-                .str => |str| return resources.checked_artifact.const_store.strBytes(str),
+                .str => |str| return resources.checked_artifact.const_store.strBytes(str.bytes),
                 .nominal => |nominal| node = nominal.backing,
                 .boxy_fn,
                 .pending,
@@ -2523,7 +2523,7 @@ pub fn devEvalSharedBoolRootModulesWithOptions(allocator: Allocator, modules: []
                 const self: *@This() = @ptrCast(@alignCast(raw.?));
                 const base_address = @intFromPtr(self.executable.codePtr());
                 if (relocation.rc_helper) |helper| return base_address + (self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null);
-                const proc = relocation.procedure orelse return null;
+                const proc = relocation.procedure.get() orelse return null;
                 return base_address + (self.codegen.compiledProcSymbol(proc) orelse return null).code_start;
             }
         };

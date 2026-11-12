@@ -42,7 +42,9 @@
 const std = @import("std");
 const TypeDigestHasher = @import("TypeDigestHasher.zig");
 const invariant = @import("invariant.zig").invariant;
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
+const OptionalU32 = collections.OptionalU32;
 
 /// Canonical digest of one type.
 pub const Identity = [TypeDigestHasher.digest_length]u8;
@@ -188,18 +190,25 @@ pub const Graph = struct {
     scc_stack: std.ArrayList(u32) = .empty,
     members: std.ArrayList(u32) = .empty,
     /// Member position of every node of the component being resolved;
-    /// `no_position` everywhere else.
-    positions: std.ArrayList(u32) = .empty,
+    /// absent everywhere else. Read for every child of a member, so it is
+    /// cleared once per `resolve` and restored per component.
+    positions: std.ArrayList(OptionalU32) = .empty,
     labels: std.ArrayList(Identity) = .empty,
     next_labels: std.ArrayList(Identity) = .empty,
     sorted_labels: std.ArrayList(Identity) = .empty,
     distinct_labels: std.AutoHashMapUnmanaged(Identity, u32) = .empty,
     member_ranks: std.ArrayList(u32) = .empty,
+    /// One member of each block of the stable partition. Every block has a
+    /// member, so one sweep writes every entry before any is read.
     representatives: std.ArrayList(u32) = .empty,
     block_digests: std.ArrayList(Identity) = .empty,
     unfolding_keys: std.ArrayList(Identity) = .empty,
     candidate_groups: std.ArrayList(u32) = .empty,
-    paired: std.ArrayList(u32) = .empty,
+    /// Each member's rank in the group a pairing attempt tries, by member
+    /// position. Reset per attempt, so it empties by advancing an epoch.
+    paired: collections.EpochColumn(u32, u32, .internal) = .{},
+    /// How many members the current pairing attempt has paired.
+    paired_count: u32 = 0,
     pending_pairs: std.ArrayList(Pair) = .empty,
 
     const Node = struct {
@@ -223,6 +232,7 @@ pub const Graph = struct {
 
     pub fn deinit(self: *Graph) void {
         inline for (list_fields) |field| @field(self, field).deinit(self.gpa);
+        self.paired.deinit(self.gpa);
         self.distinct_labels.deinit(self.gpa);
     }
 
@@ -232,7 +242,7 @@ pub const Graph = struct {
         self.distinct_labels.clearRetainingCapacity();
     }
 
-    const list_fields = .{ "nodes", "children", "frames", "scc_stack", "members", "positions", "labels", "next_labels", "sorted_labels", "member_ranks", "representatives", "block_digests", "unfolding_keys", "candidate_groups", "paired", "pending_pairs" };
+    const list_fields = .{ "nodes", "children", "frames", "scc_stack", "members", "positions", "labels", "next_labels", "sorted_labels", "member_ranks", "representatives", "block_digests", "unfolding_keys", "candidate_groups", "pending_pairs" };
 
     pub fn nodeCount(self: *const Graph) u32 {
         return @intCast(self.nodes.items.len);
@@ -278,7 +288,7 @@ pub const Graph = struct {
     /// Settle the digest of every node.
     pub fn resolve(self: *Graph, settled: *Settled, stats: ?*Stats) Allocator.Error!void {
         try self.positions.resize(self.gpa, self.nodes.items.len);
-        @memset(self.positions.items, no_position);
+        @memset(self.positions.items, .none);
         var next_index: u32 = 0;
         for (0..self.nodes.items.len) |start_index| {
             const start: u32 = @intCast(start_index);
@@ -344,8 +354,14 @@ pub const Graph = struct {
     fn memberChild(self: *const Graph, child: Child) ?u32 {
         return switch (child) {
             .settled => null,
-            .node => |target| if (self.positions.items[target] == no_position) null else target,
+            .node => |target| if (self.positions.items[target] == .none) null else target,
         };
+    }
+
+    /// The member position of a node of the component being resolved.
+    fn memberPosition(self: *const Graph, node: u32) u32 {
+        return self.positions.items[node].get() orelse
+            invariant("recursive digest read the position of a node outside its component", .{});
     }
 
     /// The digest of a child outside the component being resolved.
@@ -393,9 +409,9 @@ pub const Graph = struct {
                 return;
             }
         }
-        for (members, 0..) |node, pos| self.positions.items[node] = @intCast(pos);
+        for (members, 0..) |node, pos| self.positions.items[node] = .some(@intCast(pos));
         defer for (members) |node| {
-            self.positions.items[node] = no_position;
+            self.positions.items[node] = .none;
         };
         try self.resolveCyclicComponent(settled, stats);
     }
@@ -437,7 +453,7 @@ pub const Graph = struct {
                 hasher.update(&labels[pos]);
                 for (self.childrenOf(node)) |child| {
                     const target = self.memberChild(child) orelse continue;
-                    writeU32(&hasher, self.positions.items[target]);
+                    writeU32(&hasher, self.memberPosition(target));
                 }
                 writeBytes(&hasher, "end-member");
             }
@@ -451,10 +467,12 @@ pub const Graph = struct {
             return;
         }
 
-        try self.paired.resize(self.gpa, member_count);
+        try self.paired.ensureLen(self.gpa, member_count);
         if (try self.foldOntoSettledGroup(settled)) {
             try reserveShape(settled, member_count);
-            for (members, self.paired.items) |node, member_rank| {
+            for (members, 0..) |node, pos| {
+                const member_rank = self.paired.get(@intCast(pos)) orelse
+                    invariant("recursive digest folded a component with an unpaired member", .{});
                 self.finish(node, settled.rank(self.candidate_groups.items[0], member_rank).digest, .cyclic);
             }
             recordShape(settled, shape, self, members);
@@ -475,7 +493,7 @@ pub const Graph = struct {
                 hasher.update(&labels[pos]);
                 for (self.childrenOf(node)) |child| {
                     const target = self.memberChild(child) orelse continue;
-                    hasher.update(&labels[self.positions.items[target]]);
+                    hasher.update(&labels[self.memberPosition(target)]);
                 }
                 next_labels[pos] = hasher.finalResult();
                 try distinct_labels.put(self.gpa, next_labels[pos], no_position);
@@ -506,12 +524,14 @@ pub const Graph = struct {
         const member_ranks = self.member_ranks.items;
         try self.representatives.resize(self.gpa, block_count);
         const representatives = self.representatives.items;
-        @memset(representatives, no_position);
-        for (members, 0..) |node, pos| {
+        // The partition is stable, so any member represents its position:
+        // sweeping members last to first leaves each block's first member.
+        var pos = members.len;
+        while (pos > 0) {
+            pos -= 1;
             const block_rank = distinct_labels.get(labels[pos]) orelse unreachable; // the final round put every member's label into distinct_labels
             member_ranks[pos] = block_rank;
-            // The partition is stable, so any member represents its position.
-            if (representatives[block_rank] == no_position) representatives[block_rank] = node;
+            representatives[block_rank] = members[pos];
         }
 
         // One group rendering: every reduced position in rank order with
@@ -526,7 +546,7 @@ pub const Graph = struct {
             for (self.childrenOf(rep)) |child| {
                 if (self.memberChild(child)) |target| {
                     writeBytes(&group_hasher, "rank");
-                    writeU32(&group_hasher, member_ranks[self.positions.items[target]]);
+                    writeU32(&group_hasher, member_ranks[self.memberPosition(target)]);
                 } else {
                     writeBytes(&group_hasher, "child");
                     group_hasher.update(&self.childDigest(child));
@@ -584,7 +604,7 @@ pub const Graph = struct {
                 const child_start: u32 = @intCast(settled.rank_children.items.len);
                 for (self.childrenOf(rep)) |child| {
                     settled.rank_children.appendAssumeCapacity(if (self.memberChild(child)) |target|
-                        .{ .rank = member_ranks[self.positions.items[target]] }
+                        .{ .rank = member_ranks[self.memberPosition(target)] }
                     else
                         .{ .settled = self.childDigest(child) });
                 }
@@ -628,16 +648,18 @@ pub const Graph = struct {
 
     fn pairWithGroup(self: *Graph, settled: *const Settled, group: u32, start_rank: u32) Allocator.Error!bool {
         const members = self.members.items;
-        const paired = self.paired.items;
-        @memset(paired, no_position);
+        const paired = &self.paired;
+        paired.reset();
+        self.paired_count = 0;
         self.pending_pairs.clearRetainingCapacity();
         try self.pending_pairs.append(self.gpa, .{ .position = 0, .rank = start_rank });
         while (self.pending_pairs.pop()) |pair| {
-            if (paired[pair.position] != no_position) {
-                if (paired[pair.position] != pair.rank) return false;
+            if (paired.get(pair.position)) |paired_rank| {
+                if (paired_rank != pair.rank) return false;
                 continue;
             }
-            paired[pair.position] = pair.rank;
+            paired.set(pair.position, pair.rank);
+            self.paired_count += 1;
             const node = members[pair.position];
             const expected = settled.rank(group, pair.rank);
             if (!std.mem.eql(u8, &self.nodes.items[node].content, &expected.content)) return false;
@@ -647,7 +669,7 @@ pub const Graph = struct {
             for (actual_children, expected_children) |actual, expected_child| {
                 if (self.memberChild(actual)) |target| {
                     switch (expected_child) {
-                        .rank => |child_rank| try self.pending_pairs.append(self.gpa, .{ .position = self.positions.items[target], .rank = child_rank }),
+                        .rank => |child_rank| try self.pending_pairs.append(self.gpa, .{ .position = self.memberPosition(target), .rank = child_rank }),
                         .settled => return false,
                     }
                 } else {
@@ -660,7 +682,7 @@ pub const Graph = struct {
                 }
             }
         }
-        return std.mem.findScalar(u32, paired, no_position) == null;
+        return self.paired_count == members.len;
     }
 };
 

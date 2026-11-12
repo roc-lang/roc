@@ -214,7 +214,7 @@ fn constF32ListMatches(
     list: check.ConstStore.ConstList,
     expected: []const u32,
 ) bool {
-    return switch (list) {
+    return switch (list.items) {
         .nodes => |items| blk: {
             if (items.len != expected.len) break :blk false;
             for (items, expected) |item, bits| {
@@ -240,7 +240,7 @@ fn constF64ListMatches(
     list: check.ConstStore.ConstList,
     expected: []const u64,
 ) bool {
-    return switch (list) {
+    return switch (list.items) {
         .nodes => |items| blk: {
             if (items.len != expected.len) break :blk false;
             for (items, expected) |item, bits| {
@@ -1131,7 +1131,7 @@ fn materializedComptimeFloatBitsMatch(
     expected: TestCase.Expected,
 ) (std.mem.Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{UnsupportedTarget})!bool {
     const compile_time_root = resources.checked_artifact.compile_time_roots.roots[0];
-    const pattern = compile_time_root.pattern orelse return false;
+    const pattern = compile_time_root.pattern.get() orelse return false;
     const top_level = resources.checked_artifact.top_level_values.lookupByPattern(pattern) orelse return false;
     const const_locator = switch (top_level.value) {
         .const_ref => |value| value,

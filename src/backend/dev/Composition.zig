@@ -397,7 +397,7 @@ const Reach = struct {
     }
 };
 
-const dropped: u32 = std.math.maxInt(u32);
+const OptionalU32 = collections.OptionalU32;
 
 /// Lay the kept excerpts out canonically (`CodeExcerpt.arrange`): procedures
 /// by identity, then helpers by name, then entrypoints by name; a message
@@ -422,28 +422,29 @@ fn merge(
         if (flag) try kept.append(allocator, .{ .unit = @intCast(unit_id), .index = @intCast(i) });
     };
     // The owner of each message pool run: the first kept excerpt whose code
-    // addresses it.
-    const owner_of = try allocator.alloc([]u32, sets.len);
+    // addresses it, absent for an unowned run or another excerpt. Read per
+    // excerpt, so each unit's column starts cleared to absent (zero).
+    const owner_of = try allocator.alloc([]OptionalU32, sets.len);
     var owners_allocated: usize = 0;
     defer {
         for (owner_of[0..owners_allocated]) |owners| allocator.free(owners);
         allocator.free(owner_of);
     }
     for (sets, owner_of) |set, *owners| {
-        owners.* = try allocator.alloc(u32, set.excerpts.len);
-        @memset(owners.*, dropped);
+        owners.* = try allocator.alloc(OptionalU32, set.excerpts.len);
+        @memset(owners.*, .none);
         owners_allocated += 1;
     }
     for (kept.items) |ref| for (sets[ref.unit].excerpts[ref.index].refs) |edge| {
         if (sets[ref.unit].excerpts[edge.target].kind != .message_pool_run) continue;
-        if (owner_of[ref.unit][edge.target] == dropped) owner_of[ref.unit][edge.target] = ref.index;
+        if (owner_of[ref.unit][edge.target] == .none) owner_of[ref.unit][edge.target] = .some(ref.index);
     };
     var heads = std.ArrayList(Ref).empty;
     defer heads.deinit(allocator);
     var unowned_runs = std.ArrayList(Ref).empty;
     defer unowned_runs.deinit(allocator);
     for (kept.items) |ref| switch (sets[ref.unit].excerpts[ref.index].kind) {
-        .message_pool_run => if (owner_of[ref.unit][ref.index] == dropped) try unowned_runs.append(allocator, ref),
+        .message_pool_run => if (owner_of[ref.unit][ref.index] == .none) try unowned_runs.append(allocator, ref),
         .proc, .rc_helper, .entrypoint, .branch_island => try heads.append(allocator, ref),
     };
     std.mem.sort(Ref, heads.items, sets, headBefore);
@@ -453,32 +454,33 @@ fn merge(
         }
     }.lessThan);
 
-    const position = try allocator.alloc([]u32, sets.len);
+    // Each kept excerpt's place in the image, absent for a dropped one.
+    const position = try allocator.alloc([]OptionalU32, sets.len);
     var positions_allocated: usize = 0;
     defer {
         for (position[0..positions_allocated]) |positions| allocator.free(positions);
         allocator.free(position);
     }
     for (sets, position) |set, *positions| {
-        positions.* = try allocator.alloc(u32, set.excerpts.len);
-        @memset(positions.*, dropped);
+        positions.* = try allocator.alloc(OptionalU32, set.excerpts.len);
+        @memset(positions.*, .none);
         positions_allocated += 1;
     }
     var order = try std.ArrayList(Ref).initCapacity(allocator, kept.items.len);
     defer order.deinit(allocator);
     for (heads.items) |head| {
-        position[head.unit][head.index] = @intCast(order.items.len);
+        position[head.unit][head.index] = .some(@intCast(order.items.len));
         order.appendAssumeCapacity(head);
         for (sets[head.unit].excerpts[head.index].refs) |edge| {
             const run: Ref = .{ .unit = head.unit, .index = edge.target };
-            if (sets[run.unit].excerpts[run.index].kind != .message_pool_run or owner_of[run.unit][run.index] != head.index) continue;
-            if (position[run.unit][run.index] != dropped) continue;
-            position[run.unit][run.index] = @intCast(order.items.len);
+            if (sets[run.unit].excerpts[run.index].kind != .message_pool_run or owner_of[run.unit][run.index].get() != head.index) continue;
+            if (position[run.unit][run.index] != .none) continue;
+            position[run.unit][run.index] = .some(@intCast(order.items.len));
             order.appendAssumeCapacity(run);
         }
     }
     for (unowned_runs.items) |run| {
-        position[run.unit][run.index] = @intCast(order.items.len);
+        position[run.unit][run.index] = .some(@intCast(order.items.len));
         order.appendAssumeCapacity(run);
     }
     std.debug.assert(order.items.len == kept.items.len);
@@ -593,10 +595,8 @@ fn leadingBytes(name: []const u8) u64 {
 }
 
 /// Where a kept excerpt's definition landed in the image.
-fn placed(position: []const []const u32, ref: Ref) u32 {
-    const at = position[ref.unit][ref.index];
-    if (at == dropped) invariant("a kept excerpt names an excerpt the composition dropped", .{});
-    return at;
+fn placed(position: []const []const OptionalU32, ref: Ref) u32 {
+    return position[ref.unit][ref.index].get() orelse invariant("a kept excerpt names an excerpt the composition dropped", .{});
 }
 
 /// The canonical order of two head excerpts: by kind, then by what names
