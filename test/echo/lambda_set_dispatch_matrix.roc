@@ -18,7 +18,7 @@ main! = |_args| {
 	add_offset = |n| n + offset
 	times_scale = |n| n * scale
 	echo!("${apply(add_offset, 1).to_str()} ${apply(times_scale, 1).to_str()}\n")
-	echo!("${twice(add_offset, 1).to_str()} ${twice(times_scale, 1).to_str()}\n")
+	echo!("${twice(add_offset, 1.I64).to_str()} ${twice(times_scale, 1.I64).to_str()}\n")
 
 	add_five = LambdaSetDispatchClosures.adder(5)
 	times_seven = LambdaSetDispatchClosures.multiplier(7)

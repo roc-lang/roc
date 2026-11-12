@@ -104,7 +104,7 @@ validate_ipv6 = |raw| {
 	if count >= 8 {
 		Err(InvalidIpv6(raw))
 	} else {
-		groups = List.concat(List.concat(left, List.repeat(0, 8 - count)), left)
+		groups = List.concat(List.concat(left, List.repeat(0.U16, 8 - count)), left)
 		Ok(serialize_ipv6(groups))
 	}
 }

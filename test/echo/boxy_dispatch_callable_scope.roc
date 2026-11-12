@@ -74,7 +74,7 @@ main! = |args| {
 	echo!(describe(cell.unannotated(!full, |text| Err(Short(Str.count_utf8_bytes(text))))))
 	echo!(describe(local_row(payload, full, |text| Err(Long(text)))))
 	echo!(describe(local_row(payload, !full, |text| Err(Long(text)))))
-	echo!(total(Bag.{ items: [1.U64, 2, 3] }, 10).to_str())
+	echo!(total(Bag.{ items: [1.U64, 2, 3] }, 10.U64).to_str())
 	match first_or(if full ["x", "y"] else [], "none") {
 		Ok(item) => echo!(item)
 		Err(Missing(item)) => echo!(item)

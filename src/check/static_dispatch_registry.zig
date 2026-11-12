@@ -1258,7 +1258,7 @@ fn builtinOwnerForRegistryEntry(
     module_env: *const ModuleEnv,
     owner_stmt: CIR.Statement.Idx,
 ) ?BuiltinOwner {
-    const common = module_env.idents;
+    const common = &module_env.idents;
     if (module_env.module_role != .builtin) return null;
 
     const stmt = module_env.store.getStatement(owner_stmt);

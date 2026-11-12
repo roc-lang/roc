@@ -8837,7 +8837,7 @@ fn numeralDispatcherStrConversion(self: *Self, dispatcher_var: Var) Allocator.Er
 /// that method.
 fn numeralStrConversion(self: *Self) Allocator.Error!problem.StrConversion {
     const to_str = try self.toStrMethodName();
-    for (numeral_default_candidates) |num_kind| {
+    for (builtin_number_kinds) |num_kind| {
         if (!self.builtinNumberHasMethod(num_kind, to_str)) return .none;
     }
     return .to_str;
@@ -30453,10 +30453,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
 
     check: switch (expr) {
         // str //
-        .e_str_segment => {
-            const str_var = try self.freshStr(env, expr_region);
-            _ = try self.unify(expr_var, str_var, env);
-        },
+        .e_str_segment => try self.unifyWith(expr_var, self.builtinStrContent(), env),
         .e_bytes_literal => {
             // Create List(U8) type
             const u8_content = try self.mkNumberTypeContent(.u8);
@@ -31065,6 +31062,35 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
 
 // str //
 
+/// Concrete Builtin Quote Introduction (design.md): a checking context that
+/// already names the builtin `Str` leaves a string literal no conversion
+/// obligation to solve. All other occurrences retain their ordinary
+/// constraint.
+fn checkConcreteBuiltinQuote(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    occurrence_var: Var,
+    expected: Expected,
+    env: *Env,
+) Allocator.Error!bool {
+    if (self.cir.numericSuffixTargetForNode(node_idx) != null) return false;
+    const context = expected.aggregateType() orelse return false;
+    if (context.record_field != null) return false;
+    const nominal = self.types.resolveThroughAliases(context.var_).desc.content.unwrapNominalType() orelse return false;
+    if (!self.nominalIsBuiltinStrType(nominal)) return false;
+    try self.unifyWith(occurrence_var, self.builtinStrContent(), env);
+    try self.cir.store.recordLiteralDispatchPlan(node_idx, .quote, occurrence_var, null, null);
+    return true;
+}
+
+/// The builtin `Str` type's content. `Str` takes no arguments, so every
+/// variable holding this content is the same type.
+fn builtinStrContent(self: *const Self) Content {
+    const nominal = self.types.resolveVar(self.str_var).desc.content.unwrapNominalType() orelse
+        base.invariant("type checker invariant violated: the builtin Str type is not a nominal type", .{});
+    return .{ .structure = .{ .nominal_type = nominal } };
+}
+
 const StrCheck = struct {
     index: u32 = 0,
     did_err: bool = false,
@@ -31123,6 +31149,8 @@ fn resumeStrCheck(self: *Self, task: *ExprTask, state: *StrCheck, env: *Env, chi
         // Interpolated strings are Str
         const str_var = try self.freshStr(env, expr_region);
         _ = try self.unify(expr_var, str_var, env);
+    } else if (try self.checkConcreteBuiltinQuote(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, frame.nested_expected, env)) {
+        // The context already names the builtin `Str`.
     } else {
         // A plain literal converts to its target type through from_quote,
         // defaulting to Str if nothing pins it.
@@ -36682,8 +36710,6 @@ fn finishBinopExpr(
                     => unreachable, // the enclosing prong matches only arithmetic operators
                 };
 
-            const lhs_is_numeric = self.isBuiltinNumericNominal(lhs_var);
-            const rhs_is_numeric = self.isBuiltinNumericNominal(rhs_var);
             const lhs_is_from_numeral = self.varLiteralKind(lhs_var) == .numeral;
             const rhs_is_from_numeral = self.varLiteralKind(rhs_var) == .numeral;
 
@@ -36694,55 +36720,24 @@ fn finishBinopExpr(
                 return;
             }
 
-            // Eagerly unify the operands, but ONLY when the dispatcher's
-            // arithmetic method is known homogeneous (`T, T -> T`), so one
-            // operand FORCES the other—propagation of an implied fact, not a
-            // guess. Two gates, each forced:
-            //
-            //   1. `lhs_is_numeric`: the lhs is the dispatcher and a concrete
-            //      builtin numeric nominal. Builtin arithmetic methods are
-            //      homogeneous (e.g. `Dec.plus : Dec, Dec -> Dec`), so the rhs
-            //      MUST be the same type.
-            //   2. `rhs_is_numeric and lhs_is_from_numeral`: the lhs is an open
-            //      numeric LITERAL. Every numeral defaulting candidate is a
-            //      builtin numeric nominal with homogeneous arithmetic, so
-            //      whatever the literal resolves to forces operand equality—the
-            //      concrete builtin rhs pins it now.
-            //
-            // A concrete builtin rhs with a NON-literal, non-numeric lhs must NOT
-            // be unified eagerly: the lhs/dispatcher could be a user nominal with
-            // a heterogeneous method (e.g. `times : Duration, I64 -> Duration`
-            // used as `my_duration * count` with `count : I64`). That case falls
-            // through to the dispatch constraint below
-            // (`lhs.times : (lhs, rhs) -> lhs`), which resolves against the user
-            // method correctly.
-            if (lhs_is_numeric or (rhs_is_numeric and lhs_is_from_numeral)) {
-                const target = if (lhs_is_numeric) lhs_var else rhs_var;
-                const other = if (lhs_is_numeric) rhs_var else lhs_var;
-                const arg_unify_result = try self.unify(target, other, env);
-                if (!arg_unify_result.isEstablished()) {
-                    try self.markErroneous(expr_var);
-                    return;
-                }
-            }
-
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
                 return;
             }
 
-            // Arithmetic binops are homogeneous in the RETURN only: the result
-            // type IS the receiver type. Do NOT also unify lhs with rhs—user
-            // nominal methods may be heterogeneous (e.g.
-            // `times : Duration, I64 -> Duration`). Result-position context
-            // (`x : I64 = 1 + 2`) flows in here; argument-position context
-            // reaches an open literal via constraint-aware defaulting.
-            const ret_var = lhs_var;
+            // An arithmetic operator's operands and result are one type
+            // (design.md "Static Dispatch At The Checked Boundary"): either
+            // operand, or the result's context, decides all three.
+            const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
+            if (!arg_unify_result.isEstablished()) {
+                try self.markErroneous(expr_var);
+                return;
+            }
 
-            // Create the binop static dispatch function: lhs.method(rhs) -> lhs
+            // The operator's method: operand.method(operand) -> operand.
             _ = try self.mkBinopConstraint(
                 lhs_var,
-                rhs_var,
-                ret_var,
+                lhs_var,
+                lhs_var,
                 method_name,
                 false,
                 env,
@@ -36750,8 +36745,7 @@ fn finishBinopExpr(
                 expr_idx,
             );
 
-            // Set the expression to redirect to the return type
-            _ = try self.unify(expr_var, ret_var, env);
+            _ = try self.unify(expr_var, lhs_var, env);
         },
         .lt, .gt, .le, .ge => {
             const method_name, const ret_var =
@@ -36887,53 +36881,32 @@ fn finishBinopExpr(
             _ = try self.unify(expr_var, eq_ret_var, env);
         },
         .ne => {
-            // `a != b` desugars to `a.is_eq(b).not()`.
-            //
-            // a.is_eq(b) : x, x -> y
-            // y.not() : y -> y
-            //
-            // Currently, we required `y` to be a `Bool`. This is more
-            // restrictive, but makes inferred types easier to understand. We
-            // may revisit this in the future, but relaxing the restriction
-            // should be a non-breaking change.
-
+            // `a != b` is `a.is_eq(b)` negated. The `is_eq` dispatch carries
+            // the negation, which lowering applies to its `Bool` result, so
+            // the negation is no dispatch of its own.
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region)) {
                 return;
             }
 
-            // Unify lhs and rhs to ensure both operands have the same type
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
-
-            // If unification failed, short-circuit and set the expression to error
             if (!arg_unify_result.isEstablished()) {
                 try self.markErroneous(expr_var);
                 return;
             }
 
-            // Get the eq method + ret var
-            const eq_method_name = self.cir.idents.is_eq;
-            const eq_arg_var = rhs_var;
             const eq_ret_var = try self.freshBool(env, expr_region);
+            _ = try self.mkBinopConstraint(
+                rhs_var,
+                rhs_var,
+                eq_ret_var,
+                self.cir.idents.is_eq,
+                true,
+                env,
+                expr_region,
+                expr_idx,
+            );
 
-            // Create the eq static dispatch function: arg.is_eq(arg) -> Bool
-            _ = try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, true, env, expr_region, expr_idx);
-
-            // Get the not method + ret var
-            const not_method_name = self.cir.idents.not;
-            const not_arg_var = eq_ret_var;
-            const not_ret_var = eq_ret_var;
-
-            // Create the not static dispatch function on the not_arg + not_ret
-            // This function attaches the dispatch fn to the not_arg
-            try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, null);
-
-            // IMPORTANT: We currently required the eq_ret_var to be  a bool.
-            // This is more restrictive, but makes inferred types easier to
-            // understand. We may revisit this in the future, but relaxing the
-            // restriction should be a non-breaking change.
-
-            // The expression type is the return type of not
-            _ = try self.unify(expr_var, not_ret_var, env);
+            _ = try self.unify(expr_var, eq_ret_var, env);
         },
         .@"and", .@"or" => {
             const binop_ctx: problem.Context.BinopContext.Binop = switch (binop.op) {
@@ -45309,9 +45282,9 @@ fn reportUndeterminedType(
 }
 
 /// Whether no built-in type a literal of `kind` can become has a method named
-/// `method_name`. The candidates are the defaulting oracle's: every numeral
-/// default candidate for a number literal, and the string default (`Str`, the
-/// only built-in string type) for quote and interpolation literals. Each is
+/// `method_name`. The candidates are every builtin number type for a number
+/// literal, and `Str`, the only built-in string type, for quote and
+/// interpolation literals. Each is
 /// looked up through the same method registry dispatch uses. A user nominal
 /// that converts literals of this kind is outside this set, so the answer is
 /// about built-in types only.
@@ -45322,7 +45295,7 @@ fn builtinLiteralCandidatesLackMethod(
 ) Allocator.Error!bool {
     switch (literal_defaulting.defaultTargetForKind(kind)) {
         .dec => {
-            for (numeral_default_candidates) |num_kind| {
+            for (builtin_number_kinds) |num_kind| {
                 if (self.builtinNumberHasMethod(num_kind, method_name)) return false;
             }
             return true;
@@ -45397,9 +45370,21 @@ fn undeterminedTypeUseRegion(
     return self.cir.store.getExprRegion(expr_idx);
 }
 
-/// Candidate order for numeral defaulting, owned by the defaulting oracle
-/// (src/types/literal_defaulting.zig—see its doc for the ordering rationale)
-/// and mapped here into the `CIR.NumKind` values the probe machinery consumes.
+/// Every builtin number type, as the `CIR.NumKind` values a method lookup
+/// takes: the types a number literal can be given by a suffix, an
+/// annotation, or its uses.
+const builtin_number_kinds = blk: {
+    const targets = std.enums.values(exact_numeral.Target);
+    var kinds: [targets.len]CIR.NumKind = undefined;
+    for (targets, 0..) |target, index| {
+        kinds[index] = numKindFromNumeralTarget(target);
+    }
+    break :blk kinds;
+};
+
+/// The types an open number literal defaults to, owned by the defaulting
+/// oracle (src/types/literal_defaulting.zig) and mapped here into the
+/// `CIR.NumKind` values the probe machinery consumes.
 const numeral_default_candidates = blk: {
     var kinds: [literal_defaulting.numeral_default_candidates.len]CIR.NumKind = undefined;
     for (literal_defaulting.numeral_default_candidates, 0..) |target, index| {
@@ -48843,7 +48828,15 @@ fn instantiateDispatchTargetMethodVar(
         if (method_lookup.is_this_module) {
             const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
             self.method_receiver_context = receiver_context.subs();
-            break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
+            const instance = try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
+            if (instance != local_method_type_var) break :blk instance;
+            // A monomorphic binding has no instance of its own, so this use
+            // joins the binding's class as an occurrence, the way a lookup
+            // of it does. A mismatch at this use then poisons the occurrence
+            // and never the method type every other use shares.
+            const occurrence = try self.fresh(env, region);
+            _ = try self.unify(occurrence, local_method_type_var, env);
+            break :blk occurrence;
         }
         const imported_scheme = try self.importedMethodScheme(method_lookup);
         self.method_receiver_context = receiver_context.subs();
@@ -55209,7 +55202,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
             }
 
             const fn_var = maybe_fn_var orelse
-                base.invariant("validated builtin numeral lost its concrete builtin target", .{});
+                base.invariant("validated builtin literal lost its concrete builtin target", .{});
             visited.clearRetainingCapacity();
             if (try self.literalTargetContainsIdentity(target_var, &visited)) {
                 break :resolution .specialization_dispatch;
@@ -55903,7 +55896,7 @@ test "a function value passed to an invoking callee demands its body, even a bra
 test "an inline lambda passed to an invoking callee demands its body" {
     try expectCircularValues(
         \\a : U64
-        \\a = List.map([1, 2], |x| x + b).len()
+        \\a = List.map([1.U64, 2], |x| x + b).len()
         \\
         \\b : U64
         \\b = a + 1

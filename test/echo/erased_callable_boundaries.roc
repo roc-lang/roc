@@ -16,7 +16,7 @@ main! = |_args| {
 	bump = 7
 	boxed = Box.box(|n| n + bump)
 	unboxed = Box.unbox(boxed)
-	echo!("${unboxed(1).to_str()}\n")
+	echo!("${unboxed(1.I64).to_str()}\n")
 	echo!("${(table.inc)(1).to_str()} ${(table.dbl)(5).to_str()}\n")
 	echo!("${run_all(steps, 1).to_str()}\n")
 	boxed_list = Box.box([table.dbl, |n| n - bump])

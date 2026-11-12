@@ -643,7 +643,7 @@ const real_skip =
     "    var $i = 0.U64\n" ++
     "    while $i < n {\n" ++
     "        v = List.get($table, $i) ?? 0\n" ++
-    "        slid = (-32768).bitwise_or(v.bitwise_and(v.shr_wrap(15).bitwise_not()))\n" ++
+    "        slid = (-32768.I16).bitwise_or(v.bitwise_and(v.shr_wrap(15).bitwise_not()))\n" ++
     "        $table = match List.set($table, $i, slid) {\n" ++
     "            Ok(next) => next\n" ++
     "            Err(_) => return Err(CompressBug)\n" ++

@@ -8616,8 +8616,10 @@ pub fn numericDefaultPhaseForConstraints(
     module_env: *const ModuleEnv,
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
+    // An unconstrained variable has no default.
+    if (constraints_range.len() == 0) return null;
     const constraints = (&module_env.types).sliceStaticDispatchConstraints(constraints_range);
-    const idents = module_env.idents;
+    const idents = &module_env.idents;
     return types.literal_defaulting.numericDefaultPhase(.{
         .plus = idents.plus,
         .minus = idents.minus,
@@ -8931,7 +8933,7 @@ fn sourceDeclTypeIdent(module_env: *const ModuleEnv, source_decl: u32) ?base.Ide
 }
 
 fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident.Idx) ?CheckedBuiltinNominal {
-    const common = module_env.idents;
+    const common = &module_env.idents;
     if (ident.eql(common.bool) or ident.eql(common.bool_type)) return .bool;
     if (ident.eql(common.@"try") or ident.eql(common.builtin_try)) return .try_;
     if (ident.eql(common.str) or ident.eql(common.builtin_str)) return .str;

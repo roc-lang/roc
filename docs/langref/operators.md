@@ -85,11 +85,13 @@ Here, `user_requested_default` is only called if `config_missing` is `False`.
 
 ### Arithmetic Operators
 
-`+`, `-`, `*`, `/`, `//`, and `%` call methods on their left operand. The result has the
-left operand's type. The right operand usually has the same type as the left one, but it doesn't
-have to; that's up to the method. [Static dispatch](static-dispatch#operators) covers how to
-define these methods for your own types, and [numbers](numbers) covers what they do on the
-builtin number types (including what happens on overflow and division by zero).
+`+`, `-`, `*`, `/`, `//`, and `%` call methods on their left operand. Both operands and the
+result all have the same type. That's how a number literal gets its type from whatever it's
+combined with: in `count + 1`, the `1` is whatever type `count` is.
+
+[Static dispatch](static-dispatch#operators) covers how to define these methods for your own
+types, and [numbers](numbers) covers what they do on the builtin number types (including what
+happens on overflow and division by zero).
 
 ### Comparison Operators
 

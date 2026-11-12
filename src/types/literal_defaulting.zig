@@ -100,17 +100,10 @@ pub fn defaultTargetForKind(kind: LiteralKind) DefaultTarget {
     };
 }
 
-/// Candidate order for numeral defaulting (first satisfier wins). `Dec` (the
-/// canonical default) heads the list; then integers—signed before unsigned,
-/// `I64` first (Roc's historical integer default), wider before narrower so a
-/// tie never lands on a type that overflows sooner than it must; floats last.
-/// Order past `Dec` only matters when the constraints refute `Dec` yet accept
-/// several candidates—a pinned concrete arg or return admits exactly one
-/// regardless of order. That single-admission claim holds because builtin
-/// numeric methods are homogeneous (`T, T -> T`, e.g. `Dec.plus : Dec, Dec ->
-/// Dec`): every signature position is the dispatcher type itself, so pinning
-/// ANY position pins the candidate.
-pub const numeral_default_candidates = [_]numeral.Target{ .dec, .i64, .u64, .i128, .u128, .i32, .u32, .i16, .u16, .i8, .u8, .f64, .f32 };
+/// The types an open number literal can default to: `Dec` alone. A literal
+/// whose uses `Dec` cannot satisfy is an error asking for a suffix or an
+/// annotation; no other builtin number type is tried.
+pub const numeral_default_candidates = [_]numeral.Target{.dec};
 
 /// When a still-open literal-ish var's default is applied. A var that
 /// checking leaves open (a generalized literal no instantiation pinned) is

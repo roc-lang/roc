@@ -138,19 +138,19 @@ test "cross-module - settled weak-receiver scheme remains polymorphic" {
 
 test "cross-module - nested capturing closure publishes its dispatch relation" {
     const source_a =
-        \\main! : a -> a where [a.plus : a, Dec -> a]
-        \\main! = |x| {
+        \\main! : a, a -> a where [a.plus : a, a -> a]
+        \\main! = |x, z| {
         \\  add_x = |y| x + y
-        \\  add_x(10)
+        \\  add_x(z)
         \\}
     ;
     var test_env_a = try TestEnv.init("A", source_a);
     defer test_env_a.deinit();
-    try test_env_a.assertDefType("main!", "a -> a where [a.plus : a, Dec -> a]");
+    try test_env_a.assertDefType("main!", "a, a -> a where [a.plus : a, a -> a]");
 
     const source_b =
         \\import A
-        \\answer = A.main!(42)
+        \\answer = A.main!(42, 1)
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
@@ -158,7 +158,7 @@ test "cross-module - nested capturing closure publishes its dispatch relation" {
 
     const source_c =
         \\import A
-        \\bad = A.main!("not a number")
+        \\bad = A.main!("not a number", "either")
     ;
     var test_env_c = try TestEnv.initWithImport("C", source_c, "A", &test_env_a);
     defer test_env_c.deinit();

@@ -195,7 +195,7 @@ main! = |args| {
 	outer : Outer
 	outer = { i: { b: 1, a: long }, n: 9 }
 	add = |x| x + outer.n
-	echo!("${outer.i.a} ${Str.inspect(outer.n)} ${Str.inspect(outer.i.b)} ${Str.inspect(add(1))} ${Str.inspect(outer)}\n")
+	echo!("${outer.i.a} ${Str.inspect(outer.n)} ${Str.inspect(outer.i.b)} ${Str.inspect(add(1.U64))} ${Str.inspect(outer)}\n")
 	constructed = Outer.{ i: { b: 2, a: "constructed" }, n: 10 }
 	echo!("${constructed.i.a} ${Str.inspect(constructed.i.b + 1)}\n")
 	hidden = Hidden.new(1, 2)

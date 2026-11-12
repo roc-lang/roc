@@ -7045,15 +7045,23 @@ calls. `a == b` requires `a` and `b` to have the same type and `is_eq` to return
 `Bool`; `a != b` has the same requirements and negates that Boolean result.
 Likewise, `<`, `<=`, `>`, and `>=` require equal operand types and a `Bool`
 result, calling `is_lt`, `is_lte`, `is_gt`, and `is_gte`, respectively.
-Arithmetic operators instead require the result to have the receiver's type;
-the other operand may differ, as in `Duration * I64 -> Duration`.
+The arithmetic operators `+`, `-`, `*`, `/`, `//`, and `%` require both
+operands and the result to be one type, calling `plus`, `minus`, `times`,
+`div_by`, `div_trunc_by`, and `rem_by` at `a, a -> a`. A method of one of those
+names whose second parameter or result is another type, such as
+`times : Duration, I64 -> Duration`, is callable only as an ordinary method
+call (`duration.times(3)`); `duration * 3` is a type mismatch between the
+operands.
 
 These contracts let inference propagate information before a method has been
-selected. Either comparison operand can determine the other's type; an
-arithmetic result annotation can determine the receiver's type. A plain method
-call cannot assume these relationships: its selected method may accept a
-different argument type or return a different type. Thus `|a, b| a == b`
-infers `c, c -> Bool where [c.is_eq : c, c -> Bool]`, whereas
+selected. Either operand of a comparison or arithmetic operator determines the
+other's type, and an arithmetic result's context determines both operands'.
+This is what gives a number literal its type from the value it is combined
+with: in `|n| n + 1` applied to a `U64`, the `1` is a `U64`, with no
+defaulting involved. A plain method call cannot assume these relationships:
+its selected method may accept a different argument type or return a different
+type. Thus `|a, b| a == b` infers `c, c -> Bool where [c.is_eq : c, c -> Bool]`
+and `|a, b| a + b` infers `c, c -> c where [c.plus : c, c -> c]`, whereas
 `|a, b| a.is_eq(b)` infers `c, d -> e where [c.is_eq : c, d -> e]`.
 Restricting comparison results to `Bool` also keeps inferred signatures simple;
 ordinary `a.is_eq(b).not()` can require two methods with independently inferred
@@ -10286,6 +10294,25 @@ requirements retain their existing introduction path. Tests in
 `issue_11960_test.zig` pin concrete, inferred, custom, and rejected cases, and the
 absence of per-literal signature graphs for concrete builtin lists.
 
+### Concrete Builtin Quote Introduction
+
+A string literal with no interpolation may omit constructing its `from_quote`
+signature graph when the checking context supplied by its enclosing
+construction already names the builtin `Str` declaration.
+`checkConcreteBuiltinQuote` introduces the ordinary builtin nominal through
+`unifyWith`, exactly as Concrete Builtin Numeral Introduction does for a
+number: the enclosing expression's expected-type relation stays in place, the
+checked literal has the same type and absent custom dispatch plan as after
+ordinary constraint solving, and CIR retains a literal plan with an absent
+constraint-function variable that finalization seals as `builtin_direct` or a
+checked error.
+
+Only the builtin `Str` declaration qualifies. Transparent aliases may be
+followed; nominal wrappers, suffixed literals, borrowed record-field context,
+and unresolved or generalized targets keep the ordinary constraint. Expression
+literals only are covered; pattern equality requirements retain their existing
+introduction path.
+
 ### Expected Shape Context
 
 An expected aggregate shape guides construction but introduces no new value
@@ -10319,7 +10346,7 @@ guidance, not permission to discard a structural row's complement or the
 dispatch requirements it came with.
 
 The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
-arithmetic remains polymorphic, including heterogeneous user arithmetic;
+arithmetic remains polymorphic, and mixed-type user methods stay callable by name;
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
 
@@ -14120,9 +14147,9 @@ Other solved-graph mutations:
 - Literal defaulting (`commitLiteralDefault`, `commitLiteralGroupDefault`)
 —policy: literal defaulting as declared in Static Dispatch At The
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
-  default candidate order (`Dec` first); mutation happens only through
-  committed probes of ordinary unification. When no candidate satisfies a
-  numeral's method constraints, the documented head default is still
+  default, `Dec`; mutation happens only through
+  committed probes of ordinary unification. When `Dec` does not satisfy a
+  numeral's method constraints, it is still
   committed so the dispatch pass reports the conflicts against it—but that
   is a type the program never chose, so each failing validation against it
   rewinds its own unification: the diagnostic is reported and the relation
@@ -16510,8 +16537,8 @@ completed while constructing Monotype types from checked types. The explicit
 field-kind commitment described above is part of instantiation-graph relation
 freeze, before any Monotype type is sealed. Numeric defaulting is
 split by the checked `numeric_default_phase` data: checking defaults open
-literals (the first candidate in the numeric default candidate order, `Dec` first, that
-satisfies the literal's dispatch constraints), and Monotype commits only the
+literals to `Dec`, reporting a literal whose dispatch constraints `Dec` does
+not satisfy, and Monotype commits only the
 per-specialization residue of generalized literals.
 
 ### Monotype Instantiation
@@ -19198,9 +19225,8 @@ missing-method or mismatch report against the default owner. It is titled
 so it has no method the requirement can use, and states what the type must
 support. The hint depends on whether a built-in type could
 satisfy the failed requirement. When the class holds a literal, the checker
-looks up the failed method on every built-in type that literal's kind can
-default to—the defaulting oracle's numeral candidates
-(`literal_defaulting.numeral_default_candidates`) for a number, and `Str`,
+looks up the failed method on every built-in type a literal of that kind can
+be—every builtin number type (`builtin_number_kinds`) for a number, and `Str`,
 the only built-in string type, for a quote or interpolation—through the same
 method registry dispatch uses. If none has it, the hint says that no built-in
 number (or string) type supports the operator or has the method, naming the

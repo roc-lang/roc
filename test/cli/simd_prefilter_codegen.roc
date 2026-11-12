@@ -41,12 +41,12 @@ main! = |args| {
 	salt = args.len().to_u128()
 	length = args.len().to_u64() * 512 + 64
 	hay = List.repeat(args.len().to_u8_wrap(), length)
-	lo0 = U8x16.from_u128_bits((21345817372864405881847059188222722561).bitwise_xor(salt))
-	hi0 = U8x16.from_u128_bits((98126319374817364501927364501927364501).bitwise_xor(salt))
-	lo1 = U8x16.from_u128_bits((41827364501927364501927364501927364501).bitwise_xor(salt))
-	hi1 = U8x16.from_u128_bits((72645019273645019273645019273645019273).bitwise_xor(salt))
-	lo2 = U8x16.from_u128_bits((19273645019273645019273645019273645019).bitwise_xor(salt))
-	hi2 = U8x16.from_u128_bits((56102938475610293847561029384756102938).bitwise_xor(salt))
+	lo0 = U8x16.from_u128_bits((21345817372864405881847059188222722561.U128).bitwise_xor(salt))
+	hi0 = U8x16.from_u128_bits((98126319374817364501927364501927364501.U128).bitwise_xor(salt))
+	lo1 = U8x16.from_u128_bits((41827364501927364501927364501927364501.U128).bitwise_xor(salt))
+	hi1 = U8x16.from_u128_bits((72645019273645019273645019273645019273.U128).bitwise_xor(salt))
+	lo2 = U8x16.from_u128_bits((19273645019273645019273645019273645019.U128).bitwise_xor(salt))
+	hi2 = U8x16.from_u128_bits((56102938475610293847561029384756102938.U128).bitwise_xor(salt))
 	if prefilter_candidates(hay, lo0, hi0, lo1, hi1, lo2, hi2) > length * 65535 {
 		Err(Exit(1))
 	} else {
