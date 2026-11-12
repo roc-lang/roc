@@ -10222,6 +10222,29 @@ arithmetic remains polymorphic, including heterogeneous user arithmetic;
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
 
+### Call Arguments Relate In Order
+
+A call checks its arguments left to right, and relates each argument to its
+formal slot as soon as that argument has checked, before the next argument is
+checked. A later argument is therefore checked with every type its earlier
+siblings fixed: in `apply(ask, { plan: |a| ... })` with
+`apply : a, { plan : a -> b } -> b`, the record is checked knowing `a` is the
+type of `ask`, so a method call on the callback's parameter resolves while its
+arguments are checked and a record literal among them may omit defaulted
+fields. The flow is one-directional. An argument learns nothing from a sibling
+to its right until both relations have run, exactly as a deferred dispatch
+does.
+
+Each relation is owned by the call and leaves both operand graphs intact when
+it is rejected, so a rejected argument cannot poison the formal slots its
+siblings are checked against. The first rejected relation ends the fold, and
+an erroneous operand never relates; later arguments are still checked, and
+report their own errors. The fold runs exactly one relation per argument.
+`issue 12978: callback record accepts nominal method props with omitted
+defaults` in `type_checking_integration.zig` pins the accepted side, and
+`issue 10763 - a stored call result is monomorphic` pins that two wrong
+arguments of one call are each reported.
+
 ### Polarity: Output-Position Tag Unions Are Implicitly Open
 
 Every type annotation is walked with a POLARITY: the root is positive
@@ -13766,6 +13789,62 @@ and outside a loop; errors for a discarded value of another type on a `var`
 (`$items.len()`), the same call on an immutable binding, and an operator on a
 `var` (`$count + n`).
 
+### Frozen Scheme Relations Keep Enclosing Variables Monomorphic
+
+A local function that dispatches on a variable of an enclosing scope
+generalizes with that relation pending: in
+
+```roc
+labels = |prefix, keys| {
+    labelled = |suffix| keys.map(|k| "${prefix}${k.to_str()}${suffix}")
+    n = distinct(keys)
+    labelled("/${n.to_str()}")
+}
+```
+
+`labelled` generalizes while `keys` is still unknown, so its `map` relation
+holds `labelled`'s quantified element variable next to the enclosing `keys`.
+When `distinct(keys)` later gives `keys` the type `List(k)`, the relation
+resolves, and relating `List.map`'s signature to it unifies `labelled`'s
+quantified element variable with the enclosing `k`. Rank-minimum unification
+would leave that class generalized, and the next use of `labelled` would copy
+the enclosing function's own `k` as a fresh variable that nothing relates to
+`keys` again.
+
+A variable an enclosing scope owns is never quantified by a scheme nested in
+that scope. `restoreEnclosingVarRanks` enforces this where the two can meet:
+resolving a relation owned by a scheme whose boundary has already captured its
+requirements (`captured_scheme_owners`). Before such a relation resolves,
+`collectFrozenRelationEnclosingVars` records every non-generalized variable
+its callable and receiver reach, with its rank. Afterwards, each recorded
+variable that the resolution merged into a generalized class gets its rank
+back, and so does everything the class reaches. This is what
+checking the local function after the enclosing variable was known would have
+inferred: the variable is the enclosing scope's, shared by every use.
+
+A relation attached to a restored variable belongs to the enclosing scope
+along with its receiver, so its callable is restored too. A local function is
+therefore monomorphic in every variable such a relation relates: given
+`h = |d| keys.map(|k| k.combine(d))`, once `keys` is known to be a list of
+the enclosing scope's `k`, `d` is fixed by `k`'s one `combine` relation and
+two uses of `h` share it.
+
+This is a policy rewrite: it accepts programs that rank-minimum unification
+alone rejects with an unresolved requirement at the local function's use. The
+cost is confined to deferred relations whose owning scheme has already
+generalized: one walk of the relation's callable and receiver before it
+resolves, and one walk from each merged variable after. Every other deferred
+relation pays one owner lookup per constraint, and none when no scheme
+boundary has captured.
+
+The accepted side is pinned by `issue 12970: returned callback preserves
+captured method requirements across a where use` and `issue 12970: an
+unannotated enclosing function stays generic in its receiver's element` in
+`type_checking_integration.zig`. The rejected side is pinned by `issue 12970:
+a local function's variable fixed by its enclosing receiver is monomorphic`
+and `issue 12970: a relation on an enclosing element fixes the local
+function's other variables`.
+
 ### Rewrite Inventory
 
 - `finishAliasDeclarationParameters`—mechanism: completes an in-progress
@@ -14024,6 +14103,11 @@ Other solved-graph mutations:
   deferred static-dispatch worklist. Retirement reads the explicit structural
   origin and checked scheme-use substitution produced by those operations;
   there is no rank rewrite, structural ownership probe, or graph restamp.
+- `restoreEnclosingVarRanks` (`setDescRank`)—policy: Frozen Scheme Relations
+  Keep Enclosing Variables Monomorphic (above). After a relation owned by an
+  already-generalized scheme resolves, every enclosing-scope variable it
+  merged into a generalized class, and everything that class reaches,
+  returns to the enclosing variable's rank. No content is written.
 - `codecInputsAreBoundaryLocal` / `quiesceSchemeRequirementsAtBoundary`—policy:
   Derived Parser Tag-Row Closure (above). Exact owned codec relations with
   settled local inputs move to boundary validation before generalization;

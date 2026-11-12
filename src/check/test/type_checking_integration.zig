@@ -3645,7 +3645,11 @@ test "issue 10763 - a stored call result is monomorphic" {
         \\    check(|| "a", "a")
         \\}
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    // Both operands of the second call hold a string where `check`'s one
+    // `val` is U64, and each literal is reported.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertTypeErrorTitles(&.{ "Type Mismatch", "Type Mismatch" });
 }
 
 test "issue 11217 - aliasing a stored call result does not generalize it" {
@@ -12237,6 +12241,114 @@ test "check type - finalize defaulting - heterogeneous multi-driver group at top
         \\top = (5).plus((2).shl_wrap(3))
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "issue 12970: returned callback preserves captured method requirements across a where use" {
+    var env = try TestEnv.init("Returned",
+        \\Returned := [].{
+        \\    distinct : List(k) -> U64
+        \\        where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+        \\    distinct = |keys| Set.from_list(keys).len()
+        \\
+        \\    labels : Str -> (List(U64) -> List(Str))
+        \\    labels = |prefix| |keys| {
+        \\        labelled = |suffix| keys.map(|k| "${prefix}${k.to_str()}${suffix}")
+        \\        n = distinct(keys)
+        \\        labelled("/${n.to_str()}")
+        \\    }
+        \\}
+        \\
+        \\expect Returned.labels("#")([7, 7]) == ["#7/1", "#7/1"]
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+}
+
+test "issue 12970: an unannotated enclosing function stays generic in its receiver's element" {
+    var env = try TestEnv.init("NoAnno",
+        \\NoAnno := [].{
+        \\    distinct : List(k) -> U64
+        \\        where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+        \\    distinct = |keys| Set.from_list(keys).len()
+        \\
+        \\    labels = |prefix, keys| {
+        \\        labelled = |suffix| keys.map(|k| "${prefix}${k.to_str()}${suffix}")
+        \\        n = distinct(keys)
+        \\        labelled("/${n.to_str()}")
+        \\    }
+        \\}
+        \\
+        \\expect NoAnno.labels("#", [7.U64, 7]) == ["#7/1", "#7/1"]
+        \\expect NoAnno.labels("#", ["a", "b"]) == ["#a/2", "#b/2"]
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+}
+
+test "issue 12970: a local function's variable fixed by its enclosing receiver is monomorphic" {
+    var env = try TestEnv.init("Mono",
+        \\Mono := [].{
+        \\    both = |keys| {
+        \\        wrap = |x| keys.append(x)
+        \\        n = List.len(keys)
+        \\        (wrap(n), wrap("a"))
+        \\    }
+        \\}
+    );
+    defer env.deinit();
+    try env.assertTypeErrorTitles(&.{"Type Mismatch"});
+}
+
+test "issue 12970: a relation on an enclosing element fixes the local function's other variables" {
+    var env = try TestEnv.init("Poly",
+        \\Poly := [].{
+        \\    Thing :: U64.{
+        \\        combine : Thing, a -> a
+        \\        combine = |_, a| a
+        \\    }
+        \\
+        \\    both = |keys| {
+        \\        pair = |d| keys.map(|k| k.combine(d))
+        \\        n = List.len(keys)
+        \\        (pair(n), pair("a"))
+        \\    }
+        \\}
+    );
+    defer env.deinit();
+    try env.assertTypeErrorTitles(&.{"Type Mismatch"});
+}
+
+test "issue 12978: callback record accepts nominal method props with omitted defaults" {
+    var env = try TestEnv.init("Test",
+        \\Value :: U64.{
+        \\    make : U64 -> Value
+        \\    make = |n| Value.(n)
+        \\
+        \\    read : Value, ReadProps -> U64
+        \\    read = |Value.(n), ReadProps.({ max_bytes })| n + max_bytes
+        \\}
+        \\
+        \\ReadProps := { max_bytes : U64 ?? 8 }
+        \\Ask : [Bytes(Value), Large(Value)]
+        \\
+        \\apply : a, { plan : a -> b } -> b
+        \\apply = |value, { plan }| plan(value)
+        \\
+        \\reader : Ask -> List(U64)
+        \\reader = |ask| apply(
+        \\    ask,
+        \\    {
+        \\        plan: |a| match a {
+        \\            Bytes(f) => [f.read({})]
+        \\            Large(f) => [f.read({ max_bytes: 64 })]
+        \\        },
+        \\    },
+        \\)
+        \\
+        \\expect reader(Bytes(Value.make(1))) == [9]
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
 }
 
 // OUTER-ROOTED DISPATCH CHAINS: a dispatch deferred on a flex receiver owned
