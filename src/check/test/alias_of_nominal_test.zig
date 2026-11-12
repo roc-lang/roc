@@ -6,7 +6,6 @@
 //! is what makes it legal. An alias cycle that passes through no nominal type
 //! is still a recursive alias.
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "a nominal declaration may name itself through an alias declared before it" {

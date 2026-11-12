@@ -14,7 +14,7 @@ fn childNamed(entries: []const DocModel.DocEntry, name: []const u8) ?*const DocM
     return null;
 }
 
-fn expectTags(entry: *const DocModel.DocEntry, expected: []const []const u8) !void {
+fn expectTags(entry: *const DocModel.DocEntry, expected: []const []const u8) error{ TestUnexpectedResult, TestExpectedEqual }!void {
     const signature = entry.type_signature orelse return error.TestUnexpectedResult;
     const tags = signature.tag_union.tags;
     try std.testing.expectEqual(expected.len, tags.len);
