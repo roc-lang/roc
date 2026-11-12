@@ -328,8 +328,14 @@ d = make_inferred(1) # ERROR! Packed has more (anonymous) fields than this recor
 ```
 
 To get a `Labeled` or a `Packed` from `make_inferred`, have it build one with
-`Labeled.{ x, y: 0 }` or `Packed.{ x, y: 0 }`. That way the record is built with the
-extra fields from the start, so nothing has to rebuild it at each place it's used.
+`Labeled.{ x, y: 0 }` or `Packed.{ x, y: 0 }`, or give `make_inferred` a type annotation
+that says it returns one. That way the record is built with the extra fields from the
+start, so nothing has to rebuild it at each place it's used.
+
+The same goes for a function that takes a record apart. `|{ x, y }|` takes a record with
+exactly those fields, so it can't take a `Labeled` or a `Packed`. Writing the pattern as
+`|Packed.{ x, y }|`, or as `|Labeled.{ x, .. }|` with a `..` for the fields it doesn't
+name, makes it take one, and so does a type annotation that says it takes one.
 
 Since a nominal record has a name, it can also have [methods](static-dispatch#methods):
 

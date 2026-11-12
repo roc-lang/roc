@@ -5629,21 +5629,14 @@ pub const ReportBuilder = struct {
                         D.bytes("has more (anonymous) fields than the record this function takes apart, making it incompatible."),
                     }, self, report);
                     try report.document.addLineBreaks(2);
-                    try D.renderSlice(&.{
-                        D.bytes("Hint:").withAnnotation(.emphasized),
-                        D.bytes("If you want this function to take a"),
-                        D.typeIdent(nominal).withAnnotation(.inline_code),
-                        D.bytes(", give it a type annotation that says it takes a").withNoPrecedingSpace(),
-                        D.typeIdent(nominal).withAnnotation(.inline_code),
-                        D.bytes(".").withNoPrecedingSpace(),
-                    }, self, report);
+                    try self.renderNominalPatternHint(report, nominal, "{s}.{{ ... }}", false);
                 } else {
                     try D.renderSlice(&.{
                         D.typeIdent(nominal).withAnnotation(.inline_code),
                         D.bytes("has more (anonymous) fields than this, making it incompatible."),
                     }, self, report);
                     try report.document.addLineBreaks(2);
-                    try self.renderNominalConstructorHint(report, nominal, "the anonymous fields");
+                    try self.renderNominalConstructorHint(report, nominal, null);
                 }
             },
             .added_field => {
@@ -5656,14 +5649,7 @@ pub const ReportBuilder = struct {
                     }, self, report);
                     try report.document.addLineBreaks(2);
                     if (refusal.nominal) |nominal| {
-                        try D.renderSlice(&.{
-                            D.bytes("Hint:").withAnnotation(.emphasized),
-                            D.bytes("If you want this function to take a"),
-                            D.typeIdent(nominal).withAnnotation(.inline_code),
-                            D.bytes(", give it a type annotation that says it takes a").withNoPrecedingSpace(),
-                            D.typeIdent(nominal).withAnnotation(.inline_code),
-                            D.bytes(".").withNoPrecedingSpace(),
-                        }, self, report);
+                        try self.renderNominalPatternHint(report, nominal, "{s}.{{ ..., .. }}", true);
                     } else {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -5682,16 +5668,15 @@ pub const ReportBuilder = struct {
                     }, self, report);
                     try report.document.addLineBreaks(2);
                     if (refusal.nominal) |nominal| {
-                        var what = std.ArrayList(u8).empty;
-                        defer what.deinit(self.gpa);
-                        try what.print(self.gpa, "`{s}`", .{self.can_ir.getIdent(field)});
-                        try self.renderNominalConstructorHint(report, nominal, what.items);
+                        try self.renderNominalConstructorHint(report, nominal, field);
                     } else {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
-                            D.bytes("Give the function that builds this record a type annotation whose record has"),
+                            D.bytes("Add"),
                             D.ident(field).withAnnotation(.inline_code),
-                            D.bytes(", so the record is built with that field.").withNoPrecedingSpace(),
+                            D.bytes("to the record where it's built. You can also give the function that builds it a type annotation whose record has"),
+                            D.ident(field).withAnnotation(.inline_code),
+                            D.bytes(".").withNoPrecedingSpace(),
                         }, self, report);
                     }
                 }
@@ -5699,15 +5684,20 @@ pub const ReportBuilder = struct {
         }
     }
 
-    /// "If you want a `Name`, you can write `Name.{ ... }` instead of
-    /// `{ ... }` …, since that provides `provides` automatically."
-    fn renderNominalConstructorHint(self: *Self, report: *Report, nominal: Ident.Idx, provides: []const u8) Allocator.Error!void {
+    /// The text of a nominal type's name as the report shows it.
+    fn nominalDisplayName(self: *Self, nominal: Ident.Idx) []const u8 {
         const mapped = self.import_mapping.get(nominal) orelse nominal;
-        const name = types_mod.TypeWriter.stripBuiltinQualification(self.can_ir.getIdent(mapped));
-        const constructor = try std.fmt.allocPrint(self.gpa, "{s}.{{ ... }}", .{name});
+        return types_mod.TypeWriter.stripBuiltinQualification(self.can_ir.getIdent(mapped));
+    }
+
+    /// "If you want a `Name`, you can write `Name.{ ... }` instead of
+    /// `{ ... }` where this record is built, since that provides `field` (or
+    /// the anonymous fields) automatically. You can also give the function
+    /// that builds it a type annotation that says it's a `Name`."
+    fn renderNominalConstructorHint(self: *Self, report: *Report, nominal: Ident.Idx, field: ?Ident.Idx) Allocator.Error!void {
+        const constructor = try std.fmt.allocPrint(self.gpa, "{s}.{{ ... }}", .{self.nominalDisplayName(nominal)});
         defer self.gpa.free(constructor);
-        const fills = try std.fmt.allocPrint(self.gpa, "where this record is built, since that provides {s} automatically.", .{provides});
-        defer self.gpa.free(fills);
+        const provided: D = if (field) |name| D.ident(name).withAnnotation(.inline_code) else D.bytes("the anonymous fields");
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
             D.bytes("If you want a"),
@@ -5716,8 +5706,51 @@ pub const ReportBuilder = struct {
             D.bytes(try report.addOwnedString(constructor)).withAnnotation(.inline_code),
             D.bytes("instead of"),
             D.bytes("{ ... }").withAnnotation(.inline_code),
-            D.bytes(try report.addOwnedString(fills)),
+            D.bytes("where this record is built, since that provides"),
+            provided,
+            D.bytes("automatically. You can also give the function that builds it a type annotation that says it's a"),
+            D.typeIdent(nominal).withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
         }, self, report);
+    }
+
+    /// "If you want this function to take a `Name`, you can write `pattern`
+    /// instead of `{ ... }` in its pattern (ending it with `..` to match the
+    /// fields it doesn't name, when `rest`). You can also give it a type
+    /// annotation that says it takes a `Name`."
+    fn renderNominalPatternHint(self: *Self, report: *Report, nominal: Ident.Idx, comptime pattern_format: []const u8, rest: bool) Allocator.Error!void {
+        const pattern = try std.fmt.allocPrint(self.gpa, pattern_format, .{self.nominalDisplayName(nominal)});
+        defer self.gpa.free(pattern);
+        const name = try report.addOwnedString(pattern);
+        if (rest) {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("If you want this function to take a"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes(", you can write").withNoPrecedingSpace(),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes("instead of"),
+                D.bytes("{ ... }").withAnnotation(.inline_code),
+                D.bytes("in its pattern, ending it with"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes("to match the fields it doesn't name. You can also give it a type annotation that says it takes a"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("If you want this function to take a"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes(", you can write").withNoPrecedingSpace(),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes("instead of"),
+                D.bytes("{ ... }").withAnnotation(.inline_code),
+                D.bytes("in its pattern. You can also give it a type annotation that says it takes a"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, report);
+        }
     }
 
     fn appendHostFixedRowHint(self: *Self, report: *Report, origin: ?Ident.Idx, actual: SnapshotContentIdx) Allocator.Error!void {

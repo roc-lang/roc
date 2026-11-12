@@ -5199,7 +5199,13 @@ across a module boundary. The unifier refuses them where they arise
 the record lacks; `Unifier.unifyUncommittedWithStructure` for a written-out
 structural type), records the refusal (`Scratch.record_tail_refusal`,
 `TypeMismatch.record_tail_refusal`), and the report explains it
-(`ReportBuilder.appendRecordTailRefusal`). A required field the record lacks
+(`ReportBuilder.appendRecordTailRefusal`). Its hint offers the fix that
+needs no type annotation first, then the annotation: building the record
+as `Row.{ ... }` where it is built, or adding the field there; taking it
+apart with `Row.{ ... }` in the function's pattern, with a trailing `..`
+(`Wide.{ a, .. }`) when the nominal has optional or defaulted fields the
+pattern does not name, or ending a structural pattern with `..`; and the
+type annotation on the function that builds or takes the record. A required field the record lacks
 stays the ordinary mismatch it is for any record.
 
 Nothing is ever converted at a call. The value a use receives is the value
@@ -5358,7 +5364,8 @@ record from one function, and a nominal whose defaulted field the record
 supplies), `test/cli/open_records_imported/` (the same across a module
 boundary, accepted and rejected), `test/cli/OpenRecordsPaddedRejected.roc`
 and `test/cli/OpenRecordsAddedFieldRejected.roc` (each refusal in every
-position, with its report), `test/cli/OptionalFieldsPerUse.roc` (two uses
+position, with its report), `test/cli/OpenRecordsHintFixes.roc` (every fix
+the refusal hints suggest, compiled and run), `test/cli/OptionalFieldsPerUse.roc` (two uses
 refused fields of different types), `test/cli/LiftedUseLeavesOtherUses.roc`
 and `test/cli/lifted_use_leaves_other_uses/` (uses that lift and keep their
 results, in one module and across modules),
