@@ -12379,8 +12379,13 @@ A record or tag union with no row variable is a plain record or tag union for
 method purposes: a literal a function builds, a record pattern without `..`,
 a tag union an exhaustive match or a closed tag pattern closes, and a row an
 annotation writes without `..` (its implicit Polarity opening included).
-A method call on it is decided where the binding is checked, against the plain
-type: `is_eq` and `to_hash` are derived, and any other method is the
+A row variable that joins such a record makes it no less plain: in
+`keep = |l| { _ = l.id; if c l else { id: 1 } }` the parameter's field-use row
+meets the literal's uncommitted tail, the merged class is that uncommitted
+tail, and `keep`'s type has no row variable to carry a requirement, so a
+method call on it is decided at the definition and comparing or hashing it
+commits the tail. A method call on it is decided where the binding is
+checked, against the plain type: `is_eq` and `to_hash` are derived, and any other method is the
 missing-method error it is for any structural value. A requirement a generic
 callee's scheme carries (`generic_foo(r, r)` with `generic_foo = |x, y|
 x.foo(y)`) is decided the same way when it lands on such a value. Deriving
