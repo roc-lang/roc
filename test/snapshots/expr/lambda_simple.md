@@ -34,7 +34,7 @@ NO CHANGE
 (e-lambda
 	(args
 		(p-assign (ident "x")))
-	(e-dispatch-call (method "plus") (constraint-fn-var 225)
+	(e-dispatch-call (method "plus") (constraint-fn-var 218)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "x"))))
@@ -43,5 +43,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> a where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
 ~~~

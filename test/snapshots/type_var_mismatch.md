@@ -38,7 +38,7 @@ TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 			(line-break)
 			(reflow "The type was determined to be non-numeric here:")
 			(line-break)
-			(source-region (file "type_var_mismatch.md") (start 11 11) (end 11 39) (annotation error) (line-text "\tresult = List.first(list).ok_or(item)"))
+			(source-region (file "type_var_mismatch.md") (start 11 34) (end 11 38) (annotation error) (line-text "\tresult = List.first(list).ok_or(item)"))
 			(line-break)
 			(reflow "Other code expects this to have the type:")
 			(line-break)
@@ -129,9 +129,9 @@ NO CHANGE
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "ok_or") (constraint-fn-var 273)
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 266)
 						(receiver
-							(e-call (constraint-fn-var 270)
+							(e-call (constraint-fn-var 263)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local

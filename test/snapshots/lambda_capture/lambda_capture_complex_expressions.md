@@ -45,8 +45,8 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 260)
-	(e-call (constraint-fn-var 252)
+(e-call (constraint-fn-var 239)
+	(e-call (constraint-fn-var 238)
 		(e-lambda
 			(args
 				(p-assign (ident "outer")))
@@ -59,13 +59,13 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 240)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 233)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "outer"))))
 									(args
 										(e-num (value "0"))))
-								(e-dispatch-call (method "plus") (constraint-fn-var 243)
+								(e-dispatch-call (method "plus") (constraint-fn-var 236)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "outer"))))

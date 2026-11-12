@@ -609,10 +609,10 @@ nested_shadow = |n| |n| n
 		(expr (type "[Err(b), Ok(b)] -> b"))
 		(expr (type "_arg -> (b -> b)"))
 		(expr (type "Dec"))
+		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
+		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "(b, _field) -> b"))))
 ~~~

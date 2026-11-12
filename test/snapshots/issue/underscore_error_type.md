@@ -118,22 +118,6 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 4 7) (end 4 9))
-		(headline
-			(reflow "This number is being used where a non-number type is needed."))
-		(document
-			(source-region (file "underscore_error_type.md") (start 4 7) (end 4 9) (annotation error) (line-text "foo = 42"))
-			(line-break)
-			(reflow "Other code expects this to have the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "BadType")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
 		(region (start 9 7) (end 9 16))
 		(headline
 			(reflow "This expression is used in an unexpected way."))
@@ -180,6 +164,22 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 			(annotation-start code-block)
 			(indent 1)
 			(text "BadFunction")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 7) (end 4 9))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 4 7) (end 4 9) (annotation error) (line-text "foo = 42"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "BadType")
 			(annotation-end)))
 	(report
 		(severity runtime_error)

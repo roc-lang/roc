@@ -146,11 +146,11 @@ test "canonicalized module cache key cannot be split differently by its variable
     // A length prefix on every variable-length input keeps one field's tail
     // from reading as the next field's head.
     var whole = canonicalizedTestInput();
-    whole.compiler_version = "roc-test-version";
+    whole.compiler_version = "roc-test-v1";
     whole.module_basename = "Main.roc";
     var moved_boundary = canonicalizedTestInput();
-    moved_boundary.compiler_version = "roc-test-versio";
-    moved_boundary.module_basename = "nMain.roc";
+    moved_boundary.compiler_version = "roc-test-v";
+    moved_boundary.module_basename = "1Main.roc";
 
     try std.testing.expect(!canonicalizedKeyEql(
         canonicalizedModuleCacheKey(whole),

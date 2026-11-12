@@ -8,9 +8,9 @@ type=file
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
 sum : a -> b where [
-	a.iter : a -> Iter(item),
+	a.iter : a -> Iter(b),
 	b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-	b.plus : b, item -> b,
+	b.plus : b, b -> b,
 ]
 sum = |iter| {
 	var $s = 0
@@ -72,7 +72,7 @@ EndOfFile,
 						(ty-var (raw "a"))
 						(ty-apply
 							(ty (name "Iter"))
-							(ty-var (raw "item")))))
+							(ty-var (raw "b")))))
 				(method (mod-of "b") (name "from_numeral")
 					(ty-fn
 						(ty (name "Numeral"))
@@ -87,7 +87,7 @@ EndOfFile,
 				(method (mod-of "b") (name "plus")
 					(ty-fn
 						(ty-var (raw "b"))
-						(ty-var (raw "item"))
+						(ty-var (raw "b"))
 						(ty-var (raw "b"))))))
 		(s-decl
 			(p-ident (raw "sum"))
@@ -131,9 +131,9 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 
 sum : a -> b
 	where [
-		a.iter : a -> Iter(item),
+		a.iter : a -> Iter(b),
 		b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-		b.plus : b, item -> b,
+		b.plus : b, b -> b,
 	]
 sum = |iter| {
 	var $s = 0
@@ -166,7 +166,7 @@ main! = |_| {}
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$s"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 357)
+							(e-dispatch-call (method "plus") (constraint-fn-var 355)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$s"))))
@@ -185,7 +185,7 @@ main! = |_| {}
 					(ty-fn (effectful false)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-apply (name "Iter") (builtin)
-							(ty-rigid-var (name "item")))))
+							(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "from_numeral")
 					(ty-fn (effectful false)
 						(ty-lookup (name "Numeral") (builtin))
@@ -197,14 +197,14 @@ main! = |_| {}
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "plus")
 					(ty-fn (effectful false)
 						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "item")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 	(d-let
 		(p-assign (ident "total"))
-		(e-call (constraint-fn-var 398)
+		(e-call (constraint-fn-var 381)
 			(e-lookup-local
 				(p-assign (ident "sum")))
-			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 396)
+			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 379)
 				(receiver
 					(e-num (value "1")))
 				(args
@@ -220,11 +220,11 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b where [a.iter : a -> Iter(item), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, item -> b]"))
+		(patt (type "a -> b where [a.iter : a -> Iter(b), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, b -> b]"))
 		(patt (type "Dec"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "a -> b where [a.iter : a -> Iter(item), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, item -> b]"))
+		(expr (type "a -> b where [a.iter : a -> Iter(b), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, b -> b]"))
 		(expr (type "Dec"))
 		(expr (type "_arg -> {}"))))
 ~~~

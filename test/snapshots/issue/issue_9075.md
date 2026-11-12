@@ -40,10 +40,7 @@ TYPE MISMATCH - issue_9075.md:6:11:6:12
 			(text "    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),")
 			(line-break)
 			(indent 1)
-			(text "    b.plus : b, c -> b,")
-			(line-break)
-			(indent 1)
-			(text "    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),")
+			(text "    b.plus : b, b -> b,")
 			(line-break)
 			(indent 1)
 			(text "  ]")
@@ -163,7 +160,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 283)
+		(e-call (constraint-fn-var 269)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -171,7 +168,7 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 281)
+					(e-dispatch-call (method "plus") (constraint-fn-var 267)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "i"))))

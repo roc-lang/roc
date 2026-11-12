@@ -167,7 +167,7 @@ main! = |_| {
 					(e-num (value "999")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 275)
+					(e-dispatch-call (method "plus") (constraint-fn-var 239)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "used_var"))))
@@ -180,7 +180,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
+		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]")))
 	(expressions
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
+		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))))
 ~~~

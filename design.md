@@ -10441,53 +10441,65 @@ introduction path.
 
 ### Deferred Literal Conversion
 
-A number literal expression with no suffix and no concrete builtin context is
-introduced as an undetermined type marked as a numeral (`Flex.literal`), with
-no `from_numeral` constraint and no signature graph (`deferNumeralConversion`).
-Its CIR node holds a literal plan with an absent constraint-function variable,
-and the node waits on the checker's pending list.
+A number literal expression, or a plain string literal expression, with no
+suffix and no concrete builtin context is introduced as an undetermined type
+marked as that kind of literal (`Flex.literal`), with no `from_numeral` or
+`from_quote` constraint and no signature graph (`deferNumeralConversion`,
+`deferQuoteConversion`). Its CIR node holds a literal plan with an absent
+constraint-function variable, and the node waits on the checker's pending
+list.
 
-`settlePendingLiterals` decides each pending literal. It runs at the start of
-every dispatch pass for the literals whose type has settled, so a literal
-that meets a determined type is judged in the pass that would have judged its
-constraint: the pass looks at the literals introduced since the last one, and
-at every pending literal when the unifier has reported determining a marked
-variable since (`Scratch.determined_literal`). It runs for every pending
+`settlePendingLiterals` decides each pending literal. It runs after every
+unification the unifier reports as having determined a marked variable
+(`Scratch.determined_literal`), for the literals whose type has settled, in
+that unification's own context: this is where a conversion constraint created
+with the literal would have been deferred, so the literal is judged by the
+same dispatch pass and its failure belongs to the same use. A unification
+inside a probe leaves that to the next dispatch pass, which starts by doing
+the same. It runs for every pending
 literal at the start of every generalization boundary, before the boundary
 relates requirements, defaults literals, or generalizes; before a field
 default's parameter judgment, which reads every requirement; and once more at
 type finalization:
 
-- a literal whose type has settled to a builtin number type that holds its
-  exact value is done: this is the state Concrete Builtin Numeral
-  Introduction produces, and finalization seals it `builtin_direct`;
+- a number literal whose type has settled to a builtin number type that holds
+  its exact value, and a string literal whose type has settled to the builtin
+  `Str`, are done: this is the state Concrete Builtin Numeral Introduction and
+  Concrete Builtin Quote Introduction produce, and finalization seals it
+  `builtin_direct`;
 - a literal whose type is still undetermined below the boundary's rank
   belongs to an enclosing scope and keeps waiting (finalization leaves none
   waiting);
-- every other literal gets its ordinary `from_numeral` constraint at that
-  point: one whose type is still undetermined at the boundary's rank, so that
+- every other literal gets its ordinary conversion constraint at that point:
+  one whose type is still undetermined at the boundary's rank, so that
   defaulting and generalization see it exactly as they see a constraint
   created with the literal, and one whose type settled to anything else (a
-  custom number type, a rigid variable, a builtin type that cannot hold the
-  value, a non-number), so that conversion, evidence, and each diagnostic are
-  the ordinary ones.
+  custom literal type, a rigid variable, a builtin number type that cannot
+  hold the value, a type of the other kind), so that conversion, evidence,
+  and each diagnostic are the ordinary ones. Literals of one type in one pass
+  state one requirement, as literals that share a type variable do when each
+  is created with its constraint.
 
-This is a mechanism, not a typing rule. A `from_numeral` requirement on an
+This is a mechanism, not a typing rule. A conversion requirement on an
 undetermined type establishes nothing until that type is determined: it
-relates the literal's type to no other type, and a builtin number type
-discharges it by an exact-value check alone. Creating it late therefore
-changes neither any inferred type nor which programs are accepted. Every
-decision that reads literal constraints (boundary defaulting, generalization,
-finalization) runs after `settlePendingLiterals`, so none of them observes a
-marked variable without its constraint at the rank it decides. The marker
-answers "is this variable a number literal's type" (`varLiteralKind`) for the
-checks that ask before then, a rendered type prints the requirement the
-constraint will state, and a copy of a variable never carries the marker.
+relates the literal's type to no other type, and a builtin target discharges
+it by an exact-value check alone (a number) or unconditionally (`Str`).
+Creating it late therefore changes neither any inferred type nor which
+programs are accepted. Every decision that reads literal constraints
+(boundary defaulting, generalization, finalization) runs after
+`settlePendingLiterals`, so none of them observes a marked variable without
+its constraint at the rank it decides. The marker answers "is this variable a
+literal's type, and of which kind" (`varLiteralKind`) for the checks that ask
+before then, a rendered type prints the requirement the constraint will
+state, and a copy of a variable never carries the marker. A class a number
+literal's type and a string literal's type merged into carries both markers;
+each literal then gets its constraint, and the ordinary conflict is reported.
 
-A literal pattern, a suffixed literal, a literal checked inside a probe, and
-any literal in a module that declares `from_numeral` in a function body (whose
-conversions record where they are created) keep their constraint from the
-start. Accepted and rejected sides are pinned in `deferred_literal_test.zig`.
+A literal pattern, a suffixed literal, an interpolation, a literal checked
+inside a probe, and any literal in a module that declares its conversion
+method in a function body (whose conversions record where they are created)
+keep their constraint from the start. Accepted and rejected sides are pinned
+in `deferred_literal_test.zig`.
 
 ### Expected Shape Context
 

@@ -128,7 +128,7 @@ items = [1, 2, 3]
 						(p-assign (ident "b")))))))
 	(d-let
 		(p-assign (ident "sum"))
-		(e-call (constraint-fn-var 253)
+		(e-call (constraint-fn-var 238)
 			(e-lookup-local
 				(p-assign (ident "add")))
 			(e-num (value "1"))
@@ -145,11 +145,11 @@ items = [1, 2, 3]
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c, d -> c where [c.plus : c, d -> c]"))
+		(patt (type "c, c -> c where [c.plus : c, c -> c]"))
 		(patt (type "Dec"))
 		(patt (type "List(Dec)")))
 	(expressions
-		(expr (type "c, d -> c where [c.plus : c, d -> c]"))
+		(expr (type "c, c -> c where [c.plus : c, c -> c]"))
 		(expr (type "Dec"))
 		(expr (type "List(Dec)"))))
 ~~~

@@ -196,7 +196,7 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 390)
+				(e-dispatch-call (method "plus") (constraint-fn-var 307)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))
@@ -234,5 +234,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ callback: a -> a, metadata: [Ok({ permissions: List([Admin, Read, Write]), tags: List(Str) })], name: Str, nested: { items: List([None, Some(Str)]), result: [Success({ data: List(Dec), timestamp: Str })] }, preferences: { notifications: [Email(Str)], theme: [Dark] }, scores: List(Dec), status: [Active({ since: Str })] } where [a.plus : a, Dec -> a]"))
+(expr (type "{ callback: Dec -> Dec, metadata: [Ok({ permissions: List([Admin, Read, Write]), tags: List(Str) })], name: Str, nested: { items: List([None, Some(Str)]), result: [Success({ data: List(Dec), timestamp: Str })] }, preferences: { notifications: [Email(Str)], theme: [Dark] }, scores: List(Dec), status: [Active({ since: Str })] }"))
 ~~~

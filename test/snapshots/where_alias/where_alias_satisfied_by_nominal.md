@@ -131,7 +131,7 @@ NO CHANGE
 					(ty-lookup (name "Stringable") (local))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 314)
+		(e-call (constraint-fn-var 306)
 			(e-lookup-local
 				(p-assign (ident "stringify")))
 			(e-nominal (nominal "Name")

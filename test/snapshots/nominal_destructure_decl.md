@@ -90,7 +90,7 @@ Distance.(five) = Distance.(5)
 						(p-assign (ident "n")))
 					(e-lookup-local
 						(p-assign (ident "d"))))
-				(e-dispatch-call (method "times") (constraint-fn-var 254)
+				(e-dispatch-call (method "times") (constraint-fn-var 247)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "n"))))
