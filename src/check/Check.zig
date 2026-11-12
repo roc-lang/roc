@@ -28521,8 +28521,8 @@ fn stepPatternCheck(
             const result = try self.checkNominalTypeUsage(
                 pattern_var,
                 actual_backing_var,
-                ModuleEnv.varFrom(nominal.nominal_type_decl),
-                nominal.backing_type,
+                try self.localNamedNominalDecl(nominal.nominal_type_decl),
+                .{ .pattern = .{ .idx = pattern_idx, .backing = nominal.backing_pattern, .backing_type = nominal.backing_type } },
                 pattern_region,
                 env,
                 .exact,
@@ -28537,13 +28537,13 @@ fn stepPatternCheck(
             const actual_backing_var = input.?;
 
             // Resolve the external type declaration
-            if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
+            if (try self.externalNamedNominalDecl(nominal.module, nominal.target_node_idx)) |named| {
                 // Use shared nominal type checking logic
                 const result = try self.checkNominalTypeUsage(
                     pattern_var,
                     actual_backing_var,
-                    ext_ref.local_var,
-                    nominal.backing_type,
+                    named,
+                    .{ .pattern = .{ .idx = pattern_idx, .backing = nominal.backing_pattern, .backing_type = nominal.backing_type } },
                     pattern_region,
                     env,
                     .exact,
@@ -31666,22 +31666,25 @@ fn resumeNominalCheck(self: *Self, task: *ExprTask, state: *NominalCheck, env: *
 
     if (!state.started) {
         state.started = true;
+        const use: NominalUse = .{ .expr = .{ .idx = expr_idx, .backing = backing_expr, .backing_type = backing_type } };
         state.prepared = switch (state.source) {
             .local => |nominal| blk: {
                 try self.noteTypeDeclReferenceForLocalProcedures(nominal.nominal_type_decl);
                 break :blk try self.prepareNominalTypeUsage(
                     expr_var,
-                    ModuleEnv.varFrom(nominal.nominal_type_decl),
+                    try self.localNamedNominalDecl(nominal.nominal_type_decl),
+                    use,
                     expr_region,
                     env,
                     self.ownedExprConstructorTag(backing_expr),
                 );
             },
             // Resolve the external type declaration
-            .external => |nominal| if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref|
+            .external => |nominal| if (try self.externalNamedNominalDecl(nominal.module, nominal.target_node_idx)) |named|
                 try self.prepareNominalTypeUsage(
                     expr_var,
-                    ext_ref.local_var,
+                    named,
+                    use,
                     expr_region,
                     env,
                     self.ownedExprConstructorTag(backing_expr),
@@ -38528,23 +38531,140 @@ const PreparedNominalTypeUsage = struct {
     projected: bool = false,
 };
 
+/// The type declaration a nominal construction or pattern names, with its
+/// declaration type in this module's store.
+const NamedNominalDecl = struct {
+    decl_var: Var,
+    /// The alias's name in this module's identifier store when the
+    /// declaration is an alias, which names the nominal type its solved
+    /// backing resolves to.
+    alias_name: ?Ident.Idx,
+};
+
+/// The node of a nominal construction or pattern, and the backing it applies
+/// its type to.
+const NominalUse = union(enum) {
+    expr: struct {
+        idx: CIR.Expr.Idx,
+        backing: CIR.Expr.Idx,
+        backing_type: CIR.Expr.NominalBackingType,
+    },
+    pattern: struct {
+        idx: CIR.Pattern.Idx,
+        backing: CIR.Pattern.Idx,
+        backing_type: CIR.Expr.NominalBackingType,
+    },
+};
+
+fn localNamedNominalDecl(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!NamedNominalDecl {
+    return .{
+        .decl_var = ModuleEnv.varFrom(decl_idx),
+        .alias_name = try self.nominalUseAliasName(self.cir, decl_idx),
+    };
+}
+
+fn externalNamedNominalDecl(
+    self: *Self,
+    module: CIR.Expr.NominalExternalModule,
+    target_node_idx: u32,
+) Allocator.Error!?NamedNominalDecl {
+    const external = switch (module) {
+        .import => |import_idx| try self.resolveVarFromExternal(import_idx, target_node_idx),
+        .identity => |module_identity| try self.resolveVarFromExternalIdentity(module_identity, target_node_idx),
+    } orelse return null;
+    return .{
+        .decl_var = external.local_var,
+        .alias_name = try self.nominalUseAliasName(external.other_cir, @fromBackingInt(@intCast(target_node_idx))),
+    };
+}
+
+/// Canonicalization names only nominal and alias declarations as the type of
+/// a nominal construction or pattern.
+fn nominalUseAliasName(self: *Self, decl_env: *const ModuleEnv, decl_idx: CIR.Statement.Idx) Allocator.Error!?Ident.Idx {
+    return switch (decl_env.store.getStatement(decl_idx)) {
+        .s_nominal_decl => null,
+        .s_alias_decl => |alias| blk: {
+            const name = decl_env.store.getTypeHeader(alias.header).name;
+            if (decl_env == self.cir) break :blk name;
+            break :blk try self.cir.insertIdent(Ident.for_text(decl_env.getIdent(name)));
+        },
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => base.invariant("type checker invariant violated: a nominal construction names a statement that is not a nominal or alias declaration", .{}),
+    };
+}
+
+/// Point a nominal construction or pattern that names an alias at the nominal
+/// type the alias names, so it names that type exactly as constructing
+/// through the type's own name does (design.md "Nominal Construction Through
+/// Aliases").
+fn replaceAliasNominalUse(self: *Self, use: NominalUse, nominal: types_mod.NominalType) Allocator.Error!void {
+    const owner_env, const is_this_module = self.ownerEnvForOriginModule(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+        "nominal construction through an alias",
+    );
+    const statement = nominal.statement();
+    if (is_this_module) {
+        const decl_idx: CIR.Statement.Idx = @fromBackingInt(statement);
+        switch (use) {
+            .expr => |expr| self.cir.store.replaceExprWithLocalNominal(expr.idx, decl_idx, expr.backing, expr.backing_type),
+            .pattern => |pattern| self.cir.store.replacePatternWithLocalNominal(pattern.idx, decl_idx, pattern.backing, pattern.backing_type),
+        }
+        return;
+    }
+    const module_identity = try self.internCheckedTargetModuleIdentity(owner_env);
+    switch (use) {
+        .expr => |expr| try self.cir.store.replaceExprWithExternalNominal(expr.idx, module_identity, statement, expr.backing, expr.backing_type),
+        .pattern => |pattern| try self.cir.store.replacePatternWithExternalNominal(pattern.idx, module_identity, statement, pattern.backing, pattern.backing_type),
+    }
+}
+
 /// Instantiate and explicitly open a nominal application before checking its
 /// backing syntax. Expression constructors use `backing_var` as structural
 /// context for nested aggregates; patterns use the same prepared application
 /// immediately at relation time.
+///
+/// A use naming an alias constructs the nominal type the alias's solved
+/// backing resolves to, through any chain of aliases, and is rewritten to
+/// name that nominal type.
 fn prepareNominalTypeUsage(
     self: *Self,
     target_var: Var,
-    nominal_type_decl_var: Var,
+    named: NamedNominalDecl,
+    use: NominalUse,
     region: Region,
     env: *Env,
     constructor: ?ConstructorTag,
 ) std.mem.Allocator.Error!?PreparedNominalTypeUsage {
-    const nominal_var = try self.instantiateVar(nominal_type_decl_var, env, .{ .explicit = region }, .none);
-    const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
+    const nominal_type_decl_var = named.decl_var;
+    const instantiated_var = try self.instantiateVar(nominal_type_decl_var, env, .{ .explicit = region }, .none);
+    const resolved = self.types.resolveThroughAliases(instantiated_var);
+    const nominal_var = resolved.var_;
+    const nominal_resolved = resolved.desc.content;
 
     if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
         const nominal_type = nominal_resolved.structure.nominal_type;
+
+        if (named.alias_name != null) try self.replaceAliasNominalUse(use, nominal_type);
 
         // If this nominal type is opaque and we're not in the defining module
         // then report an error
@@ -38581,6 +38701,15 @@ fn prepareNominalTypeUsage(
         // The declaration itself is poisoned (malformed backing or invalid
         // recursion) and that error was already reported at the declaration.
         // Poison this use silently instead of piling on a resolution error.
+        try self.markErroneous(target_var);
+        return null;
+    } else if (named.alias_name) |alias_name| {
+        // An alias of a type that is not nominal names no nominal type to
+        // construct or match.
+        _ = try self.problems.appendProblem(.{ .alias_names_no_nominal_type = .{
+            .var_ = target_var,
+            .alias_name = alias_name,
+        } });
         try self.markErroneous(target_var);
         return null;
     } else {
@@ -38694,8 +38823,8 @@ fn checkNominalTypeUsage(
     self: *Self,
     target_var: Var,
     actual_backing_var: Var,
-    nominal_type_decl_var: Var,
-    backing_type: CIR.Expr.NominalBackingType,
+    named: NamedNominalDecl,
+    use: NominalUse,
     region: Region,
     env: *Env,
     row_width_relation: unifier.RowWidthRelation,
@@ -38705,9 +38834,14 @@ fn checkNominalTypeUsage(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const backing_type = switch (use) {
+        .expr => |expr| expr.backing_type,
+        .pattern => |pattern| pattern.backing_type,
+    };
     const prepared = (try self.prepareNominalTypeUsage(
         target_var,
-        nominal_type_decl_var,
+        named,
+        use,
         region,
         env,
         constructor,

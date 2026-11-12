@@ -5401,6 +5401,29 @@ pub fn beginSExprNodeAt(self: *const Self, tree: *SExprTree, name: []const u8, i
     return begin;
 }
 
+/// Append the module an external nominal construction or pattern names. The
+/// Builtin module is an implementation detail, printed as `(builtin)`.
+pub fn pushNominalExternalModuleToSExprTree(
+    self: *const Self,
+    tree: *SExprTree,
+    module: CIR.Expr.NominalExternalModule,
+) std.mem.Allocator.Error!void {
+    const module_name = switch (module) {
+        .import => |import_idx| blk: {
+            const module_idx_int = @backingInt(import_idx);
+            std.debug.assert(module_idx_int < self.imports.imports.items.items.len);
+            break :blk self.common.strings.get(self.imports.imports.items.items[module_idx_int]);
+        },
+        .identity => |identity| self.moduleIdentityDisplayText(identity),
+    };
+    if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
+        const field_begin = try tree.beginNamedNode("builtin");
+        try tree.endNodeWithoutChildren(field_begin);
+    } else {
+        try tree.pushStringPair("external-module", module_name);
+    }
+}
+
 /// Append region information to an S-expression node for a given index.
 pub fn appendRegionInfoToSExprTree(self: *const Self, tree: *SExprTree, idx: anytype) std.mem.Allocator.Error!void {
     const region = self.store.getNodeRegion(@fromBackingInt(@intCast(@backingInt(idx))));

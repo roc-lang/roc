@@ -1431,7 +1431,7 @@ fn addAutoImportedNominalTagExpr(
 
     return try self.env.addExpr(CIR.Expr{
         .e_nominal_external = .{
-            .module_idx = import_idx,
+            .module = .{ .import = import_idx },
             .target_node_idx = target_node_idx,
             .backing_expr = tag_expr_idx,
             .backing_type = .tag,
@@ -9027,7 +9027,7 @@ fn addTryTagPattern(
         }, region),
         .external => |external| try self.env.addPattern(Pattern{
             .nominal_external = .{
-                .module_idx = external.import_idx,
+                .module = .{ .import = external.import_idx },
                 .target_node_idx = external.target_node_idx,
                 .backing_pattern = applied_tag_pattern,
                 .backing_type = .tag,
@@ -9060,7 +9060,7 @@ fn addTryTagExpr(
         }, region),
         .external => |external| try self.env.addExpr(CIR.Expr{
             .e_nominal_external = .{
-                .module_idx = external.import_idx,
+                .module = .{ .import = external.import_idx },
                 .target_node_idx = external.target_node_idx,
                 .backing_expr = tag_expr,
                 .backing_type = .tag,
@@ -10727,7 +10727,7 @@ fn isInfiniteLoopCondition(self: *const Self, cond: Expr.Idx) bool {
         self.isBuiltinBoolLocalNominal(expr.e_nominal.nominal_type_decl) and
         self.exprIsBareTrueTag(expr.e_nominal.backing_expr);
     if (expr == .e_nominal_external) return expr.e_nominal_external.backing_type == .tag and
-        self.isBuiltinBoolExternalNominal(expr.e_nominal_external.module_idx, expr.e_nominal_external.target_node_idx) and
+        self.isBuiltinBoolExternalNominal(expr.e_nominal_external.module, expr.e_nominal_external.target_node_idx) and
         self.exprIsBareTrueTag(expr.e_nominal_external.backing_expr);
     return false;
 }
@@ -10744,7 +10744,12 @@ fn isBuiltinBoolLocalNominal(self: *const Self, nominal_type_decl: Statement.Idx
     return stmt == .s_nominal_decl and self.env.store.getTypeHeader(stmt.s_nominal_decl.header).name.eql(self.env.idents.bool);
 }
 
-fn isBuiltinBoolExternalNominal(self: *const Self, module_idx: Import.Idx, target_node_idx: u32) bool {
+fn isBuiltinBoolExternalNominal(self: *const Self, module: Expr.NominalExternalModule, target_node_idx: u32) bool {
+    // Bool is named through the import canonicalization creates for it.
+    const module_idx = switch (module) {
+        .import => |import_idx| import_idx,
+        .identity => return false,
+    };
     const bool_info = self.builtin_auto_imported_types.get(self.env.idents.bool) orelse return false;
     const bool_stmt_idx = bool_info.statement_idx orelse return false;
     const bool_target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse return false;
@@ -14472,7 +14477,7 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         );
         return try self.env.addExpr(CIR.Expr{
             .e_nominal_external = .{
-                .module_idx = import_idx,
+                .module = .{ .import = import_idx },
                 .target_node_idx = target_node_idx,
                 .backing_expr = tag_expr_idx,
                 .backing_type = .tag,
@@ -14501,7 +14506,7 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
             };
             break :blk try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
-                    .module_idx = import_idx,
+                    .module = .{ .import = import_idx },
                     .target_node_idx = target_node_idx,
                     .backing_expr = tag_expr_idx,
                     .backing_type = .tag,
@@ -14960,16 +14965,18 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
     }, region);
 }
 
+/// Whether a declaration can be the type a nominal construction or pattern
+/// names. An alias can: checking resolves it to the nominal type it names and
+/// reports one that names no nominal type (design.md "Nominal Construction
+/// Through Aliases").
 const NominalTargetKind = enum {
-    nominal,
-    alias,
+    type_decl,
     other,
 };
 
 fn nominalTargetKind(statement: Statement) NominalTargetKind {
     return switch (statement) {
-        .s_nominal_decl => .nominal,
-        .s_alias_decl => .alias,
+        .s_nominal_decl, .s_alias_decl => .type_decl,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -15018,11 +15025,7 @@ fn importedNominalTargetProblem(
 ) ?Diagnostic {
     const target_stmt_idx: Statement.Idx = @fromBackingInt(@intCast(target_node_idx));
     return switch (nominalTargetKind(imported_env.store.getStatement(target_stmt_idx))) {
-        .nominal => null,
-        .alias => Diagnostic{ .type_alias_but_needed_nominal = .{
-            .name = type_name,
-            .region = type_region,
-        } },
+        .type_decl => null,
         .other => Diagnostic{ .type_not_exposed = .{
             .module_name = module_name,
             .type_name = type_name,
@@ -15144,7 +15147,7 @@ fn finishNominalConstructionForType(
         }, region),
         .auto_imported => |imported| try self.env.addExpr(CIR.Expr{
             .e_nominal_external = .{
-                .module_idx = imported.import_idx,
+                .module = .{ .import = imported.import_idx },
                 .target_node_idx = imported.target_node_idx,
                 .backing_expr = backing_expr_idx,
                 .backing_type = backing_type,
@@ -15185,7 +15188,7 @@ fn resolveNominalTypePath(
 
     if (qualifiers.span.len == 0) {
         if (try self.scopeLookupOrPrepareTypeDecl(final_type_ident)) |nominal_type_decl_stmt_idx| {
-            return localNominalTypePathTarget(self.env, kind, nominal_type_decl_stmt_idx, final_type_ident, type_region);
+            return localNominalTypePathTarget(self.env, kind, nominal_type_decl_stmt_idx, type_region);
         }
 
         if (self.scopeLookupExposedItem(final_type_ident)) |exposed_info| {
@@ -15234,7 +15237,7 @@ fn resolveNominalTypePath(
                 .name = full_type_ident,
                 .region = type_region,
             } } };
-        return localNominalTypePathTarget(self.env, kind, nominal_type_decl_stmt_idx, full_type_ident, type_region);
+        return localNominalTypePathTarget(self.env, kind, nominal_type_decl_stmt_idx, type_region);
     }
 
     const module_info = (try self.scopeLookupOrPrepareModule(first_tok_ident)).?;
@@ -15264,15 +15267,10 @@ fn localNominalTypePathTarget(
     env: *const ModuleEnv,
     kind: ModuleEnv.DeferredRefKind,
     nominal_type_decl_stmt_idx: Statement.Idx,
-    type_ident: Ident.Idx,
     type_region: Region,
 ) NominalTypePathTarget {
     return switch (nominalTargetKind(env.store.getStatement(nominal_type_decl_stmt_idx))) {
-        .nominal => .{ .local = nominal_type_decl_stmt_idx },
-        .alias => .{ .malformed = Diagnostic{ .type_alias_but_needed_nominal = .{
-            .name = type_ident,
-            .region = type_region,
-        } } },
+        .type_decl => .{ .local = nominal_type_decl_stmt_idx },
         .other => .{ .malformed = notCanonicalized(kind, type_region) },
     };
 }
@@ -15336,7 +15334,7 @@ fn finishTagExprWithArgs(
         // First, try to lookup the type as a local declaration
         if (try self.scopeLookupOrPrepareTypeDecl(type_tok_ident)) |nominal_type_decl_stmt_idx| {
             switch (nominalTargetKind(self.env.store.getStatement(nominal_type_decl_stmt_idx))) {
-                .nominal => {
+                .type_decl => {
                     const expr_idx = try self.env.addExpr(CIR.Expr{
                         .e_nominal = .{
                             .nominal_type_decl = nominal_type_decl_stmt_idx,
@@ -15350,16 +15348,6 @@ fn finishTagExprWithArgs(
                         .idx = expr_idx,
                         .free_vars = free_vars_span,
                         .diverges = args_diverge,
-                    };
-                },
-                .alias => {
-                    return CanonicalizedExpr{
-                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
-                            .name = type_tok_ident,
-                            .region = type_tok_region,
-                        } }),
-                        .free_vars = DataSpan.empty(),
-                        .diverges = false,
                     };
                 },
                 .other => {
@@ -15399,7 +15387,7 @@ fn finishTagExprWithArgs(
 
                 const expr_idx = try self.env.addExpr(CIR.Expr{
                     .e_nominal_external = .{
-                        .module_idx = import_idx,
+                        .module = .{ .import = import_idx },
                         .target_node_idx = target_node_idx,
                         .backing_expr = tag_expr_idx,
                         .backing_type = .tag,
@@ -15519,7 +15507,7 @@ fn finishTagExprWithArgs(
             // Local reference: look up the type locally
             if (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) |nominal_type_decl_stmt_idx| {
                 switch (nominalTargetKind(self.env.store.getStatement(nominal_type_decl_stmt_idx))) {
-                    .nominal => {
+                    .type_decl => {
                         const expr_idx = try self.env.addExpr(CIR.Expr{
                             .e_nominal = .{
                                 .nominal_type_decl = nominal_type_decl_stmt_idx,
@@ -15533,16 +15521,6 @@ fn finishTagExprWithArgs(
                             .idx = expr_idx,
                             .free_vars = free_vars_span,
                             .diverges = args_diverge,
-                        };
-                    },
-                    .alias => {
-                        return CanonicalizedExpr{
-                            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
-                                .name = full_type_ident,
-                                .region = type_tok_region,
-                            } }),
-                            .free_vars = DataSpan.empty(),
-                            .diverges = false,
                         };
                     },
                     .other => {
@@ -15574,7 +15552,7 @@ fn finishTagExprWithArgs(
 
                     const expr_idx = try self.env.addExpr(CIR.Expr{
                         .e_nominal_external = .{
-                            .module_idx = import_idx,
+                            .module = .{ .import = import_idx },
                             .target_node_idx = target_node_idx,
                             .backing_expr = tag_expr_idx,
                             .backing_type = .tag,
@@ -16098,7 +16076,7 @@ fn finishTagPattern(
 
                     return try self.env.addPattern(CIR.Pattern{
                         .nominal_external = .{
-                            .module_idx = import_idx,
+                            .module = .{ .import = import_idx },
                             .target_node_idx = target_node_idx,
                             .backing_pattern = tag_pattern_idx,
                             .backing_type = .tag,
@@ -16167,7 +16145,7 @@ fn finishTagPattern(
         };
 
         switch (nominalTargetKind(self.env.store.getStatement(nominal_type_decl_stmt_idx))) {
-            .nominal => {
+            .type_decl => {
                 const pattern_idx = try self.env.addPattern(CIR.Pattern{
                     .nominal = .{
                         .nominal_type_decl = nominal_type_decl_stmt_idx,
@@ -16177,12 +16155,6 @@ fn finishTagPattern(
                 }, region);
 
                 return pattern_idx;
-            },
-            .alias => {
-                return try self.malformedNominalPattern(tag_pattern_idx, Diagnostic{ .type_alias_but_needed_nominal = .{
-                    .name = type_tok_ident,
-                    .region = type_tok_region,
-                } });
             },
             .other => {
                 const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
@@ -16215,7 +16187,7 @@ fn finishTagPattern(
         const module_info = (try self.scopeLookupOrPrepareModule(first_tok_ident)) orelse {
             if (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) |nominal_type_decl_stmt_idx| {
                 switch (nominalTargetKind(self.env.store.getStatement(nominal_type_decl_stmt_idx))) {
-                    .nominal => {
+                    .type_decl => {
                         const pattern_idx = try self.env.addPattern(CIR.Pattern{
                             .nominal = .{
                                 .nominal_type_decl = nominal_type_decl_stmt_idx,
@@ -16225,12 +16197,6 @@ fn finishTagPattern(
                         }, region);
 
                         return pattern_idx;
-                    },
-                    .alias => {
-                        return try self.malformedNominalPattern(tag_pattern_idx, Diagnostic{ .type_alias_but_needed_nominal = .{
-                            .name = full_type_ident,
-                            .region = type_tok_region,
-                        } });
                     },
                     .other => {
                         const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
@@ -16252,7 +16218,7 @@ fn finishTagPattern(
 
                     return try self.env.addPattern(CIR.Pattern{
                         .nominal_external = .{
-                            .module_idx = import_idx,
+                            .module = .{ .import = import_idx },
                             .target_node_idx = target_node_idx,
                             .backing_pattern = tag_pattern_idx,
                             .backing_type = .tag,
@@ -16328,7 +16294,7 @@ fn finishNominalBackingPattern(
         }, region),
         .auto_imported => |imported| try self.env.addPattern(CIR.Pattern{
             .nominal_external = .{
-                .module_idx = imported.import_idx,
+                .module = .{ .import = imported.import_idx },
                 .target_node_idx = imported.target_node_idx,
                 .backing_pattern = backing_pattern_idx,
                 .backing_type = backing_type,

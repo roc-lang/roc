@@ -333,6 +333,11 @@ pub const Expr = union(enum) {
     /// Point.(1.0, 2.0)           # Tuples
     /// Point.(1.0)                # Values
     /// ```
+    ///
+    /// `nominal_type_decl` is the type declaration the source named: a
+    /// nominal declaration, or an alias declaration until checking replaces
+    /// it with the nominal type the alias names (design.md "Nominal
+    /// Construction Through Aliases").
     e_nominal: struct {
         nominal_type_decl: CIR.Statement.Idx,
         backing_expr: Expr.Idx,
@@ -346,8 +351,13 @@ pub const Expr = union(enum) {
     /// OtherModule.Point.(1.0, 2.0)           # Tuples
     /// OtherModule.Point.(1.0)                # Values
     /// ```
+    ///
+    /// `target_node_idx` is the type declaration the source named in
+    /// `module`: a nominal declaration, or an alias declaration until checking
+    /// replaces it with the nominal type the alias names (design.md "Nominal
+    /// Construction Through Aliases").
     e_nominal_external: struct {
-        module_idx: CIR.Import.Idx,
+        module: NominalExternalModule,
         target_node_idx: u32,
         backing_expr: Expr.Idx,
         backing_type: NominalBackingType,
@@ -844,6 +854,18 @@ pub const Expr = union(enum) {
     /// The type inside a nominal var
     pub const NominalBackingType = enum { tag, record, tuple, value };
 
+    /// The module owning the type declaration an external nominal
+    /// construction or pattern names.
+    pub const NominalExternalModule = union(enum) {
+        /// The import the source path was written with.
+        import: CIR.Import.Idx,
+        /// A module named by content identity: the module a source path
+        /// reached by following an exposed alias out of the import it was
+        /// written with, or the module owning the nominal type an alias names
+        /// as selected by checking. This module need not import it.
+        identity: base.ModuleIdentity.Idx,
+    };
+
     /// The backing value a deferred nominal construction applies its imported
     /// type to, kept reachable while the type reference is still deferred.
     pub const DeferredBacking = struct {
@@ -1207,6 +1229,9 @@ pub const Expr = union(enum) {
                 if (stmt == .s_nominal_decl) {
                     const header = ir.store.getTypeHeader(stmt.s_nominal_decl.header);
                     try tree.pushStringPair("nominal", ir.getIdent(header.name));
+                } else if (stmt == .s_alias_decl) {
+                    const header = ir.store.getTypeHeader(stmt.s_alias_decl.header);
+                    try tree.pushStringPair("alias", ir.getIdent(header.name));
                 } else {
                     // Handle malformed nominal type declaration by pushing error info
                     try tree.pushStringPair("nominal", "<malformed>");
@@ -1222,17 +1247,7 @@ pub const Expr = union(enum) {
                 const begin = try ir.beginSExprNodeAt(tree, "e-nominal-external", expr_idx);
                 const attrs = tree.beginNode();
 
-                const module_idx_int = @backingInt(e.module_idx);
-                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
-                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
-                const module_name = ir.common.strings.get(string_lit_idx);
-                // Special case: Builtin module is an implementation detail, print as (builtin)
-                if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                    const field_begin = try tree.beginNamedNode("builtin");
-                    try tree.endNodeWithoutChildren(field_begin);
-                } else {
-                    try tree.pushStringPair("external-module", module_name);
-                }
+                try ir.pushNominalExternalModuleToSExprTree(tree, e.module);
 
                 try ir.store.getExpr(e.backing_expr).pushToSExprTree(ir, tree, e.backing_expr);
 

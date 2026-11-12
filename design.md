@@ -1687,6 +1687,35 @@ identity selected by checking. `buildImportedTemplateClosure` and
 `collectPublicApiDependencies` receive defining checked module data explicitly
 when no lexical import exists.
 
+### Nominal Construction Through Aliases
+
+An alias of a nominal type names that nominal type, so a construction or
+pattern written through the alias (`Pt.{ x: 1 }`, `Hue.Red`,
+`Api.Item.{ ... }`) builds or matches the aliased nominal value exactly as
+writing the nominal type's own name does. Canonicalization does not interpret
+the alias annotation: it records the alias declaration it resolved as the
+type the `e_nominal` / `e_nominal_external` expression or `nominal` /
+`nominal_external` pattern names, local or imported, including an alias
+reached by following an exposed alias out of the import the path was written
+with (named by module content identity, like any declaration reached that
+way). Checking instantiates the alias declaration, follows its solved backing
+through any chain of aliases to the terminal nominal application, and uses
+that application as the nominal the node constructs or matches; the result
+type is the nominal type, not the alias. Opacity is judged on that nominal
+type, so an alias never widens who may construct an opaque (`::`) type. Once
+the nominal type is known, checking replaces the node's target with the
+nominal declaration: `e_nominal` / `nominal` when the nominal type is declared
+in the checked module, otherwise the external form naming the declaring
+module by content identity, since that module need not be one this module
+imports. Every consumer after checking therefore sees only nominal targets.
+An alias whose backing is not a nominal type is reported by checking as
+"Expected Nominal Type", and the use is erroneous. Like the associated lookup
+rewrite above, this replacement resolves a reference; it mutates no solved
+type and stamps no dispatch plan, so it adds no Rewrite Inventory entry
+(Solver-Mutating Rewrites). Omitted defaulted fields of a construction through
+an alias are found by checking, as for any construction whose nominal type
+canonicalization does not know (Defaulted Fields).
+
 ### Compile-Time Evaluation And Static Storage
 
 Frontend task completion and checked-value completion are distinct boundaries.
@@ -4190,9 +4219,10 @@ same holds for an import that a package header narrows to one declaration:
 that declaration is the whole of what the import reaches. An import of a module
 itself reaches that module's own exposed names.
 
-A nominal construction or nominal pattern names its type through the import it
-was written with, so a declaration reachable only by following an alias out of
-that module is not one those positions can name. Values through an alias
+A nominal construction or nominal pattern resolves its type by the same walk;
+a declaration it reaches by following an alias out of the import is named by
+content identity, and an alias it reaches is resolved to its nominal type by
+checking (Nominal Construction Through Aliases). Values through an alias
 (`Gui.Files.pick_directory!`, `Gui.Files.Dir.value`) resolve by the same walk.
 An alias to a module's whole namespace is not a thing the language has; the
 walk only ever passes through type declarations.

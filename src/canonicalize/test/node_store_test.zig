@@ -554,7 +554,7 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_nominal_external = .{
-            .module_idx = rand_idx_u16(CIR.Import.Idx),
+            .module = .{ .import = rand_idx_u16(CIR.Import.Idx) },
             .target_node_idx = rand.random().int(u16),
             .backing_expr = rand_idx(CIR.Expr.Idx),
             .backing_type = .tag,
@@ -1624,7 +1624,7 @@ test "NodeStore round trip - Pattern" {
     });
     try patterns.append(gpa, CIR.Pattern{
         .nominal_external = .{
-            .module_idx = rand_idx_u16(CIR.Import.Idx),
+            .module = .{ .import = rand_idx_u16(CIR.Import.Idx) },
             .target_node_idx = rand.random().int(u16),
             .backing_pattern = rand_idx(CIR.Pattern.Idx),
             .backing_type = .tag,

@@ -899,7 +899,7 @@ test "import interner - many imports keep stable module identity keys" {
     try expectEqual(@as(usize, import_count), explicit_import_count);
 }
 
-test "imported type-module tag rejects alias target" {
+test "imported type-module tag through an alias target names the alias" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
@@ -961,18 +961,19 @@ test "imported type-module tag rejects alias target" {
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
 
-    var found_alias_error = false;
+    // Checking resolves the alias to the type it names and reports an alias
+    // that names no nominal type, so canonicalization records the alias.
     for (diagnostics) |diagnostic| {
-        if (diagnostic == .type_alias_but_needed_nominal) {
-            const d = diagnostic.type_alias_but_needed_nominal;
-            const name = env.getIdent(d.name);
-            if (std.mem.eql(u8, name, "Alias")) {
-                found_alias_error = true;
-            }
-        }
+        if (diagnostic == .type_alias_but_needed_nominal or
+            diagnostic == .type_not_exposed) return error.UnexpectedDiagnostic;
     }
 
-    try testing.expect(found_alias_error);
+    const defs = env.store.sliceDefs(env.top_level_value_defs);
+    try testing.expectEqual(@as(usize, 1), defs.len);
+    const bad = env.store.getExpr(env.store.getDef(defs[0]).expr);
+    try testing.expect(bad == .e_nominal_external);
+    const target_stmt: CIR.Statement.Idx = @fromBackingInt(@intCast(bad.e_nominal_external.target_node_idx));
+    try testing.expect(imported_env.store.getStatement(target_stmt) == .s_alias_decl);
 }
 
 test "imported nested associated types resolve by qualified export key" {
