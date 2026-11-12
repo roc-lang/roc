@@ -38654,6 +38654,11 @@ fn selectedConstructorTemplate(
 }
 
 const PreparedNominalTypeUsage = struct {
+    /// The type the node has: the instantiated declaration it names, which is
+    /// the alias application when the node names an alias and `nominal_var`
+    /// otherwise.
+    result_var: Var,
+    /// The nominal application the node constructs or matches.
     nominal_var: Var,
     backing_var: Var,
     projected: bool = false,
@@ -38773,7 +38778,7 @@ fn replaceAliasNominalUse(self: *Self, use: NominalUse, nominal: types_mod.Nomin
 ///
 /// A use naming an alias constructs the nominal type the alias's solved
 /// backing resolves to, through any chain of aliases, and is rewritten to
-/// name that nominal type.
+/// name that nominal type. Its type is the alias application it wrote.
 fn prepareNominalTypeUsage(
     self: *Self,
     target_var: Var,
@@ -38821,6 +38826,7 @@ fn prepareNominalTypeUsage(
         };
 
         return .{
+            .result_var = instantiated_var,
             .nominal_var = nominal_var,
             .backing_var = nominal_backing_var,
             .projected = projected_template != null,
@@ -38879,7 +38885,7 @@ fn finishNominalTypeUsage(
         });
         switch (result) {
             .unified => {
-                _ = try self.unify(target_var, prepared.nominal_var, env);
+                _ = try self.unify(target_var, prepared.result_var, env);
                 return .ok;
             },
             .suppressed_by_error => {},
@@ -38920,7 +38926,7 @@ fn finishNominalTypeUsage(
 
     switch (result) {
         .unified => {
-            _ = try self.unify(target_var, prepared.nominal_var, env);
+            _ = try self.unify(target_var, prepared.result_var, env);
             if (recheck_at_settled_state) |recheck| {
                 try self.accepted_nominal_constructor_backings.append(self.gpa, .{
                     .expr_idx = recheck.expr,

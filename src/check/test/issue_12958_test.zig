@@ -2,8 +2,9 @@
 //!
 //! An alias of a nominal type names that nominal type, so constructing through
 //! the alias (`Alias.{ ... }` or `Alias.Tag`) builds the aliased nominal value,
-//! exactly as constructing through the nominal type's own name does. The alias
-//! does not widen visibility: an alias of an opaque (`::`) type still cannot be
+//! exactly as constructing through the nominal type's own name does. The value
+//! is typed as the alias it was written through, which is a transparent view
+//! of the nominal type. The alias does not widen visibility: an alias of an opaque (`::`) type still cannot be
 //! constructed outside the module that declares the type.
 
 const std = @import("std");
@@ -30,7 +31,7 @@ test "issue 12958 - record construction through a local alias builds the nominal
     defer env.deinit();
 
     try env.assertNoErrors();
-    try env.assertDefType("c", "Point");
+    try env.assertDefType("c", "Pt");
 }
 
 test "issue 12958 - construction through a parameterized local alias builds the nominal" {
@@ -46,7 +47,7 @@ test "issue 12958 - construction through a parameterized local alias builds the 
     defer env.deinit();
 
     try env.assertNoErrors();
-    try env.assertDefType("p", "Pair(Str)");
+    try env.assertDefType("p", "Both(Str)");
 }
 
 test "issue 12958 - tag construction through a local alias of a nominal tag union" {
@@ -62,7 +63,7 @@ test "issue 12958 - tag construction through a local alias of a nominal tag unio
     defer env.deinit();
 
     try env.assertNoErrors();
-    try env.assertDefType("c", "Color");
+    try env.assertDefType("c", "Hue");
 }
 
 test "issue 12958 - construction through an imported alias builds the nominal" {
@@ -135,7 +136,7 @@ test "issue 12958 - construction through an alias of an alias builds the nominal
     defer env.deinit();
 
     try env.assertNoErrors();
-    try env.assertDefType("c", "Color");
+    try env.assertDefType("c", "Shade");
 }
 
 test "issue 12958 - a pattern through a local alias matches the nominal" {
@@ -171,7 +172,7 @@ test "issue 12958 - construction through an alias omits a defaulted field" {
     defer env.deinit();
 
     try env.assertNoErrors();
-    try env.assertDefType("s", "Cfg");
+    try env.assertDefType("s", "Settings");
 }
 
 test "issue 12958 - construction through an alias of a structural type is rejected" {
@@ -219,7 +220,7 @@ test "issue 12958 - an imported alias of an imported module's type builds that t
     defer cross.deinit();
 
     try cross.assertNoErrors();
-    try cross.assertDefType("i", "Shapes.Shape");
+    try cross.assertDefType("i", "Api.Item");
 }
 
 test "issue 12958 - a type reached through a re-exported alias can be constructed" {
@@ -254,4 +255,32 @@ test "issue 12958 - a type reached through a re-exported alias can be constructe
 
     try app.assertNoErrors();
     try app.assertDefType("App.dir", "Resource.Files.Dir");
+}
+
+test "issue 12958 - a value built through an alias is the nominal value" {
+    var env = try TestEnv.init("Repro",
+        \\Repro :: [].{}
+        \\
+        \\Point := { x : U64, y : U64 }.{
+        \\    sum : Point -> U64
+        \\    sum = |point| point.x + point.y
+        \\}
+        \\
+        \\Pt : Point
+        \\
+        \\through_alias = Pt.{ x: 1, y: 2 }
+        \\
+        \\as_nominal : Point
+        \\as_nominal = through_alias
+        \\
+        \\total = through_alias.sum()
+        \\
+        \\both = [through_alias, Point.{ x: 3, y: 4 }]
+    );
+    defer env.deinit();
+
+    try env.assertNoErrors();
+    try env.assertDefType("through_alias", "Pt");
+    try env.assertDefType("as_nominal", "Point");
+    try env.assertDefType("total", "U64");
 }

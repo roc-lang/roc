@@ -1749,8 +1749,12 @@ reached by following an exposed alias out of the import the path was written
 with (named by module content identity, like any declaration reached that
 way). Checking instantiates the alias declaration, follows its solved backing
 through any chain of aliases to the terminal nominal application, and uses
-that application as the nominal the node constructs or matches; the result
-type is the nominal type, not the alias. Opacity is judged on that nominal
+that application as the nominal the node constructs or matches. The node's
+type is the instantiated alias it was written through, so `Pt.{ x: 1 }` with
+`Pt : Point` is a `Pt`: the alias is the public name and a transparent view of
+the nominal type, and the one relation that publishes the node's type relates
+it to that alias application instead of to the nominal application behind it.
+Everything else uses the nominal type. Opacity is judged on that nominal
 type, so an alias never widens who may construct an opaque (`::`) type. Once
 the nominal type is known, checking replaces the node's target with the
 nominal declaration: `e_nominal` / `nominal` when the nominal type is declared
