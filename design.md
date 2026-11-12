@@ -279,7 +279,9 @@ avoids it so a small touched subset does not make large regions resident.
 Address stability below a reservation limit is a performance property, never
 a consumer contract. Exceeding a reservation may relocate the column, and
 allocation failure propagates without changing logical contents or ownership.
-Borrowed serialized views own no backing memory and cannot grow.
+Borrowed serialized views own no backing memory. A sealed borrowed view
+cannot grow. A writable one copies its entries into storage it owns the first
+time it grows, frees nothing, and leaves the serialized bytes alone.
 
 Groupings use CSR for dense keys and sorted pairs for sparse keys. Chains are
 appropriate only when construction and queries interleave. Group order is
@@ -792,14 +794,15 @@ hit, a checked-cache hit and a typing restore all load the entry's env body with
 the one loader, `ModuleEnv.Serialized.deserializeInPlace`, over a copy-on-write
 private mapping of the entry (or, where the platform cannot map files, a heap
 buffer holding it). Every list in the env borrows the entry's bytes: a
-`SafeList` with capacity 0 and a nonzero length, or a `SafeMultiList` whose
-capacity word carries the borrowed mark. A borrowed list reads and writes its
-items where they lie, so the probe tables of the interners and of the
-string-literal and import stores take new cells in place, and solving writes
-type rows in place. The first growth of a list copies its items into memory the
-env's allocator owns and leaves the entry's bytes alone. `deinit` frees only
-those copies: a borrowed list frees nothing, so a loaded env is released with
-the same `deinit` as a freshly built one.
+`SafeList` with capacity 0 and a nonzero length, a `SafeMultiList` whose
+capacity word carries the borrowed mark, or a `ReservedList` whose storage is
+`borrowed`. A borrowed list reads and writes its items where they lie, so the
+probe tables of the interners and of the string-literal and import stores take
+new cells in place, and solving writes type rows in place. The first growth of
+a list copies its items into memory the env's allocator owns and leaves the
+entry's bytes alone. `deinit` frees only those copies: a borrowed list frees
+nothing, so a loaded env is released with the same `deinit` as a freshly built
+one.
 
 The env owns its entry as `loaded_entry` and releases it (an unmapping, or a
 free with the env's allocator) at the end of `deinit`, after every list that

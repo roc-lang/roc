@@ -439,6 +439,13 @@ pub const Store = struct {
             if (self.savepoint_active) base.invariant("a type store was sealed with a savepoint open", .{});
             if (self.frozen_anchors.count() != 0) base.invariant("a type store was sealed with a frozen class", .{});
         }
+        self.sealGrowingColumns();
+        self.releaseCheckerBuffers();
+        self.sealed = true;
+    }
+
+    /// Forbid growth of every growing column.
+    fn sealGrowingColumns(self: *Self) void {
         self.slots.payloads.seal();
         self.slots.kinds.seal();
         self.descs.backing.seal();
@@ -447,8 +454,6 @@ pub const Store = struct {
         self.vars.seal();
         self.record_fields.seal();
         self.tags.seal();
-        self.releaseCheckerBuffers();
-        self.sealed = true;
     }
 
     /// Canonicalize the solved store (`canonicalizeForSeal`), then seal it.
@@ -2853,7 +2858,7 @@ pub const Store = struct {
         /// its columns in place, and a column copies itself into owned memory
         /// the first time it grows. `deinit` frees only those copies.
         pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator, access: LoadedAccess) Store {
-            return Store{
+            var store = Store{
                 .gpa = gpa,
                 .sealed = access == .sealed,
                 .frozen_anchors = .init(gpa),
@@ -2873,6 +2878,8 @@ pub const Store = struct {
                 .derived_map_plans = self.derived_map_plans.deserializeInto(base_addr),
                 .invalid_nominal_decl_written = self.invalid_nominal_decl_written != 0,
             };
+            if (access == .sealed) store.sealGrowingColumns();
+            return store;
         }
     };
 };
