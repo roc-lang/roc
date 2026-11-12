@@ -142,6 +142,7 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
         TestUnexpectedResult,
         UnsupportedBuiltinAnnotationOnly,
         UnsupportedHeader,
+        UnsupportedTarget,
         WriteFailed,
         Issue806UnsafeLargeStackStructAssign,
         Issue806UnsafeLargeStackTagAssign,
@@ -1341,6 +1342,10 @@ fn lowerAppPathToLir(
         .include_internal_static_data = opts.include_internal_static_data,
     };
     var lower_target = loweringTarget(opts);
+    lower_target.completed_scalar_values = if (coord.program_session) |*session|
+        if (session.completed) |*completed| &completed.scalar_values else null
+    else
+        null;
     lower_target.post_check_executor = post_check_executor;
     lower_target.timing = if (opts.timing_out != null) &timing else null;
     if (opts.prepared_inspect) |prepared_inspect| {

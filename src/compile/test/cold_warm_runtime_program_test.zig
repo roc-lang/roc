@@ -68,6 +68,9 @@ const Built = struct {
     debug_observations: usize,
     static_callables: usize,
     invalid_static_parts: usize,
+    /// Stored static values whose `ConstStore` belongs to a module outside
+    /// the root, its relations, and its lowering-visible imports.
+    stored_outside_input: usize,
 };
 
 fn buildWithCache(gpa: std.mem.Allocator, cache_dir: []const u8, app_path: []const u8) BuildError!Built {
@@ -75,6 +78,14 @@ fn buildWithCache(gpa: std.mem.Allocator, cache_dir: []const u8, app_path: []con
 }
 
 fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_path: []const u8, target: lir.CheckedPipeline.TargetConfig) BuildError!Built {
+    return buildWithCacheAndTests(gpa, cache_dir, app_path, target, false);
+}
+
+/// `program_tests` builds as a linked `roc build` does: every checked module
+/// is one of the program's test modules, as `BuildEnv` makes every module of
+/// the app's package, so their expects are the build's discovery-only roots,
+/// and the runtime program carries internal static data.
+fn buildWithCacheAndTests(gpa: std.mem.Allocator, cache_dir: []const u8, app_path: []const u8, target: lir.CheckedPipeline.TargetConfig, program_tests: bool) BuildError!Built {
     const roc_ctx = CoreCtx.os(gpa, gpa, std.testing.io);
     var cache_manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
     defer cache_manager.deinit();
@@ -100,6 +111,19 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
     try coord.coordinatorLoop();
     if (coord.hasUserErrors()) return reportErrors(&coord);
     coord.runtime_lowering = .{ .target = target };
+    var test_modules = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifactKey).empty;
+    defer test_modules.deinit(gpa);
+    if (program_tests) {
+        var packages = coord.packages.iterator();
+        while (packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*module| {
+                if (module.checkedArtifact()) |artifact| try test_modules.append(gpa, artifact.key);
+            }
+        }
+        coord.program_test_modules = test_modules.items;
+        coord.runtime_lowering.?.include_provided_data_exports = true;
+        coord.runtime_lowering.?.include_internal_static_data = true;
+    }
     try coord.finishCheckedProgram(.executable_artifacts);
     if (coord.hasUserErrors()) return reportErrors(&coord);
     const session = &coord.program_session.?;
@@ -117,6 +141,24 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
     for (result.static_data_values.items, 0..) |value, index| {
         try out.writer.print("static s{d} layout={d} initializer={?d}\n", .{ index, @backingInt(value.layout_idx), if (value.initializer.get()) |proc| @backingInt(proc) else null });
     }
+    // The modules a `roc build` gives its static-data builder: the root, its
+    // relations, and the imports the root's lowering can see.
+    const root_artifact = coord.appRootCheckedArtifact();
+    const imported_views = try coord.collectImportedArtifactViews(gpa, root_artifact);
+    defer gpa.free(imported_views);
+    const relation_views = try coord.collectRelationArtifactViews(gpa, root_artifact);
+    defer gpa.free(relation_views);
+    var stored_outside_input: usize = 0;
+    for (result.static_data_values.items) |value| {
+        const stored = value.stored orelse continue;
+        if (std.mem.eql(u8, &stored.module.bytes, &root_artifact.key.digest().bytes)) continue;
+        const visible = for (imported_views) |view| {
+            if (std.mem.eql(u8, &view.key.bytes, &stored.module.bytes)) break true;
+        } else for (relation_views) |view| {
+            if (std.mem.eql(u8, &view.key.bytes, &stored.module.bytes)) break true;
+        } else false;
+        if (!visible) stored_outside_input += 1;
+    }
     if (runtime.frozen_static_data) |frozen| for (frozen.exports) |item| {
         try out.writer.print("frozen {s} {x}\n", .{ item.symbol_name, item.bytes });
     };
@@ -132,6 +174,7 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
         .debug_observations = coord.appRootCheckedArtifact().compile_time_debug.entries.len,
         .static_callables = 0,
         .invalid_static_parts = 0,
+        .stored_outside_input = stored_outside_input,
     };
     for (coord.appRootCheckedArtifact().compile_time_roots.roots) |root| {
         if (root.lss_value_has_functions or root.payload == .fn_value) {
@@ -212,6 +255,83 @@ fn expectColdEqualsWarm(cold_program: ColdProgram, app_source: []const u8) Expec
     try std.testing.expectEqual(cold_program == .respecialized, cold.respecialized);
     try std.testing.expect(!warm.respecialized);
     try std.testing.expect(warm.cache_hits > 0);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12930
+test "issue 12930: a program's expects stay out of its runtime program whether evaluated or read from the cache" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(io, "cache");
+    try tmp_dir.dir.createDirPath(io, "app/.roc_echo_platform");
+    try tmp_dir.dir.createDirPath(io, "lib");
+    // The app and an expect of the local package `lib` both call `List.all`
+    // over `List(Str)` with a `Str -> Bool` callback.
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/main.roc", .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc", lib: "../lib/main.roc" }
+        \\import pf.Echo
+        \\import lib.Greet
+        \\greeting = Greet.hello("there, this is a fairly long string")
+        \\main! = |args| {
+        \\    Echo.line!(greeting)
+        \\    Echo.line!(Str.inspect(args.all(|arg| arg != greeting)))
+        \\    Ok({})
+        \\}
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "lib/main.roc", .data =
+        \\package [Greet, Fixture] {}
+    });
+    // Only an expect of `Greet` reads `Fixture`, so nothing in the app's
+    // runtime program can reach `Fixture`'s stored values. The literal of the
+    // custom `from_quote` type makes the expect a discovery root of the build.
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "lib/Greet.roc", .data =
+        \\import Fixture
+        \\Greet := {}.{
+        \\    hello : Str -> Str
+        \\    hello = |name| "Hello ".concat(name)
+        \\}
+        \\quoted_after = |_name| "a literal whose type its caller picks"
+        \\expect {
+        \\    accepts = |name| {
+        \\        quoted : Fixture
+        \\        quoted = quoted_after(name)
+        \\        Fixture.names.contains(name) and quoted.text() != name
+        \\    }
+        \\    ["a fixture string only an expect reads, long enough to be heap allocated"].all(accepts)
+        \\}
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "lib/Fixture.roc", .data =
+        \\Fixture := { text : Str }.{
+        \\    from_quote : Str -> Try(Fixture, [BadQuotedBytes(Str)])
+        \\    from_quote = |text| Ok(Fixture.{ text })
+        \\
+        \\    text : Fixture -> Str
+        \\    text = |fixture| fixture.text
+        \\
+        \\    names : List(Str)
+        \\    names = List.repeat("a fixture string only an expect reads, long enough to be heap allocated", 3)
+        \\}
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/main.roc", .data = platform_main });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/Echo.roc", .data = platform_echo });
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(io, "cache", gpa);
+    defer gpa.free(cache_dir);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(io, "app/main.roc", gpa);
+    defer gpa.free(app_path);
+
+    const cold = try buildWithCacheAndTests(gpa, cache_dir, app_path, .{}, true);
+    defer gpa.free(cold.program);
+    const warm = try buildWithCacheAndTests(gpa, cache_dir, app_path, .{}, true);
+    defer gpa.free(warm.program);
+    try std.testing.expect(warm.cache_hits > 0);
+    // The expect is a discovery-only root: neither build's runtime program
+    // contains its closure or the static data it reads, so every stored
+    // static value is one the build's static-data builder can read.
+    try std.testing.expectEqual(@as(usize, 0), cold.stored_outside_input);
+    try std.testing.expectEqual(@as(usize, 0), warm.stored_outside_input);
+    try std.testing.expectEqualStrings(cold.program, warm.program);
 }
 
 test "a hoisted string a body computes lowers the same whether evaluated or read from the cache" {

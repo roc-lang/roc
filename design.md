@@ -2011,10 +2011,10 @@ program's root module, taken from its checked `runtime_requests`, and the
 package and the packages it reaches through filesystem paths), with every
 literal conversion those roots reach hoisted, at the host's width, with
 expects run (`compileTimeTarget`). Every compilation evaluates every requested
-root ("Demand-Driven Compile-Time Evaluation"). Its Solved policy is that of the program
-being built, so evaluation runs inside that program's one specialization;
-with no runtime program, as in `roc check`, it is a dev build's
-(`CheckedPipeline.dev_inline_mode`). Inlining and SpecConstr preserve meaning,
+root ("Demand-Driven Compile-Time Evaluation"). When an LSS runtime consumer
+continues that specialization (see "Runtime Programs Read Stored Values"), its
+Solved policy is that of the program being built; otherwise, as in `roc check`,
+it is a dev build's (`CheckedPipeline.dev_inline_mode`). Inlining and SpecConstr preserve meaning,
 and every function value keeps the captures the checked program gives it
 ("Stored Function Capture Contract"), so the policy changes how evaluation's
 code is built, never what it computes or stores.
@@ -2036,10 +2036,11 @@ no LSS runtime consumer continues that program, as in `roc check`, the
 program roots in that union are discovery roots and only the bodies that can
 register a literal root are specialized (see "Demand-Driven Compile-Time
 Specialization" below). An
-LSS runtime consumer continues that program and borrows it, unless the
-evaluation completed a compile-time root the program demands, when it
-continues the program specialized again from the stored values instead
-(see "Runtime Programs Read Stored Values"): none copies it,
+LSS runtime consumer continues that program and borrows it only when the
+evaluation has no compile-time root to evaluate and no discovery root to
+specialize; otherwise evaluation is specialized as in `roc check` and the
+consumer continues a specialization of its own roots made from the stored
+values (see "Runtime Programs Read Stored Values"): none copies it,
 none reruns any of those stages for it, and callable correspondence compares ids
 from one producer domain, never ids allocated by separate solver runs. A
 consumer continuing it chooses its target width, the explicitly shared
@@ -2232,12 +2233,14 @@ discovery request otherwise.
 Literal roots registered in discovery bodies are evaluated exactly as before,
 so `roc check` reports every rejected or crashing conversion a build reports.
 
-An LSS runtime consumer needs its own runtime bodies specialized and continues
-the evaluation's program. An application build names its entrypoints as runtime
-roots; tests discovered in its modules are compile-time discovery roots. These test bodies
-must still validate specialization-dependent literals and replay compile-time
+An LSS runtime consumer needs its own runtime bodies specialized. An
+application build names its entrypoints as runtime roots; tests discovered in
+its modules are compile-time discovery roots. These test bodies must still
+validate specialization-dependent literals and replay compile-time
 observations, but do not become runtime demand merely because an unrelated
-application entrypoint has a runtime consumer. Its compile-time consumer lowers and evaluates the
+application entrypoint has a runtime consumer, so a runtime consumer never
+continues a specialization that kept a discovery root (see "Runtime Programs
+Read Stored Values"). Its compile-time consumer lowers and evaluates the
 same compile-time and literal roots.
 
 `--timings` reports these decisions under "Demand-driven specialization":
@@ -5731,6 +5734,11 @@ were bound. Completed independent roots are
 read as stored values and never evaluated again. A pairing is never serialized
 into the platform's checked module.
 
+The pairing recomputes exact-alias forwarding after binding required values,
+before classifying calls or scheduling roots. That forwarding is a changed
+pairing column and survives a pairing-cache hit; borrowing the unbound
+platform's forwarding would incorrectly demand a computed callable.
+
 ### Type Content Keys
 
 A type content key is the content identity of a type: alpha-invariant over
@@ -6620,6 +6628,10 @@ type identity key includes them; the resulting `CheckedNominalDeclaration` takes
 the same variables as formals after its declared ones (`context_len` of
 them). The declaration's backing names those variables directly, so binding
 the formals to a use's arguments substitutes them like any other formal.
+The backing walk binds each formal by its binder annotation, never by its
+name: in `Pair(a) := [Pair(Captured, a)]` inside a body over `a`, the
+backing's `a` resolves to the enclosing function's binder, so it stays that
+context variable rather than becoming the same-named parameter.
 Monotype's declaration scopes and its nominal caches, keyed by arguments,
 therefore tell `Wrap` at `U64` from `Wrap` at `Str`, and give each its own
 methods' specializations, with no rule of their own; Boxy reads the same
@@ -11752,6 +11764,16 @@ checked module data records for flex and rigid variables alike).
 Specialization therefore never meets a request wider than a template
 that cannot take it.
 
+A direct call is lowered at the wider row only when its template takes
+one by these two rules: the template's OWN root has a closed result row or
+a request-determined result row variable
+(`Builder.templateTakesWiderResultRow`). The call's instantiated type is
+not enough. A template whose result row variable it shares with an
+argument, like `same : Try(ok, err) -> Try(ok, err)`, is closed at a call
+whose argument builds no error tags (`same(Ok(x))`), yet its request's
+result row is its argument's, which the request does not widen. Such a
+call keeps its own row and is widened by a `row_widen`.
+
 The set of positions a use may WIDEN is kept within the row coercion's reach
 by construction rather than by a second rule that could drift: polarity's
 per-use opening is withheld at generation time from every position outside
@@ -16215,7 +16237,9 @@ program is specialized (`evaluateBoxyRoots`, `.before_solved`), so the
 specialization restores every value it reads exactly as a compilation of
 cached modules does: the Solved program of a cold compilation and of a warm
 one are the same program, and an LSS runtime consumer continues it without
-the program being specialized again. A root holding a function value is the
+the program being specialized again when it has no root left to evaluate and
+no discovery root to specialize ("Runtime Programs Read Stored Values").
+A root holding a function value is the
 Solved program's, since a `.boxy` function value means nothing to Monotype
 ("Stored Function Values"), and so is every root reading one; the Solved
 program evaluates them, and the literal roots its specializations register,
@@ -21742,9 +21766,10 @@ from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
 
-Field reads in an explicit product use that product's slot boundaries. A
-scalar prefix can occupy zero slots there; the standalone scalar layout's
-one-slot domain must not make the read take its neighboring field's unit.
+An erased argument product's recorded slot boundaries are authoritative for
+both the start and width of each field read. Its non-owning prefix and scalar
+fields may occupy zero slots; their standalone layouts cannot supply widths in
+that product's coordinate system.
 
 ARC uses this explicit shape for the same field-take and residual-release
 rules as concrete products. Generic record field reads copy representation
@@ -26041,22 +26066,28 @@ construction as its parts), and no runtime program declares a slot, a
 failure record, or a guard for a compile-time root that completed.
 
 The point at which this holds for a live compilation is explicit: the end of the
-program's evaluation (`finalizeProgram`). The specialization evaluation made declared
-each pending root's read as a slot read, because the value did not exist
-yet, so when that evaluation completed any compile-time root the program
-demands, its Solved program is not the one a runtime consumer continues.
-The program is specialized again from the checked modules, now holding
-every demanded value stored, exactly as a compilation that found them all
-in the cache specializes it (`ProgramSession.RuntimeStages.respecialized`).
-Runtime roots still register every conversion
-their own code uses. That specialization demands no compile-time root; it registers the
-runtime program's literal roots again and evaluates them, and their outcomes, which
-the first evaluation already reported, report nowhere. A literal root is
-not stored by any compilation, so both kinds of compilation read literal
-roots' completed values from the stages that evaluated them, the same way.
-A compilation that
-evaluated no compile-time root its program demands continues its one
-specialization, which is already that program.
+program's evaluation (`finalizeProgram`). The specialization evaluation makes
+declares each pending root's read as a slot read, because the value does not
+exist yet, so a specialization that evaluates a compile-time root is never the
+one a runtime consumer continues. Neither is one that keeps a discovery root:
+a test is no part of the runtime program, but its closures would join the
+lambda sets the runtime program shares with it, and the runtime program would
+then reach the test's values. Which case applies is decided before anything is
+specialized, from the pending compile-time roots and the discovery roots that
+can register a literal root (`planRoots`). When there are any, evaluation
+specializes exactly what `roc check` specializes, with the program roots as
+discovery roots, and afterwards the program roots alone are specialized from
+the checked modules, now holding every value stored, exactly as a compilation
+that found them all in the cache specializes it
+(`ProgramSession.RuntimeStages.respecialized`). Runtime roots still register
+every conversion their own code uses. That specialization demands no
+compile-time root; it registers the runtime program's literal roots again and
+evaluates them, and their outcomes, which the first evaluation already
+reported, report nowhere. A literal root is not stored by any compilation, so
+both kinds of compilation read literal roots' completed values from the stages
+that evaluated them, the same way. A compilation with neither specializes
+once, with its program roots in full, and its runtime consumer continues that
+specialization.
 
 ### Dependency-Ordered Compile-Time Evaluation
 
