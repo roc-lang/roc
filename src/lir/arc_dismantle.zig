@@ -793,10 +793,39 @@ const Analysis = struct {
         return slot.value_ptr;
     }
 
+    /// The tag-union view a local belongs to: a borrowed tag union read out
+    /// of a container, or a borrowed alias of one. Such a view holds the
+    /// union's unit once its definition takes its slot, and can then
+    /// dismantle through a payload view exactly as an owned union does.
+    fn unionViewOf(self: *const Analysis, local: LIR.LocalId) ?u32 {
+        if (!self.isView(local)) return null;
+        const head = self.view_head[@backingInt(local)];
+        const head_local: LIR.LocalId = @fromBackingInt(@intCast(head));
+        if (self.layouts.getLayout(self.store.getLocal(head_local).layout_idx).tag != .tag_union) return null;
+        return head;
+    }
+
+    /// The payload view a held tag-union view dismantles through, when the
+    /// view has exactly one, nothing else uses the union whole, and some
+    /// refcounted field read through that payload view binds an owned target.
+    fn heldUnionPayload(self: *const Analysis, view: u32) ?LIR.LocalId {
+        const entry = self.union_roots.getPtr(view) orelse return null;
+        if (entry.disqualified or entry.view == no_index or entry.view == ambiguous_view) return null;
+        if (self.state[view] != .view or self.state[entry.view] != .candidate) return null;
+        const payload = self.candidates.getPtr(entry.view) orelse return null;
+        if (payload.disqualified or payload.def_count != 1) return null;
+        for (payload.reads.items) |read| {
+            if (self.rc_local[@backingInt(read.target)] and !self.solution.isBorrowed(read.target)) {
+                return @fromBackingInt(@intCast(entry.view));
+            }
+        }
+        return null;
+    }
+
     /// A whole use of a tag union (or of an alias sharing its unit) ends its
     /// chance to dismantle.
     fn touchUnion(self: *Analysis, local: LIR.LocalId) Error!void {
-        const root_index = self.unionRootOf(local) orelse return;
+        const root_index = self.unionRootOf(local) orelse self.unionViewOf(local) orelse return;
         const entry = try self.unionEntryOf(root_index);
         entry.disqualified = true;
     }
@@ -805,9 +834,15 @@ const Analysis = struct {
     /// byte of the union's active variant. The view is the struct candidate
     /// the union dismantles through; a second view or variant leaves the
     /// union whole-released.
-    fn notePayloadView(self: *Analysis, target: LIR.LocalId, op: anytype) Error!bool {
+    fn notePayloadView(self: *Analysis, stmt: LIR.CFStmtId, target: LIR.LocalId, op: anytype) Error!bool {
         if (!self.solution.isBorrowed(target)) return false;
-        const root_index = self.unionRootOf(op.source) orelse return false;
+        const root_index = self.unionRootOf(op.source) orelse blk: {
+            // A payload view of a tag-union view observes the container's
+            // slot until that view's take is committed.
+            const view = self.unionViewOf(op.source) orelse return false;
+            try self.noteMention(stmt, op.source);
+            break :blk view;
+        };
         const projection = encodeProjection(op).?;
         if (!projectionOwnsAllRc(self.store, self.layouts, op.source, target, projection)) return false;
         const entry = try self.unionEntryOf(root_index);
@@ -2283,8 +2318,9 @@ fn classifyStatement(
                 },
                 .discriminant => {
                     // The tag word is disjoint from every stored unit, so
-                    // reading it is no use of a tag union.
-                    analysis.disqualify(stmt.op.source);
+                    // reading it is no use of a tag union. A view's tag word
+                    // is in the representation its definition copied.
+                    if (!analysis.isView(stmt.op.source)) analysis.disqualify(stmt.op.source);
                     try analysis.noteDef(stmt.target, current);
                 },
                 .tag_payload => {
@@ -2292,7 +2328,7 @@ fn classifyStatement(
                     try analysis.noteDef(stmt.target, current);
                 },
                 .tag_payload_struct => {
-                    if (!try analysis.notePayloadView(stmt.target, stmt.op)) try analysis.useWhole(current, stmt.op.source);
+                    if (!try analysis.notePayloadView(current, stmt.target, stmt.op)) try analysis.useWhole(current, stmt.op.source);
                     try analysis.noteDef(stmt.target, current);
                 },
                 inline .list_reinterpret, .nominal => {
@@ -3543,7 +3579,13 @@ pub fn compute(
     defer read_masks.deinit(gpa);
     // The containers of one component's solve: its candidates, then each view
     // whose definition took its slots, solved right after its container.
-    const SolveEntry = struct { local: u32, view: bool };
+    const SolveEntry = struct {
+        local: u32,
+        view: bool,
+        /// A payload view queued by the committed take of the tag-union view
+        /// it dismantles.
+        held_union_payload: bool = false,
+    };
     var solve_queue = std.ArrayList(SolveEntry).empty;
     defer solve_queue.deinit(gpa);
     // Per container: reads solved as owned-demanded takes whose binding is
@@ -3849,7 +3891,16 @@ pub fn compute(
                 // is defined once, and is otherwise only aliased or discriminated
                 // spends the root's unit through its fields.
                 const union_root: ?*UnionRoot = if (!entry.view and analysis.view_root[@backingInt(local)] != no_index) blk: {
-                    const root_entry = analysis.union_roots.getPtr(analysis.view_root[@backingInt(local)]) orelse continue :candidates;
+                    const root_index = analysis.view_root[@backingInt(local)];
+                    const root_entry = analysis.union_roots.getPtr(root_index) orelse continue :candidates;
+                    if (analysis.state[root_index] == .view) {
+                        // The union is a view: it holds a unit to spend only
+                        // once its container commits its take, which queues
+                        // this payload view.
+                        if (!entry.held_union_payload) continue :candidates;
+                        root_entry.def_count = 1;
+                        root_entry.def_stmt = analysis.view_candidates.getPtr(root_index).?.def_stmt;
+                    }
                     if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @backingInt(local)) continue :candidates;
                     break :blk root_entry;
                 } else null;
@@ -3956,12 +4007,26 @@ pub fn compute(
                 // its definition. Every other read solved borrowed holds no unit
                 // and takes, if at all, at its consuming operands.
                 view_demand.clearRetainingCapacity();
+                const container_owned_only = if (entry.view)
+                    !result.take_bindings[candidate_index]
+                else
+                    union_root == null and solution.isBorrowed(if (analysis.projected_root[@backingInt(local)] != no_index)
+                        @as(LIR.LocalId, @fromBackingInt(@intCast(analysis.projected_root[@backingInt(local)])))
+                    else
+                        local);
                 for (candidate.reads.items) |read| {
                     var demanded = false;
                     if (read.view and solution.isBorrowed(read.target)) {
                         try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, @backingInt(read.target));
                         demanded = forestHasOperandSite(store, solution, @fromBackingInt(@intCast(owner)), &analysis, operand_benefits, rc_local, forest.items, forest_mark, @backingInt(read.target));
                         for (forest.items) |borrower| forest_mark[borrower] = false;
+                    }
+                    // A tag-union view that dismantles through a payload view
+                    // is held so that view's reads can take its fields. A
+                    // container whose takes are owned-only gives the view no
+                    // unit in every emission, so it stays a borrowed view.
+                    if (!demanded and read.view and solution.isBorrowed(read.target) and !container_owned_only) {
+                        demanded = analysis.heldUnionPayload(@backingInt(read.target)) != null;
                     }
                     try view_demand.append(gpa, demanded);
                 }
@@ -4383,6 +4448,11 @@ pub fn compute(
                     if (!(read_kinds.get(read.stmt) orelse continue).consuming) continue;
                     if (!solution.isBorrowed(read.target)) continue;
                     try solve_queue.append(gpa, .{ .local = @backingInt(read.target), .view = true });
+                    if (!owned_only) {
+                        if (analysis.heldUnionPayload(@backingInt(read.target))) |payload| {
+                            try solve_queue.append(gpa, .{ .local = @backingInt(payload), .view = false, .held_union_payload = true });
+                        }
+                    }
                 }
                 for (field_restitutions.items) |receipt| {
                     if ((receipt.field_mask & taken_mask) == 0) continue;

@@ -22626,10 +22626,11 @@ reads of the container's slots offset by the view's first slot, so a
 consumed read through it takes those slots from the container, and its
 other uses observe its whole range. A borrowed tag union read out of a
 container is a view of its one slot: nothing reads through it except an
-ownership-complete payload view, which carries the union's whole unit, so
-it is held exactly when that payload reaches a consuming operand (the
-closure read out of a record of closures, whose captures are unwrapped and
-passed to the closure body), and it dismantles no further. Its definition copies only the
+ownership-complete payload view, which carries the union's whole unit. It is
+held when that payload reaches a consuming operand (the closure read out of a
+record of closures, whose captures are unwrapped and passed to the closure
+body), or when it dismantles through that payload view (the held tag-union
+view rule below). Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
 view's residual shell, numbered in the view's own layout. A view whose shell
@@ -22704,6 +22705,36 @@ variant, or any other occurrence of the union keeps its whole release. The
 shape this serves is a call returning `Try` of a record whose fields are moved
 out under `Ok`: without it every such field pays a retain and the whole result
 a release, on every call.
+
+A held tag-union view qualifies the same way. A borrowed tag union read out of
+a container (or out of a view the container holds) is solved as a take of its
+one slot at its definition when all of the following hold:
+
+- the container's takes apply to every emission, so the view holds the
+  union's unit wherever its take is committed. A container whose takes are
+  owned-only leaves the view borrowed
+- every occurrence of the view and of its borrowed pure aliases is a
+  discriminant read or exactly one borrowed `tag_payload_struct` view that
+  owns every refcounted byte of the union. A second payload view, a second
+  variant, a whole use, or any other occurrence leaves the view to the
+  consuming-operand rule above. A discriminant read of a view reads the tag
+  word in the representation the view's definition copied, so it observes
+  none of the container's slots
+- at least one refcounted field read through that payload view binds an owned
+  target, so holding the union can spare a retain
+
+Once the container's flow commits that take, the view's binding holds the
+union's unit and is bound once by its field read, so it is a union root: its
+payload view is the struct candidate, solved right after the container, with
+its own takes, use-point takes, and discriminant-dispatched residual release,
+and the field read is the fresh-value boundary of its take-state flow. If the
+container's flow declines the take, the view is a borrowed view again, its
+payload view dismantles nothing, and every read through it observes the
+container's slot. This is what lets a loop over
+`{ first : Dict(k, v), second : Dict(k, v), writes : U64 }` update both
+dictionaries in place: a `Dict` is a single-tag union around the record of
+its lists, and each list leaves the dying loop state by a take instead of a
+retain that the following `List.set` would have to copy for.
 
 A proc parameter solved borrowed qualifies conditionally: its takes are
 solved once against the shared ownership-neutral body but recorded as

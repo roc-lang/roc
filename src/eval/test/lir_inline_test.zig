@@ -11598,6 +11598,117 @@ test "field takes: a borrowed read used after a second read of its field blocks 
     try std.testing.expectEqual(@as(usize, 0), counts.tag_union_takes);
 }
 
+/// A record whose first two fields are tag unions wrapping two lists each,
+/// and a function that takes ownership of a list.
+const record_of_wrapped_lists_source =
+    \\Wrapped : [Wrapped({ xs : List(U64), ys : List(U64) }), Missing]
+    \\
+    \\State : { first : Wrapped, second : Wrapped, writes : U64 }
+    \\
+    \\make : U64 -> State
+    \\make = |n| {
+    \\    first: Wrapped({ xs: List.repeat(1, n), ys: List.repeat(2, n) }),
+    \\    second: Wrapped({ xs: List.repeat(3, n), ys: List.repeat(4, n) }),
+    \\    writes: n,
+    \\}
+    \\
+    \\grown : List(U64) -> U64
+    \\grown = |list| List.len(List.append(list, 9))
+    \\
+    \\wrapped_len : Wrapped -> U64
+    \\wrapped_len = |wrapped| match wrapped {
+    \\    Wrapped({ xs, ys }) => List.len(xs) + List.len(ys)
+    \\    Missing => 0
+    \\}
+    \\
+;
+
+// https://github.com/roc-lang/roc/issues/12971
+//
+// Each tag union is read out of the dying record and its payload's lists are
+// consumed one at a time. The union read takes its slot, so it holds the
+// union's unit and its payload's lists leave by takes: no field read in
+// `main` retains.
+test "field takes: a tag union read out of a dying record dismantles through its payload" {
+    const allocator = std.testing.allocator;
+    const source = record_of_wrapped_lists_source ++
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    state = make(n)
+        \\    a = match state.first {
+        \\        Wrapped({ xs, ys }) => grown(xs) + grown(ys)
+        \\        Missing => 0
+        \\    }
+        \\    b = match state.second {
+        \\        Wrapped({ xs, ys }) => grown(xs) + grown(ys)
+        \\        Missing => 0
+        \\    }
+        \\    a + b + state.writes
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    defer lowered.deinit(allocator);
+
+    const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
+    try std.testing.expectEqual(@as(usize, 2), counts.tag_union_reads);
+    try std.testing.expectEqual(@as(usize, 2), counts.tag_union_takes);
+    try std.testing.expectEqual(@as(usize, 0), try mainFieldReadRetainCount(allocator, &lowered.lowered));
+}
+
+// The record is passed on whole after its unions' lists were consumed, so no
+// slot may leave it: the union reads stay borrowed views and their payloads
+// dismantle nothing.
+test "field takes: a tag union read out of a record used whole afterwards stays a view" {
+    const allocator = std.testing.allocator;
+    const source = record_of_wrapped_lists_source ++
+        \\total : State -> U64
+        \\total = |state| wrapped_len(state.first) + wrapped_len(state.second) + state.writes
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    state = make(n)
+        \\    a = match state.first {
+        \\        Wrapped({ xs, ys }) => grown(xs) + grown(ys)
+        \\        Missing => 0
+        \\    }
+        \\    a + total(state)
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    defer lowered.deinit(allocator);
+
+    const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
+    try std.testing.expectEqual(@as(usize, 1), counts.tag_union_reads);
+    try std.testing.expectEqual(@as(usize, 0), counts.tag_union_takes);
+}
+
+// The same union is read out of the record a second time after its lists
+// were consumed. The second read observes the slot the first would have
+// taken, so the first stays a borrowed view.
+test "field takes: a tag union read again after its payload was consumed stays a view" {
+    const allocator = std.testing.allocator;
+    const source = record_of_wrapped_lists_source ++
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    state = make(n)
+        \\    a = match state.first {
+        \\        Wrapped({ xs, ys }) => grown(xs) + grown(ys)
+        \\        Missing => 0
+        \\    }
+        \\    a + wrapped_len(state.first)
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    defer lowered.deinit(allocator);
+
+    const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
+    try std.testing.expectEqual(@as(usize, 2), counts.tag_union_reads);
+    try std.testing.expectEqual(@as(usize, 0), counts.tag_union_takes);
+}
+
 test "field takes dismantle a Try whose caller match tag reachability folded" {
     const allocator = std.testing.allocator;
     const source =
