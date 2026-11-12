@@ -1194,6 +1194,28 @@ fn runToLirInspected(
     try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, inspect_lowered);
 }
 
+/// Keep structural and executable inspections on the same lowering policy.
+fn loweringTarget(opts: LirLoweringOptions) lir.CheckedPipeline.TargetConfig {
+    return .{
+        .comptime_value_reads = opts.shared_comptime_reads,
+        .specialization_strategy = opts.specialization_strategy,
+        .target_usize = opts.target_usize,
+        .inline_mode = opts.inline_mode,
+        .spec_constr_clone_inlining = opts.spec_constr_clone_inlining,
+        .prove_uniqueness = true,
+        .consume_dead_boxes = opts.consume_dead_boxes,
+        .list_in_place_map = opts.list_in_place_map,
+        .proc_debug_names = opts.proc_debug_names,
+        .prove_ranges = opts.prove_ranges,
+        .replay_interface_summaries = .{ .value = opts.replay_interface_summaries },
+        .lifted_expr_count_out = opts.lifted_expr_count_out,
+        .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,
+        .lir_pass_parallel_metrics_out = opts.lir_pass_parallel_metrics_out,
+        .arc_parallel_metrics_out = opts.arc_parallel_metrics_out,
+        .spec_constr_parallel_metrics_out = opts.spec_constr_parallel_metrics_out,
+    };
+}
+
 fn lowerAppPathToLir(
     gpa: std.mem.Allocator,
     app_path: []const u8,
@@ -1319,30 +1341,13 @@ fn lowerAppPathToLir(
         .requests = lir_roots,
         .include_internal_static_data = opts.include_internal_static_data,
     };
-    const lower_target: lir.CheckedPipeline.TargetConfig = .{
-        .comptime_value_reads = opts.shared_comptime_reads,
-        .completed_scalar_values = if (coord.program_session) |*session|
-            if (session.completed) |*completed| &completed.scalar_values else null
-        else
-            null,
-        .specialization_strategy = opts.specialization_strategy,
-        .target_usize = opts.target_usize,
-        .inline_mode = opts.inline_mode,
-        .spec_constr_clone_inlining = opts.spec_constr_clone_inlining,
-        .prove_uniqueness = true,
-        .consume_dead_boxes = opts.consume_dead_boxes,
-        .list_in_place_map = opts.list_in_place_map,
-        .proc_debug_names = opts.proc_debug_names,
-        .prove_ranges = opts.prove_ranges,
-        .replay_interface_summaries = .{ .value = opts.replay_interface_summaries },
-        .lifted_expr_count_out = opts.lifted_expr_count_out,
-        .post_check_executor = post_check_executor,
-        .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,
-        .lir_pass_parallel_metrics_out = opts.lir_pass_parallel_metrics_out,
-        .arc_parallel_metrics_out = opts.arc_parallel_metrics_out,
-        .spec_constr_parallel_metrics_out = opts.spec_constr_parallel_metrics_out,
-        .timing = if (opts.timing_out != null) &timing else null,
-    };
+    var lower_target = loweringTarget(opts);
+    lower_target.completed_scalar_values = if (coord.program_session) |*session|
+        if (session.completed) |*completed| &completed.scalar_values else null
+    else
+        null;
+    lower_target.post_check_executor = post_check_executor;
+    lower_target.timing = if (opts.timing_out != null) &timing else null;
     if (opts.prepared_inspect) |prepared_inspect| {
         var prepared = try lir.CheckedPipeline.prepareCheckedModulesMonotype(gpa, lower_modules, lower_roots, lower_target);
         defer prepared.deinit();
@@ -1353,25 +1358,17 @@ fn lowerAppPathToLir(
     }
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(gpa, lower_modules, lower_roots, lower_target);
     defer lowered.deinit();
-    if (lowered.lir_result.static_data_values.items.len != 0) {
+    if (inspect_lowered != null or lowered.lir_result.static_data_values.items.len != 0) {
+        // Executing a lowered program, or reading its static values, requires
+        // the same complete readonly image that a linked program receives.
         const exports = try static_materialization.buildStaticDataForWidth(gpa, .{
             .root = lower_modules.root,
-            .imports = imports,
+            .imports = lower_modules.imports,
         }, &lowered, opts.target_usize, .{});
         if (lowered.frozen_static_data) |*frozen| frozen.deinit();
         lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
     }
     if (opts.timing_out) |timing_out| timing_out.* = timing.snapshot();
-    if (inspect_lowered != null) {
-        // Executing a lowered program requires the same static-data
-        // materialization that a linked program receives.
-        const exports = try @import("static_data").buildStaticDataForWidth(gpa, .{
-            .root = lower_modules.root,
-            .imports = lower_modules.imports,
-        }, &lowered, opts.target_usize, .{});
-        if (lowered.frozen_static_data) |*previous| previous.deinit();
-        lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
-    }
 
     if (dump) |writer| {
         const store = &lowered.lir_result.store;

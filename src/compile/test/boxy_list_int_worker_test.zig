@@ -81,7 +81,7 @@ fn calledNames(store: *const lir.LirStore, proc: lir.LIR.LirProcSpec, out: *std.
     defer pending.deinit(std.testing.allocator);
     var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
     defer visited.deinit();
-    try pending.append(std.testing.allocator, proc.body.?);
+    try pending.append(std.testing.allocator, proc.body.get().?);
     while (pending.pop()) |id| {
         if ((try visited.getOrPut(id)).found_existing) continue;
         const stmt = store.getCFStmt(id);
@@ -99,12 +99,12 @@ fn expectStaticWorker(store: *const lir.LirStore, proc: lir.LIR.LirProcSpec) (st
     for (0..collections.GuardedList.borrowLen(args)) |arg_index| {
         try std.testing.expect(store.localDyn(collections.GuardedList.at(args, arg_index)) == null);
     }
-    try std.testing.expect(proc.dyn_result == null);
+    try std.testing.expect(proc.dyn_result == .none);
     var pending: std.ArrayList(lir.LIR.CFStmtId) = .empty;
     defer pending.deinit(std.testing.allocator);
     var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
     defer visited.deinit();
-    try pending.append(std.testing.allocator, proc.body.?);
+    try pending.append(std.testing.allocator, proc.body.get().?);
     while (pending.pop()) |id| {
         if ((try visited.getOrPut(id)).found_existing) continue;
         try std.testing.expect(store.getCFStmt(id) != .dyn);

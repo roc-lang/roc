@@ -1146,7 +1146,7 @@ const Encoder = struct {
             switch (store.get(frame.ty)) {
                 .record => |record| {
                     for (store.fieldSpan(record.fields)) |field| try stack.append(self.allocator, .{ .ty = field.ty, .expanded = false });
-                    if (record.ext) |ext| try stack.append(self.allocator, .{ .ty = ext, .expanded = false });
+                    if (record.ext.get()) |ext| try stack.append(self.allocator, .{ .ty = ext, .expanded = false });
                     for (store.paddingTypes(record)) |padding| try stack.append(self.allocator, .{ .ty = padding, .expanded = false });
                 },
                 .tuple => |items| for (store.span(items)) |item| try stack.append(self.allocator, .{ .ty = item, .expanded = false }),
@@ -1182,15 +1182,15 @@ const Encoder = struct {
                     try self.tableType(field.ty);
                     try self.table.append(self.allocator, @backingInt(field.kind));
                     try self.tableWord(field.slot_variable);
-                    try self.table.append(self.allocator, @intFromBool(field.default != null));
-                    if (field.default) |default| {
+                    try self.table.append(self.allocator, @intFromBool(field.default.get() != null));
+                    if (field.default.get()) |default| {
                         try self.tableWord(try self.moduleEntry(default.module));
                         try self.tableWord(default.expr_node);
                     }
                 }
-                try self.tableExt(record.ext);
-                try self.table.append(self.allocator, @intFromBool(record.declared != null));
-                if (record.declared) |declared| {
+                try self.tableExt(record.ext.get());
+                try self.table.append(self.allocator, @intFromBool(record.declared.get() != null));
+                if (record.declared.get()) |declared| {
                     try self.tableTypes(store.span(declared.padding));
                     const entries = store.declaredEntries(declared);
                     try self.tableWord(@intCast(entries.len));
@@ -1512,7 +1512,7 @@ const Decoder = struct {
                     field.* = .{ .name = field_name, .ty = ty, .kind = kind, .slot_variable = self.word() };
                     if (self.byte() != 0) {
                         const module_index = self.module();
-                        field.default = .{ .module = module_index, .expr_node = self.word() };
+                        field.default = .some(.{ .module = module_index, .expr_node = self.word() });
                     }
                 }
                 const remainder = self.ext();
@@ -1761,7 +1761,7 @@ test "stored type metadata preserves field defaults across module reindexing" {
     const number = try source.store.primitive(.u8);
     var fields = [_]types.Field{.{ .name = name, .ty = number, .kind = .inline_slot }};
     const required = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
-    fields[0].default = .{ .module = source_modules[0], .expr_node = 10 };
+    fields[0].default = .some(.{ .module = source_modules[0], .expr_node = 10 });
     const defaulted = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     const root = try source.store.intern(.{ .tuple = &.{ required, defaulted } });
     var encoder: Encoder = .{ .allocator = allocator, .program = &source };
@@ -1794,8 +1794,8 @@ test "stored type metadata preserves field defaults across module reindexing" {
     defer allocator.free(decoder.table);
     const restored = destination.store.span(destination.store.get(decoder.table[root_index]).tuple);
     try std.testing.expect(restored[0] != restored[1]);
-    try std.testing.expectEqual(@as(?types.FieldDefault, null), destination.store.fieldSpan(destination.store.get(restored[0]).record.fields)[0].default);
-    const restored_default = destination.store.fieldSpan(destination.store.get(restored[1]).record.fields)[0].default.?;
+    try std.testing.expectEqual(@as(?types.FieldDefault, null), destination.store.fieldSpan(destination.store.get(restored[0]).record.fields)[0].default.get());
+    const restored_default = destination.store.fieldSpan(destination.store.get(restored[1]).record.fields)[0].default.get().?;
     try std.testing.expectEqual(destination_modules[1], restored_default.module);
     try std.testing.expectEqual(@as(u32, 10), restored_default.expr_node);
 }

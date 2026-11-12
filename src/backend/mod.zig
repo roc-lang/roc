@@ -106,12 +106,12 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
                 .name = s.freshSyntheticSymbol(),
                 .identity = lir.LIR.ProcIdentity.forTest(3),
                 .args = args,
-                .body = body,
+                .body = .some(body),
                 .ret_layout = ret_layout,
                 .abi = .erased_callable,
-                .erased_capture_arg = capture_arg,
-                .erased_reuse_arg = reuse_arg,
-                .erased_call_args = arg_plan,
+                .erased_capture_arg = .of(capture_arg),
+                .erased_reuse_arg = .of(reuse_arg),
+                .erased_call_args = .of(arg_plan),
             }, .none);
         }
 
@@ -273,7 +273,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
         .identity = lir.LIR.ProcIdentity.forTest(2),
         .args = lir.LIR.LocalSpan.empty(),
         .ret_layout = .u128,
-        .hosted = .{ .symbol = symbol, .dispatch_index = 0 },
+        .hosted = .some(.{ .symbol = symbol, .dispatch_index = 0 }),
     }, .none);
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
@@ -321,7 +321,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = lir.LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u128,
     }, .none);
 

@@ -181,7 +181,7 @@ fn testStrCallee(store: *LirStore) ResourceError!LIR.LirProcSpecId {
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(&.{arg}),
-        .body = ret,
+        .body = .some(ret),
         .ret_layout = .str,
     }, .none);
 }
@@ -240,7 +240,7 @@ test "str append fuses a single-use call result into a direct append call" {
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ acc, x }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, result, out }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .str,
     }, .none);
 
@@ -288,7 +288,7 @@ test "str append variant keeps a dynamic parameter's descriptor binding" {
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ value, desc }),
         .frame_locals = try store.addLocalSpan(&.{ value, desc, rendered }),
-        .body = inspect,
+        .body = .some(inspect),
         .ret_layout = .str,
     }, .none);
 
@@ -311,7 +311,7 @@ test "str append variant keeps a dynamic parameter's descriptor binding" {
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ acc, n, n_desc }),
         .frame_locals = try store.addLocalSpan(&.{ acc, n, n_desc, result, out }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .str,
     }, .none);
 
@@ -361,7 +361,7 @@ test "str append fuses through a single-use alias of the call result" {
         .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&.{ acc, x }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, result, result_alias, out }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .str,
     }, .none);
 
@@ -409,7 +409,7 @@ test "str append does not fuse across an alias of an unrelated local" {
         .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{ acc, x, unrelated }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, unrelated, unrelated_alias, result, out, extra }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .str,
     }, .none);
 
@@ -452,7 +452,7 @@ test "str append does not fuse a multi-use call result" {
         .identity = LIR.ProcIdentity.forTest(5),
         .args = try store.addLocalSpan(&.{ acc, x, other }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, other, result, out, extra }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .str,
     }, .none);
 
@@ -492,7 +492,7 @@ test "str append fuses a str_append consumer with a variant that appends with st
         .identity = LIR.ProcIdentity.forTest(6),
         .args = try store.addLocalSpan(&.{ acc, x }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, result, out }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .str,
     }, .none);
 
@@ -506,7 +506,7 @@ test "str append fuses a str_append consumer with a variant that appends with st
     try std.testing.expectEqual(ret, rewritten.next);
 
     var ops: [4]LowLevelOp = undefined;
-    const variant_ops = try testLowLevelOps(&store, store.getProcSpec(rewritten.proc).body.?, &ops);
+    const variant_ops = try testLowLevelOps(&store, store.getProcSpec(rewritten.proc).body.get().?, &ops);
     try std.testing.expectEqualSlices(LowLevelOp, &.{.str_append}, variant_ops);
 }
 
@@ -526,7 +526,7 @@ test "str append keeps the source's own join when rooting a direct join return" 
         .identity = LIR.ProcIdentity.forTest(7),
         .args = try store.addLocalSpan(&.{ left, right }),
         .frame_locals = try store.addLocalSpan(&.{ left, right, joined }),
-        .body = callee_join,
+        .body = .some(callee_join),
         .ret_layout = .str,
     }, .none);
 
@@ -549,7 +549,7 @@ test "str append keeps the source's own join when rooting a direct join return" 
         .identity = LIR.ProcIdentity.forTest(8),
         .args = try store.addLocalSpan(&.{ acc, a, b }),
         .frame_locals = try store.addLocalSpan(&.{ acc, a, b, result, out }),
-        .body = call,
+        .body = .some(call),
         .ret_layout = .str,
     }, .none);
 
@@ -563,9 +563,9 @@ test "str append keeps the source's own join when rooting a direct join return" 
     // `ret str_concat(str_append(acc, left), right)`: the join onto the
     // accumulator is the consumer's, the source's own join stays spelled.
     var ops: [4]LowLevelOp = undefined;
-    const variant_ops = try testLowLevelOps(&store, store.getProcSpec(rewritten.proc).body.?, &ops);
+    const variant_ops = try testLowLevelOps(&store, store.getProcSpec(rewritten.proc).body.get().?, &ops);
     try std.testing.expectEqualSlices(LowLevelOp, &.{ .str_append, .str_concat }, variant_ops);
-    const variant_body = store.getCFStmtImmediate(store.getProcSpec(rewritten.proc).body.?).assign_low_level;
+    const variant_body = store.getCFStmtImmediate(store.getProcSpec(rewritten.proc).body.get().?).assign_low_level;
     const variant_args = store.getLocalSpan(store.getProcSpec(rewritten.proc).args);
     try std.testing.expectEqual(GuardedList.at(variant_args, 0), GuardedList.at(store.getLocalSpan(variant_body.args), 0));
 }
@@ -605,7 +605,7 @@ test "str append makes one variant per source and join" {
         .identity = LIR.ProcIdentity.forTest(9),
         .args = try store.addLocalSpan(&.{ acc, x, y }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, y, first_result, second_result, mid, out }),
-        .body = first_call,
+        .body = .some(first_call),
         .ret_layout = .str,
     }, .none);
 
@@ -620,6 +620,6 @@ test "str append makes one variant per source and join" {
     try std.testing.expect(first.proc != second.proc);
 
     var ops: [4]LowLevelOp = undefined;
-    try std.testing.expectEqualSlices(LowLevelOp, &.{.str_concat}, try testLowLevelOps(&store, store.getProcSpec(first.proc).body.?, &ops));
-    try std.testing.expectEqualSlices(LowLevelOp, &.{.str_append}, try testLowLevelOps(&store, store.getProcSpec(second.proc).body.?, &ops));
+    try std.testing.expectEqualSlices(LowLevelOp, &.{.str_concat}, try testLowLevelOps(&store, store.getProcSpec(first.proc).body.get().?, &ops));
+    try std.testing.expectEqualSlices(LowLevelOp, &.{.str_append}, try testLowLevelOps(&store, store.getProcSpec(second.proc).body.get().?, &ops));
 }

@@ -147,7 +147,7 @@ pub fn encode(allocator: Allocator, pieces: *const Pieces) Allocator.Error![]u8 
             try writer.byte(formByte(ref.form));
             try writer.word(ref.target);
             try writer.word(ref.delta);
-            try writer.word(ref.veneer orelse std.math.maxInt(u32));
+            try writer.word(ref.veneer.get() orelse std.math.maxInt(u32));
         }
         try writer.word(@intCast(excerpt.symbolic_refs.len));
         for (excerpt.symbolic_refs) |ref| {
@@ -272,7 +272,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
                 .form = try readForm(&reader),
                 .target = try reader.word(),
                 .delta = try reader.word(),
-                .veneer = optionalWord(try reader.word()),
+                .veneer = .of(optionalWord(try reader.word())),
             };
             if (ref.target >= excerpt_count) return error.MalformedPieces;
         }
@@ -587,7 +587,7 @@ test "pieces round-trip through their encoding" {
         .code = try sa.dupe(u8, "\x01\x02\x03\x04"),
         .entry = 0,
         .frame = .{ .prologue_size = 4, .stack_alloc = 16, .frame_size = 32, .callee_saved_mask = 3, .epilogue_offset = 2, .uses_frame_pointer = true },
-        .refs = try sa.dupe(CodeExcerpt.Reference, &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0, .veneer = null }}),
+        .refs = try sa.dupe(CodeExcerpt.Reference, &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0, .veneer = .none }}),
         .symbolic_refs = try sa.dupe(CodeExcerpt.SymbolicReference, &.{.{ .site = 2, .form = .addr, .target = .{ .rc_helper = try sa.dupe(u8, "roc__helper") } }}),
         .lines = try sa.dupe(CodeExcerpt.LineEntry, &.{.{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 1 }, .region = base.Region.from_raw_offsets(5, 9) }}),
         .failure_sites = try sa.dupe(CodeExcerpt.FailureSite, &.{.{ .offset = 4, .meaning = .checked_error }}),

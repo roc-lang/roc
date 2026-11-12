@@ -477,7 +477,7 @@ fn programSize(result: *lir.Program.Result) std.mem.Allocator.Error!ProgramSize 
         size.widest_frame = @max(size.widest_frame, proc.frame_locals.len);
         // Initializer procedures count too: moving per-element code out of
         // the entrypoint still makes every later pass process it.
-        const body = proc.body orelse continue;
+        const body = proc.body.get() orelse continue;
         var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
         defer statements.deinit();
         while (try statements.next()) |_| size.statements += 1;

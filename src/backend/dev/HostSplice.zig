@@ -151,8 +151,8 @@ pub const HostSplice = struct {
             try names.put(self.allocator, relocation.name, {});
         };
         for (materialized) |item| for (item.relocations) |relocation| {
-            if (relocation.rc_helper != null or relocation.callable_capture_offset == null) continue;
-            const proc = relocation.procedure orelse continue;
+            if (relocation.rc_helper != null or relocation.callable_capture_offset == .none) continue;
+            const proc = relocation.procedure.get() orelse continue;
             if (codegen.compiledProcSymbol(proc) != null) continue;
             try names.put(self.allocator, relocation.target_symbol_name, {});
         };
@@ -543,7 +543,7 @@ test "CTFE external references include carried data and frozen callbacks but exc
         .name = store.freshSyntheticSymbol(),
         .identity = lir.ProcIdentity.forTest(1),
         .args = lir.LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .i64,
     }, .none);
     var codegen = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, .default);
@@ -572,8 +572,8 @@ test "CTFE external references include carried data and frozen callbacks but exc
             .offset = 0,
             .target_symbol_name = "frozen_callback",
             .kind = .function_pointer,
-            .callable_capture_offset = 8,
-            .procedure = uncompiled,
+            .callable_capture_offset = .some(8),
+            .procedure = .some(uncompiled),
         }},
     }};
     var layout = try StaticDataImage.Layout.plan(allocator, &frozen, .{});
