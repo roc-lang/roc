@@ -565,7 +565,7 @@ const StaticInitializerMachine = struct {
             .nominal => unreachable, // unwrapStoredNominal stepped past every nominal layer
             .zst => return try self.rememberStored(key, try self.newValue(request.layout_idx)),
             .scalar => |scalar| return try self.rememberStored(key, try self.storedScalar(scalar, request.layout_idx)),
-            .str => |str| return try self.rememberStored(key, try self.storedStr(store_.strBytes(str), request.layout_idx)),
+            .str => |str| return try self.rememberStored(key, try self.storedStr(store_.strBytes(str.bytes), str.capacity, request.layout_idx)),
             .list => |list| {
                 const elem_plan = switch (plans[@backingInt(request.plan)]) {
                     .list => |elem| elem,
@@ -798,25 +798,57 @@ const StaticInitializerMachine = struct {
         return value;
     }
 
-    /// A string holding `bytes`: in its descriptor when short enough, else
-    /// in an allocation of its own.
-    fn storedStr(self: *StaticInitializerMachine, bytes: []const u8, layout_idx: layout.Idx) Allocator.Error!*SymbolicValue {
+    /// A string holding `bytes` with room for `capacity`: in its descriptor
+    /// when the capacity fits there, else in an allocation of its own. The
+    /// allocation holds the bytes alone: the descriptor records the capacity,
+    /// which the first copy of the string allocates
+    /// (`builtins.str.RocStr.copyCapacity`).
+    fn storedStr(self: *StaticInitializerMachine, bytes: []const u8, capacity: u64, layout_idx: layout.Idx) Allocator.Error!*SymbolicValue {
+        if (capacity < bytes.len) staticDataInvariant("stored string capacity was below its length");
         const result = try self.newValue(layout_idx);
         const roc_str_size = self.word_size * builtins.str.RocStr.word_count;
-        if (bytes.len < roc_str_size) {
+        if (capacity < roc_str_size) {
             @memcpy(result.bytes[0..bytes.len], bytes);
             result.bytes[roc_str_size - 1] = builtins.str.RocStr.smallStrFlagByte(bytes.len);
             return result;
         }
+        const encoded = builtins.str.RocStr.encodeCapacityForWidth(capacity);
+        if (encoded > self.targetWordMax() or builtins.str.RocStr.decodeCapacityForWidth(encoded) != capacity) return error.OutOfMemory;
+        // A string with no bytes still points into an allocation, whose
+        // static refcount is what keeps the runtime from writing through it.
         const allocation = try self.addAllocation(.u8, bytes.len, self.word_size, false, null);
         @memcpy(allocation.payload.bytes, bytes);
         try result.relocations.append(self.allocator(), .{
             .offset = 0,
             .target = .{ .allocation = allocation.id },
         });
-        self.writeTargetWord(result.bytes, self.word_size, builtins.str.RocStr.encodeCapacityForWidth(bytes.len));
+        self.writeTargetWord(result.bytes, self.word_size, encoded);
         self.writeTargetWord(result.bytes, self.word_size * 2, bytes.len);
         return result;
+    }
+
+    /// The bytes of the string descriptor `value`.
+    fn symbolicStrBytes(self: *const StaticInitializerMachine, value: *const SymbolicValue) []const u8 {
+        const roc_str_size = self.word_size * builtins.str.RocStr.word_count;
+        if (value.bytes.len != roc_str_size) staticDataInvariant("static string had a non-string size");
+        const flag = value.bytes[roc_str_size - 1];
+        if (flag & builtins.str.RocStr.small_str_flag != 0) return value.bytes[0..builtins.str.RocStr.smallStrLenFromFlagByte(flag)];
+        const len: usize = @intCast(self.readTargetWord(value.bytes, self.word_size * 2));
+        for (value.relocations.items) |relocation| {
+            if (relocation.offset != 0) continue;
+            const allocation = switch (relocation.target) {
+                .allocation => |id| self.allocations.items[@backingInt(id)],
+                .frozen_symbol, .procedure, .rc_helper => staticDataInvariant("a static string did not point into an allocation"),
+            };
+            const start: usize = @intCast(relocation.addend);
+            return allocation.payload.bytes[start..][0..len];
+        }
+        staticDataInvariant("a static big string had no bytes pointer");
+    }
+
+    fn targetWordMax(self: *const StaticInitializerMachine) u64 {
+        const unused_bits: std.math.Log2Int(u64) = @intCast((8 - self.word_size) * 8);
+        return @as(u64, std.math.maxInt(u64)) >> unused_bits;
     }
 
     const StoredItems = struct {
@@ -860,10 +892,8 @@ const StaticInitializerMachine = struct {
     /// Record `capacity` in the list descriptor `value`. A capacity the
     /// target's word cannot encode is past what that target can address.
     fn writeListCapacity(self: *StaticInitializerMachine, value: *SymbolicValue, capacity: u64) Allocator.Error!void {
-        const unused_bits: std.math.Log2Int(u64) = @intCast((8 - self.word_size) * 8);
-        const max_word = @as(u64, std.math.maxInt(u64)) >> unused_bits;
         const encoded = builtins.list.RocList.encodeCapacityForWidth(capacity);
-        if (encoded > max_word or builtins.list.RocList.decodeCapacityForWidth(encoded) != capacity) return error.OutOfMemory;
+        if (encoded > self.targetWordMax() or builtins.list.RocList.decodeCapacityForWidth(encoded) != capacity) return error.OutOfMemory;
         self.writeTargetWord(value.bytes, self.word_size * 2, encoded);
     }
 
@@ -1539,6 +1569,14 @@ const StaticInitializerMachine = struct {
             try self.ownListItems(result, abi, @intCast(len));
             try self.writeListCapacity(result, std.math.add(u64, len, spare) catch return error.OutOfMemory);
             return result;
+        }
+        // A restored string with spare capacity, likewise
+        // (`constStrWithSpareCapacity`).
+        if (op == .str_reserve) {
+            if (args.len != 2) staticDataInvariant("static initializer str_reserve arity differed from two");
+            const bytes = self.symbolicStrBytes(local(locals, GuardedList.at(args, 0)));
+            const spare = self.readU64(local(locals, GuardedList.at(args, 1)));
+            return self.storedStr(bytes, std.math.add(u64, bytes.len, spare) catch return error.OutOfMemory, target_layout);
         }
         if (op != .box_box) {
             staticDataInvariant("non-construction low-level operation reached static initializer materialization");

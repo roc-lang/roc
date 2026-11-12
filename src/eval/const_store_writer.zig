@@ -26,7 +26,7 @@ const RocStr = builtins.str.RocStr;
 const RuntimeValueAddress = struct {
     ptr: usize,
     len: usize,
-    /// A list's evaluated capacity, which its stored node records. Two views
+    /// A list's or string's evaluated capacity, which its stored node records. Two views
     /// of one allocation with the same length can differ in it: a seamless
     /// slice has none beyond its window.
     capacity: u64,
@@ -788,13 +788,21 @@ pub const Writer = struct {
         };
     }
 
-    /// A string is stored as exactly its own bytes. How the evaluator's
-    /// allocations share bytes between strings is runtime representation,
-    /// which never enters the ConstStore; equal bytes share one blob because
-    /// `addBlobData` interns by content.
+    /// A string is stored as exactly its own bytes and the capacity it was
+    /// evaluated with. How the evaluator's allocations share bytes between
+    /// strings is runtime representation, which never enters the ConstStore;
+    /// equal bytes share one blob because `addBlobData` interns by content.
     fn storeStr(self: *Writer, value: Value) Allocator.Error!checked.ConstValue {
         const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
-        return .{ .str = try self.storeBytes(roc_str.asSlice()) };
+        return .{ .str = .{ .bytes = try self.storeBytes(roc_str.asSlice()), .capacity = strCapacity(roc_str) } };
+    }
+
+    /// The capacity the string was evaluated with. One held inline in its
+    /// descriptor has no capacity of its own beyond its bytes, and neither
+    /// does a seamless slice, whose capacity is its window.
+    fn strCapacity(roc_str: *const RocStr) u64 {
+        if (roc_str.isSmallStr()) return roc_str.len();
+        return roc_str.getCapacity();
     }
 
     fn storeBytes(self: *Writer, bytes: []const u8) Allocator.Error!const_store.ConstStr {
@@ -1122,7 +1130,11 @@ pub const Writer = struct {
         };
         return if (ptr) |raw| .{
             .ptr = raw,
-            .capacity = if (layout_value.tag == .list) self.listCapacity(layout_idx, value) else 0,
+            .capacity = switch (layout_value.tag) {
+                .list => self.listCapacity(layout_idx, value),
+                .scalar => if (layout_value.getScalar().tag == .str) strCapacity(@ptrCast(@alignCast(value.ptr))) else 0,
+                .hole, .dynamic, .box, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => 0,
+            },
             .len = switch (layout_value.tag) {
                 .list => blk: {
                     const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
@@ -1360,8 +1372,8 @@ test "const store writer pointer memoization is scoped to one root" {
     const second_value = artifact.const_store.get(second.const_node);
     try testing.expect(first_value == .str);
     try testing.expect(second_value == .str);
-    try testing.expectEqualStrings(first_bytes, artifact.const_store.strBytes(first_value.str));
-    try testing.expectEqualStrings(second_bytes, artifact.const_store.strBytes(second_value.str));
+    try testing.expectEqualStrings(first_bytes, artifact.const_store.strBytes(first_value.str.bytes));
+    try testing.expectEqualStrings(second_bytes, artifact.const_store.strBytes(second_value.str.bytes));
 }
 
 test "const store writer stores each string's own bytes when strings share an allocation" {
@@ -1413,7 +1425,7 @@ test "const store writer stores each string's own bytes when strings share an al
     for (expected, nodes) |expected_piece, node| {
         const piece = artifact.const_store.get(node);
         try testing.expect(piece == .str);
-        try testing.expectEqualStrings(expected_piece, artifact.const_store.strBytes(piece.str));
+        try testing.expectEqualStrings(expected_piece, artifact.const_store.strBytes(piece.str.bytes));
     }
 }
 
@@ -1509,7 +1521,7 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const scalar_bytes = list_value.list.items.packed_bytes;
     try testing.expectEqual(@as(u32, 20 * 1024), scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u8, scalar_bytes.element);
-    try testing.expectEqual(str_value.str, scalar_bytes.bytes);
+    try testing.expectEqual(str_value.str.bytes, scalar_bytes.bytes);
     try testing.expectEqualSlices(u8, bytes, artifact.const_store.blobData(scalar_bytes.bytes));
 
     const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.items.packed_bytes;
@@ -1525,7 +1537,7 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const stored_empty_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_empty_list) });
     try testing.expect(artifact.const_store.get(stored_empty_list.const_node).list.items == .empty);
     try testing.expectEqual(@as(u64, bytes.len), artifact.const_store.get(stored_empty_list.const_node).list.capacity);
-    try testing.expectEqual(str_value.str, u16_scalar_bytes.bytes);
+    try testing.expectEqual(str_value.str.bytes, u16_scalar_bytes.bytes);
 }
 
 /// Publish a real pending frame with an independently owned recipe, without

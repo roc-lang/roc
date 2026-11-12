@@ -5781,11 +5781,13 @@ const StaticDataUse = struct {
     ty: Type.TypeId,
 };
 
-/// A restored string lowers as its own bytes (see `finishConstAtNode`), so
-/// whether it needs target storage is a function of the string alone, as it
-/// is for a string read from a completed evaluation.
-fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstStr) u64 {
-    return view.const_store.strBytes(str).len;
+/// A restored string lowers as its own bytes and capacity (see
+/// `finishConstAtNode`), so whether it needs target storage is a function of
+/// the string alone, as it is for a string read from a completed evaluation:
+/// a string fits its descriptor when its capacity does.
+fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstString) u64 {
+    _ = view;
+    return str.capacity;
 }
 
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
@@ -6388,6 +6390,16 @@ const Builder = struct {
         const amount = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(Ast.ExprData, .{ .u64 = spare }) });
         const list = items orelse return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.program.addExprSpan(&.{amount}) } };
         return .{ .low_level = .{ .op = .list_reserve, .args = try self.program.addExprSpan(&.{ list, amount }) } };
+    }
+
+    /// A stored string's restored form when it has `spare` capacity beyond
+    /// its bytes: the reservation it was evaluated with, applied to its
+    /// literal. A static-data initializer evaluates this into the
+    /// descriptor's capacity; anywhere else it is the string operation the
+    /// constant's own code ran.
+    fn constStrWithSpareCapacity(self: *Builder, literal: Ast.ExprId, spare: u64) Allocator.Error!ConstExprData {
+        const amount = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(Ast.ExprData, .{ .u64 = spare }) });
+        return .{ .low_level = .{ .op = .str_reserve, .args = try self.program.addExprSpan(&.{ literal, amount }) } };
     }
 
     fn addExpr(self: *Builder, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
@@ -23079,6 +23091,16 @@ const BodyContext = struct {
     /// to the empty list when `items` is null. A static-data initializer
     /// evaluates this into the descriptor's capacity; anywhere else it is
     /// the list operation the constant's own code ran.
+    /// A stored string's restored form when it has `spare` capacity beyond
+    /// its bytes: the reservation it was evaluated with, applied to its
+    /// literal. A static-data initializer evaluates this into the
+    /// descriptor's capacity; anywhere else it is the string operation the
+    /// constant's own code ran.
+    fn constStrWithSpareCapacity(self: *BodyContext, literal: DraftExprId, spare: u64) Allocator.Error!ConstExprData {
+        const amount = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(BodyExprData, .{ .u64 = spare }) });
+        return .{ .low_level = .{ .op = .str_reserve, .args = try self.addExprSpan(&.{ literal, amount }) } };
+    }
+
     fn constListWithSpareCapacity(self: *BodyContext, items: ?DraftExprId, spare: u64) Allocator.Error!ConstExprData {
         const amount = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(BodyExprData, .{ .u64 = spare }) });
         const list = items orelse return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.addExprSpan(&.{amount}) } };
@@ -48485,9 +48507,13 @@ const BodyContext = struct {
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(BodyExprData, scalar),
-                    .str => |str| .{ .str_lit = try self.addStringLiteral(
-                        store_view.const_store.strBytes(str),
-                    ) },
+                    .str => |str| str: {
+                        const bytes = store_view.const_store.strBytes(str.bytes);
+                        const literal: BodyExprData = .{ .str_lit = try self.addStringLiteral(bytes) };
+                        const spare = str.capacity - bytes.len;
+                        if (spare == 0) break :str literal;
+                        break :str try self.constStrWithSpareCapacity(try self.addExprWithTypeCell(cell, literal), spare);
+                    },
                     .crash => |str| .{ .crash = try self.addStringLiteral(
                         store_view.const_store.strBytes(str),
                     ) },
@@ -70421,9 +70447,14 @@ fn constRestoreData(
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
-        .str => |str| .{ .str_lit = try emit.addStringLiteral(
-            store_view.const_store.strBytes(str),
-        ) },
+        .str => |str| blk: {
+            const Data = @TypeOf(restorer.*).ConstExprData;
+            const bytes = store_view.const_store.strBytes(str.bytes);
+            const literal: Data = .{ .str_lit = try emit.addStringLiteral(bytes) };
+            const spare = str.capacity - bytes.len;
+            if (spare == 0) break :blk literal;
+            break :blk try restorer.constStrWithSpareCapacity(try restorer.addExpr(.{ .ty = frame.ty, .data = literal }), spare);
+        },
         .crash => |str| .{ .crash = try emit.addStringLiteral(
             store_view.const_store.strBytes(str),
         ) },
@@ -70733,7 +70764,7 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .str => |str| @intCast(view.const_store.strBytes(str).len),
+        .str => |str| @intCast(view.const_store.strBytes(str.bytes).len),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
 }
@@ -70741,7 +70772,7 @@ fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
 fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .str => |str| view.const_store.strBytes(str),
+        .str => |str| view.const_store.strBytes(str.bytes),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
 }

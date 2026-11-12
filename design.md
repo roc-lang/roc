@@ -1886,9 +1886,10 @@ values, including empty lists, records, tuples, payload-bearing tags, boxes,
 and captured functions, read immutable stored
 data. There is no construction tree, runtime constructor, or fresh alternative
 for a completed value. Mutation uses the normal copy-on-write operation.
-A list's capacity is part of the frozen value (Static Lists Keep Their
-Capacity): its descriptor records the capacity the list was evaluated with,
-while its allocation stores the items alone, with no spare slots.
+A list's or string's capacity is part of the frozen value (Static Lists And
+Strings Keep Their Capacity): its descriptor records the capacity the value
+was evaluated with, while its allocation stores the items alone, with no
+spare slots.
 The same rule applies when restoring values from the checked module cache.
 
 Static data can refer directly to a ConstStore node with its type plan, or
@@ -23693,8 +23694,9 @@ cleared and refilled each iteration keeps both its allocation and its unique
 birth. Modeled as a sublist, the clear left the chain unborn, the parameter it
 emptied borrowed, and the retained parameter's clear returned an empty list
 with no capacity. A static list has no allocation the program may keep, so
-clearing one allocates the capacity its descriptor records (Static Lists Keep
-Their Capacity); a sublist of one never does, because a view reserves nothing.
+clearing one allocates the capacity its descriptor records (Static Lists And
+Strings Keep Their Capacity); a sublist of one never does, because a view
+reserves nothing.
 
 An append-only promoted loop versions on its slack instead. The fill limit
 answers whether the next append fits; a bound on the loop's remaining
@@ -25169,14 +25171,21 @@ const ConstValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    string: ConstStr,
-    list: union(enum) {
-        nodes: Span(ConstNodeId),
-        scalar_bytes: struct {
-            bytes: ConstBlobDataId,
-            len: u32,
-            item: ConstPackedScalar,
+    string: struct {
+        bytes: ConstStr,
+        capacity: u64,
+    },
+    list: struct {
+        items: union(enum) {
+            nodes: Span(ConstNodeId),
+            scalar_bytes: struct {
+                bytes: ConstBlobDataId,
+                len: u32,
+                item: ConstPackedScalar,
+            },
+            empty,
         },
+        capacity: u64,
     },
     tuple: Span(ConstNodeId),
     record: Span(ConstField),
@@ -25208,12 +25217,12 @@ const ConstStr = ConstBlobDataId;
 ```
 
 A stored string or packed list is a whole blob, never a view into a longer
-one. How evaluation's allocations shared bytes (a seamless slice, or a string
-that kept a longer allocation's capacity) is runtime representation and does
-not enter `ConstStore`; the writer stores each string's own bytes, and equal
-contents share a blob because interning is by content. A list's capacity is
-not representation: `ConstList.capacity` records it beside the items, which
-may be nodes, a packed blob, or nothing (Static Lists Keep Their Capacity).
+one. How evaluation's allocations shared bytes (a seamless slice of a longer
+allocation) is runtime representation and does not enter `ConstStore`; the writer stores each string's own bytes, and equal
+contents share a blob because interning is by content. Capacity is not
+representation: `ConstList.capacity` records a list's beside its items, which
+may be nodes, a packed blob, or nothing, and `ConstString.capacity` records a
+string's beside its blob (Static Lists And Strings Keep Their Capacity).
 Strings and packed scalar lists intern into the same exact-content namespace.
 Packed multi-byte scalars use little-endian checked-value bytes;
 this is target-independent `ConstStore` data, not a captured host allocation or
@@ -25545,8 +25554,8 @@ optimization preference. There is no fresh-construction alternative, including
 for a consumer that may later update a list. Required runtime operations retain
 their ordinary meaning, but cannot change a constant read into reconstruction.
 The copy a later update makes is the ordinary copy-on-write copy, and it is
-where a list's recorded capacity is allocated (Static Lists Keep Their
-Capacity).
+where a list's or string's recorded capacity is allocated (Static Lists And
+Strings Keep Their Capacity).
 All nested storage and callable captures are emitted as immutable target data
 with explicit relocations. Scalars may be immediate literals. Target-data
 encoding happens in the compiler and emits no runtime initializer.
@@ -25554,12 +25563,13 @@ A product whose committed layout is zero-sized has no stored field offsets.
 Lowering represents its field reads as zero-sized value aliases, including
 when the product comes from an immutable slot.
 
-### Static Lists Keep Their Capacity
+### Static Lists And Strings Keep Their Capacity
 
 Compile-time evaluation must not change how much a program allocates. A list
 built by `List.with_capacity(5000)` and then filled reserves once whether the
 compiler evaluated the `with_capacity` or the program did, so capacity is part
-of a completed list's value, and every form the value takes records it:
+of a completed list's or string's value, and every form the value takes
+records it. For a list:
 
 - `ConstStore` stores each list's `capacity` beside its items
   (`ConstList.capacity`, never below the length), and two lists that differ
@@ -25596,6 +25606,23 @@ A literal has no spare capacity, so its descriptor's capacity is its length
 and its copies are sized as they would be for a uniquely owned list of that
 length. Capacity is counted in items as the evaluation left it; a seamless
 slice's capacity is its window.
+
+Strings follow the same rule with one addition, because a string may be held
+inline in its descriptor. `ConstStore` stores each string's capacity beside
+its bytes (`ConstString.capacity`); a string that was inline, or a seamless
+slice, when its evaluation finished has none beyond its length. A frozen
+string is inline exactly when its capacity fits the target's inline string,
+so a string without spare capacity is inline whenever its bytes fit, and
+`Str.with_capacity(1000)` freezes as an allocated string of no bytes whose
+descriptor records the thousand. A stored string with spare capacity restores
+as its literal under `str_reserve`, which a static-data initializer evaluates
+into the descriptor, and whether its read needs target storage is decided by
+its capacity rather than its length (`StaticDataStorage.string_backing`). A
+copy of a static string keeps the recorded capacity
+(`RocStr.copyCapacity`), in an append, a reserve, or an in-place edit's copy.
+`Str.reserve` hands back its argument only when nothing else holds it: a
+static string's descriptor may record enough capacity for the request, but
+it has no room behind it.
 
 Deriving capacity at the read instead, by having ARC choose a fresh
 construction where a value reaches an updating operation, is rejected: it

@@ -58,7 +58,7 @@ test "issue 12722: top-level constant stores split_on pieces of a compile-time h
         for (expected, nodes) |expected_piece, node| {
             const piece = artifact.const_store.get(node);
             try std.testing.expect(piece == .str);
-            try std.testing.expectEqualStrings(expected_piece, artifact.const_store.blobData(piece.str));
+            try std.testing.expectEqualStrings(expected_piece, artifact.const_store.blobData(piece.str.bytes));
         }
     }
     try std.testing.expectEqual(@as(usize, 1), list_constants);

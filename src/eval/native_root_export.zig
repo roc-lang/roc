@@ -224,7 +224,12 @@ const Builder = struct {
     fn string(self: *Builder, job: Job) Allocator.Error!void {
         const str = job.source.read(builtins.str.RocStr);
         const slice = str.asSlice();
-        if (builtins.str.RocStr.fitsInSmallStr(slice.len)) {
+        // The descriptor keeps the capacity the string was evaluated with;
+        // the allocation holds the bytes alone. A string held inline has no
+        // capacity of its own beyond its bytes, and a seamless slice's is its
+        // window, so either is inline again whenever its bytes fit.
+        const capacity = if (str.isSmallStr()) slice.len else str.getCapacity();
+        if (builtins.str.RocStr.fitsInSmallStr(capacity)) {
             var small = builtins.str.RocStr.fromSliceSmall(slice);
             @memcpy(self.graph.bytes(job.dest, @sizeOf(builtins.str.RocStr)), std.mem.asBytes(&small));
             return;
@@ -238,7 +243,7 @@ const Builder = struct {
         }, slice.len, 1, false, null);
         if (result.fresh) @memcpy(self.graph.bytes(result.dest, slice.len), slice);
         try self.graph.relocate(job.dest, result.dest);
-        try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(slice.len));
+        try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(capacity));
         try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "length")), slice.len);
     }
 

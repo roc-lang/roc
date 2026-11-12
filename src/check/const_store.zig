@@ -609,6 +609,16 @@ pub const FnDef = union(enum) {
 /// so equal strings share it and no string is a view into a longer one.
 pub const ConstStr = ConstBlobDataId;
 
+/// A string: its bytes and the capacity it was evaluated with.
+pub const ConstString = struct {
+    bytes: ConstStr,
+    /// How many bytes the string had room for when its evaluation finished,
+    /// never fewer than it holds. A string held inline in its descriptor, or
+    /// viewing another string's bytes, has none beyond its length. Capacity
+    /// is part of the value, as a list's is (`ConstList.capacity`).
+    capacity: u64,
+};
+
 /// Packed list with little-endian scalar leaves in semantic field order.
 /// Product bytes omit padding. `blobData(bytes).len == len * byteWidth()`.
 pub const ConstPackedList = struct {
@@ -663,7 +673,7 @@ pub const ConstValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    str: ConstStr,
+    str: ConstString,
     list: ConstList,
     box: ConstNodeId,
     tuple: []const ConstNodeId,
@@ -698,7 +708,7 @@ const StoredValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    str: ConstStr,
+    str: ConstString,
     list: struct {
         items: union(enum) {
             nodes: ConstRange,
@@ -1289,7 +1299,10 @@ pub const ConstStore = struct {
             .pending => constStoreInvariant("cannot fill a const node with a pending value"),
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
-            .str => |s| .{ .str = s },
+            .str => |s| blk: {
+                if (s.capacity < self.blobData(s.bytes).len) constStoreInvariant("string capacity is below its length");
+                break :blk .{ .str = s };
+            },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -1644,7 +1657,7 @@ pub const ConstStore = struct {
                 },
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
-                .str => |str| if (!sameBytes(self.blobData(str), other.blobData(right.str))) return false,
+                .str => |str| if (str.capacity != right.str.capacity or !sameBytes(self.blobData(str.bytes), other.blobData(right.str.bytes))) return false,
                 .crash => |str| if (!sameBytes(self.blobData(str), other.blobData(right.crash))) return false,
                 .checked_error => |str| if (!sameBytes(self.blobData(str), other.blobData(right.checked_error))) return false,
                 .box => |payload| try pending.append(self.allocator, .{ .left = payload, .right = right.box }),
@@ -1727,7 +1740,11 @@ pub const ConstStore = struct {
                 .pending, .zst => {},
                 .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
                 .scalar => |scalar| hashScalar(hasher, scalar),
-                inline .str, .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
+                .str => |str| {
+                    hasher.update(std.mem.asBytes(&str.capacity));
+                    hashBytes(hasher, self.blobData(str.bytes));
+                },
+                inline .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
                 .box => |payload| try pending.append(self.allocator, payload),
                 .nominal => |nominal| {
                     hasher.update(&context.moduleDigest(nominal.named_type.module));
@@ -1878,7 +1895,10 @@ pub const ConstStore = struct {
                 switch (self.get(node.id)) {
                     .pending => constStoreInvariant("completed store contains a pending node"),
                     .zst, .scalar => {},
-                    .str, .crash, .checked_error => |str| {
+                    .str => |str| {
+                        _ = self.strBytes(str.bytes);
+                    },
+                    .crash, .checked_error => |str| {
                         _ = self.strBytes(str);
                     },
                     .fn_value => |fn_id| try pending.append(self.allocator, .{ .fn_value = .{ .id = fn_id, .delayed_depth = node.delayed_depth } }),
@@ -1972,7 +1992,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const sd = try store.addBlobData("hello world");
     try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
     const hello = try store.addBlobData("hello");
-    const str = try store.append(.{ .str = hello });
+    const str = try store.append(.{ .str = .{ .bytes = hello, .capacity = 40 } });
     const packed_list = try store.append(.{ .list = .{ .items = .{ .packed_bytes = .{
         .bytes = sd,
         .len = 11,
@@ -2088,7 +2108,8 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqualStrings("Ok", loaded_tag.tag_name);
     try std.testing.expectEqualSlices(ConstNodeId, &.{a}, loaded_tag.payloads);
     // String backing
-    try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
+    try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str.bytes));
+    try std.testing.expectEqual(@as(u64, 40), loaded.get(str).str.capacity);
     const loaded_packed = loaded.get(packed_list).list.items.packed_bytes;
     try std.testing.expectEqual(@as(u64, 64), loaded.get(packed_list).list.capacity);
     try std.testing.expectEqual(sd, loaded_packed.bytes);
