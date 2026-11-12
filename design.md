@@ -5595,6 +5595,11 @@ were bound. Completed independent roots are
 read as stored values and never evaluated again. A pairing is never serialized
 into the platform's checked module.
 
+The pairing recomputes exact-alias forwarding after binding required values,
+before classifying calls or scheduling roots. That forwarding is a changed
+pairing column and survives a pairing-cache hit; borrowing the unbound
+platform's forwarding would incorrectly demand a computed callable.
+
 ### Type Content Keys
 
 A type content key is the content identity of a type: alpha-invariant over
@@ -6464,6 +6469,10 @@ type identity key includes them; the resulting `CheckedNominalDeclaration` takes
 the same variables as formals after its declared ones (`context_len` of
 them). The declaration's backing names those variables directly, so binding
 the formals to a use's arguments substitutes them like any other formal.
+The backing walk binds each formal by its binder annotation, never by its
+name: in `Pair(a) := [Pair(Captured, a)]` inside a body over `a`, the
+backing's `a` resolves to the enclosing function's binder, so it stays that
+context variable rather than becoming the same-named parameter.
 Monotype's declaration scopes and its nominal caches, keyed by arguments,
 therefore tell `Wrap` at `U64` from `Wrap` at `Str`, and give each its own
 methods' specializations, with no rule of their own; Boxy reads the same
@@ -21295,6 +21304,11 @@ not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
+
+An erased argument product's recorded slot boundaries are authoritative for
+both the start and width of each field read. Its non-owning prefix and scalar
+fields may occupy zero slots; their standalone layouts cannot supply widths in
+that product's coordinate system.
 
 ARC uses this explicit shape for the same field-take and residual-release
 rules as concrete products. Generic record field reads copy representation
