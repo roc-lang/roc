@@ -24749,9 +24749,18 @@ compiled host and builtin code points its frame pointer into the middle of its
 frame rather than at a saved-frame-pointer record, so the host unwinds those
 frames with the system unwind tables until it reaches generated code, then
 walks the generated frame-pointer chain from there. A stack overflow is
-caught by the guard-page handler, which records the faulting program counter,
-frame pointer, and stack pointer before escaping; the host records the counter
-when it is in generated code and walks the chain from the frame pointer.
+caught by the guard-page handler, which records the faulting frame pointer and
+stack pointer before escaping; the host walks the chain from the frame
+pointer. The faulting program counter is not part of an overflow's point:
+which instruction of the innermost frame touches the guard first depends on
+where the guard falls within that frame (a callee's frame-record push, a
+store to one of its slots, or an x86_64 `call` pushing its return address),
+so an overflow is located at the innermost generated call on the chain: the
+call that entered the innermost frame whose record was in place when the
+stack ran out. Every
+frame of a self-recursive procedure but the outermost was entered by its
+recursive call, so its overflow is reported at that call wherever in the
+frame the guard is hit.
 
 Compile-time code runs on a dedicated fixed stack, the evaluation stack
 (`base.eval_stack`), never on the stack of whichever worker picked the root up.
@@ -24768,9 +24777,8 @@ the system unwinder all read a stack's extent from the thread's TEB, and
 the stack pointer, together with the fiber-local storage the C runtime keeps
 its per-thread state in. Every root starts at the same top, the same distance
 above the guard, with no compiler frames beneath the generated entry, so how
-deep a program recurses before it overflows, and the instruction that
-overflows, are a function of the program and the compiler build alone, and an
-overflow's reported position is reproducible. The crash boundary is set on the
+deep a program recurses before it overflows is a function of the program and
+the compiler build alone. The crash boundary is set on the
 evaluation stack (`CrashBoundary.run`), so the escape from a crash or an
 overflow lands there and the root returns to the thread's own stack through
 the switch it entered by. The guarded callback is explicitly never tail-called:
@@ -24783,7 +24791,7 @@ interpreter and compiled runtime programs keep their own stack handling.
 
 The evaluating program resolves the point: the meaning of the innermost call,
 and the source position of the innermost statement with a region among the
-faulting instruction's and the enclosing generated calls'. A return address
+enclosing generated calls'. A return address
 belongs to the statement of the call instruction just before it. A failure
 whose meaning is an exhaustiveness failure is the empirical failure of that
 site; every other failure is reported as a crash at its position.
