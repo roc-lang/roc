@@ -525,6 +525,15 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
+This rule has exactly one exception. For an `incref` or `decref` of a dynamic
+local, the native dev backend may read the `contains_refcounted` flag of the
+local's descriptor and skip the call to `roc_desc_incref` or `roc_desc_decref`
+when the flag is clear ("Ownership" under "Dynamic Values In LIR"). The helper
+would return at once for such a descriptor, so the skip changes no reference
+count and decides nothing: the explicit statement still fully determines what
+happens. No other backend code reads reference-counting facts, and there is no
+other exception.
+
 Walks over post-check types and values must have an explicit termination
 argument. A structure reachable after checking can be
 self-referential—a recursive nominal's backing, or the fixpoint value of a
@@ -5239,11 +5248,62 @@ quantified, exactly as it owns copies of the quantified variables.
 The rule is carried as explicit descriptor data, not by rank: such a class is
 monomorphic, so marking it generalized would make every body-local record of
 the scope look polymorphic to post-check stages. Instead, when a
-generalization boundary leaves a class it made ungeneralized and the class can
-lift (`Descriptor.liftsIntoNominal`: a record, tag union, empty record, or empty
-tag union not written in an opened nominal backing, which never lifts), it
-marks the class `DescriptorFlags.per_use_structure`, and the rank stays what
-rank adjustment computed. A class an enclosing scope made keeps its sharing:
+generalization boundary leaves a class it made ungeneralized and some use can
+change the class (`UseAbsorbers.copiedPerUse`), it marks the class
+`DescriptorFlags.per_use_structure`, and the rank stays what rank adjustment
+computed. Only a record, tag union, empty record, or empty tag union not
+written in an opened nominal backing (`Descriptor.liftsIntoNominal`) can be
+changed by a use, and only in these ways:
+
+- A use lifts an anonymous tag union into a nominal type only when the
+  declaration's backing is a tag union whose row is open or lists every tag
+  the anonymous union itself lists, which is exactly what relating the two
+  checks before it lifts.
+- A use lifts an anonymous record into a nominal type only when the
+  declaration's backing is a record whose row is open or lists every field
+  of the anonymous record it cannot absorb. A backing absorbs only an
+  optional or defaulted field, and a field whose kind is still unsettled
+  becomes one only by relating to a widening field of its name.
+- A use widens a record with an optional or defaulted field the record does
+  not hold. That field's name was written in some module, as a `?:` or
+  defaulted field of an annotation, a `.?` access, or an unset.
+- A declaration that is one of its own type variables, or that is invalid
+  (relating to which poisons the structure), can take in anything.
+
+So a structure is marked only when something the module's checking can see
+could change it. A tag union is marked when some visible declaration could
+take it in: an open tag-union backing row, a closed one listing all of the
+union's own tags, or, for an empty union, any tag-union backing. A record is
+marked when some visible declaration could take it in by the same rule over
+the fields it cannot absorb, or when some visible widening field name is
+not among its own fields. A structure nothing visible could change keeps the
+same type under every relation, so every use shares it. Only a class's own
+tags or fields are counted; a tag or field further along its row only rules
+out a lift or a widening, so leaving it out can only mark more.
+
+What a module's checking can see is collected before any binding generalizes
+(`Check.use_absorbers`). From each module the check copies types from
+(Builtin, its imports, the owners of what it imports, and a platform's
+requirement surface) it is every declaration in that module's type store,
+less the opaque ones, into which another module cannot lift, and the name of
+every optional or defaulted field of a record in that store: a field name
+written in one module reaches another only through the type stores it copies
+types from. Sealing a checked store lists those names
+(`Store.widening_names`), so a module reads each source's list rather than
+walking its records. From the module itself it is read from its syntax, since checking
+registers a declaration or an optional field only as it reaches it: every
+nominal declaration's backing, and every field name written as optional or
+defaulted in an annotation, accessed with `.?`, or unset. A backing written
+as a tag union or record is the only one of the module's own that can take
+in anonymous structure: an application or a lookup is checked as the alias or
+nominal type it names, and relating structure to a nominal type whose
+backing is not the same kind of structure never lifts. Names are compared by
+a hash of their text, as they come from several modules; a collision can
+only mark a structure that did not need it. Debug builds assert that every
+module a check copies types from was collected, that every declaration the
+module registered admits no lift its syntax did not record, and that every
+optional or defaulted field of a record in the module's store is a collected
+widening field. A class an enclosing scope made keeps its sharing:
 a weak binding's one type is still shared by every use, and a function
 returning it returns that same class. A merge keeps the mark only when both
 sides had it, so a class that joins an enclosing scope's class is shared like
@@ -5279,19 +5339,23 @@ type by descriptors.
 
 Annotation instances follow the same rule. An annotation's instance of a
 type declaration is shared by later references at the same position only
-when it is ground and free of liftable structure; only such subtrees of a
-non-ground instance are shared with the next instance. Otherwise one
+when it is ground and free of structure a use can change, by the same test;
+only such subtrees of a non-ground instance are shared with the next
+instance. Otherwise one
 definition's body, lifting its annotated result into a nominal type, would
 change every other annotation naming the same alias.
 
-The cost is one copy per use of a binding's anonymous records and tag
-unions, with their field and tag runs, and of the nodes above them.
+The cost is one copy per use of a binding's anonymous records and of the tag
+unions a visible declaration could take in, with their field and tag runs,
+and of the nodes above them.
 The accepted and rejected sides are pinned by
 `test/cli/LiftedUseLeavesOtherUses.roc`,
 `test/cli/LiftedUseLeavesOtherUsesRejected.roc`,
 `test/cli/OptionalFieldsPerUse.roc`,
-`test/cli/issue_12482_encoder_for_in_nested_function.roc`, and
-`test/cli/lifted_use_leaves_other_uses/`.
+`test/cli/issue_12482_encoder_for_in_nested_function.roc`,
+`test/cli/lifted_use_leaves_other_uses/`, and
+`src/check/test/per_use_structure_test.zig`, which pins which tag unions and
+records are copied and which are shared.
 
 ### Scheme Relations Through Unrooted Variables
 
@@ -14124,9 +14188,10 @@ Other solved-graph mutations:
   rule in Declared Backing Structure (above); the write itself never changes
   content or links classes.
 - `markPerUseStructure`—policy: Anonymous Structure Is Copied Per Use
-  (above). A generalization boundary marks each liftable class it made and
-  left ungeneralized, after rank adjustment and before anything instantiates
-  the binding. The write never changes content, rank, or links classes; scheme
+  (above). A generalization boundary marks each class it made and left
+  ungeneralized that a use can change (a record or tag union something
+  visible could lift or widen), after rank adjustment and before anything
+  instantiates the binding. The write never changes content, rank, or links classes; scheme
   classification and scheme instantiation consult it, so each use copies the
   class instead of sharing it. The accepted side (every use keeps its own
   type, and a lifting use still lifts) and the rejected side (a method of the
@@ -15055,7 +15120,11 @@ callable, since the descriptor holding it lives for the program's lifetime.
 Two descriptors of the same type may be distinct static data (one without
 override scope, one carrying a body's overrides); no consumer compares
 descriptors by identity, and equality, hashing, and inspection are defined on
-values through descriptors, never on descriptors.
+values through descriptors, never on descriptors. An override capturing such a
+descriptor is likewise distinct static data for one method: two override scopes
+merged into one descriptor agree on a nominal type when each of its methods
+enters the same procedure, and the merged scope keeps the first scope's
+callables.
 
 #### Type Tables
 
@@ -15215,13 +15284,14 @@ descriptor explicitly as an operand:
   `Box` whose payload `desc` describes, and `dyn_slot_store(dst, slot, value,
   desc)` moves the built value into it ("Recursive values" above).
 
-The native dev backend emits five of these operations inline, reading the
+The native dev backend emits seven of these operations inline, reading the
 same descriptor fields the runtime helper reads, and calls the helper only
 for the cases listed:
 
-- `dyn_copy` loads `size` and copies a 1-, 2-, 4-, 8-, or 16-byte value with
-  loads and then stores, copies nothing for size 0, and calls `roc_desc_copy`
-  for every other size.
+- `dyn_copy` loads `size` and copies a 1-, 2-, 4-, 8-, 16-, or 24-byte value
+  with loads and then stores, copies nothing for size 0, and calls
+  `roc_desc_copy` for every other size. A `set_local` of a dynamic local is
+  the same copy.
 - `dyn_list_item_addr` is the list's bytes plus `index` times `size`. A
   zero-sized item calls `roc_desc_list_item_addr`, whose address it is.
 - `dyn_field_addr` with an immediate source-field index follows nominal `child`
@@ -15235,11 +15305,18 @@ for the cases listed:
 - `list_get_unsafe`, `list_map_extract_unsafe`, and `list_move_out_unsafe`
   with an item descriptor write nothing for a zero-sized item or a list
   without bytes. Otherwise they copy the item as `dyn_copy` does.
+- `list_append_unsafe` and `list_map_write_unsafe` with an item descriptor
+  copy the item into the list's bytes as `dyn_copy` does, at the list's
+  length or at the given index, and write the list's three words to the
+  target with the length one greater for an append. A zero-sized item copies
+  nothing, and appending one writes a list with no bytes and no capacity.
+- `incref` and `decref` of a dynamic local load the descriptor's
+  `contains_refcounted` flag, do nothing when it is clear, and otherwise call
+  `roc_desc_incref` or `roc_desc_decref` ("Ownership").
 
-Every other dynamic statement, everything that allocates, and every
-reference count operation calls the runtime. The wasm backend, the LLVM
-backend, and the interpreter call the helpers for these five as well, and
-produce the same bytes.
+Every other dynamic statement and everything that allocates calls the
+runtime. The wasm backend, the LLVM backend, and the interpreter call the
+helpers for these seven as well, and produce the same bytes.
 
 A literal whose conversion depends on its instance never converts at a type
 the body does not know: its converted value is a literal argument of the
@@ -15627,8 +15704,11 @@ dynamic parameter as it treats any aggregate parameter, and no pass needs to
 know what the descriptor will say. Backends lower `incref`/`decref` of a
 dynamic local to the runtime's descriptor-guided `roc_desc_incref` and
 `roc_desc_decref`, which do nothing when the descriptor reports no refcounted
-content. Backends remain forbidden from reasoning about reference counting in
-any other way.
+content. The native dev backend reads that one flag inline and skips the call
+when the helper would do nothing. That skip is the only exception to the rule
+that backends do not reason about reference counting: it selects no helper,
+moves no statement, and infers no ownership. Backends remain forbidden from
+reasoning about reference counting in any other way.
 
 #### Host ABI
 
@@ -15668,9 +15748,10 @@ data of the program, immutable, so the runtime and the code calling it share
 nothing mutable between threads or between programs in one process.
 
 A helper that copies a value's bytes (copy, construction, adaptation, list
-item reads, writes, and sets) copies a 1-, 2-, 4-, 8-, or 16-byte value with
-one load and one store and every other size with `memmove`. Overlapping
-operands therefore copy as `memmove` copies them, whatever the size.
+item reads, writes, and sets) copies a 1-, 2-, 4-, 8-, 16-, or 24-byte value
+by loading all of it and then storing it, and every other size with `memmove`.
+Overlapping operands therefore copy as `memmove` copies them, whatever the
+size.
 
 Traversal stacks and other temporary buffers do not escape the operation
 that allocates them. In-process execution allocates these from the
@@ -22918,10 +22999,11 @@ reads of the container's slots offset by the view's first slot, so a
 consumed read through it takes those slots from the container, and its
 other uses observe its whole range. A borrowed tag union read out of a
 container is a view of its one slot: nothing reads through it except an
-ownership-complete payload view, which carries the union's whole unit, so
-it is held exactly when that payload reaches a consuming operand (the
-closure read out of a record of closures, whose captures are unwrapped and
-passed to the closure body), and it dismantles no further. Its definition copies only the
+ownership-complete payload view, which carries the union's whole unit. It is
+held when that payload reaches a consuming operand (the closure read out of a
+record of closures, whose captures are unwrapped and passed to the closure
+body), or when it dismantles through that payload view (the held tag-union
+view rule below). Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
 view's residual shell, numbered in the view's own layout. A view whose shell
@@ -22996,6 +23078,36 @@ variant, or any other occurrence of the union keeps its whole release. The
 shape this serves is a call returning `Try` of a record whose fields are moved
 out under `Ok`: without it every such field pays a retain and the whole result
 a release, on every call.
+
+A held tag-union view qualifies the same way. A borrowed tag union read out of
+a container (or out of a view the container holds) is solved as a take of its
+one slot at its definition when all of the following hold:
+
+- the container's takes apply to every emission, so the view holds the
+  union's unit wherever its take is committed. A container whose takes are
+  owned-only leaves the view borrowed
+- every occurrence of the view and of its borrowed pure aliases is a
+  discriminant read or exactly one borrowed `tag_payload_struct` view that
+  owns every refcounted byte of the union. A second payload view, a second
+  variant, a whole use, or any other occurrence leaves the view to the
+  consuming-operand rule above. A discriminant read of a view reads the tag
+  word in the representation the view's definition copied, so it observes
+  none of the container's slots
+- at least one refcounted field read through that payload view binds an owned
+  target, so holding the union can spare a retain
+
+Once the container's flow commits that take, the view's binding holds the
+union's unit and is bound once by its field read, so it is a union root: its
+payload view is the struct candidate, solved right after the container, with
+its own takes, use-point takes, and discriminant-dispatched residual release,
+and the field read is the fresh-value boundary of its take-state flow. If the
+container's flow declines the take, the view is a borrowed view again, its
+payload view dismantles nothing, and every read through it observes the
+container's slot. This is what lets a loop over
+`{ first : Dict(k, v), second : Dict(k, v), writes : U64 }` update both
+dictionaries in place: a `Dict` is a single-tag union around the record of
+its lists, and each list leaves the dying loop state by a take instead of a
+retain that the following `List.set` would have to copy for.
 
 A proc parameter solved borrowed qualifies conditionally: its takes are
 solved once against the shared ownership-neutral body but recorded as

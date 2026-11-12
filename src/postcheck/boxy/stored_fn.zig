@@ -350,10 +350,13 @@ pub const Retained = struct {
 
     /// Read the function value of the proc `proc` whose capture record is at
     /// `capture`.
+    /// Describe the function value at `capture`, stored in the constants of
+    /// the module with checked key `store_module`.
     pub fn describe(
         self: *Retained,
         allocator: Allocator,
         result: *LirProgram.Result,
+        store_module: checked.ModuleId,
         proc: LIR.LirProcSpecId,
         capture: [*]u8,
     ) Allocator.Error!Described {
@@ -362,15 +365,15 @@ pub const Retained = struct {
         defer result.* = program.result;
         const worker_id = self.workers.get(result.store.getProcSpec(proc).identity) orelse
             invariant("a stored function value's code is no worker of its program");
-        return try self.describeCapture(allocator, captureShape(program, worker_id), .{ .local = worker_id }, capture);
+        return try self.describeCapture(allocator, program.moduleByKey(store_module).index, captureShape(program, worker_id), .{ .local = worker_id }, capture);
     }
 
-    pub fn describeImported(self: *Retained, allocator: Allocator, result: *LirProgram.Result, owner: [32]u8, identity: LIR.ProcIdentity, capture: [*]u8) Allocator.Error!Described {
+    pub fn describeImported(self: *Retained, allocator: Allocator, result: *LirProgram.Result, store_module: checked.ModuleId, owner: [32]u8, identity: LIR.ProcIdentity, capture: [*]u8) Allocator.Error!Described {
         self.program.result = result.*;
         defer result.* = self.program.result;
         const imported = try self.importMetadata(owner);
         const function = imported.functions.get(identity) orelse invariant("a cached function's metadata has no such worker");
-        return try self.describeCapture(allocator, function.shape, .{ .imported = .{ .metadata = imported, .function = function } }, capture);
+        return try self.describeCapture(allocator, self.program.moduleByKey(store_module).index, function.shape, .{ .imported = .{ .metadata = imported, .function = function } }, capture);
     }
 
     fn importMetadata(self: *Retained, owner: [32]u8) Allocator.Error!*ImportedMetadata {
@@ -386,7 +389,7 @@ pub const Retained = struct {
         imported: struct { metadata: *ImportedMetadata, function: ImportedFunction },
     };
 
-    fn describeCapture(self: *Retained, allocator: Allocator, shape: CaptureShape, source: Recipe, capture: [*]u8) Allocator.Error!Described {
+    fn describeCapture(self: *Retained, allocator: Allocator, store_module: types.ModuleIndex, shape: CaptureShape, source: Recipe, capture: [*]u8) Allocator.Error!Described {
         const program = self.program;
         const open = !try allClosed(program, shape.values);
         const has_table = shape.descs + shape.dicts != 0;
@@ -453,7 +456,7 @@ pub const Retained = struct {
             for (bound, roots[0..shape.descs]) |*ty, ref| ty.* = captureType(graph, ref);
         }
 
-        var recipe = Encoder{ .allocator = allocator, .program = program };
+        var recipe = Encoder{ .allocator = allocator, .program = program, .store_module = store_module };
         defer recipe.deinit();
         switch (source) {
             .local => |worker_id| try recipe.worker(worker_id),
@@ -1012,6 +1015,13 @@ const Encoder = struct {
     allocator: Allocator,
     link_names: bool = false,
     program: *Program,
+    /// The module whose constants hold the recipe being written, or null for
+    /// a unit's function metadata. Every module a recipe names lies in this
+    /// module's reflexive import closure, which is all a lowering restoring
+    /// the recipe is sure to hold: a generated worker whose key names no
+    /// module is written under it, and a codec piece under the closure's
+    /// module holding its family's derivation (`Codec.closureDerivation`).
+    store_module: ?types.ModuleIndex = null,
     /// The table of modules, by checked key, each once.
     modules: std.ArrayList([32]u8) = .empty,
     module_index: std.AutoHashMapUnmanaged([32]u8, u32) = .empty,
@@ -1332,12 +1342,12 @@ const Encoder = struct {
             },
             .structural => |method| {
                 try self.tag(.structural);
-                try self.module(record.module);
+                try self.module(self.store_module orelse record.module);
                 try self.bytes.append(self.allocator, @backingInt(method));
             },
             .structural_map => |map| {
                 try self.tag(.structural_map);
-                try self.module(record.module);
+                try self.module(self.store_module orelse record.module);
                 try self.name(map.name);
                 try self.word(map.payload_index);
                 try self.word(map.arity);
@@ -1345,21 +1355,25 @@ const Encoder = struct {
             },
             .crash_dictionary => |kind| {
                 try self.tag(.crash_dictionary);
-                try self.module(record.module);
+                try self.module(self.store_module orelse record.module);
                 try self.bytes.append(self.allocator, @backingInt(kind));
             },
             .callable_eval_entry => |binding| {
                 try self.tag(.callable_eval_entry);
-                try self.module(record.module);
+                try self.module(self.store_module orelse record.module);
                 try self.module(binding.module);
                 try self.word(@backingInt(binding.template));
             },
             .codec => |index| {
                 try self.tag(.codec);
-                try self.module(record.module);
                 const piece = program.codec.pieces.items[index];
+                const module_index, const root = if (self.store_module) |store_module|
+                    try Codec.storedPieceHome(program, self.allocator, store_module, piece)
+                else
+                    .{ record.module, Codec.pieceFamilyRoot(program, piece) };
+                try self.module(module_index);
                 try self.bytes.append(self.allocator, @backingInt(piece.kind));
-                try self.word(Codec.pieceFamilyRoot(program, piece));
+                try self.word(root);
                 switch (Codec.pieceOperands(piece.kind)) {
                     .none => {},
                     .types => {
@@ -1408,8 +1422,8 @@ const Decoder = struct {
     fn module(self: *Decoder) types.ModuleIndex {
         const key = self.modules[self.word()];
         if (!self.link_names) return self.program.moduleByKey(.{ .bytes = key }).index;
-        for (self.program.modules.views.items) |view| if (std.mem.eql(u8, &view.link_name, &key)) return view.index;
-        invariant("stored-function metadata names a module outside its checked imports");
+        return self.program.modules.findLinkName(key) orelse
+            invariant("stored-function metadata names a module outside its checked imports");
     }
 
     /// The table of modules, which `module` indexes.
