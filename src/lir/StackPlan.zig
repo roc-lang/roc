@@ -753,28 +753,47 @@ fn lastNodeOf(self: *const Self, block: Block) u32 {
 /// solving the control-flow graph a second time.
 /// Set physical sizes and call `assignSlots` after this operation.
 pub fn solveAliasLifetimes(self: *Self, entry: u32) Allocator.Error!void {
+    const aliases = try self.prepareAliases();
+    defer if (aliases) |items| self.allocator.free(items);
+    try self.solveLifetimes();
+    if (aliases) |items| try self.applyAliases(entry, items);
+}
+
+/// Extend already-solved lifetimes through the caller's proposed aliases.
+/// Pointer slots can consume the independent ranges first; backing storage
+/// then consumes their owner unions without rebuilding or solving the CFG.
+pub fn extendAliasLifetimes(self: *Self, entry: u32) Allocator.Error!void {
+    const aliases = try self.prepareAliases() orelse return;
+    defer self.allocator.free(aliases);
+    try self.applyAliases(entry, aliases);
+}
+
+const Alias = struct {
+    source: u32,
+    state: enum { pending, visiting, resolved },
+    start: usize = 0,
+    end: usize = 0,
+    definition: ?u32 = null,
+};
+
+fn prepareAliases(self: *Self) Allocator.Error!?[]Alias {
     var has_candidates = false;
     for (self.values.items, 0..) |*value, i| {
         has_candidates = has_candidates or value.representative != i;
         // Even externally allocated parameters participate in the proof.
         value.size = 1;
     }
-    if (!has_candidates) return self.solveLifetimes();
+    if (!has_candidates) return null;
 
-    const Alias = struct {
-        source: u32,
-        state: enum { pending, visiting, resolved },
-        start: usize = 0,
-        end: usize = 0,
-        definition: ?u32 = null,
-    };
     const aliases = try self.allocator.alloc(Alias, self.values.items.len);
-    defer self.allocator.free(aliases);
     for (self.values.items, 0..) |*v, i| {
         aliases[i] = .{ .source = v.representative, .state = if (v.representative == i) .resolved else .pending };
         v.representative = @intCast(i);
     }
-    try self.solveLifetimes();
+    return aliases;
+}
+
+fn applyAliases(self: *Self, entry: u32, aliases: []Alias) Allocator.Error!void {
     const accesses = self.sortedAccesses();
     var begin: usize = 0;
     while (begin < accesses.len) {
@@ -1157,8 +1176,17 @@ fn valueLess(self: *Self, a: u32, b: u32) bool {
     const y = self.liveRanges(b)[0].start;
     return if (x == y) a < b else x < y;
 }
+/// Discard only placement, preserving the CFG and solved lifetimes for another
+/// storage domain. Ordinary single-domain users do not pay for a second reset.
+pub fn resetSlots(self: *Self) void {
+    self.slots.clearRetainingCapacity();
+    self.class_of_size.clearRetainingCapacity();
+    for (self.values.items) |*value| value.slot = none;
+}
+
 /// Assign physical storage to the already solved nonzero-sized values.
 pub fn assignSlots(self: *Self) Allocator.Error!void {
+    std.debug.assert(self.slots.items.len == 0);
     const order = &self.slot_order;
     order.clearRetainingCapacity();
     for (self.values.items, 0..) |v, i| if (v.range_len != 0 and v.size != 0) {
@@ -1482,6 +1510,34 @@ test "stack plan keeps alias storage live through the final alias read" {
     plan.values.items[1].representative = 0;
     try plan.solve();
     try std.testing.expect(plan.values.items[0].slot != plan.values.items[2].slot);
+}
+
+test "stack plan reuses one lifetime solve for pointer and backing placements" {
+    var plan = init(std.testing.allocator);
+    defer plan.deinit();
+    for (0..5) |_| _ = try plan.node();
+    for (0..4) |i| try plan.edge(@intCast(i), @intCast(i + 1));
+    try plan.access(0, testLocal(0), false, true);
+    try plan.access(1, testLocal(0), true, false);
+    try plan.access(1, testLocal(1), false, true);
+    try plan.access(2, testLocal(2), false, true);
+    try plan.access(3, testLocal(1), true, false);
+    try plan.access(4, testLocal(2), true, false);
+    for (plan.values.items) |*value| value.size = 1;
+    try plan.solve();
+    // The source pointer is dead, even though its bytes remain observable
+    // through the alias. Pointer-slot reuse must not imply backing reuse.
+    try std.testing.expectEqual(plan.values.items[0].slot, plan.values.items[2].slot);
+    plan.values.items[1].representative = 0;
+    try plan.extendAliasLifetimes(0);
+    for (plan.values.items, 0..) |*value, i| {
+        value.size = if (value.representative == i) 32 else 0;
+    }
+    plan.resetSlots();
+    try plan.assignSlots();
+    try std.testing.expectEqual(@as(usize, 2), plan.slots.items.len);
+    try std.testing.expect(plan.values.items[0].slot != plan.values.items[2].slot);
+    try std.testing.expectEqual(@as(?u32, null), plan.values.items[1].slotIndex());
 }
 
 test "stack plan uses linear interval storage for a wide straight-line block" {
