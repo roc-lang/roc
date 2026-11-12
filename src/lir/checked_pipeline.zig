@@ -200,6 +200,10 @@ pub const TargetConfig = struct {
     /// checks, so optimized consumers enable them and the rest keep the
     /// checks and skip the analysis.
     prove_uniqueness: bool = false,
+    /// Drop the retains and releases of string literals, which are image
+    /// data. They only ever decide to do nothing at runtime, so optimized
+    /// consumers drop them and the rest keep them and skip the analysis.
+    immortal_string_literals: bool = false,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
     /// so post-check time and emitted program size stay bounded. Consulted
@@ -1074,6 +1078,7 @@ pub const SolvedPolicy = struct {
 pub const LirPolicy = struct {
     specialize_arc_modes: bool,
     prove_uniqueness: bool,
+    immortal_string_literals: bool,
     consume_dead_boxes: bool,
     zero_dict_seed: bool,
     list_in_place_map: bool,
@@ -1930,7 +1935,7 @@ fn finishLoweredOutput(
 
     // After the certifier has checked ARC's ledger, so that what it verified
     // is the placement ARC produced.
-    _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
+    _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store, if (target.immortal_string_literals) .static_data_and_strings else .static_data);
 
     try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result, if (frozen.*) |*data| data else null);
 
