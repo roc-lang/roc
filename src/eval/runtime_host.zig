@@ -616,8 +616,8 @@ const CrashingCallback = struct {
 
     noinline fn fillScratch() void {
         var scratch: [4096]u8 = undefined;
-        @memset(&scratch, 0xAA);
-        std.mem.doNotOptimizeAway(&scratch);
+        const volatile_scratch: *volatile [4096]u8 = &scratch;
+        for (volatile_scratch) |*byte| byte.* = 0xAA;
     }
 };
 
