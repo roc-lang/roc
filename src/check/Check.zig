@@ -3298,8 +3298,9 @@ const WaitingPredeclaredDispatchUse = struct {
 /// still gets a record. Each use site keeps the policy it applies to every
 /// other scheme it instantiates.
 const PredeclaredRecordPolicy = enum {
-    /// Record only a nonempty substitution or a scheme with evidence params,
-    /// as `instantiateVarHelp` decides.
+    /// Record only a nonempty substitution, a use of a hole-sharing scheme,
+    /// or a scheme with evidence params, as `instantiateVarHelp` decides for
+    /// the schemes it instantiates.
     when_needed,
     /// Always record, as `instantiateDispatchTargetMethodVar` does for every
     /// same-module target.
@@ -21547,7 +21548,12 @@ fn predeclaredHasEvidenceParams(self: *Self, annotation_idx: CIR.Annotation.Idx)
 }
 
 /// Record the substitution in `scratch_evidence_pairs` as a use of the
-/// binding's own scheme, rooted at `scheme_root`.
+/// binding's own scheme, rooted at `scheme_root`. A hole-sharing scheme's
+/// use is always recorded: the binding's own scheme quantifies the holes the
+/// predeclared scheme shares, so the use instantiates them (at themselves)
+/// even when it pairs no annotation variable, and the requirements the body
+/// gives them, such as a literal's conversion, are not the predeclared
+/// scheme's to report.
 fn writePredeclaredSchemeUse(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
@@ -21561,6 +21567,7 @@ fn writePredeclaredSchemeUse(
     try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
     if (policy == .when_needed and
         self.scratch_evidence_pairs.items.len == 0 and
+        self.holeSharedVars(self.predeclaredSlotsPtr(annotation_idx).scheme_var) == null and
         !try self.predeclaredHasEvidenceParams(annotation_idx))
     {
         return;

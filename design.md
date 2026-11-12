@@ -12526,7 +12526,16 @@ including a generated codec call, waits and records when that generation
 happens, so checking order is unchanged. Each site keeps the record policy it
 applies to every other scheme: a value use or generated codec call with an
 empty substitution is recorded only when the scheme has evidence params, and
-a source dispatch edge to a same-module target is always recorded.
+a source dispatch edge to a same-module target is always recorded. A use of a
+hole-sharing scheme is always recorded. The binding's own scheme quantifies
+the holes its group generalizes, so the use instantiates each of them at
+itself even when it pairs no annotation variable, and what the body requires
+of a hole, such as a numeral's conversion whose type the hole holds, is not
+visible in the predeclared scheme's evidence params. The record gives the use
+its substitution of the binding's own scheme, from which the use's literal
+arguments derive (Literal Arguments): a recursive call to
+`go : U8 -> Try(U64, _)` whose body builds `Err(Failed(1))` passes the
+function's own literal argument for that numeral on to itself.
 A receiver already at `Rank.generalized` is never captured as an outer-rank
 pending requirement. Generalization boundaries cannot run inside a commit
 probe; probes may append candidates, but rollback rewinds those candidates and
