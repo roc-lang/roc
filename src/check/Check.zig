@@ -14487,6 +14487,36 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         }
     }
 
+    // A type nested in a block-local type's associated block is in
+    // `type_decls` but not `all_statements`, and its body is generated here
+    // like every other declaration's, whether or not anything references it.
+    // A module-level declaration is in both lists and is generated once.
+    for (self.cir.store.sliceStatements(self.cir.type_decls)) |stmt_idx| {
+        switch (self.cir.store.getStatement(stmt_idx)) {
+            .s_alias_decl, .s_nominal_decl => _ = try self.ensureTypeDeclGenerated(stmt_idx, &env),
+            .s_where_alias_decl,
+            .s_runtime_error,
+            .s_type_anno,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_type_var_alias,
+            => {},
+        }
+    }
+
     // With every declaration generated, validate nominal declaration
     // recursion before any value checking consumes the declarations.
     try self.finalizeTypeDeclarationValidity();
