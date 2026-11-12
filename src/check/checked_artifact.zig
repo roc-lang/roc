@@ -30799,6 +30799,26 @@ pub const CheckedModuleArtifact = struct {
         return blob[0..serialized_len];
     }
 
+    /// The compiler's embedded Builtin artifact, viewed in place over its
+    /// baked blob (`[serialized bytes][version trailer]`) with `module_env` as
+    /// its environment. Every compilation in the process shares the blob, so
+    /// nothing writes through the view.
+    pub fn viewStaticBuiltin(
+        blob: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) const u8,
+        gpa: Allocator,
+        module_env: ModuleEnvStorage,
+    ) error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact }!CheckedModuleArtifact {
+        const serialized_bytes = try splitVersionTrailer(blob);
+        // The sub-stores' lists hold mutable item pointers, so this is where
+        // the blob's constness is dropped. Nothing writes through a static
+        // view; an optimized native build keeps the blob in read-only data,
+        // where a write faults.
+        const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = @constCast(blob[0..serialized_bytes.len]);
+        const serialized: *const Serialized = @ptrCast(backing.ptr);
+        try serialized.validate(backing.len);
+        return serialized.deserializeStatic(backing, gpa, module_env);
+    }
+
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
         self.deinitInternal(allocator, true);
     }
@@ -34898,13 +34918,7 @@ fn expectProvidedExportKind(
 
     // The baked builtin artifact is the published form of the builtin module
     // `test_env` checked against, so it serves as the real direct import.
-    const blob = compiled_builtins.builtin_artifact_bin[0..];
-    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(blob);
-    const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-        @alignCast(blob[0..serialized_bytes.len]);
-    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
-    try serialized.validate(backing.len);
-    var builtin_artifact = serialized.deserializeStatic(backing, allocator, .{ .static_builtin = test_env.builtin_module.env });
+    var builtin_artifact = try CheckedModuleArtifact.viewStaticBuiltin(compiled_builtins.builtin_artifact_bin, allocator, .{ .static_builtin = test_env.builtin_module.env });
     try builtin_artifact.attachSealedTypes(allocator, std.testing.io);
     defer builtin_artifact.deinitRetainingModuleEnv(allocator);
 
@@ -36729,13 +36743,7 @@ test "publishing a module releases each resource exactly once under allocation f
     );
     var artifact_owns_module = false;
     errdefer if (!artifact_owns_module) builtin_module.deinit();
-    const blob = compiled_builtins.builtin_artifact_bin[0..];
-    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(blob);
-    const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-        @alignCast(blob[0..serialized_bytes.len]);
-    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
-    try serialized.validate(backing.len);
-    var builtin_artifact = serialized.deserializeStatic(backing, gpa, .{ .static_builtin = builtin_module.env });
+    var builtin_artifact = try CheckedModuleArtifact.viewStaticBuiltin(compiled_builtins.builtin_artifact_bin, gpa, .{ .static_builtin = builtin_module.env });
     try builtin_artifact.attachSealedTypes(gpa, std.testing.io);
     artifact_owns_module = true;
     defer builtin_artifact.deinit(gpa);

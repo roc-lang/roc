@@ -800,8 +800,16 @@ The compiler's embedded Builtin module is viewed the same way, with a sealed
 type store, over the executable's static data. Every compilation in the process
 shares those bytes, so nothing writes through the view: it has no imports and
 no node scratch, and it is baked already prepared for checked-artifact use, so
-nothing inserts into its identifier or string-literal tables. Debug builds make
-those pages read-only, so a write through the view faults where it happens.
+nothing inserts into its identifier or string-literal tables. The embedded
+Builtin artifact is viewed beside it the same way. On native targets both blobs
+are `const` data, and the loaders drop the bytes' constness in one place each
+(`ModuleEnv.Serialized.viewStatic`, `CheckedModuleArtifact.viewStaticBuiltin`),
+because lists hold mutable item pointers. An optimized native build (LLVM)
+places const data in read-only memory, so a write through either view faults
+where it happens. Debug builds made by Zig's self-hosted x86_64 backend place
+const data in a writable segment, and the compressed variant embedded in
+echo.wasm is decompressed into writable storage at startup, on a target with
+no page protection; in those builds the property rests on the invariant alone.
 
 ### Test outcome files
 

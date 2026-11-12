@@ -4220,19 +4220,28 @@ pub const Serialized = extern struct {
     }
 
     /// A view over the compiler's embedded Builtin bytes, which hold no
-    /// imports. Its lists point into the executable's static data and nothing
-    /// is copied; the bytes are shared by every compilation in the process, so
-    /// nothing may write to the view (see `BuiltinStatic.moduleView`).
+    /// imports and start with this header. Its lists point into the
+    /// executable's static data and nothing is copied. The bytes are shared by
+    /// every compilation in the process, so nothing writes through the view:
+    /// its type store is sealed, it has no imports or node scratch, and the
+    /// baked module is already prepared for checked-artifact use, so nothing
+    /// inserts into its identifier or string-literal tables.
     pub fn viewStatic(
         self: *const Serialized,
-        base_addr: usize,
+        backing: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) const u8,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_basename: []const u8,
     ) (std.mem.Allocator.Error || error{CorruptSerializedModuleEnv})!Self {
+        std.debug.assert(@intFromPtr(self) == @intFromPtr(backing.ptr));
         if (self.imports.imports.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.import_idents.len != 0) return error.CorruptSerializedModuleEnv;
         if (self.imports.resolved_modules.len != 0) return error.CorruptSerializedModuleEnv;
+        // The view's lists hold mutable item pointers, so this is where the
+        // bytes' constness is dropped. Nothing writes through a static view;
+        // an optimized native build keeps the bytes in read-only data, where a
+        // write faults.
+        const base_addr = @intFromPtr(@constCast(backing.ptr));
         return self.deserializeInPlace(base_addr, gpa, source, module_basename, .sealed);
     }
 
