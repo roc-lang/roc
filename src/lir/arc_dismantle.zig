@@ -2441,11 +2441,32 @@ fn classifyStatement(
     }
 }
 
-/// A consuming operand position and the statement after it.
+/// A consuming operand, its position, and the statement after it.
 const OperandUse = struct {
+    operand: LIR.LocalId,
     position: u8,
     next: LIR.CFStmtId,
 };
+
+/// Whether a binding on the value path from the borrowed read binding `root`
+/// down to `local` (`root` and `local` included) holds a unit of its own: a
+/// take binding, or an owned-only one in the emissions its take applies to.
+/// Such a binding holds the unit that the take of a projected container
+/// solved earlier moved into it, so consuming `local` consumes that binding's
+/// unit, never the field `root` reads.
+fn valuePathHoldsUnit(analysis: *const Analysis, solution: *const arc_solve.Solution, result: *const Dismantles, local: LIR.LocalId, root: u32) bool {
+    var cursor = @backingInt(solution.unitLocalOf(local));
+    var steps: usize = 0;
+    while (true) {
+        if (result.take_bindings[cursor] or result.owned_only_binding_roots[cursor] != no_index) return true;
+        if (cursor == root) return false;
+        const source = analysis.projection_source[cursor];
+        if (source == no_index) dismantleInvariant("ARC dismantle operand left its read's projection chain");
+        cursor = @backingInt(solution.unitLocalOf(@fromBackingInt(@intCast(source))));
+        steps += 1;
+        if (steps > analysis.projection_source.len) dismantleInvariant("ARC dismantle projection chain contained a cycle");
+    }
+}
 
 /// Whether `local` carries the value of the borrowed read binding `root`:
 /// it is the binding or a borrowed pure same-value alias of it, or an
@@ -2506,7 +2527,7 @@ fn operandSiteUse(
                     .borrowed => !solution.isPinnedProc(stmt.proc) and arc_solve.sharesEmissionUnit(store, owner, stmt.proc) and (param_benefits[@backingInt(stmt.proc)] & bit) != 0,
                 };
                 if (!consumes) return null;
-                found = .{ .position = @intCast(position), .next = stmt.next };
+                found = .{ .operand = arg, .position = @intCast(position), .next = stmt.next };
             }
             return found;
         },
@@ -2526,7 +2547,7 @@ fn operandSiteUse(
                 // A retained operand moves into the result only when the
                 // result can hold it.
                 if ((effect.consume_args & bit) == 0 and !rc_local[@backingInt(stmt.target)]) return null;
-                found = .{ .position = @intCast(position), .next = stmt.next };
+                found = .{ .operand = arg, .position = @intCast(position), .next = stmt.next };
             }
             return found;
         },
@@ -4207,7 +4228,13 @@ pub fn compute(
                                 const edge = analysis.mention_edges.items[mention];
                                 mention = edge.next;
                                 const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
-                                const site_use = operandSiteUse(store, solution, &analysis, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, target_index, stmt);
+                                // An operand whose value reaches it through a
+                                // binding holding a unit of its own consumes
+                                // that unit, so it only observes this field.
+                                const site_use = if (operandSiteUse(store, solution, &analysis, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, target_index, stmt)) |use|
+                                    if (valuePathHoldsUnit(&analysis, solution, &result, use.operand, target_index)) null else use
+                                else
+                                    null;
                                 const slot = try read_kinds.getOrPut(stmt);
                                 if (site_use) |use| {
                                     if (!slot.found_existing) {

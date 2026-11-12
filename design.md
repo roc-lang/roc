@@ -23065,7 +23065,15 @@ borrowed onward from the read through a partial field or payload read, a
 borrowed low-level result, or a lent call result holds a different value
 than the field (the payload unboxed out of a boxed field is not the box), so
 consuming it only observes the field, exactly like any other mention of the
-forest. It takes the
+forest. So does consuming a member whose value reaches the operand through a
+binding that holds a unit of its own, such as the take binding of a projected
+container solved before this container: the operand consumes that binding's
+unit, which that container's own solve takes. Were the container above to
+claim the operand too, its claim would name a field its root no longer holds,
+and the argument would pass borrowed. With `held = { inner: { d, m }, n }`
+captured by a closure that passes `d` to a large `Dict` update the inliner
+declines, the borrowed base variant would then retain `d` and every insert
+would copy it. A use-point take candidate takes the
 field only where it is the last observation of that field on every path; an
 earlier one pays its ordinary retain at the operand, since the binding is
 read again afterwards. The take belongs at the operand, not at the read. A
