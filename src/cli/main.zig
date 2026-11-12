@@ -17257,16 +17257,17 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     // nor a default app is tested as a plain module, and an app is tested
     // whether or not it supplies the definitions its platform requires.
     build_env.setEntryValidation(.explicit_roots);
+    // A module takes its package aliases from its owning `main.roc` (or
+    // `--main`), the same as under `roc check`, but only the module's own
+    // import closure is checked and tested: the rest of the app and its
+    // platform cannot affect the module's `expect`s.
+    build_env.setEntryClosureOnly(true);
 
     var extra_buf: [2][]const u8 = undefined;
     const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);
 
     reporter.begin("Resolving Dependencies");
-    const discovered = if (args.main) |main_path|
-        build_env.discoverWithMain(args.path, main_path)
-    else
-        build_env.discoverDependencies(args.path);
-    discovered catch |err| {
+    build_env.discoverResolvingMain(args.path, args.main) catch |err| {
         _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
         if (args.watch_inputs_file) |file_path| {
             try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);

@@ -147,8 +147,8 @@ pub fn copy(desc: *const TypeDesc, dst: [*]u8, src: [*]const u8) void {
 }
 
 /// Copy `size` bytes from `src` to `dst`, which may overlap. A 1-, 2-, 4-,
-/// 8-, or 16-byte value is one load and one store; other sizes move through
-/// `@memmove`.
+/// 8-, 16-, or 24-byte value is loaded whole and then stored; other sizes
+/// move through `@memmove`.
 pub inline fn copyBytes(dst: [*]u8, src: [*]const u8, size: usize) void {
     switch (size) {
         0 => {},
@@ -157,6 +157,7 @@ pub inline fn copyBytes(dst: [*]u8, src: [*]const u8, size: usize) void {
         4 => copyScalar(u32, dst, src),
         8 => copyScalar(u64, dst, src),
         16 => copyScalar(u128, dst, src),
+        24 => copyScalar([3]u64, dst, src),
         else => @memmove(dst[0..size], src[0..size]),
     }
 }
