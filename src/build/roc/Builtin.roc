@@ -4940,7 +4940,7 @@ Builtin :: [].{
 		keep_if_try : List(a), (a -> Try(Bool, err)) -> Try(List(a), err)
 		keep_if_try = |list, predicate| {
 			prepared = list_map_prepare_reuse(list)
-			len = prepared.len()
+			prepared_len = prepared.len()
 			match list_owned_unique(prepared) {
 				1 => {
 					# Swap each kept item down to the end of the kept prefix. A swap
@@ -4949,7 +4949,7 @@ Builtin :: [].{
 					var $out = prepared
 					var $kept = 0
 					var $index = 0
-					while $index < len {
+					while $index < prepared_len {
 						if predicate(list_get_unsafe($out, $index))? {
 							if $kept != $index {
 								$out = list_swap_unsafe($out, $kept, $index)
@@ -4958,22 +4958,22 @@ Builtin :: [].{
 						}
 						$index = $index + 1
 					}
-					Ok(List.drop_last($out, len - $kept))
+					Ok(List.drop_last($out, prepared_len - $kept))
 				}
 				_ => {
 					# A shared list is returned as it is when every item is kept.
 					var $first_dropped = 0
-					while $first_dropped < len and predicate(list_get_unsafe(prepared, $first_dropped))? {
+					while $first_dropped < prepared_len and predicate(list_get_unsafe(prepared, $first_dropped))? {
 						$first_dropped = $first_dropped + 1
 					}
-					if $first_dropped == len {
+					if $first_dropped == prepared_len {
 						Ok(prepared)
 					} else {
 						# The items before $first_dropped were already tested and kept,
 						# so copy them in one step and test only the items after it.
-						var $new_list = list_append_sublist(List.with_capacity(len), prepared, 0, $first_dropped)
+						var $new_list = list_append_sublist(List.with_capacity(prepared_len), prepared, 0, $first_dropped)
 						var $index = $first_dropped + 1
-						while $index < len {
+						while $index < prepared_len {
 							item = list_get_unsafe(prepared, $index)
 							if predicate(item)? {
 								$new_list = list_append_unsafe($new_list, item)
@@ -4994,7 +4994,7 @@ Builtin :: [].{
 		keep_if_try! : List(a), (a => Try(Bool, err)) => Try(List(a), err)
 		keep_if_try! = |list, predicate!| {
 			prepared = list_map_prepare_reuse(list)
-			len = prepared.len()
+			prepared_len = prepared.len()
 			match list_owned_unique(prepared) {
 				1 => {
 					# Swap each kept item down to the end of the kept prefix. A swap
@@ -5003,7 +5003,7 @@ Builtin :: [].{
 					var $out = prepared
 					var $kept = 0
 					var $index = 0
-					while $index < len {
+					while $index < prepared_len {
 						if predicate!(list_get_unsafe($out, $index))? {
 							if $kept != $index {
 								$out = list_swap_unsafe($out, $kept, $index)
@@ -5012,22 +5012,22 @@ Builtin :: [].{
 						}
 						$index = $index + 1
 					}
-					Ok(List.drop_last($out, len - $kept))
+					Ok(List.drop_last($out, prepared_len - $kept))
 				}
 				_ => {
 					# A shared list is returned as it is when every item is kept.
 					var $first_dropped = 0
-					while $first_dropped < len and predicate!(list_get_unsafe(prepared, $first_dropped))? {
+					while $first_dropped < prepared_len and predicate!(list_get_unsafe(prepared, $first_dropped))? {
 						$first_dropped = $first_dropped + 1
 					}
-					if $first_dropped == len {
+					if $first_dropped == prepared_len {
 						Ok(prepared)
 					} else {
 						# The items before $first_dropped were already tested and kept,
 						# so copy them in one step and test only the items after it.
-						var $new_list = list_append_sublist(List.with_capacity(len), prepared, 0, $first_dropped)
+						var $new_list = list_append_sublist(List.with_capacity(prepared_len), prepared, 0, $first_dropped)
 						var $index = $first_dropped + 1
-						while $index < len {
+						while $index < prepared_len {
 							item = list_get_unsafe(prepared, $index)
 							if predicate!(item)? {
 								$new_list = list_append_unsafe($new_list, item)
