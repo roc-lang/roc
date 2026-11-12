@@ -428,7 +428,7 @@ roundtrip = parse_show("hi")
 						(ty-lookup (name "I128") (builtin)))))))
 	(d-let
 		(p-assign (ident "ok_data"))
-		(e-call (constraint-fn-var 395)
+		(e-call (constraint-fn-var 388)
 			(e-lookup-local
 				(p-assign (ident "via_data")))
 			(e-list
@@ -454,7 +454,7 @@ roundtrip = parse_show("hi")
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "unpinned_ret"))
-		(e-call (constraint-fn-var 421)
+		(e-call (constraint-fn-var 414)
 			(e-lookup-local
 				(p-assign (ident "gen")))
 			(e-empty_record)))

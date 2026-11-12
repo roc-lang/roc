@@ -61,7 +61,7 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "age"))))
 				(args)))
-		(e-interpolation (constraint-fn-var 256) (dispatcher-var 18)
+		(e-interpolation (constraint-fn-var 253) (dispatcher-var 18)
 			(first
 				(e-literal (string "Hello ")))
 			(parts

@@ -28,33 +28,33 @@ use_it = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
+MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:19:34:19:35
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
-		(region (start 19 17) (end 19 25))
+		(region (start 19 34) (end 19 35))
 		(headline
-			(reflow "A type this needs never resolved to a concrete type, so it has no")
+			(reflow "This number's type never resolved to a concrete type, so it has no")
 			(reflow " ")
 			(annotated code "decode")
 			(reflow " ")
 			(reflow "method."))
 		(document
-			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
+			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 34) (end 19 35) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
 			(line-break)
 			(reflow "Its type needs all of these:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, c -> b]")
+			(text "b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, b -> b]")
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
+			(reflow "Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -246,18 +246,18 @@ use_it = {
 		(e-block
 			(s-let
 				(p-assign (ident "transform"))
-				(e-call (constraint-fn-var 345)
+				(e-call (constraint-fn-var 338)
 					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 343)
+						(e-dispatch-call (method "plus") (constraint-fn-var 336)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
 							(args
 								(e-num (value "1")))))))
-			(e-call (constraint-fn-var 346)
+			(e-call (constraint-fn-var 339)
 				(e-lookup-local
 					(p-assign (ident "transform")))
 				(e-num (value "41"))))))

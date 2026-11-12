@@ -1195,7 +1195,7 @@ const Unifier = struct {
         if (flexLiteral(vars.a.desc.content) != flexLiteral(vars.b.desc.content) and
             (vars.a.desc.content != .flex or vars.b.desc.content != .flex))
         {
-            self.scratch.determined_literal = true;
+            _ = try self.scratch.determined_literals.append(self.scratch.gpa, self.unresolved_b orelse vars.b.var_);
         }
 
         switch (vars.a.desc.content) {
@@ -4445,9 +4445,11 @@ pub const Scratch = struct {
 
     // constraints
     deferred_constraints: DeferredConstraintCheck.SafeList,
-    /// Whether this unification determined a type that was a deferred
-    /// literal's (`Flex.literal`): the literal can now be decided.
-    determined_literal: bool = false,
+    /// For each type this unification determined that was a deferred
+    /// literal's (`Flex.literal`), the variable a conversion constraint on
+    /// the literal would have been deferred on. The literal can now be
+    /// decided.
+    determined_literals: VarSafeList,
     only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
@@ -4606,6 +4608,7 @@ pub const Scratch = struct {
         return .{
             .gpa = gpa,
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),
+            .determined_literals = try VarSafeList.initCapacity(gpa, 2),
             .effect_dependency_seen = collections.DenseMap(Var, void).init(gpa),
             .unify_work_stack = try WorkFrame.SafeList.initCapacity(gpa, 32),
             .mismatch_flags = try MkSafeList(bool).initCapacity(gpa, 8),
@@ -4645,6 +4648,7 @@ pub const Scratch = struct {
     /// Deinit scratch
     pub fn deinit(self: *Self) void {
         self.fresh_vars.deinit(self.gpa);
+        self.determined_literals.deinit(self.gpa);
         self.effect_dependency_seen.deinit();
         self.effect_dependencies.deinit(self.gpa);
         self.pure_demands.deinit(self.gpa);
@@ -4703,7 +4707,7 @@ pub const Scratch = struct {
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();
         self.deferred_constraints.items.clearRetainingCapacity();
-        self.determined_literal = false;
+        self.determined_literals.items.clearRetainingCapacity();
         self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();

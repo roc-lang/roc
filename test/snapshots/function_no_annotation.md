@@ -126,10 +126,10 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 266)
+			(e-call (constraint-fn-var 258)
 				(e-lookup-local
 					(p-assign (ident "print_number!")))
-				(e-call (constraint-fn-var 265)
+				(e-call (constraint-fn-var 257)
 					(e-lookup-local
 						(p-assign (ident "multiply")))
 					(e-lookup-local
@@ -137,7 +137,7 @@ NO CHANGE
 					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 285)
+		(e-call (constraint-fn-var 276)
 			(e-lookup-local
 				(p-assign (ident "process!")))
 			(e-num (value "42"))))
@@ -148,13 +148,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, b -> a where [a.times : a, b -> a]"))
+		(patt (type "a, a -> a where [a.times : a, a -> a]"))
 		(patt (type "_arg -> _ret"))
-		(patt (type "a -> _ret where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> _ret where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.times : a, a -> a]"))
 		(patt (type "_a")))
 	(expressions
-		(expr (type "a, b -> a where [a.times : a, b -> a]"))
+		(expr (type "a, a -> a where [a.times : a, a -> a]"))
 		(expr (type "_arg -> _ret"))
-		(expr (type "a -> _ret where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> _ret where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.times : a, a -> a]"))
 		(expr (type "_a"))))
 ~~~

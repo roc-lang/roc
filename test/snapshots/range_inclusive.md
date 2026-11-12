@@ -36,7 +36,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 236)
+		(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 222)
 			(receiver
 				(e-num (value "1")))
 			(args

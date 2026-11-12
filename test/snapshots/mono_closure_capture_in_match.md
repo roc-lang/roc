@@ -136,14 +136,14 @@ EndOfFile,
 													(e-lambda
 														(args
 															(p-assign (ident "y")))
-														(e-dispatch-call (method "plus") (constraint-fn-var 264)
+														(e-dispatch-call (method "plus") (constraint-fn-var 257)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "x"))))
 															(args
 																(e-lookup-local
 																	(p-assign (ident "y"))))))))
-											(e-call (constraint-fn-var 276)
+											(e-call (constraint-fn-var 259)
 												(e-lookup-local
 													(p-assign (ident "add_x")))
 												(e-num (value "10"))))))
@@ -157,7 +157,7 @@ EndOfFile,
 					(p-assign (ident "result"))))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call (constraint-fn-var 309)
+		(e-call (constraint-fn-var 294)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "42")))))
@@ -166,9 +166,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.plus : a, a -> a]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.plus : a, a -> a]"))
 		(expr (type "Dec"))))
 ~~~

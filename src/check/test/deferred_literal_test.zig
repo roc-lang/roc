@@ -1,4 +1,4 @@
-//! A number literal with no checking context carries no conversion
+//! A number or string literal with no checking context carries no conversion
 //! constraint until its type has settled.
 const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
@@ -79,4 +79,59 @@ test "a literal that does not fit the builtin type it settles to is an error" {
     );
     defer env.deinit();
     try env.assertOneTypeError("Invalid Number");
+}
+
+test "a string literal whose type settles to Str has no conversion constraint" {
+    const gpa = std.testing.allocator;
+    var small: usize = 0;
+    for ([_]usize{ 8, 256 }) |count| {
+        var source: std.ArrayList(u8) = .empty;
+        defer source.deinit(gpa);
+        try source.appendSlice(gpa, "last : Str -> Str\nlast = |given| {\n");
+        for (0..count) |index| {
+            try source.print(gpa, "    var $t{d} = \"word\"\n    $t{d} = Str.concat($t{d}, given)\n", .{ index, index, index });
+        }
+        try source.appendSlice(gpa, "    given\n}\n");
+        var env = try TestEnv.init("Test", source.items);
+        defer env.deinit();
+        try env.assertNoErrors();
+        try std.testing.expectEqual(count, env.module_env.store.literalDispatchPlans().len);
+        for (env.module_env.store.literalDispatchPlans()) |plan| {
+            try std.testing.expect(plan.fnVar() == null);
+            try std.testing.expectEqual(.builtin_direct, plan.dispatchResolution());
+        }
+        const constraints = env.checker.types.static_dispatch_constraints.len();
+        if (count == 8) small = constraints else try std.testing.expectEqual(small, constraints);
+    }
+}
+
+test "a string literal whose type settles to a custom string type gets its conversion" {
+    var env = try TestEnv.init("Test",
+        \\Word := Str.{
+        \\    from_quote : Str -> Try(Word, [BadQuotedBytes(Str)])
+        \\    from_quote = |text| Ok(Word.(text))
+        \\}
+        \\
+        \\keep : Word -> Word
+        \\keep = |given| {
+        \\    var $current = "start"
+        \\    $current = given
+        \\    $current
+        \\}
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), env.module_env.store.literalDispatchPlans().len);
+    for (env.module_env.store.literalDispatchPlans()) |plan| {
+        try std.testing.expect(plan.fnVar() != null);
+        try std.testing.expectEqual(.custom_dispatch, plan.dispatchResolution());
+    }
+}
+
+test "a string literal and a number literal of one undetermined type are still a conflict" {
+    var env = try TestEnv.init("Test",
+        \\mixed = if True { 1 } else { "one" }
+    );
+    defer env.deinit();
+    try std.testing.expect(try env.typeProblemCount() >= 1);
 }

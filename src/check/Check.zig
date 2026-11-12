@@ -1483,9 +1483,13 @@ open_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// constraint, by the first generalization boundary that finds its type
 /// settled or about to generalize, and by type finalization otherwise.
 pending_literals: std.ArrayListUnmanaged(PendingLiteral) = .empty,
-/// How many leading `pending_literals` a dispatch pass has already found
-/// still undetermined. The rest were introduced since, and it is zero once a
-/// unification has determined a deferred literal's type.
+/// The variables the unifications now settling literals determined them
+/// against (`Scratch.determined_literals`), one run per unification in
+/// progress.
+determined_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// How many leading `pending_literals` have already been found still
+/// undetermined. The rest were introduced since, and it is zero when a
+/// unification inside a probe has determined a deferred literal's type.
 pending_literals_scanned: usize = 0,
 /// The use that instantiated each literal-conversion constraint copied out of
 /// a generalized scheme, keyed by the copy's own callable var. A copy's
@@ -2068,6 +2072,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .open_literal_vars = .settled,
     .pending_literals = .settled,
     .pending_literals_scanned = .settled,
+    .determined_literal_vars = .settled,
     .instantiated_literal_conversion_uses = .keyed,
     .open_numeral_literals = .settled,
     .instantiated_interpolation_owners = .keyed,
@@ -8479,10 +8484,19 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     if (result.isAccepted()) {
         try self.recordAbsorbedDefaults(construction_var, a, b);
     }
-    // A deferred literal whose type was just determined is judged by the
-    // next dispatch pass, which therefore looks at every pending literal.
-    if (self.unify_scratch.determined_literal) self.pending_literals_scanned = 0;
+    // A deferred literal whose type this unification determined is decided
+    // here, in the context this unification ran in and against the variable
+    // its conversion constraint would have been deferred on. Inside a probe
+    // it waits for the next dispatch pass, which then looks at every pending
+    // literal.
+    const determined_top = self.determined_literal_vars.items.len;
+    defer self.determined_literal_vars.shrinkRetainingCapacity(determined_top);
+    try self.determined_literal_vars.appendSlice(self.gpa, self.unify_scratch.determined_literals.items.items);
     try self.adoptUnifyScratch(env, b, owner);
+    if (self.determined_literal_vars.items.len != determined_top) {
+        self.pending_literals_scanned = 0;
+        try self.settlePendingLiteralsAt(env, .introduced, determined_top);
+    }
 
     // Ensure arrays are in sync
     self.debugAssertArraysInSync();
@@ -13986,12 +14000,15 @@ fn checkNumeralExpression(
     try self.checkNumeralLiteral(node_idx, occurrence_var, region, .expression, null, env);
 }
 
-/// A number literal expression whose conversion is deferred, and the
-/// `expect` whose body holds it, if any: a conversion created later is still
-/// that `expect`'s dispatch.
+/// A literal expression whose conversion is deferred, and the `expect` whose
+/// body holds it, if any: a conversion created later is still that `expect`'s
+/// dispatch.
 const PendingLiteral = struct {
     node: CIR.Node.Idx,
+    kind: Kind,
     expect_slot: ?ExpectEffectSlotId,
+
+    const Kind = enum { numeral, quote };
 };
 
 /// Deferred Literal Conversion (design.md): introduce a number literal
@@ -14019,6 +14036,7 @@ fn deferNumeralConversion(
     try self.cir.store.recordLiteralDispatchPlan(node_idx, .numeral, occurrence_var, null, null);
     try self.pending_literals.append(self.gpa, .{
         .node = node_idx,
+        .kind = .numeral,
         .expect_slot = self.current_expect_effect_slot,
     });
     try self.open_literal_vars.append(self.gpa, occurrence_var);
@@ -14028,10 +14046,41 @@ fn deferNumeralConversion(
     return true;
 }
 
+/// Deferred Literal Conversion (design.md) for a plain string literal
+/// expression: an undetermined type marked as a quote, with no conversion
+/// constraint. Returns false for a literal that needs its constraint now.
+fn deferQuoteConversion(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    occurrence_var: Var,
+    env: *Env,
+) Allocator.Error!bool {
+    if (self.cir.numericSuffixTargetForNode(node_idx) != null) return false;
+    // A probe's rollback restores the type store, not this list.
+    if (self.probe_depth != 0) return false;
+    // A module that declares a conversion method in a function body records
+    // where each conversion is created (`noteLiteralDispatchSite`).
+    if (try self.moduleDeclaresLocalMethodNamed(self.cir.idents.from_quote)) return false;
+
+    try self.unifyWith(occurrence_var, .{ .flex = .{
+        .name = null,
+        .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
+        .literal = .quote,
+    } }, env);
+    try self.cir.store.recordLiteralDispatchPlan(node_idx, .quote, occurrence_var, null, null);
+    try self.pending_literals.append(self.gpa, .{
+        .node = node_idx,
+        .kind = .quote,
+        .expect_slot = self.current_expect_effect_slot,
+    });
+    try self.open_literal_vars.append(self.gpa, occurrence_var);
+    return true;
+}
+
 const PendingLiteralScope = enum {
-    /// A dispatch pass: the literals whose type has settled, among those
-    /// introduced since the last pass, or among all of them when a
-    /// unification has determined a deferred literal's type since.
+    /// A unification that determined a deferred literal's type, or a
+    /// dispatch pass: the literals whose type has settled, among those not
+    /// yet found undetermined.
     introduced,
     /// A generalization boundary: a literal whose type is still undetermined
     /// below the boundary's rank belongs to an enclosing scope and waits.
@@ -14041,14 +14090,24 @@ const PendingLiteralScope = enum {
     all,
 };
 
-/// Deferred Literal Conversion (design.md): decide the pending number
-/// literals in `scope`. One whose type has settled to a builtin number type
-/// that holds its exact value needs no conversion, exactly as under Concrete
-/// Builtin Numeral Introduction. Every other one that does not keep waiting
-/// gets its ordinary `from_numeral` constraint here, so defaulting,
-/// generalization, a custom conversion, and each diagnostic proceed as for a
-/// constraint created with the literal.
+/// Deferred Literal Conversion (design.md): decide the pending literals in
+/// `scope`. A number literal whose type has settled to a builtin number type
+/// that holds its exact value, and a string literal whose type has settled
+/// to the builtin `Str`, need no conversion, exactly as under Concrete
+/// Builtin Numeral Introduction and Concrete Builtin Quote Introduction.
+/// Every other one that does not keep waiting gets its ordinary conversion
+/// constraint here, so defaulting, generalization, a custom conversion, and
+/// each diagnostic proceed as for a constraint created with the literal.
 fn settlePendingLiterals(self: *Self, env: *Env, scope: PendingLiteralScope) Allocator.Error!void {
+    return self.settlePendingLiteralsAt(env, scope, self.determined_literal_vars.items.len);
+}
+
+/// `settlePendingLiterals`, where `determined_literal_vars` from
+/// `determined_top` on are the variables a unification just determined
+/// literals against: a conversion created for one of those literals is
+/// related to that variable, as its constraint would have been deferred on
+/// it, so a rejection can show where the type was determined.
+fn settlePendingLiteralsAt(self: *Self, env: *Env, scope: PendingLiteralScope, determined_top: usize) Allocator.Error!void {
     const first: usize = switch (scope) {
         .introduced => self.pending_literals_scanned,
         .boundary, .all => 0,
@@ -14090,43 +14149,66 @@ fn settlePendingLiterals(self: *Self, env: *Env, scope: PendingLiteralScope) All
             // checked error.
             .err => continue,
             .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| if (self.builtinNumKindFromNominalType(nominal)) |kind| {
-                    const literal = self.recordedNumeralLiteralForNode(pending.node);
-                    const info = try self.exactNumeralInfoForLiteral(literal, region);
-                    if (validateBuiltinFromNumeralLiteral(kind, info) == null) continue;
+                .nominal_type => |nominal| switch (pending.kind) {
+                    .numeral => if (self.builtinNumKindFromNominalType(nominal)) |kind| {
+                        const literal = self.recordedNumeralLiteralForNode(pending.node);
+                        const info = try self.exactNumeralInfoForLiteral(literal, region);
+                        if (validateBuiltinFromNumeralLiteral(kind, info) == null) continue;
+                    },
+                    .quote => if (self.nominalIsBuiltinStrType(nominal)) continue,
                 },
                 .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
             },
             .rigid, .alias, .field_presence => {},
         }
 
-        const literal = self.recordedNumeralLiteralForNode(pending.node);
-        const info = try self.exactNumeralInfoForLiteral(literal, region);
         const enclosing_slot = self.current_expect_effect_slot;
         self.current_expect_effect_slot = pending.expect_slot;
         defer self.current_expect_effect_slot = enclosing_slot;
-        const flex_var = try self.mkFlexWithFromNumeralConstraint(pending.node, expr_idx, null, info, env);
-        const conversion = try conversions.getOrPut(self.gpa, self.types.resolveVar(occurrence_var).var_);
+        const flex_var = switch (pending.kind) {
+            .numeral => numeral: {
+                const literal = self.recordedNumeralLiteralForNode(pending.node);
+                const info = try self.exactNumeralInfoForLiteral(literal, region);
+                break :numeral try self.mkFlexWithFromNumeralConstraint(pending.node, expr_idx, null, info, env);
+            },
+            .quote => try self.mkFlexWithFromQuoteConstraint(pending.node, region, null, env),
+        };
+        const type_root = self.types.resolveVar(occurrence_var).var_;
+        const conversion = try conversions.getOrPut(self.gpa, type_root);
         if (conversion.found_existing) {
             _ = try self.unify(conversion.value_ptr.constrained_var, flex_var, env);
         } else {
-            conversion.value_ptr.* = .{ .occurrence_var = occurrence_var, .constrained_var = flex_var };
+            const determined_against: ?Var = for (self.determined_literal_vars.items[determined_top..]) |determined_var| {
+                if (self.types.resolveVar(determined_var).var_ == type_root) break determined_var;
+            } else null;
+            conversion.value_ptr.* = .{
+                .occurrence_var = occurrence_var,
+                .constrained_var = flex_var,
+                .determined_against = determined_against,
+            };
         }
     }
     self.pending_literals.shrinkRetainingCapacity(kept);
     self.pending_literals_scanned = kept;
 
     for (conversions.values()) |conversion| {
-        _ = try self.unify(conversion.occurrence_var, conversion.constrained_var, env);
+        if (conversion.determined_against) |determined_var| {
+            _ = try self.unify(conversion.constrained_var, determined_var, env);
+        } else {
+            _ = try self.unify(conversion.occurrence_var, conversion.constrained_var, env);
+        }
     }
 }
 
 /// One type's conversion requirement created by `settlePendingLiterals`: a
-/// literal of that type, and the constrained variable every literal of that
-/// type in the pass relates to before it relates to the type.
+/// literal of that type, the constrained variable every literal of that type
+/// in the pass relates to before it relates to the type, and the variable the
+/// literal's type was just determined against, when a unification reported
+/// one.
 const SettledConversion = struct {
     occurrence_var: Var,
     constrained_var: Var,
+    determined_against: ?Var,
 };
 
 /// Check one exact numeric source occurrence. Exact digits and the optional
@@ -31328,6 +31410,8 @@ fn resumeStrCheck(self: *Self, task: *ExprTask, state: *StrCheck, env: *Env, chi
         _ = try self.unify(expr_var, str_var, env);
     } else if (try self.checkConcreteBuiltinQuote(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, frame.nested_expected, env)) {
         // The context already names the builtin `Str`.
+    } else if (try self.deferQuoteConversion(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, env)) {
+        // The conversion waits for the literal's type to settle.
     } else {
         // A plain literal converts to its target type through from_quote,
         // defaulting to Str if nothing pins it.
@@ -45202,13 +45286,14 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
 fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
-    // A deferred number literal is a numeral, the dominant kind.
-    switch (resolved.desc.content.flex.literal) {
-        .numeral => return .numeral,
-        .none => {},
-    }
     const constraints = self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints);
-    return literal_defaulting.dominantKind(self.literalMethodIdents(), constraints);
+    // A deferred literal counts as its conversion constraint would, under
+    // the oracle's precedence: numeral, then quote.
+    return switch (resolved.desc.content.flex.literal) {
+        .numeral, .numeral_and_quote => .numeral,
+        .quote => if (literal_defaulting.dominantKind(self.literalMethodIdents(), constraints) == .numeral) .numeral else .quote,
+        .none => literal_defaulting.dominantKind(self.literalMethodIdents(), constraints),
+    };
 }
 
 // --- Per-kind literal facts, each an exhaustive `switch (LiteralKind)` ---------

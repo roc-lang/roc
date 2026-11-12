@@ -32,10 +32,10 @@ written_method = written.foo()
 MISSING METHOD - defaulted_type_diagnostics.md:22:26:22:29
 MISSING METHOD - defaulted_type_diagnostics.md:15:18:15:25
 MISSING METHOD - defaulted_type_diagnostics.md:17:17:17:20
+MISSING METHOD - defaulted_type_diagnostics.md:7:26:7:27
 MISSING METHOD - defaulted_type_diagnostics.md:9:18:9:20
 MISSING METHOD - defaulted_type_diagnostics.md:11:21:11:23
 TYPE MISMATCH - defaulted_type_diagnostics.md:13:34:13:37
-MISSING METHOD - defaulted_type_diagnostics.md:7:16:7:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -139,6 +139,36 @@ MISSING METHOD - defaulted_type_diagnostics.md:7:16:7:17
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
+		(region (start 7 26) (end 7 27))
+		(headline
+			(reflow "This number's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "d")
+			(reflow " ")
+			(reflow "method."))
+		(document
+			(source-region (file "defaulted_type_diagnostics.md") (start 7 26) (end 7 27) (annotation error) (line-text "materialized = g(|n| n + 1)"))
+			(line-break)
+			(reflow "Its type needs all of these:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a where [a.d : I64 -> a, a.encode : a -> I64, a.plus : a, a -> a]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "None of the built-in number types")
+			(reflow " ")
+			(reflow "have a method named")
+			(reflow " ")
+			(annotated code "d")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
 		(region (start 9 18) (end 9 20))
 		(headline
 			(reflow "This number's type never resolved to a concrete type, so it has no")
@@ -200,30 +230,7 @@ MISSING METHOD - defaulted_type_diagnostics.md:7:16:7:17
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 7 16) (end 7 17))
-		(headline
-			(reflow "A type this needs never resolved to a concrete type, so it has no")
-			(reflow " ")
-			(annotated code "d")
-			(reflow " ")
-			(reflow "method."))
-		(document
-			(source-region (file "defaulted_type_diagnostics.md") (start 7 16) (end 7 17) (annotation error) (line-text "materialized = g(|n| n + 1)"))
-			(line-break)
-			(reflow "Its type needs all of these:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "a where [a.d : I64 -> a, a.encode : a -> I64, a.plus : a, b -> a]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -376,12 +383,12 @@ written_method = written.foo()
 			(e-block
 				(s-type-var-alias (alias "A") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-dispatch-call (method "encode") (constraint-fn-var 319)
+				(e-dispatch-call (method "encode") (constraint-fn-var 312)
 					(receiver
-						(e-call (constraint-fn-var 318)
+						(e-call (constraint-fn-var 311)
 							(e-lookup-local
 								(p-assign (ident "f")))
-							(e-type-dispatch-call (method "d") (type-dispatch-stmt 20) (constraint-fn-var 314)
+							(e-type-dispatch-call (method "d") (type-dispatch-stmt 20) (constraint-fn-var 307)
 								(args
 									(e-num (value "41"))))))
 					(args))))
@@ -403,17 +410,17 @@ written_method = written.foo()
 						(ty-lookup (name "I64") (builtin)))))))
 	(d-let
 		(p-assign (ident "materialized"))
-		(e-call (constraint-fn-var 339)
+		(e-call (constraint-fn-var 325)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-lambda
 				(args
 					(p-assign (ident "n")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 337)
+				(e-dispatch-call (method "plus") (constraint-fn-var 323)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "n"))))
 					(args
-						(e-num (value "1")))))))
+						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "literal_method"))
 		(e-runtime-error (tag "erroneous_value_expr")

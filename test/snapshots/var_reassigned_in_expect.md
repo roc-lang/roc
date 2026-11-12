@@ -287,7 +287,7 @@ NO CHANGE
 				(s-expect
 					(e-block
 						(s-runtime-error (tag "var_reassigned_in_expect"))
-						(e-dispatch-call (method "is_gte") (constraint-fn-var 324)
+						(e-dispatch-call (method "is_gte") (constraint-fn-var 309)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$remaining"))))
@@ -314,7 +314,7 @@ NO CHANGE
 								(p-assign (ident "balance"))))
 						(s-reassign
 							(p-var-assign (ident "$left"))
-							(e-dispatch-call (method "minus") (constraint-fn-var 355)
+							(e-dispatch-call (method "minus") (constraint-fn-var 314)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$left"))))
@@ -330,7 +330,7 @@ NO CHANGE
 							(e-block
 								(s-reassign
 									(p-var-assign (ident "$left"))
-									(e-dispatch-call (method "plus") (constraint-fn-var 419)
+									(e-dispatch-call (method "plus") (constraint-fn-var 360)
 										(receiver
 											(e-lookup-local
 												(p-var-assign (ident "$left"))))
@@ -338,7 +338,7 @@ NO CHANGE
 											(e-lookup-local
 												(p-assign (ident "x"))))))
 								(e-empty_record)))
-						(e-dispatch-call (method "is_gte") (constraint-fn-var 434)
+						(e-dispatch-call (method "is_gte") (constraint-fn-var 309)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$left"))))
@@ -361,15 +361,15 @@ NO CHANGE
 						(e-tag (name "True"))))
 				(s-reassign
 					(p-var-assign (ident "$count"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 479)
+					(e-dispatch-call (method "plus") (constraint-fn-var 382)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "$count"))))
 						(args
 							(e-num (value "1")))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 485)
+				(e-dispatch-call (method "plus") (constraint-fn-var 360)
 					(receiver
-						(e-dispatch-call (method "minus") (constraint-fn-var 481)
+						(e-dispatch-call (method "minus") (constraint-fn-var 314)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$remaining"))))

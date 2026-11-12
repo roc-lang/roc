@@ -398,10 +398,24 @@ pub const Flex = struct {
     pub const Literal = enum(u8) {
         none,
         numeral,
+        quote,
+        /// A number literal's type and a string literal's type merged into
+        /// this class. No type is both, so the class cannot check.
+        numeral_and_quote,
 
         /// The marker of a class two flex classes merged into.
         pub fn merged(a: Literal, b: Literal) Literal {
-            return if (a == .numeral or b == .numeral) .numeral else .none;
+            if (a == b or b == .none) return a;
+            if (a == .none) return b;
+            return .numeral_and_quote;
+        }
+
+        pub fn hasNumeral(self: Literal) bool {
+            return self == .numeral or self == .numeral_and_quote;
+        }
+
+        pub fn hasQuote(self: Literal) bool {
+            return self == .quote or self == .numeral_and_quote;
         }
     };
 
