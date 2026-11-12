@@ -5096,11 +5096,62 @@ quantified, exactly as it owns copies of the quantified variables.
 The rule is carried as explicit descriptor data, not by rank: such a class is
 monomorphic, so marking it generalized would make every body-local record of
 the scope look polymorphic to post-check stages. Instead, when a
-generalization boundary leaves a class it made ungeneralized and the class can
-lift (`Descriptor.liftsIntoNominal`: a record, tag union, empty record, or empty
-tag union not written in an opened nominal backing, which never lifts), it
-marks the class `DescriptorFlags.per_use_structure`, and the rank stays what
-rank adjustment computed. A class an enclosing scope made keeps its sharing:
+generalization boundary leaves a class it made ungeneralized and some use can
+change the class (`UseAbsorbers.copiedPerUse`), it marks the class
+`DescriptorFlags.per_use_structure`, and the rank stays what rank adjustment
+computed. Only a record, tag union, empty record, or empty tag union not
+written in an opened nominal backing (`Descriptor.liftsIntoNominal`) can be
+changed by a use, and only in these ways:
+
+- A use lifts an anonymous tag union into a nominal type only when the
+  declaration's backing is a tag union whose row is open or lists every tag
+  the anonymous union itself lists, which is exactly what relating the two
+  checks before it lifts.
+- A use lifts an anonymous record into a nominal type only when the
+  declaration's backing is a record whose row is open or lists every field
+  of the anonymous record it cannot absorb. A backing absorbs only an
+  optional or defaulted field, and a field whose kind is still unsettled
+  becomes one only by relating to a widening field of its name.
+- A use widens a record with an optional or defaulted field the record does
+  not hold. That field's name was written in some module, as a `?:` or
+  defaulted field of an annotation, a `.?` access, or an unset.
+- A declaration that is one of its own type variables, or that is invalid
+  (relating to which poisons the structure), can take in anything.
+
+So a structure is marked only when something the module's checking can see
+could change it. A tag union is marked when some visible declaration could
+take it in: an open tag-union backing row, a closed one listing all of the
+union's own tags, or, for an empty union, any tag-union backing. A record is
+marked when some visible declaration could take it in by the same rule over
+the fields it cannot absorb, or when some visible widening field name is
+not among its own fields. A structure nothing visible could change keeps the
+same type under every relation, so every use shares it. Only a class's own
+tags or fields are counted; a tag or field further along its row only rules
+out a lift or a widening, so leaving it out can only mark more.
+
+What a module's checking can see is collected before any binding generalizes
+(`Check.use_absorbers`). From each module the check copies types from
+(Builtin, its imports, the owners of what it imports, and a platform's
+requirement surface) it is every declaration in that module's type store,
+less the opaque ones, into which another module cannot lift, and the name of
+every optional or defaulted field of a record in that store: a field name
+written in one module reaches another only through the type stores it copies
+types from. Sealing a checked store lists those names
+(`Store.widening_names`), so a module reads each source's list rather than
+walking its records. From the module itself it is read from its syntax, since checking
+registers a declaration or an optional field only as it reaches it: every
+nominal declaration's backing, and every field name written as optional or
+defaulted in an annotation, accessed with `.?`, or unset. A backing written
+as a tag union or record is the only one of the module's own that can take
+in anonymous structure: an application or a lookup is checked as the alias or
+nominal type it names, and relating structure to a nominal type whose
+backing is not the same kind of structure never lifts. Names are compared by
+a hash of their text, as they come from several modules; a collision can
+only mark a structure that did not need it. Debug builds assert that every
+module a check copies types from was collected, that every declaration the
+module registered admits no lift its syntax did not record, and that every
+optional or defaulted field of a record in the module's store is a collected
+widening field. A class an enclosing scope made keeps its sharing:
 a weak binding's one type is still shared by every use, and a function
 returning it returns that same class. A merge keeps the mark only when both
 sides had it, so a class that joins an enclosing scope's class is shared like
@@ -5136,19 +5187,23 @@ type by descriptors.
 
 Annotation instances follow the same rule. An annotation's instance of a
 type declaration is shared by later references at the same position only
-when it is ground and free of liftable structure; only such subtrees of a
-non-ground instance are shared with the next instance. Otherwise one
+when it is ground and free of structure a use can change, by the same test;
+only such subtrees of a non-ground instance are shared with the next
+instance. Otherwise one
 definition's body, lifting its annotated result into a nominal type, would
 change every other annotation naming the same alias.
 
-The cost is one copy per use of a binding's anonymous records and tag
-unions, with their field and tag runs, and of the nodes above them.
+The cost is one copy per use of a binding's anonymous records and of the tag
+unions a visible declaration could take in, with their field and tag runs,
+and of the nodes above them.
 The accepted and rejected sides are pinned by
 `test/cli/LiftedUseLeavesOtherUses.roc`,
 `test/cli/LiftedUseLeavesOtherUsesRejected.roc`,
 `test/cli/OptionalFieldsPerUse.roc`,
-`test/cli/issue_12482_encoder_for_in_nested_function.roc`, and
-`test/cli/lifted_use_leaves_other_uses/`.
+`test/cli/issue_12482_encoder_for_in_nested_function.roc`,
+`test/cli/lifted_use_leaves_other_uses/`, and
+`src/check/test/per_use_structure_test.zig`, which pins which tag unions and
+records are copied and which are shared.
 
 ### Scheme Relations Through Unrooted Variables
 
@@ -13981,9 +14036,10 @@ Other solved-graph mutations:
   rule in Declared Backing Structure (above); the write itself never changes
   content or links classes.
 - `markPerUseStructure`—policy: Anonymous Structure Is Copied Per Use
-  (above). A generalization boundary marks each liftable class it made and
-  left ungeneralized, after rank adjustment and before anything instantiates
-  the binding. The write never changes content, rank, or links classes; scheme
+  (above). A generalization boundary marks each class it made and left
+  ungeneralized that a use can change (a record or tag union something
+  visible could lift or widen), after rank adjustment and before anything
+  instantiates the binding. The write never changes content, rank, or links classes; scheme
   classification and scheme instantiation consult it, so each use copies the
   class instead of sharing it. The accepted side (every use keeps its own
   type, and a lifting use still lifts) and the rejected side (a method of the
@@ -14912,7 +14968,11 @@ callable, since the descriptor holding it lives for the program's lifetime.
 Two descriptors of the same type may be distinct static data (one without
 override scope, one carrying a body's overrides); no consumer compares
 descriptors by identity, and equality, hashing, and inspection are defined on
-values through descriptors, never on descriptors.
+values through descriptors, never on descriptors. An override capturing such a
+descriptor is likewise distinct static data for one method: two override scopes
+merged into one descriptor agree on a nominal type when each of its methods
+enters the same procedure, and the merged scope keeps the first scope's
+callables.
 
 #### Type Tables
 
