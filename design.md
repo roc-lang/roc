@@ -11296,17 +11296,31 @@ frame. Until its boundary, an unannotated function member's result row can
 still become the row of any expression that reached it through a recursive
 reference or a dispatch back-edge, and a deferred dispatch constraint
 waiting for an unchecked target still becomes that target's instantiated
-result. A contribution whose source row ends in such an open row (a member's
-result row, a waiting dispatch constraint's result row, or a destination
-already waiting on a fixpoint) is not related when its lambda composes: building the result
-on top of that row could make the result its own extension once the
-fixpoint closes (`helper = |_| { _a = Err(Bad)?  helper({}) }` would infer
-`E = [Bad, ..E]`). The contribution waits for the outermost fixpoint in which
+result. Likewise, a method call whose receiver is not resolved yet when the
+call is made (a lambda's parameter whose type arrives later through the
+lambda's expected type, a later use, or an annotated binding) still becomes
+its method's instantiated result once the receiver resolves and the dispatch
+settles. A contribution whose source row ends in such an open row (a member's
+result row, a waiting dispatch constraint's result row, a pending method
+call's result row, or a destination already waiting on a fixpoint) is not
+related when its lambda composes: building the result on top of that row
+could make the result its own extension once the fixpoint closes
+(`helper = |_| { _a = Err(Bad)?  helper({}) }` would infer `E = [Bad, ..E]`),
+or, for a pending method call, equate the method's errors with the result's
+errors other than the tags the lambda's other `?`s contribute, which the
+method may also raise
+(`run(|source| { m = source.read()?  k = check(m)?  Ok(k) })` with both
+failing with `Bad`). The contribution waits for the outermost fixpoint in which
 its source is open, and the destination's residual tail is kept at that
 fixpoint's rank so no frame nested inside it generalizes the tail first. A
 member result reached before the member's own result is built may still be
 the structural union `Try`'s backing relates to; its error row is the `Err`
-payload.
+payload. A pending method call is open in the fixpoint of the frame where
+its receiver would generalize, until its dispatch settles. At that frame's
+boundary, a call whose receiver outlives the frame stays open in the
+enclosing fixpoint where the receiver would now generalize, so each call
+moves at most once per frame; a receiver generalized at the boundary takes
+its dispatch into the scheme, and the call's contributions relate there.
 
 At the fixpoint's boundary—after every member's pattern has been related to
 its right-hand side and every deferred dispatch constraint the frame owns
@@ -11325,7 +11339,8 @@ an enclosing fixpoint moves to that fixpoint. Thus a self tail call adds
 nothing to its own result, mutually tail-calling functions share one error
 row, and a closure whose result includes its enclosing function's errors
 adds nothing to that function unless the function returns the closure's
-result. Pinned by `src/check/test/issue_11640_test.zig`.
+result. Pinned by `src/check/test/issue_11640_test.zig`; pending method
+calls by `src/check/test/issue_12951_test.zig`.
 
 The rule is confined to deferred returns carrying the explicit `try_suffix`
 return context emitted by canonicalization. Annotated returns reject incompatible

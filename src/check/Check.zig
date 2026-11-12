@@ -4295,14 +4295,27 @@ const TryRowFixpoint = struct {
     /// function member link to, and the callables of dispatch obligations
     /// waiting for their target's scheme.
     links: std.ArrayListUnmanaged(Var) = .empty,
+    /// The callables of method calls whose receiver was not resolved when
+    /// they were made, linked in the frame where the receiver would
+    /// generalize. Their results stay open until the dispatch settles.
+    dispatch_links: std.ArrayListUnmanaged(PendingReceiverDispatch) = .empty,
     /// Error-row contributions whose source is still open in this frame,
     /// waiting for its boundary.
     edges: std.ArrayListUnmanaged(DeferredTryRowEdge) = .empty,
 
     fn deinit(self: *TryRowFixpoint, gpa: Allocator) void {
         self.links.deinit(gpa);
+        self.dispatch_links.deinit(gpa);
         self.edges.deinit(gpa);
     }
+};
+
+/// A method call made on a receiver that was not resolved yet, whose result
+/// is unknown until its dispatch settles.
+const PendingReceiverDispatch = struct {
+    /// The dispatch constraint's own callable.
+    fn_var: Var,
+    receiver: Var,
 };
 
 /// One `?` or body error-row contribution whose source row was still open in
@@ -37422,6 +37435,7 @@ fn mkReceiverDispatchConstraint(
     _ = try self.unify(constrained_var, receiver_var, env);
     try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(receiver_var, .creation, constraintIntroExpr(constraint), .value);
+    try self.linkPendingReceiverDispatch(receiver_var, constraint_fn_var);
     return constraint_fn_var;
 }
 
@@ -46741,6 +46755,49 @@ fn addTryRowFixpointLink(self: *Self, owner: u32, link_var: Var) Allocator.Error
     try self.try_row_fixpoints.items[owner].links.append(self.gpa, link_var);
 }
 
+/// Until a method call's dispatch settles, its result is not the method's
+/// yet, so a `?` contribution ending in that result's error row waits like
+/// one ending in a waiting obligation's (design.md "Try Return-Row
+/// Composition"). A call whose receiver is already resolved settles where it
+/// is made; one on an unresolved receiver is linked in the fixpoint of the
+/// frame where the receiver would generalize.
+fn linkPendingReceiverDispatch(self: *Self, receiver_var: Var, fn_var: Var) Allocator.Error!void {
+    const receiver = self.types.resolveVar(receiver_var);
+    if (receiver.desc.content != .flex) return;
+    const owner = self.tryRowFixpointAtRank(receiver.desc.rank, self.try_row_fixpoints.items.len) orelse return;
+    try self.try_row_fixpoints.items[owner].dispatch_links.append(self.gpa, .{ .fn_var = fn_var, .receiver = receiver_var });
+}
+
+/// The innermost fixpoint below `limit` whose frame generalizes at or
+/// outside `rank`.
+fn tryRowFixpointAtRank(self: *const Self, rank: Rank, limit: usize) ?u32 {
+    if (rank == .generalized) return null;
+    var idx = limit;
+    while (idx > 0) {
+        idx -= 1;
+        if (@backingInt(self.try_row_fixpoints.items[idx].rank) <= @backingInt(rank)) return @intCast(idx);
+    }
+    return null;
+}
+
+/// At a fixpoint's boundary its dispatch links end: a settled dispatch's
+/// result is its method's, and a receiver generalized here takes its
+/// dispatch into the scheme. A dispatch whose receiver outlives the frame is
+/// still pending, so its link moves to the enclosing fixpoint where the
+/// receiver would generalize, before this boundary decides which
+/// contributions are still open there.
+fn moveTryRowDispatchLinks(self: *Self, fixpoint_idx: u32) Allocator.Error!void {
+    const fixpoint = &self.try_row_fixpoints.items[fixpoint_idx];
+    for (fixpoint.dispatch_links.items) |link| {
+        if (self.settled_static_dispatch_constraint_fns.contains(link.fn_var)) continue;
+        const receiver_rank = self.types.resolveVar(link.receiver).desc.rank;
+        if (receiver_rank == .generalized or @backingInt(receiver_rank) >= @backingInt(fixpoint.rank)) continue;
+        const outer = self.tryRowFixpointAtRank(receiver_rank, fixpoint_idx) orelse continue;
+        try self.try_row_fixpoints.items[outer].dispatch_links.append(self.gpa, link);
+    }
+    fixpoint.dispatch_links.clearRetainingCapacity();
+}
+
 /// Close the innermost fixpoint, which must be `fixpoint_idx`: relate what is
 /// still deferred to it, then drop it with its links.
 fn popTryRowFixpoint(self: *Self, fixpoint_idx: u32, env: *Env) Allocator.Error!void {
@@ -46816,12 +46873,22 @@ fn tryBackingErrPayload(self: *Self, union_var: Var) ?Var {
 fn collectOpenTryRowTails(self: *Self, limit: usize) Allocator.Error!void {
     const open_tails = &self.try_row_open_tails;
     open_tails.clearRetainingCapacity();
-    for (self.try_row_fixpoints.items[0..limit], 0..) |fixpoint, owner_idx| {
+    for (self.try_row_fixpoints.items[0..limit], 0..) |*fixpoint, owner_idx| {
         const owner: u32 = @intCast(owner_idx);
         for (fixpoint.links.items) |link_var| {
             const tail = self.tryRowFixpointMemberTail(link_var) orelse continue;
             try self.noteOpenTryRowTail(tail, owner);
         }
+        // A settled dispatch's result is its method's, so its link ends.
+        var kept: usize = 0;
+        for (fixpoint.dispatch_links.items) |link| {
+            if (self.settled_static_dispatch_constraint_fns.contains(link.fn_var)) continue;
+            fixpoint.dispatch_links.items[kept] = link;
+            kept += 1;
+            const tail = self.tryRowFixpointMemberTail(link.fn_var) orelse continue;
+            try self.noteOpenTryRowTail(tail, owner);
+        }
+        fixpoint.dispatch_links.shrinkRetainingCapacity(kept);
         for (fixpoint.edges.items) |edge| {
             try self.noteOpenTryRowTail(self.types.resolveVar(self.tagRowTail(edge.composed_err)).var_, owner);
         }
@@ -46859,6 +46926,7 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
 
     const scratch = &self.try_row_fixpoint_scratch;
     scratch.clear();
+    try self.moveTryRowDispatchLinks(fixpoint_idx);
     if (self.try_row_fixpoints.items[fixpoint_idx].edges.items.len == 0) return false;
     try self.collectOpenTryRowTails(fixpoint_idx);
     // A contribution whose source is still open in an enclosing fixpoint
