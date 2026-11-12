@@ -92,3 +92,53 @@ test "equality on a type with arguments keeps its constraint" {
     const growth = try growthPerItem("checks : List(U64), List(U64) -> List(Bool)\nchecks = |a, b| [", "a == b,", "]\n");
     try std.testing.expect(growth.constraints >= 1);
 }
+
+test "equality on a closed record of builtin types adds no constraint" {
+    const growth = try growthPerItem("Point : { x : U64, y : Str }\nsame : Point, Point -> List(Bool)\nsame = |a, b| [", "a == b, a != b,", "]\n");
+    try std.testing.expectEqual(@as(usize, 0), growth.constraints);
+}
+
+test "equality on a closed tag union with builtin payloads adds no constraint" {
+    const growth = try growthPerItem("State : [Idle, Busy(U8), Done((Str, Bool))]\nsame : State, State -> List(Bool)\nsame = |a, b| [", "a == b,", "]\n");
+    try std.testing.expectEqual(@as(usize, 0), growth.constraints);
+}
+
+test "equality on a closed tag union against one of its tags adds no constraint" {
+    const growth = try growthPerItem("State : [Idle, Busy(U8)]\nidle : State -> List(Bool)\nidle = |a| [", "a == Idle,", "]\n");
+    try std.testing.expectEqual(@as(usize, 0), growth.constraints);
+}
+
+test "equality on a record whose field type is unknown keeps its constraint" {
+    const with_operator = try countsFor("same = |a, b| [", "{ value: a } == { value: b },", "]\n", 8);
+    const without_operator = try countsFor("same = |_a, _b| [", "", "]\n", 0);
+    try std.testing.expect(with_operator.constraints > without_operator.constraints);
+}
+
+test "equality on a record holding a list keeps its constraint" {
+    const growth = try growthPerItem("Bag : { items : List(U8) }\nsame : Bag, Bag -> List(Bool)\nsame = |a, b| [", "a == b,", "]\n");
+    try std.testing.expect(growth.constraints != 0);
+}
+
+test "equality on a record holding a type of this module keeps its constraint" {
+    const growth = try growthPerItem(
+        \\Meters := U64.{
+        \\    is_eq : Meters, Meters -> Bool
+        \\    is_eq = |_, _| Bool.True
+        \\}
+        \\
+        \\Trip : { length : Meters }
+        \\same : Trip, Trip -> List(Bool)
+        \\same = |a, b| [
+    , "a == b,", "]\n");
+    try std.testing.expect(growth.constraints != 0);
+}
+
+test "equality on a record holding a function is still an error" {
+    var env = try TestEnv.init("Test",
+        \\Handler : { run : U64 -> U64 }
+        \\same : Handler, Handler -> Bool
+        \\same = |a, b| a == b
+    );
+    defer env.deinit();
+    try std.testing.expect(try env.typeProblemCount() != 0);
+}
