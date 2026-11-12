@@ -4198,6 +4198,71 @@ test "issue 12609 lss runs imported stored inline lambdas at two types" {
     try std.testing.expectEqualStrings("(\"hi!\", \"abab\", [1, 2, 1, 2])", output);
 }
 
+// repro for https://github.com/roc-lang/roc/issues/12984
+//
+// The `_` in the annotation leaves the error row and the quote literal's type
+// to the body, so the body's scheme quantifies them and `count_down` takes the
+// literal's converted value as a hidden argument. The recursive call shares
+// those variables with the body and forwards that argument.
+test "issue 12984 boxy forwards a hole-inferred literal argument through an annotated recursive call" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\count_down : U64 -> Try(U64, _)
+        \\count_down = |n| if n == 7 Err(Seven("seven")) else if n == 0 Ok(n) else count_down(n - 1)
+        \\
+        \\main = (count_down(3), count_down(9))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(Ok(0), Err(Seven(\"seven\")))", output);
+}
+
+test "issue 12984 boxy forwards hole-inferred literal arguments across a mutually recursive group" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\count_down : U64 -> Try(U64, _)
+        \\count_down = |n| if n == 7 Err(Seven("seven")) else if n == 0 Ok(n) else step(n - 1)
+        \\
+        \\step : U64 -> Try(U64, _)
+        \\step = |n| if n == 3 Err(Three("three")) else count_down(n)
+        \\
+        \\main = (count_down(2), count_down(5), count_down(9))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(Ok(0), Err(Three(\"three\")), Err(Seven(\"seven\")))", output);
+}
+
 test "issue 12609 boxy runs imported lambdas a stored conditional, match, or block selects" {
     const allocator = std.testing.allocator;
     const hooks_module =

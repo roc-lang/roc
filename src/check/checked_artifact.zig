@@ -16031,10 +16031,12 @@ const EvidencePass = struct {
         }
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
         // Resolution against an enclosing evidence chain depends on that
-        // chain, so only chain-free resolutions are shared.
+        // chain, so only chain-free resolutions are shared. Every empty
+        // substitution of one scheme is the same substitution, wherever its
+        // record's empty range sits in the pair pool.
         const key: ?RecordSubstitutionKey = if (evidenceChainIsEmpty(self.current_chain)) .{
             .scheme_root = record.scheme_root,
-            .pairs_start = record.pairs_start,
+            .pairs_start = if (record.pairs_len == 0) 0 else record.pairs_start,
             .pairs_len = record.pairs_len,
             .unpinned = unpinned,
         } else null;
