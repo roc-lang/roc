@@ -694,6 +694,53 @@ linked objects, executables, or glue plugins. Every invocation
 specializes and emits its requested program from the current checked modules.
 In-memory sharing within a compilation remains independent of disk caching.
 
+### Loading environments in place
+
+A cached `ModuleEnv` is never copied into fresh storage. A canonicalized-cache
+hit, a checked-cache hit and a typing restore all load the entry's env body with
+the one loader, `ModuleEnv.Serialized.deserializeInPlace`, over a copy-on-write
+private mapping of the entry (or, where the platform cannot map files, a heap
+buffer holding it). Every list in the env borrows the entry's bytes: a
+`SafeList` with capacity 0 and a nonzero length, or a `SafeMultiList` whose
+capacity word carries the borrowed mark. A borrowed list reads and writes its
+items where they lie, so the probe tables of the interners and of the
+string-literal and import stores take new cells in place, and solving writes
+type rows in place. The first growth of a list copies its items into memory the
+env's allocator owns and leaves the entry's bytes alone. `deinit` frees only
+those copies: a borrowed list frees nothing, so a loaded env is released with
+the same `deinit` as a freshly built one.
+
+The env owns its entry as `loaded_entry` and releases it (an unmapping, or a
+free with the env's allocator) at the end of `deinit`, after every list that
+might still borrow it. The entry therefore lives exactly as long as the env,
+whichever thread loaded it and whichever thread releases it, and is released
+once on every path. Anything else read from the entry, such as a checked
+artifact's body or the typing metadata, lives as long as the env does.
+
+The loader takes the type store's access: `.sealed` for a checked hit, whose
+types are solved and only read, and `.writable` for a canonicalized hit and a
+typing restore, whose types checking solves further; a writable load also gives
+the node store its scratch buffers. Nothing in a loaded env is rebuilt: the
+identifier interners, the string-literal dedup table, the import lookup table,
+sorted method and exposure tables, and the type store's
+`invalid_nominal_decl_written` and `err_written` flags are all stored in the
+entry and used as loaded.
+
+Validation runs before the loader dereferences anything: every relocatable list
+must lie inside the body, and each probe table must have its stored shape (a
+power-of-two length, or empty with no entries; parallel columns of equal
+length; fewer entries than cells; list lengths agreeing with their counts). A
+violation is a cache miss. The checks are constant time and read no cell, so a
+corrupt table whose occupied cells outnumber its count, or a cell naming an
+entry that does not exist, is not detected.
+
+The compiler's embedded Builtin module is viewed the same way, with a sealed
+type store, over the executable's static data. Every compilation in the process
+shares those bytes, so nothing writes through the view: it has no imports and
+no node scratch, and it is baked already prepared for checked-artifact use, so
+nothing inserts into its identifier or string-literal tables. Debug builds make
+those pages read-only, so a write through the view faults where it happens.
+
 ### Test outcome files
 
 `roc test` records what running each test root observed, so a later run of
@@ -4253,8 +4300,11 @@ key, and both body lengths):
   renders from, plus the parser's own import inventory (each local import's
   spelling, base, and parent count, and each package-qualified import name).
   The parse stage produces these source-local records in the AST rather than in
-  the env, and a hit has no AST, so they are encoded explicitly, field by
-  field, and decoded the same way. Nothing is re-parsed to recover them.
+  the env, and a hit has no AST, so they are stored as an extern header over
+  lists of fixed-size records and one name-byte list, read in place after their
+  bounds are checked; each record's enum values and name ranges are checked as
+  it is read, and any failure is a miss. Nothing is re-parsed to recover them.
+  The env body is padded to 16 bytes so the record starts aligned.
 
 Location-dependent import normalization is deliberately absent from an entry:
 an import's package-root-relative module name depends on the importing module's
@@ -4263,17 +4313,20 @@ is a canonicalization input. The parse task normalizes the record's spellings
 against its own task inputs on a hit exactly as it does on a miss.
 
 The parse task probes this cache after reading the source and before parsing. A
-hit loads the env into fully owned, growable storage (every store copied, the
-identifier interner and module-identity table reopened for insertion, the
-string-literal builder rebuilt from the loaded store's own entries, and the node
-store given its scratch) because the drain patches nodes in place and appends
-nodes, diagnostics, identifiers, string literals, method rows, and module
-identities, and checking then grows types and regions. A hit then reads the
-module's file imports and renders both the parse-stage and canonicalization
-reports, and the coordinator handles it as a parse result followed by a
-canonicalized result, through the same two steps a miss takes. A miss parses,
-canonicalizes, and stores the entry before the env leaves the canonicalize task.
-A corrupt, truncated, stale, or misaligned entry is a miss.
+hit first reads the parse-stage record, renders its reports (a diagnostic's
+report reads only the source and the line starts of the env's common store,
+which alone is validated for it), and delivers them with the discovered imports
+as a `cached_parse` result. It then loads the env in place with a writable type
+store ("Loading environments in place"); the drain patches nodes in place and
+appends nodes, diagnostics, identifiers, string literals, method rows, and
+module identities, and checking then grows types and regions, each list copying
+itself on its first growth. The env takes the entry over as its
+`loaded_entry`. A hit then reads the module's file imports and renders the
+canonicalization reports in a `canonicalized_cached` result. The coordinator
+handles the two results as a parse result followed by a canonicalized result,
+through the same two steps a miss takes. A miss parses, canonicalizes, and
+stores the entry before the env leaves the canonicalize task. A corrupt,
+truncated, stale, or misaligned entry is a miss.
 
 Cache state never changes compiler output: a warm, cold, or disabled
 canonicalized cache yields identical diagnostics, identical checked data, and
@@ -4283,9 +4336,13 @@ The checked-module cache is unchanged in role: it stores the fully checked
 module after the drain, keyed by content identity and the direct imports'
 checked-module cache keys, and is probed once the direct imports are complete. A
 checked hit makes the drain unnecessary; a canonicalized hit makes parsing
-unnecessary. A checked hit installs the entry's env with the package-qualified
-display identity of the module being installed, exactly as a canonicalized
-result does.
+unnecessary. A checked hit loads the entry's env with the same in-place loader
+and a sealed type store, relocates the checked artifact in place beside it, and
+installs the env, which owns the entry, with the package-qualified display
+identity of the module being installed, exactly as a canonicalized result does.
+A typing restore loads the env of an entry whose typing inputs match with a
+writable type store, takes the entry over from the checking context, and seals
+the store once the reused typing is installed.
 
 A module's file imports are part of its source-input identity. They are read
 in the canonicalize task, after the canonicalized-cache entry is stored and
@@ -4297,7 +4354,9 @@ complete by the time the checked cache is probed.
 A successful parse also writes a small source import inventory, keyed by
 normalized source bytes within the compiler compatibility namespace. It holds
 parser-produced local import spellings, bases and parent counts, qualified
-imports, and public-name-to-source-module mappings. Syntax errors never produce
+imports, and public-name-to-source-module mappings, stored like the
+parse-stage record: an extern header over lists of fixed-size records and one
+name-byte list, read in place after bounds checks. Syntax errors never produce
 a reusable inventory. The inventory contains no filesystem paths or checked
 state. Graph tools consume this same parser output; a missing or corrupt
 optional record causes a fresh parse, never a guess about imports.
@@ -4322,8 +4381,9 @@ whitespace-only lines and lines whose first non-whitespace byte is `#`.
 
 ### Coordinator phases
 
-`Parse` (probe the canonicalized cache; on a hit load the env, read the file
-imports, and skip straight to the canonicalized result; on a miss parse) →
+`Parse` (probe the canonicalized cache; on a hit deliver the parse stage, load
+the env, read the file imports, and skip straight to the canonicalized result;
+on a miss parse) →
 canonicalization (enqueued as soon as the parse result is handled, never
 waiting on an import; canonicalize, store the entry, then read the file imports
 before the module leaves the task) → `WaitingOnImports` (canonicalized, waiting
@@ -4334,6 +4394,23 @@ miss drain the worklist then check) → `Done`. No phase before
 identity is recorded on the env when the canonicalized result is handled,
 before the hosted transform, on a cache hit exactly as on a miss, and again on
 the env a checked-cache hit installs.
+
+A canonicalized hit delivers its parse stage as its own `cached_parse` result
+before it loads the env, so the coordinator registers the module's imports, and
+schedules their parses, while the env is still loading. The coordinator handles
+that result exactly like a parse result's reports and imports, and the task's
+own result follows it: a worker sends both through the result channel in order,
+counting the extra one in `inflight`, and a task run on the coordinating thread
+queues the early result for `handleResult`, which handles it first. Each
+module's imports are therefore registered once, and its reports keep the order
+a miss gives them (parse-stage reports, then import-registration reports, then
+canonicalization reports), whatever the cache state. A module that
+registration, or anything after it, finished is left finished when the task's
+own result arrives. When the env cannot be loaded after its parse stage was
+delivered, the module is parsed after all and its parse result is marked as
+already delivered: its reports and imports, which come from the same source
+bytes as the record, are not taken a second time (debug builds check that they
+match).
 
 ## Cache Boundary
 
@@ -4576,11 +4653,11 @@ Checked-module cache writes stream the header and the relocatable bodies (the
 output) to a private staging file, then atomically rename it. They never gather
 another full-entry heap buffer. Each body starts at a 16-byte-aligned entry
 offset, so a cache hit relocates every body in place inside the entry's
-private mapping, which the installed module's environment storage owns. A failed write or rename removes the staging file
+private mapping, which the installed module's environment owns. A failed write or rename removes the staging file
 and records a cache-write failure; partial data never becomes a cache entry.
 
 Serialization never writes spare capacity. A `SafeMultiList` persists its live
-rows as `std.MultiArrayList`'s own column layout with capacity equal to length, so
+rows as columns in descending alignment, each exactly as long as the list, so
 both the blob's contents and its size depend on what the list holds and not on how
 it was grown. There is one column-writing implementation behind every
 `SafeMultiList` serialization entry point, so no two entry points can drift into

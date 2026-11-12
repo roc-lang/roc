@@ -974,12 +974,6 @@ pub const CheckingDependency = struct {
         pub fn deserializeInto(self: *const @This(), address: usize) CheckingDependency {
             return .{ .digest = self.digest, .owners = self.owners.deserializeInto(address), .references = self.references.deserializeInto(address), .published = self.published != 0 };
         }
-
-        pub fn deserializeWithCopy(self: *const @This(), address: usize, allocator: Allocator) Allocator.Error!CheckingDependency {
-            var owners = try self.owners.deserializeWithCopy(address, allocator);
-            errdefer owners.deinit(allocator);
-            return .{ .digest = self.digest, .owners = owners, .references = try self.references.deserializeWithCopy(address, allocator), .published = self.published != 0 };
-        }
     };
 };
 
