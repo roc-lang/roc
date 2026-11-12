@@ -11517,6 +11517,7 @@ fn runExprKernel(
                         if (field.value == .supplied) explicit_value_count += 1;
                         try field_work.append(frame_allocator, .{
                             .name = field_name,
+                            .name_token = field.name,
                             .value_expr = field.value.asSupplied(),
                         });
                     }
@@ -13688,18 +13689,18 @@ fn runExprKernel(
                     for (value_free_vars) |fv| {
                         try self.appendPropagatedFreeVar(state.captures_top, fv);
                     }
-                } else if (self.scopeContains(.ident, field.name)) |pattern_idx| {
-                    const lookup_idx = try self.env.addExpr(CIR.Expr{
-                        .e_lookup_local = .{ .pattern_idx = pattern_idx },
-                    }, state.region);
-                    try self.scratch_expr_ids.append(lookup_idx);
-                    try self.appendPropagatedFreeVar(state.captures_top, pattern_idx);
                 } else {
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
-                        .ident = field.name,
-                        .region = state.region,
-                    } });
-                    try self.scratch_expr_ids.append(malformed_idx);
+                    // A punned field is a use of the name it spells, resolved
+                    // exactly as that identifier is anywhere else.
+                    const can_value = try self.canonicalizeUnqualifiedIdentExpr(
+                        field.name,
+                        self.parse_ir.tokens.resolve(field.name_token),
+                    );
+                    try self.scratch_expr_ids.append(can_value.idx);
+
+                    for (self.scratch_free_vars.sliceFromSpan(can_value.free_vars)) |fv| {
+                        try self.appendPropagatedFreeVar(state.captures_top, fv);
+                    }
                 }
             }
 
@@ -17107,6 +17108,9 @@ const ExprIfBranchWork = struct {
 
 const ExprRecordBuilderFieldWork = struct {
     name: Ident.Idx,
+    /// The token spelling the field's name, which is where a punned field
+    /// reads the variable of that name.
+    name_token: Token.Idx,
     value_expr: ?AST.Expr.Idx,
 };
 

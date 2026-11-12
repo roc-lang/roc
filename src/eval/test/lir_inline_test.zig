@@ -5043,6 +5043,49 @@ test "a capture slot of a lifted closure reads as a slot only of the closure's b
     }
 }
 
+test "issue 12976 a function returning a parameter its closure also captures lowers at every inline mode" {
+    // repro for https://github.com/roc-lang/roc/issues/12976
+    // `pass`'s parameter is also capture 0 of the closure it builds. Deciding
+    // whether inlining `pass(A)` is productive reads what `pass` builds at
+    // `.0`, which is `pass`'s own argument, not a capture `pass(A)` supplies.
+    const allocator = std.testing.allocator;
+    const source =
+        \\pass : [A, B] -> ([A, B], ({} -> [A, B]))
+        \\pass = |x| (x, |_| x)
+        \\pick : [A, B] -> U64
+        \\pick = |t| match t {
+        \\    A => 1
+        \\    B => 2
+        \\}
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    r = pass(A)
+        \\    pick(r.0) + n
+        \\}
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .procedures, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+            defer interpreter.deinit();
+            var n: u64 = 5;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&n),
+            });
+            try std.testing.expectEqual(@as(u64, 6), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
 test "issue 11317 or-pattern captures reuse one closure with and without specialization" {
     const allocator = std.testing.allocator;
     const source =
