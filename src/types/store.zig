@@ -9,6 +9,7 @@ const collections = @import("collections");
 const types = @import("types.zig");
 const debug = @import("debug.zig");
 const instantiate = @import("instantiate.zig");
+const use_absorbers = @import("use_absorbers.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -249,6 +250,12 @@ pub const Store = struct {
     /// merge keeps it, a member detached from the class keeps it, and a copy
     /// of a relation's callable carries it.
     derived_map_plans: DerivedMapPlanEntry.SafeList = .{},
+    /// The sorted, distinct name hashes (`use_absorbers.nameHash`) of every
+    /// optional or defaulted field a record of this store holds, filled when
+    /// the store is sealed. A module checking against this store reads them
+    /// as the fields a relation can widen a record with (design.md
+    /// "Anonymous Structure Is Copied Per Use").
+    widening_names: collections.SafeList(u64) = .{},
 
     /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
@@ -447,7 +454,37 @@ pub const Store = struct {
     /// Checking calls this once, when it finishes a module.
     pub fn canonicalizeAndSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
         try self.canonicalizeForSeal(idents);
+        try self.collectWideningNames(idents);
         self.seal();
+    }
+
+    /// Fill `widening_names` from the field table, which holds every field of
+    /// every record of the store. A field of a record no longer reachable only
+    /// adds a name, which can only make a structure look changeable.
+    fn collectWideningNames(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
+        var hashes: std.ArrayListUnmanaged(u64) = .empty;
+        defer hashes.deinit(self.gpa);
+        for (0..self.record_fields.len()) |index| {
+            const field = self.record_fields.get(@fromBackingInt(@intCast(index)));
+            const may_widen = switch (field.presence.decode()) {
+                .required => false,
+                .unknown => |unknown| switch (self.resolveVar(unknown.presence).desc.content) {
+                    .field_presence => |kind| kind != .required,
+                    .flex, .rigid, .alias, .structure, .err => false,
+                },
+            };
+            if (may_widen) try hashes.append(self.gpa, use_absorbers.nameHash(idents.getText(field.name)));
+        }
+        std.mem.sortUnstable(u64, hashes.items, {}, std.sort.asc(u64));
+        var distinct: usize = 0;
+        for (hashes.items) |hash| {
+            if (distinct != 0 and hashes.items[distinct - 1] == hash) continue;
+            hashes.items[distinct] = hash;
+            distinct += 1;
+        }
+        self.widening_names.deinit(self.gpa);
+        self.widening_names = try collections.SafeList(u64).initCapacity(self.gpa, distinct);
+        for (hashes.items[0..distinct]) |hash| _ = try self.widening_names.append(self.gpa, hash);
     }
 
     /// The last write to a solved store. Every slot comes to name its
@@ -652,6 +689,7 @@ pub const Store = struct {
         self.nominal_decls.deinit(self.gpa);
         self.nominal_decl_index.deinit(self.gpa);
         self.derived_map_plans.deinit(self.gpa);
+        self.widening_names.deinit(self.gpa);
     }
 
     /// Clone this store into fresh owned memory.
@@ -674,6 +712,7 @@ pub const Store = struct {
             .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
             .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
             .derived_map_plans = try self.derived_map_plans.clone(gpa),
+            .widening_names = try self.widening_names.clone(gpa),
         };
     }
 
@@ -2802,6 +2841,7 @@ pub const Store = struct {
         nominal_decls: NominalDecl.SafeList.Serialized,
         nominal_decl_index: NominalDeclIndexEntry.SafeList.Serialized,
         derived_map_plans: DerivedMapPlanEntry.SafeList.Serialized,
+        widening_names: collections.SafeList(u64).Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -2825,6 +2865,7 @@ pub const Store = struct {
             try self.nominal_decls.serialize(&store.nominal_decls, allocator, writer);
             try self.nominal_decl_index.serialize(&store.nominal_decl_index, allocator, writer);
             try self.derived_map_plans.serialize(&store.derived_map_plans, allocator, writer);
+            try self.widening_names.serialize(&store.widening_names, allocator, writer);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -2854,6 +2895,7 @@ pub const Store = struct {
                 .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
                 .derived_map_plans = self.derived_map_plans.deserializeInto(base_addr),
+                .widening_names = self.widening_names.deserializeInto(base_addr),
             };
         }
 
@@ -2893,6 +2935,7 @@ pub const Store = struct {
             store.nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa);
             store.nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa);
             store.derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa);
+            store.widening_names = try self.widening_names.deserializeWithCopy(base_addr, gpa);
             store.invalid_nominal_decl_written = false;
             for (store.nominal_decls.items.items) |decl| store.noteNominalDeclWrite(decl);
             return store;

@@ -94,3 +94,24 @@ plain_token = unit(2)
 expect lifted_token.describe() == "token"
 
 expect Str.inspect(plain_token) == "{}"
+
+Light := [Red, Green].{
+	describe : Light -> Str
+	describe = |light|
+		match light {
+			Red => "red light"
+			Green => "green light"
+		}
+}
+
+signals : U64 -> List([Red, Green])
+signals = |_n| [Red]
+
+lifted_signals : List(Light)
+lifted_signals = signals(1)
+
+plain_signals = signals(2)
+
+expect lifted_signals.map(Light.describe) == ["red light"]
+
+expect Str.inspect(plain_signals) == "[Red]"

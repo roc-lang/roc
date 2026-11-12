@@ -253,6 +253,7 @@ const listAppendSublist = list.listAppendSublist;
 const listPrepend = list.listPrepend;
 const listSublist = list.listSublist;
 const listSublistBorrowed = list.listSublistBorrowed;
+const listClear = list.listClear;
 const listDropAt = list.listDropAt;
 const listReplace = list.listReplace;
 const listSet = list.listSet;
@@ -1030,6 +1031,19 @@ pub fn roc_builtins_list_sublist_borrowed(out: *RocList, list_bytes: ?[*]u8, lis
     out.* = listSublistBorrowed(l, element_width, start, len, elements_refcounted, roc_ops);
 }
 
+/// Wrapper: listClear(list) -> List. The update mode is forwarded to the
+/// builtin's uniqueness check; `.InPlace` skips it.
+pub fn roc_builtins_list_clear(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, element_decref: ?RcDropFn, update_mode: utils.UpdateMode) callconv(.c) void {
+    const roc_ops = in_process_host.ops();
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listClear(l, alignment, element_width, true, dec_ctx, &callbackListElementDecref, update_mode, roc_ops);
+    } else {
+        out.* = listClear(l, alignment, element_width, false, null, @ptrCast(&rcNone), update_mode, roc_ops);
+    }
+}
+
 /// Wrapper: listDropAt(list, index) -> List. The update mode is forwarded to
 /// the builtin's uniqueness check; `.InPlace` skips it.
 pub fn roc_builtins_list_drop_at(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, index: u64, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode) callconv(.c) void {
@@ -1602,12 +1616,6 @@ fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void 
             .length = slice.len,
         };
     }
-}
-
-/// Build a RocStr from static literal bytes owned by generated code.
-pub fn roc_builtins_str_from_literal(out: *RocStr, bytes: [*]const u8, len: usize) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    writeRocStrFromSlice(out, bytes[0..len], roc_ops);
 }
 
 /// Wrapper: decToStrC (decomposed i128)
