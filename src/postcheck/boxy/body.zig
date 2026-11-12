@@ -198,7 +198,7 @@ pub const Task = union(enum) {
     /// Pop the slots of a stored tag's payloads and push the tag's.
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
     /// Pop the slots of a stored list's items and push the list's.
-    finish_static_list: struct { ty: TypeId, count: u32 },
+    finish_static_list: struct { ty: TypeId, count: u32, capacity: u64 },
     /// Pop the slot of a stored box's payload and push the box's.
     finish_static_box: struct { ty: TypeId, sequence_step_offset: ?u32 = null },
     remember_static_value: lower.Program.StoredValueKey,
@@ -3202,7 +3202,7 @@ pub const Builder = struct {
                 } else invariant("a stored tag has no declared variant");
                 try self.finishStaticParts(restore.ty, restore.count, .{ .tag = @intCast(variant) });
             },
-            .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .list),
+            .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .{ .list = value.capacity }),
             .finish_static_box => |value| try self.finishStaticParts(value.ty, 1, if (value.sequence_step_offset) |offset| .{ .boxed_sequence = offset } else .box),
             .remember_static_value => |key| {
                 const value = self.popValue();
@@ -5874,10 +5874,10 @@ pub const Builder = struct {
                     .list => |elem| elem,
                     .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a stored list restored at a non-List type"),
                 };
-                switch (list) {
+                switch (list.items) {
                     .nodes => |nodes| {
                         try self.push(.{ .remember_static_part = key });
-                        try self.push(.{ .finish_static_list = .{ .ty = raw_ty, .count = @intCast(nodes.len) } });
+                        try self.push(.{ .finish_static_list = .{ .ty = raw_ty, .count = @intCast(nodes.len), .capacity = list.capacity } });
                         try self.tasks.ensureUnusedCapacity(self.allocator, nodes.len);
                         var index = nodes.len;
                         while (index > 0) {
