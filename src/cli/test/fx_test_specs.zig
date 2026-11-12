@@ -96,6 +96,11 @@ pub const inline_list_slow_arms_test = TestSpec{
 /// the compiled binary's IO behavior, not build-time features.
 pub const io_spec_tests = [_]TestSpec{
     .{
+        .roc_file = "test/fx/record_literal_iterator_field_host_round_trip.roc",
+        .io_spec = "1>list literal: 123|1>adapter chain: 34|1>bound record: 45|1>bound list: 67|1>through a function: 89|1>two fields: 12 tagged|1>nested: 34 2|1>tag payload: 56|1>list of records: 1204|1>stream: 78|1>custom: 123|1>long chain: 199|1>nested iterators: 1203",
+        .description = "Record literals with unpinned field kinds keep their iterator fields through a hosted Box(a) round trip",
+    },
+    .{
         .roc_file = "test/fx/issue_12953_host_held_state.roc",
         .io_spec = "1>a label long enough to live on the heap rather than inline: 35",
         .description = "A boxed app state whose fields hold functions survives a host round trip (issue #12953)",

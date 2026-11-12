@@ -135,6 +135,14 @@ pub const InstVariableOrigin = enum(u8) {
     checked_variable,
     row_extension,
     placeholder,
+    /// The runtime slot of a record field whose kind is still undetermined.
+    /// It holds no representation of its own: committing the kind to
+    /// `required` makes it the field's source-value cell, and row
+    /// unification relates it to the matching field's slot. Joining it to a
+    /// class therefore never merges a checked-public representation into
+    /// that class, whatever representation the class holds. Relation freeze
+    /// commits every undetermined kind, so none survives to sealing.
+    field_slot,
     /// An explicit parameter of a detached interface relation, filled when
     /// that relation is joined to its requesting graph. Never defaulted.
     interface_parameter,
@@ -171,6 +179,10 @@ pub const InstVariable = struct {
 
     pub fn placeholder() InstVariable {
         return .{ .origin = .placeholder };
+    }
+
+    pub fn fieldSlot() InstVariable {
+        return .{ .origin = .field_slot };
     }
 };
 
@@ -3760,7 +3772,7 @@ pub const InstGraph = struct {
             .redirect, .leaf => unreachable, // callers pass a find root, and rootContent of a find root expands a leaf, so it returns structure
             .unresolved => |variable| switch (variable.origin) {
                 .checked_variable, .row_extension => .{ .fixed = 0 },
-                .placeholder, .interface_parameter => Common.invariant("placeholder reached generated iterator representation finalization"),
+                .placeholder, .field_slot, .interface_parameter => Common.invariant("placeholder reached generated iterator representation finalization"),
             },
             .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole, .func => .{ .fixed = 0 },
             .list, .box => .{ .children = .{ .count = 1, .increment = 0 } },
@@ -3922,7 +3934,7 @@ pub const InstGraph = struct {
                     return switch (variable.origin) {
                         .checked_variable => true,
                         .row_extension => Common.invariant("row extension reached final demand validation without row default"),
-                        .placeholder, .interface_parameter => Common.invariant("instantiation placeholder reached final demand validation"),
+                        .placeholder, .field_slot, .interface_parameter => Common.invariant("instantiation placeholder reached final demand validation"),
                     };
                 },
                 .named => |named| {
@@ -7317,6 +7329,8 @@ pub const InstGraph = struct {
         const right_generated_private = self.contentIsGeneratedPrivateRoot(right_content);
         if (left_generated_private != right_generated_private and
             !allow_private_selection and
+            !contentIsFieldSlot(left_content) and
+            !contentIsFieldSlot(right_content) and
             !self.isIteratorRepresentationTierRelation(left_content, right_content))
         {
             Common.invariant("generated-private representation reached ordinary public/private graph unification");
@@ -7353,6 +7367,17 @@ pub const InstGraph = struct {
         };
     }
 
+    /// Whether class content is the still-unbound runtime slot of an
+    /// undetermined record field. Such a class holds no representation, so
+    /// joining it to a generated-private class selects nothing and merges
+    /// nothing.
+    fn contentIsFieldSlot(node_content: InstNode) bool {
+        return switch (node_content) {
+            .unresolved => |variable| variable.origin == .field_slot,
+            .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
+        };
+    }
+
     /// Whether class content is a named type whose backing is generated-
     /// private representation evidence, including an unread leaf of one.
     fn contentIsGeneratedPrivateRoot(self: *InstGraph, node_content: InstNode) bool {
@@ -7378,7 +7403,8 @@ pub const InstGraph = struct {
         if (a == .checked_variable or b == .checked_variable) return .checked_variable;
         if (a == .row_extension or b == .row_extension) return .row_extension;
         if (a == .interface_parameter or b == .interface_parameter) return .interface_parameter;
-        return .placeholder;
+        if (a == .placeholder or b == .placeholder) return .placeholder;
+        return .field_slot;
     }
 
     fn unifyConcrete(
@@ -9012,7 +9038,7 @@ const GraphUninhabitedScan = struct {
                     break :blk switch (variable.origin) {
                         .checked_variable => .{ .value = true },
                         .row_extension => Common.invariant("row extension reached final inhabitance validation without row default"),
-                        .placeholder, .interface_parameter => Common.invariant("instantiation placeholder reached final inhabitance validation"),
+                        .placeholder, .field_slot, .interface_parameter => Common.invariant("instantiation placeholder reached final inhabitance validation"),
                     };
                 },
             },
@@ -10362,7 +10388,7 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
     return switch (variable.origin) {
         .checked_variable => .{ .tag_union = Type.Span.empty() },
         .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
-        .placeholder, .interface_parameter => Common.invariant("instantiation placeholder reached Monotype materialization"),
+        .placeholder, .field_slot, .interface_parameter => Common.invariant("instantiation placeholder reached Monotype materialization"),
     };
 }
 
@@ -11225,7 +11251,7 @@ test "provisional Monotype view preserves an undetermined record field" {
 
     const field_name = try name_store.internRecordFieldLabel("value");
     const value_ty = try graph.newNode(.{ .primitive = .u64 });
-    const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.fieldSlot() });
     const kind = try graph.newUndeterminedFieldKind();
     const fields = try graph.arena().alloc(InstField, 1);
     fields[0] = .{
@@ -11289,7 +11315,7 @@ test "retained provisional view preserves content across later graph refinement"
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
     const value = try graph.newNode(.{ .primitive = .u64 });
-    const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.fieldSlot() });
     const kind = try graph.newUndeterminedFieldKind();
     graph.registerUndeterminedFieldKindCells(kind, slot, value);
     const record = try graph.newNode(.{ .record = .{
@@ -11334,7 +11360,7 @@ test "issue 11303: reading a field value preserves its undetermined storage unti
         .args = try graph.arena().dupe(NodeId, &.{arg}),
         .ret = try graph.newNode(.{ .primitive = .str }),
     } });
-    const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.fieldSlot() });
     const kind = try graph.newUndeterminedFieldKind();
     graph.registerUndeterminedFieldKindCells(kind, slot, value);
     const record = try graph.newNode(.{ .record = .{
@@ -11360,6 +11386,137 @@ test "issue 11303: reading a field value preserves its undetermined storage unti
     try std.testing.expect(graph.resolvedFieldKind(.{ .undetermined = kind }).? == .required);
     try std.testing.expect(graph.sameClass(slot, value));
     try std.testing.expectEqual(try graph.recordFieldNode(record, field_name), try graph.recordFieldValueNode(record, field_name));
+}
+
+/// A record whose one field has an undetermined kind, and whose source-value
+/// cell is a checked-public named type that a producer then selects a
+/// generated-private representation for.
+const UndeterminedPrivateFieldFixture = struct {
+    record: NodeId,
+    field: InstField,
+    slot: NodeId,
+    value: NodeId,
+    private: NodeId,
+
+    fn init(graph: *InstGraph, name_store: *names.NameStore, def_byte: u8) Allocator.Error!UndeterminedPrivateFieldFixture {
+        const named_type: Type.NamedType = .{ .module = .{} };
+        const def: Type.TypeDef = .{
+            .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(def_byte)))),
+            .type_name = try name_store.internTypeName("PrivateEvidence"),
+        };
+        const value = try graph.newNode(try graph.namedContent(.{
+            .named_type = named_type,
+            .def = def,
+            .kind = .@"opaque",
+            .builtin_owner = .fields,
+            .args = &.{},
+            .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
+        }));
+        const private = try graph.newNode(try graph.namedContent(.{
+            .named_type = named_type,
+            .def = def,
+            .kind = .@"opaque",
+            .builtin_owner = .fields,
+            .args = &.{},
+            .backing = .{
+                .node = try graph.newNode(.empty_record),
+                .use = .runtime_layout_only,
+                .authority = .generated_private,
+            },
+        }));
+        const slot = try graph.newNode(.{ .unresolved = InstVariable.fieldSlot() });
+        const kind = try graph.newUndeterminedFieldKind();
+        graph.registerUndeterminedFieldKindCells(kind, slot, value);
+        const field: InstField = .{
+            .name = try name_store.internRecordFieldLabel("evidence"),
+            .ty = slot,
+            .value_ty = .of(value),
+            .kind = .{ .undetermined = kind },
+            .default = null,
+        };
+        const record = try graph.newNode(.{ .record = .{
+            .fields = try graph.arena().dupe(InstField, &.{field}),
+            .ext = try graph.newNode(.empty_record),
+        } });
+        try graph.selectGeneratedPrivateRepresentation(value, private);
+        return .{ .record = record, .field = field, .slot = slot, .value = value, .private = private };
+    }
+
+    fn expectSlotIsPrivateValue(self: UndeterminedPrivateFieldFixture, graph: *InstGraph) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+        try std.testing.expect(graph.resolvedFieldKind(self.field.kind).? == .required);
+        try std.testing.expect(graph.sameClass(self.slot, self.value));
+        try std.testing.expect(graph.sameClass(self.slot, self.private));
+        try std.testing.expectEqual(Type.BackingAuthority.generated_private, (try graph.content(self.slot)).named.backing.?.authority);
+    }
+};
+
+test "constructing an undetermined field commits its slot to the private representation selected for its value" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const fixture = try UndeterminedPrivateFieldFixture.init(graph, &name_store, 0xB1);
+    try std.testing.expect((try graph.content(fixture.slot)) == .unresolved);
+    try std.testing.expect(!graph.sameClass(fixture.slot, fixture.value));
+
+    try std.testing.expect((try graph.recordConstructionFieldKindOf(fixture.field)) == .required);
+    try fixture.expectSlotIsPrivateValue(graph);
+}
+
+test "a required access commits an undetermined field's slot to the private representation selected for its value" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const fixture = try UndeterminedPrivateFieldFixture.init(graph, &name_store, 0xB2);
+    const accessed = try graph.requiredRecordFieldNode(fixture.record, fixture.field.name);
+    try std.testing.expect(graph.sameClass(accessed, fixture.private));
+    try fixture.expectSlotIsPrivateValue(graph);
+}
+
+test "relation freeze commits an undetermined field's slot to the private representation selected for its value" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const fixture = try UndeterminedPrivateFieldFixture.init(graph, &name_store, 0xB3);
+    try graph.freezeRelations();
+    try fixture.expectSlotIsPrivateValue(graph);
+}
+
+test "row unification joins an undetermined field's slot to a committed private slot" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    // Two records of one shape, as two call sites of one procedure produce:
+    // the first is constructed, so its slot is its private value cell, and
+    // the second's kind is still undetermined when their requests join.
+    const committed = try UndeterminedPrivateFieldFixture.init(graph, &name_store, 0xB4);
+    _ = try graph.recordConstructionFieldKindOf(committed.field);
+    const pending = try UndeterminedPrivateFieldFixture.init(graph, &name_store, 0xB4);
+    try std.testing.expect((try graph.content(pending.slot)) == .unresolved);
+
+    try graph.unify(committed.record, pending.record);
+
+    try std.testing.expect(graph.sameClass(committed.slot, pending.slot));
+    try pending.expectSlotIsPrivateValue(graph);
 }
 
 test "issue 11303: field value reads preserve optional tagged storage and sealed metadata" {
@@ -14783,7 +14940,7 @@ test "interface constraints preserve recursive and field-presence topology" {
     const graph = try InstGraph.create(allocator, &types, &name_store);
     defer graph.destroy();
     const value = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.fieldSlot() });
     const kind = try graph.newUndeterminedFieldKind();
     graph.registerUndeterminedFieldKindCells(kind, slot, value);
     const row = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });

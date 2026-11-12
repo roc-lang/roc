@@ -27666,7 +27666,7 @@ const BodyContext = struct {
                         .default = null,
                     };
                 }
-                const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.fieldSlot() });
                 const kind = try self.graph.newUndeterminedFieldKind();
                 self.graph.registerUndeterminedFieldKindCells(kind, slot_node, value_node);
                 const instantiated = InstantiatedFieldKind{
@@ -55859,7 +55859,7 @@ const BodyContext = struct {
                 if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
                 break :blk switch (variable.origin) {
                     .checked_variable => true,
-                    .row_extension, .placeholder, .interface_parameter => false,
+                    .row_extension, .placeholder, .field_slot, .interface_parameter => false,
                 };
             },
             .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,

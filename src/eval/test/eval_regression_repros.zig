@@ -1139,4 +1139,79 @@ pub const tests = [_]TestCase{
         .specialization_strategy = .boxy,
         .skip = .{ .wasm = true },
     },
+    .{
+        // Nothing pins the record's field kind: no annotation names the
+        // record and no field is read. The field's value is a method call on
+        // a list literal, whose generated iterator representation is selected
+        // for the field's value cell before the record commits the field to
+        // `required`.
+        .name = "record literal with an unpinned field kind holds an iterator a method call on a list literal produces",
+        .source_kind = .module,
+        .source =
+        \\count = |n| {
+        \\    held = ({ items: [1.U8, 2].iter() }, n)
+        \\    held.1
+        \\}
+        \\
+        \\main : U64
+        \\main = count(2)
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // The same record passed through a generic function, whose request
+        // keys on the record's type before the record is constructed.
+        .name = "record literal with an unpinned field kind and an iterator field passes through a generic function",
+        .source_kind = .module,
+        .source =
+        \\keep : a -> a
+        \\keep = |value| value
+        \\
+        \\count = |n| {
+        \\    held = (keep({ items: [1.U8, 2].iter().map(|item| item + 1) }), n)
+        \\    held.1
+        \\}
+        \\
+        \\main : U64
+        \\main = count(3)
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        // Two calls of one generic function with records of one shape: the
+        // second request's field kind is still undetermined when it joins the
+        // first request, whose record is already constructed.
+        .name = "two record literals with unpinned field kinds and iterator fields share one generic function request",
+        .source_kind = .module,
+        .source =
+        \\keep : a -> a
+        \\keep = |value| value
+        \\
+        \\count = |n| {
+        \\    first = (keep({ items: [1.U8, 2].iter() }), n)
+        \\    second = (keep({ items: [3.U8].iter() }), first.1 + 1)
+        \\    second.1
+        \\}
+        \\
+        \\main : U64
+        \\main = count(4)
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        // Records of one shape built from different iterator producers share
+        // one list element type.
+        .name = "list of record literals with unpinned field kinds holds iterators from different producers",
+        .source_kind = .module,
+        .source =
+        \\count = |n| {
+        \\    held = ([{ items: [1.U8, 2].iter() }, { items: [3.U8].iter().map(|item| item + 1) }], n)
+        \\    held.0.len() + held.1
+        \\}
+        \\
+        \\main : U64
+        \\main = count(5)
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
 };

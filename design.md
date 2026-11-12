@@ -9180,9 +9180,12 @@ dedicated `selectGeneratedPrivateRepresentation` capability before lowering
 the dispatch. The capability exists only during relation production, requires
 an explicitly directed public-to-private edge, and rejects every class that
 contains an imported finished Monotype. Ordinary graph unification rejects the
-same edge. This preserves producer selection for branch results without making
-public/private merging—or reopening a durable Monotype—available as a general
-unification behavior. If the requested public interface is already a finished
+same edge, and rejects binding an unresolved checked variable to a private
+class; the one unresolved cell it does bind is an undetermined record field's
+runtime slot, which holds no representation (Field Kinds). This preserves
+producer selection for branch results without making public/private
+merging—or reopening a durable Monotype—available as a general unification
+behavior. If the requested public interface is already a finished
 Monotype, the producer relates its distinct private result to that immutable
 interface without merging either class, and the enclosing procedure or
 compile-time wrapper carries the private result cell as its exact output
@@ -12882,7 +12885,18 @@ deferred at lowering; the checked module and lowering are both complete):
   checked presence-variable identity. Instantiation gives that identity a
   dedicated field-kind cell plus distinct source-value and runtime-slot
   cells; row unification resolves the kind and relates value-to-value and
-  slot-to-slot. Construction consumes the resolved graph kind, never the
+  slot-to-slot. The runtime-slot cell is an explicit field-slot variable
+  (`InstVariableOrigin.field_slot`): it holds no representation until its
+  kind commits, so joining it to a class is a binding, never a merge of two
+  representations. A producer can select a generated-private representation
+  for the source-value cell before the kind commits (a method call on a list
+  literal, lowered as the field's value, does). Committing `required` then
+  makes the slot that private class, and a row unification relates the slot
+  to a matching field's already-private slot, both by ordinary unification.
+  The record ends up exactly as one whose kind was `required` from the
+  start, where one cell is both slot and value. A field slot that has joined
+  any other variable takes that variable's origin and its rules.
+  Construction consumes the resolved graph kind, never the
   generalized scheme or a reconstructed slot shape; when the construction
   itself is the first required-kind evidence, it explicitly relates that
   field's runtime-slot cell to its source-value cell at the same time.
@@ -26220,6 +26234,17 @@ substituted. The rule applies equally to hosted and provided arguments and
 results. A procedure's own signature is not a function value. Boxed iterators
 and streams are opaque handles: their private step closures are implementation
 state, not further host-visible values.
+
+The rule reads declared signatures. A type variable inside a declared `Box`
+(`store! : Box(a) => {}`) is a held payload whose type only the app names, so
+an app may instantiate it with a type that holds a sequence outside its own
+`Box`. Such a sequence keeps the representation tier its producer selected,
+and code that reads the payload back names the public type. The two agree on
+the stored bytes: every tier's backing has the public record's shape, with
+`rest` naming the tier's own type, and every callable a `Box` holds is erased,
+so a held sequence is its length hint and one erased step whichever tier
+produced it. The handle representation is the only other layout, and the
+`Box` payload's type alone selects it.
 
 Boxed sequences share the erased-callable ownership protocol. Their captures
 and private record view occupy one allocation; the view's step points back to
