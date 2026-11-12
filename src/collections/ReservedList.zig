@@ -14,9 +14,10 @@
 //! No reader relies on a column's address across appends. `seal` returns the
 //! unused tail of a reservation to the kernel and forbids further growth.
 //! Serialization writes the logical length only, and `deserializeInto`
-//! returns a column borrowing the serialized bytes: it reads and writes them
-//! in place, copies them into storage of its own on its first growth, and
-//! never frees them.
+//! returns a borrowed view over the serialized bytes. A borrowed view reads
+//! and writes its entries where they lie and owns nothing. The first growth of
+//! an unsealed view copies its entries into storage the column owns and leaves
+//! the serialized bytes alone; a sealed view never grows.
 //!
 //! `ReservedColumns(T)` keeps one `ReservedList` per field of the struct `T`,
 //! so each column grows on its own reservation without copying, and offers
@@ -49,8 +50,8 @@ const Storage = enum {
     allocated,
     /// Lives on `reservation`.
     reserved,
-    /// Borrows serialized bytes, which it owns none of; the first growth
-    /// copies the entries into storage of the column's own.
+    /// A view over serialized bytes, which owns nothing. Its first growth
+    /// copies the entries into `allocated` or `reserved` storage.
     borrowed,
 };
 
@@ -147,13 +148,14 @@ pub fn ReservedList(comptime T: type, comptime density: Density) type {
                         storage_work.add(.reservation_crossings, 1);
                         return self.moveToReservation(gpa, needed_bytes);
                     }
-                    var new_capacity: usize = @max(self.items.len, 8);
+                    var new_capacity = @max(self.capacity, 8);
                     while (new_capacity < needed) new_capacity *|= 2;
                     new_capacity = @min(new_capacity, max_len);
+                    const old_len = self.items.len;
                     const fresh = try gpa.alloc(T, new_capacity);
-                    @memcpy(fresh[0..self.items.len], self.items);
-                    storage_work.add(.bytes_copied, self.items.len * @sizeOf(T));
-                    self.items = fresh[0..self.items.len];
+                    @memcpy(fresh[0..old_len], self.items);
+                    storage_work.add(.bytes_copied, old_len * @sizeOf(T));
+                    self.items = fresh[0..old_len];
                     self.capacity = fresh.len;
                     self.storage = .allocated;
                 },
@@ -365,8 +367,9 @@ pub fn ReservedList(comptime T: type, comptime density: Density) type {
                 self.capacity = list.items.len;
             }
 
-            /// A column borrowing the serialized entries: it reads and writes
-            /// them in place and copies them on its first growth.
+            /// A borrowed view over the serialized entries. Its first growth
+            /// copies them into owned storage; the caller seals a view that
+            /// must only be read.
             pub fn deserializeInto(self: *const Serialized, base: usize) Self {
                 if (self.len == 0) return .{ .storage = .borrowed };
                 const items_ptr: [*]T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
@@ -623,7 +626,9 @@ pub fn ReservedColumns(comptime T: type, comptime density: Density) type {
                 inline for (field_names) |name| try @field(self.columns, name).serialize(&@field(list.columns, name), allocator, writer);
             }
 
-            /// Columns borrowing the serialized columns.
+            /// Borrowed views over the serialized columns. A column's first
+            /// growth copies it into owned storage; the caller seals views
+            /// that must only be read.
             pub fn deserializeInto(self: *const Serialized, base: usize) Self {
                 var result: Self = .{};
                 inline for (field_names) |name| @field(result.columns, name) = @field(self.columns, name).deserializeInto(base);
@@ -717,6 +722,109 @@ test "sealing trims the reservation, and serialization round-trips the logical l
     defer copied.deinit(testing.allocator);
     _ = try copied.append(testing.allocator, 1);
     try testing.expectEqual(@as(u64, 5001), copied.len());
+}
+
+test "a borrowed view copies itself into allocated storage on its first growth" {
+    const List = ReservedList(u32, .dense);
+    var original = try List.init(testing.allocator, 4);
+    defer original.deinit(testing.allocator);
+    _ = try original.appendSlice(testing.allocator, &.{ 11, 12, 13 });
+    var writer = CompactWriter.init();
+    defer writer.deinit(testing.allocator);
+    var header: List.Serialized = undefined;
+    try header.serialize(&original, testing.allocator, &writer);
+    const bytes = try testing.allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer testing.allocator.free(bytes);
+    _ = try writer.writeToBuffer(bytes);
+
+    var view = header.deserializeInto(@intFromPtr(bytes.ptr));
+    defer view.deinit(testing.allocator);
+    const serialized: []const u32 = @as([*]const u32, @ptrCast(@alignCast(bytes.ptr)))[0..3];
+
+    // A write lands in the serialized bytes while the view borrows them.
+    view.items[0] = 21;
+    try testing.expectEqual(@as(u32, 21), serialized[0]);
+
+    _ = try view.append(testing.allocator, 14);
+    try testing.expectEqual(Storage.allocated, view.storage);
+    try testing.expectEqualSlices(u32, &.{ 21, 12, 13, 14 }, view.items);
+    try testing.expect(@intFromPtr(view.items.ptr) != @intFromPtr(bytes.ptr));
+
+    // The owned copy is separate from the serialized bytes, which keep theirs.
+    view.items[1] = 22;
+    try testing.expectEqualSlices(u32, &.{ 21, 12, 13 }, serialized);
+
+    for (0..1000) |i| _ = try view.append(testing.allocator, @intCast(i));
+    try testing.expectEqual(@as(u64, 1004), view.len());
+    try testing.expectEqual(@as(u32, 999), view.items[1003]);
+}
+
+test "a borrowed view growing past the threshold copies itself onto a reservation" {
+    const List = ReservedList(u64, .dense);
+    var original = try List.init(testing.allocator, 2);
+    defer original.deinit(testing.allocator);
+    _ = try original.appendSlice(testing.allocator, &.{ 5, 6 });
+    var writer = CompactWriter.init();
+    defer writer.deinit(testing.allocator);
+    var header: List.Serialized = undefined;
+    try header.serialize(&original, testing.allocator, &writer);
+    const bytes = try testing.allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer testing.allocator.free(bytes);
+    _ = try writer.writeToBuffer(bytes);
+
+    var view = header.deserializeInto(@intFromPtr(bytes.ptr));
+    defer view.deinit(testing.allocator);
+    try view.ensureTotalCapacity(testing.allocator, reserve_threshold_bytes / @sizeOf(u64));
+    try testing.expectEqual(Storage.reserved, view.storage);
+    try testing.expectEqualSlices(u64, &.{ 5, 6 }, view.items);
+    _ = try view.append(testing.allocator, 7);
+    try testing.expectEqualSlices(u64, &.{ 5, 6, 7 }, view.items);
+}
+
+test "an empty borrowed view grows into owned storage" {
+    const List = ReservedList(u16, .dense);
+    const header: List.Serialized = .{ .offset = 0, .len = 0, .capacity = 0 };
+    var view = header.deserializeInto(0);
+    defer view.deinit(testing.allocator);
+    try testing.expectEqual(Storage.borrowed, view.storage);
+    _ = try view.append(testing.allocator, 3);
+    try testing.expectEqual(Storage.allocated, view.storage);
+    try testing.expectEqualSlices(u16, &.{3}, view.items);
+}
+
+test "a failed first growth leaves a borrowed view borrowing" {
+    const List = ReservedList(u32, .dense);
+    var backing = [_]u32{ 1, 2, 3 };
+    const header: List.Serialized = .{ .offset = 0, .len = backing.len, .capacity = backing.len };
+    var view = header.deserializeInto(@intFromPtr(&backing));
+    defer view.deinit(testing.allocator);
+    var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    try testing.expectError(error.OutOfMemory, view.append(failing.allocator(), 4));
+    try testing.expectEqual(Storage.borrowed, view.storage);
+    try testing.expectEqualSlices(u32, &backing, view.items);
+}
+
+test "borrowed columns copy every column on their first growth" {
+    const Columns = ReservedColumns(Row, .dense);
+    var original = try Columns.init(testing.allocator, 2);
+    defer original.deinit(testing.allocator);
+    const first = try original.append(testing.allocator, .{ .wide = 1, .narrow = 2, .mid = 3 });
+    var writer = CompactWriter.init();
+    defer writer.deinit(testing.allocator);
+    var header: Columns.Serialized = undefined;
+    try header.serialize(&original, testing.allocator, &writer);
+    const bytes = try testing.allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer testing.allocator.free(bytes);
+    _ = try writer.writeToBuffer(bytes);
+
+    var view = header.deserializeInto(@intFromPtr(bytes.ptr));
+    defer view.deinit(testing.allocator);
+    const second = try view.append(testing.allocator, .{ .wide = 4, .narrow = 5, .mid = 6 });
+    inline for (@typeInfo(Row).@"struct".field_names) |name| {
+        try testing.expectEqual(Storage.allocated, @field(view.columns, name).storage);
+    }
+    try testing.expectEqual(Row{ .wide = 1, .narrow = 2, .mid = 3 }, view.get(first));
+    try testing.expectEqual(Row{ .wide = 4, .narrow = 5, .mid = 6 }, view.get(second));
 }
 
 test "a clone holds the same entries in its own storage" {

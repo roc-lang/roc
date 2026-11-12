@@ -366,7 +366,8 @@ pub const Constants = struct {
     ///      store's lookup table and the type store's written flags.
     /// 184: combines the independent 179 and 183 entry changes.
     /// 185: combines the independent 181 and 184 entry changes.
-    pub const CACHE_VERSION = 185;
+    /// 186: combines the independently merged 183 and 185 entry layouts.
+    pub const CACHE_VERSION = 186;
 };
 
 /// Configuration for the Roc cache system.

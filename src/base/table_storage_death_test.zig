@@ -36,6 +36,16 @@ fn growSealedList() error{OutOfMemory}!void {
     _ = try list.append(std.heap.page_allocator, 2);
 }
 
+fn growSealedBorrowedList() error{OutOfMemory}!void {
+    const List = collections.ReservedList(u32, .dense);
+    const backing = try std.heap.page_allocator.alloc(u32, 2);
+    @memset(backing, 7);
+    const header: List.Serialized = .{ .offset = 0, .len = backing.len, .capacity = backing.len };
+    var view = header.deserializeInto(@intFromPtr(backing.ptr));
+    view.seal();
+    _ = try view.append(std.heap.page_allocator, 2);
+}
+
 test "a write-first table read before its write fails the invariant" {
     try death_test.expectPanic("write-first table entry 1 read before it was written", readBeforeWrite, .{});
 }
@@ -50,6 +60,10 @@ test "an optional index column rejects the reserved index" {
 
 test "a sealed reserved list refuses to grow" {
     try death_test.expectPanic("reached unreachable code", growSealedList, .{});
+}
+
+test "a sealed borrowed reserved list refuses to grow" {
+    try death_test.expectPanic("reached unreachable code", growSealedBorrowedList, .{});
 }
 
 fn readEpochOutsideLogicalDomain() error{OutOfMemory}!void {
