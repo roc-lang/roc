@@ -10476,6 +10476,37 @@ and unresolved or generalized targets keep the ordinary constraint. Expression
 literals only are covered: a literal pattern is checked with no context, and
 Deferred Literal Conversion decides it.
 
+### Concrete Builtin Interpolation Introduction
+
+An interpolation may omit its `from_interpolation` conversion, its
+iterator's `iter` and `append` dispatches, and every type variable those
+state, when two things already hold as it is checked: the type its enclosing
+construction relates it to is the builtin `Str` declaration, and each
+interpolated part's type is already the builtin `Str`. The related type is
+the expected type the construction supplies or, for a function body's or a
+branch's final expression, the result that body or branch produces.
+`checkConcreteBuiltinInterpolation` then introduces the builtin nominal
+through `unifyWith`, and the checked expression keeps absent dispatch
+variables.
+
+This is a mechanism. `Str` discharges `from_interpolation` by checking that
+each part is a `Str` (Builtin Str Interpolation Part Compatibility), which
+already holds, so the discharge would establish nothing and report nothing,
+and a `Str` interpolation is lowered from its parts alone: publication and
+both lowering strategies ask `interpolationIsBuiltinStr` before they read an
+interpolation's plan, so the `from_interpolation` plan and iterator plan
+ordinary solving outputs for a `Str` interpolation are read by nothing. An
+interpolation with absent dispatch variables gets neither plan and
+contributes no dispatch type roots, and the program lowered from the checked
+module is the same.
+
+Only the builtin `Str` declaration qualifies, for the target and for every
+part. A part whose type is still undetermined, a number or string literal
+part that is still waiting for its type, a suffixed interpolation, a borrowed
+record-field context, and an unresolved or generalized target keep the
+ordinary constraint, so the part diagnostics and their timing are unchanged.
+Accepted and rejected sides are pinned in `deferred_literal_test.zig`.
+
 ### Deferred Literal Conversion
 
 A number literal expression, or a plain string literal expression, with no

@@ -319,3 +319,67 @@ test "a rejected value assigned to a variable leaves the variable's waiting lite
         try std.testing.expectEqual(.builtin_direct, plan.dispatchResolution());
     }
 }
+
+const CIR = @import("can").CIR;
+
+/// How many of the module's interpolations have a dispatch, and how many
+/// have none.
+fn interpolationDispatchCounts(env: *TestEnv) struct { with: usize, without: usize } {
+    var with: usize = 0;
+    var without: usize = 0;
+    const store = &env.module_env.store;
+    var raw: u32 = 0;
+    while (raw < store.nodes.len()) : (raw += 1) {
+        if (store.nodes.get(@fromBackingInt(@intCast(raw))).tag != .expr_interpolation) continue;
+        const expr = store.getExpr(@as(CIR.Expr.Idx, @fromBackingInt(@intCast(raw))));
+        if (expr.e_interpolation.constraint_fn_var == null) without += 1 else with += 1;
+    }
+    return .{ .with = with, .without = without };
+}
+
+test "an interpolation of Str parts where a Str is expected has no dispatch" {
+    var env = try TestEnv.init("Test",
+        \\greet : Str, Str -> Str
+        \\greet = |greeting, name| "${greeting}, ${name}!"
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    const counts = interpolationDispatchCounts(&env);
+    try std.testing.expectEqual(@as(usize, 1), counts.without);
+    try std.testing.expectEqual(@as(usize, 0), counts.with);
+}
+
+test "an interpolation with no expected type keeps its dispatch" {
+    var env = try TestEnv.init("Test",
+        \\greet = |name| {
+        \\    shown : Str
+        \\    shown = name
+        \\    "hello ${shown}"
+        \\}
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    const counts = interpolationDispatchCounts(&env);
+    try std.testing.expectEqual(@as(usize, 0), counts.without);
+    try std.testing.expectEqual(@as(usize, 1), counts.with);
+}
+
+test "an interpolation with a part whose type is not yet Str keeps its dispatch" {
+    var env = try TestEnv.init("Test",
+        \\label : U64 -> Str
+        \\label = |n| "item ${n.to_str()}"
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    const counts = interpolationDispatchCounts(&env);
+    try std.testing.expectEqual(@as(usize, 1), counts.with + counts.without);
+}
+
+test "an interpolation with a part that is not a Str is still an error where a Str is expected" {
+    var env = try TestEnv.init("Test",
+        \\label : U64 -> Str
+        \\label = |n| "item ${n}"
+    );
+    defer env.deinit();
+    try std.testing.expectEqual(@as(usize, 1), try env.typeProblemCount());
+}

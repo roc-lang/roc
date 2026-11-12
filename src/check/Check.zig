@@ -31449,6 +31449,38 @@ fn checkConcreteBuiltinQuote(
     return true;
 }
 
+/// Concrete Builtin Interpolation Introduction (design.md): a checking
+/// context that already names the builtin `Str`, around parts that are each
+/// already the builtin `Str`, leaves an interpolation neither a conversion
+/// to solve nor a part to check. All other occurrences retain their ordinary
+/// constraint.
+fn checkConcreteBuiltinInterpolation(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    parts: []const CIR.Expr.Idx,
+    expected: Expected,
+    env: *Env,
+) Allocator.Error!bool {
+    if (self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) return false;
+    // The type the enclosing construction relates this expression to: its
+    // expected type, or the result a function body or a branch produces.
+    const target_var = if (expected.aggregateType()) |context| target: {
+        if (context.record_field != null) return false;
+        break :target context.var_;
+    } else expected.branch_result orelse return false;
+    const nominal = self.types.resolveThroughAliases(target_var).desc.content.unwrapNominalType() orelse return false;
+    if (!self.nominalIsBuiltinStrType(nominal)) return false;
+    // `parts` holds (value, following segment) pairs.
+    var index: usize = 0;
+    while (index < parts.len) : (index += 2) {
+        const part_nominal = self.types.resolveThroughAliases(ModuleEnv.varFrom(parts[index])).desc.content.unwrapNominalType() orelse return false;
+        if (!self.nominalIsBuiltinStrType(part_nominal)) return false;
+    }
+    try self.unifyWith(expr_var, self.builtinStrContent(), env);
+    return true;
+}
+
 /// The builtin `Str` type's content. `Str` takes no arguments, so every
 /// variable holding this content is the same type.
 fn builtinStrContent(self: *const Self) Content {
@@ -34211,7 +34243,6 @@ fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck
 const InterpolationCheck = struct {
     phase: enum { start, first, part_value, part_segment } = .start,
     str_var: Var = undefined,
-    item_var: Var = undefined,
     did_err: bool = false,
     /// Index of the (value, segment) pair's value in `parts`.
     part_index: u32 = 0,
@@ -34239,7 +34270,6 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
             state.did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{interpolation.first});
 
             std.debug.assert(parts.len % 2 == 0);
-            state.item_var = try self.fresh(env, expr_region);
         },
         .part_value => {
             // The part is not related to the item type here: the target's
@@ -34263,8 +34293,11 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
         return .{ .child = .{ .expr = parts[state.part_index], .expected = child_expected } };
     }
 
-    const item_var = state.item_var;
     const did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, parts) or state.did_err;
+    if (!did_err and try self.checkConcreteBuiltinInterpolation(expr_idx, expr_var, parts, frame.nested_expected, env)) {
+        return .done;
+    }
+    const item_var = try self.fresh(env, expr_region);
 
     // The conversion receives the literal segments at compile time and returns
     // the assembler the interpolation calls with its values at runtime:
