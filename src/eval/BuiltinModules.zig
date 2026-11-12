@@ -78,3 +78,10 @@ pub const BuiltinModules = struct {
         self.checked_artifact.deinit(self.allocator);
     }
 };
+
+test "baked Builtin completes requested roots for both lowering strategies" {
+    var modules = try BuiltinModules.init(std.testing.allocator, std.testing.io);
+    defer modules.deinit();
+    try std.testing.expect(!modules.checked_artifact.hasUnevaluatedRequests(.lss));
+    try std.testing.expect(!modules.checked_artifact.hasUnevaluatedRequests(.boxy));
+}

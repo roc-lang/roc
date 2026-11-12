@@ -4992,6 +4992,51 @@ test "LIR locals carry source-level names" {
     try std.testing.expect(found_second);
 }
 
+test "a capture slot of a lifted closure reads as a slot only of the closure's body" {
+    const allocator = std.testing.allocator;
+    // Each closure's capture slot is the enclosing function's parameter
+    // local, which the enclosing body must keep reading as its own parameter.
+    const source =
+        \\get : U64 -> U64
+        \\get = |x| {
+        \\    var $out = 0.U64
+        \\    if x > 3 {
+        \\        $out = x * 2
+        \\    }
+        \\    $out = $out + (|| x)()
+        \\    $out
+        \\}
+        \\pick : U64 -> U64
+        \\pick = |x| match x {
+        \\    0 => (|| x)()
+        \\    _ => (|| x)()
+        \\}
+        \\main : U64 -> U64
+        \\main = |n| get(n) + get(n + 1) + pick(n) + pick(n + 2)
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+            defer interpreter.deinit();
+            var n: u64 = 5;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&n),
+            });
+            try std.testing.expectEqual(@as(u64, 45), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
 test "issue 11317 or-pattern captures reuse one closure with and without specialization" {
     const allocator = std.testing.allocator;
     const source =
@@ -7352,6 +7397,197 @@ test "multi-use match binding emits branch bodies once" {
     try std.testing.expectEqual(@as(usize, 5), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_concat_count"));
 }
 
+fn orPatternArmSource(comptime outer_arms: []const u8) []const u8 {
+    return
+    \\classify : U64 -> [A, B, C, D, E, F, Z]
+    \\classify = |n| match n {
+    \\    0 => A
+    \\    1 => B
+    \\    2 => C
+    \\    3 => D
+    \\    4 => E
+    \\    5 => F
+    \\    _ => Z
+    \\}
+    \\
+    \\label : U64, Str -> Str
+    \\label = |n, s| match classify(n) {
+    \\
+    ++ outer_arms ++
+        \\}
+        \\
+        \\main : U64, Str -> Str
+        \\main = |n, s| label(n, s)
+    ;
+}
+
+const or_pattern_arm_body =
+    \\match s {
+    \\        "k0" => Str.concat("line 00", s)
+    \\        "k1" => Str.concat("line 01", s)
+    \\        "k2" => Str.concat("line 02", s)
+    \\        "k3" => Str.concat("line 03", s)
+    \\        _ => ""
+    \\    }
+;
+
+test "issue 12903 an or-pattern arm body is emitted once regardless of alternative count" {
+    // repro for https://github.com/roc-lang/roc/issues/12903
+    // A match arm whose pattern is `A | B | C | D | E | F` must lower its
+    // body once, exactly like the equivalent `_` arm, rather than once per
+    // alternative.
+    const allocator = std.testing.allocator;
+
+    var or_pattern = try lowerModule(allocator, orPatternArmSource(
+        "    A | B | C | D | E | F => " ++ or_pattern_arm_body ++ "\n    Z => \"\"\n",
+    ), .none);
+    defer or_pattern.deinit(allocator);
+
+    var wildcard = try lowerModule(allocator, orPatternArmSource(
+        "    Z => \"\"\n    _ => " ++ or_pattern_arm_body ++ "\n",
+    ), .none);
+    defer wildcard.deinit(allocator);
+
+    const wildcard_concats = try reachableProcShapeFieldTotal(allocator, &wildcard.lowered, "str_concat_count");
+    try std.testing.expect(wildcard_concats > 0);
+    try std.testing.expectEqual(wildcard_concats, try reachableProcShapeFieldTotal(allocator, &or_pattern.lowered, "str_concat_count"));
+    try std.testing.expectEqual(
+        try reachableProcShapeFieldTotal(allocator, &wildcard.lowered, "str_match_set_count"),
+        try reachableProcShapeFieldTotal(allocator, &or_pattern.lowered, "str_match_set_count"),
+    );
+}
+
+test "issue 12903 shared arms preserve guards captures state and producer values" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, expected: [2]u64 }{
+        .{
+            .source =
+            \\main : U64 -> U64
+            \\main = |n| {
+            \\    var $sum = n
+            \\    match (0.U64, n) {
+            \\        (x, _) | (_, x) if x > 0 => {
+            \\            value = (|| x)()
+            \\            $sum = $sum + value
+            \\        }
+            \\        _ => {}
+            \\    }
+            \\    $sum
+            \\}
+            ,
+            .expected = .{ 0, 10 },
+        },
+        .{
+            .source =
+            \\main : U64 -> U64
+            \\main = |n| {
+            \\    var $seen = 0.U64
+            \\    match (n, n) {
+            \\        (x, _) | (_, x) if {
+            \\            $seen = $seen + 1
+            \\            True
+            \\        } => {
+            \\            $seen = $seen + x
+            \\        }
+            \\        _ => {}
+            \\    }
+            \\    $seen
+            \\}
+            ,
+            .expected = .{ 1, 6 },
+        },
+        .{
+            .source =
+            \\get : [A(Str, List(U64)), B(List(U64), Str)] -> U64
+            \\get = |v| match v {
+            \\    A(s, xs) | B(xs, s) => (|| s.concat("!").to_utf8().len() + xs.len() + (xs.get(0) ?? 0))()
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| {
+            \\    s = n.to_str().concat("01234567890123456789012345678901")
+            \\    xs = [n, n + 1]
+            \\    get(A(s, xs)) + get(B(xs, s))
+            \\}
+            ,
+            .expected = .{ 72, 82 },
+        },
+        .{
+            .source =
+            \\get : [A(U64 -> U64), B(U64 -> U64)], U64 -> U64
+            \\get = |v, n| match v {
+            \\    A(f) | B(f) => f(n)
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| get(A(|x| x + n), 1) + get(B(|x| x * 2), n)
+            ,
+            .expected = .{ 1, 16 },
+        },
+        .{
+            .source =
+            \\get : [A(Iter(U64)), B(Iter(U64))] -> U64
+            \\get = |v| match v {
+            \\    A(items) | B(items) => items.sum()
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| get(
+            \\    if n == 0 A([n].iter())
+            \\    else B([n, n + 1].iter().map(|x| x + 1)),
+            \\)
+            ,
+            .expected = .{ 0, 13 },
+        },
+        .{
+            .source =
+            \\get : [A({ head : U64, tail : U64 }), B({ head : U64, tail : U64 })] -> U64
+            \\get = |v| match v {
+            \\    A({ head, ..rest }) | B({ head, ..rest }) if rest.tail > 0 => head + rest.tail
+            \\    _ => 0
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| get(A({ head: n, tail: 2 })) + get(B({ head: 3, tail: n }))
+            ,
+            .expected = .{ 2, 15 },
+        },
+        .{
+            .source =
+            \\get : [A([], U64), B(U64), C(U64)] -> U64
+            \\get = |v| match v {
+            \\    A(_, x) | B(x) | C(x) => (|| x)()
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| get(B(n)) + get(C(n + 1))
+            ,
+            .expected = .{ 1, 11 },
+        },
+    };
+    for (cases, 0..) |case, index| {
+        errdefer std.debug.print("shared arm case {d}\n", .{index});
+        for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+            var lowered = try lowerModule(allocator, case.source, inline_mode);
+            defer lowered.deinit(allocator);
+            var runtime_env = eval.RuntimeHostEnv.init(allocator);
+            defer runtime_env.deinit();
+            {
+                const result = &lowered.lowered.lir_result;
+                var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+                defer static_strings.deinit();
+                var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+                defer interpreter.deinit();
+                for ([_]u64{ 0, 5 }, case.expected) |input, expected| {
+                    var n = input;
+                    const evaluated = try interpreter.eval(.{
+                        .proc_id = try rootProc(&lowered.lowered),
+                        .arg_layouts = &.{.u64},
+                        .arg_ptr = @ptrCast(&n),
+                    });
+                    try std.testing.expectEqual(expected, evaluated.value.read(u64));
+                }
+            }
+            try runtime_env.checkForLeaks();
+        }
+    }
+}
+
 test "boundary field access projects private leaf branch" {
     // A record consumed only through demanded field accesses splits into a
     // sparse private product, and an if branch whose value is an opaque call
@@ -7398,6 +7634,50 @@ test "boundary field access projects private leaf branch" {
         \\}
     , .wrappers);
     defer optimized.deinit(allocator);
+}
+
+test "issue 12922 aggregate snapshots and shared arms execute on native and wasm" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\{
+        \\    read = |v| match v {
+        \\        A({ label, value }) | B({ label, value }) if label != "" => {
+        \\            saved = { label, value }
+        \\            replaced = { ..saved, value: saved.value + 1 }
+        \\            saved.value + replaced.value
+        \\        }
+        \\        _ => 0
+        \\    }
+        \\    records = [{ label: "left", value: 5.U64 }, { label: "right", value: 7 }]
+        \\    var $total = 0.U64
+        \\    for record in records {
+        \\        $total = $total + read(A(record)) + read(B(record))
+        \\    }
+        \\    $total
+        \\}
+    ;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var compiled = try eval.Inspected.compileInspectedProgramWithOptions(
+            allocator,
+            std.testing.io,
+            .expr,
+            source,
+            &.{},
+            .{
+                .pre_published_builtin = try sharedPrePublishedBuiltin(),
+                .specialization_strategy = strategy,
+            },
+        );
+        defer compiled.deinit(allocator);
+        const native = try eval.Inspected.devEvaluatorInspectedStr(allocator, &compiled.lowered);
+        defer allocator.free(native);
+        try std.testing.expectEqualStrings("52", native);
+        inline for (.{ .default, .v1 }) |cpu| {
+            const wasm = try eval.Inspected.wasmRunAt(allocator, &compiled.wasm_lowered.?, cpu);
+            defer allocator.free(wasm.output);
+            try std.testing.expectEqualStrings("52", wasm.output);
+        }
+    }
 }
 
 test "local iterator append loop demands step captures across states" {
@@ -13309,6 +13589,11 @@ test "issue 11376: mixed-width products survive Boxy boundaries and copy-on-writ
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
+        // The product's packing metadata and the shared list live in the
+        // frozen image, not a two-byte LIR literal. Execute that image through
+        // both strategies and verify the original shared list stays unchanged.
+        try std.testing.expect(result.static_data_values.items.len != 0);
+        try std.testing.expect(lowered.lowered.frozen_static_data.?.exports.len != 0);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {

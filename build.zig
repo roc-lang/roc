@@ -1846,6 +1846,15 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "issue_12778_wide_record_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "51181" } },
     .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12778_wide_record_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "51181" } },
     .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12778_wide_record_split_static_lib_app.wasm", .run_args = &.{ "--expected", "51181" }, .split_bytes = "256" },
+    // A recursion through a closure call whose lambda set has 256 members
+    // fits a 1 MiB shadow stack: the calling function's frame does not grow
+    // with the member count (#12922).
+    .{ .app = "issue_12922_lambda_set_frame_static_lib_app.roc", .options = &.{ "--opt=dev", "--wasm-stack-size=1048576" }, .output = "issue_12922_lambda_set_frame_static_lib_app.wasm", .run_args = &.{ "--expected", "20" } },
+    // The same storage contract holds for Boxy's runtime producers and for
+    // WebAssembly 1.0, not only the specialized bulk-memory path.
+    .{ .app = "issue_12922_lambda_set_frame_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no", "--wasm-stack-size=1048576" }, .output = "issue_12922_lambda_set_frame_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "20" } },
+    .{ .app = "issue_12922_lambda_set_frame_static_lib_app.roc", .options = &.{ "--opt=dev", "--wasm-stack-size=1048576" }, .output = "issue_12922_lambda_set_frame_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "20" } },
+    .{ .app = "issue_12922_lambda_set_frame_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no", "--wasm-stack-size=1048576" }, .output = "issue_12922_lambda_set_frame_boxy_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "20" } },
     // Narrowing try conversions from 128-bit integers (#12782).
     .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12782_i128_narrow_static_lib_app.wasm", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
     .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12782_i128_narrow_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
@@ -3788,6 +3797,19 @@ pub fn build(b: *std.Build) void {
         wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         wasm_test_exe.root_module.addImport("build_options", roc_modules.build_options);
         wasm_test_exe.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+
+        if (b.option([]const u8, "wasm-cart", "Run one wasm static-library cart, selected by its output filename")) |selected| {
+            const index = for (wasm_static_lib_carts, 0..) |cart, i| {
+                if (std.mem.eql(u8, cart.output, selected)) break i;
+            } else std.debug.panic("Unknown wasm cart output: {s}", .{selected});
+            const cart = wasm_static_lib_carts[index];
+            const args = cart.run_args orelse std.debug.panic("Wasm cart has no runtime assertion: {s}", .{selected});
+            const run_cart = b.addRunArtifact(wasm_test_exe);
+            run_cart.addArg("--wasm-path");
+            run_cart.addFileArg(wasm_static_lib_cart_outputs[index]);
+            run_cart.addArgs(args);
+            b.step("run-test-wasm-cart", "Build and run only the selected wasm static-library cart").dependOn(&run_cart.step);
+        }
 
         const install = b.addInstallArtifact(wasm_test_exe, .{});
         build_test_wasm_static_lib_runner_step.dependOn(&install.step);
