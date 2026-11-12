@@ -385,7 +385,7 @@ pub fn hostedSymbols(arena: Allocator, store_: *const lir.LirStore) Allocator.Er
     var seen = std.StringHashMap(void).init(arena);
     var symbols = std.ArrayList([]const u8).empty;
     for (store_.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         const text = store_.getString(hosted.symbol);
         const gop = try seen.getOrPut(text);
         if (!gop.found_existing) try symbols.append(arena, try arena.dupe(u8, text));

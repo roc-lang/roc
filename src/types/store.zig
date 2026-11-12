@@ -44,7 +44,7 @@ const Rigid = types.Rigid;
 const RecordField = types.RecordField;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
-const VarSafeList = Var.SafeList;
+const VarSafeList = collections.ReservedList(Var, .dense);
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const TagSafeMultiList = Tag.SafeMultiList;
 const Descriptor = types.Descriptor;
@@ -71,8 +71,8 @@ const RootMeta = struct {
     checked_var: Var,
 };
 
-const RootMetaSafeMultiList = collections.SafeMultiList(RootMeta);
-const UnionRankSafeList = collections.SafeList(u8);
+const RootMetaSafeMultiList = collections.ReservedColumns(RootMeta, .dense);
+const UnionRankSafeList = collections.ReservedList(u8, .dense);
 
 /// A variable & its descriptor info
 pub const ResolvedVarDesc = struct {
@@ -389,30 +389,44 @@ pub const Store = struct {
 
     /// Init the unification table
     pub fn initCapacity(gpa: Allocator, root_capacity: usize, child_capacity: usize) std.mem.Allocator.Error!Self {
-        return .{
+        var result: Self = .{
             .gpa = gpa,
             .frozen_anchors = .init(gpa),
 
             // slots & descriptors
-            .descs = try DescStore.init(gpa, root_capacity),
-            .slots = try SlotStore.init(gpa, root_capacity),
-            .root_metas = try RootMetaSafeMultiList.initCapacity(gpa, root_capacity),
-            .union_ranks = try UnionRankSafeList.initCapacity(gpa, root_capacity),
+            .descs = .{ .backing = .{} },
+            .slots = .{ .payloads = .{}, .kinds = .{} },
+            .root_metas = .{},
+            .union_ranks = .{},
 
             // everything else
-            .vars = try VarSafeList.initCapacity(gpa, child_capacity),
-            .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
-            .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
-            .interpolation_parts = try InterpolationPartMetadata.SafeList.initCapacity(gpa, child_capacity),
-            .numeral_infos = try NumeralInfo.SafeList.initCapacity(gpa, child_capacity),
+            .vars = .{},
+            .record_fields = .{},
+            .tags = .{},
+            .interpolation_parts = .{},
+            .numeral_infos = .{},
             .interpolation_metadata = .{},
-            .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
+            .static_dispatch_constraints = .{},
 
             // nominal declaration table (modules typically declare few types)
-            .nominal_decls = try NominalDecl.SafeList.initCapacity(gpa, 16),
-            .nominal_decl_index = try NominalDeclIndexEntry.SafeList.initCapacity(gpa, 16),
+            .nominal_decls = .{},
+            .nominal_decl_index = .{},
             .invalid_nominal_decl_written = false,
         };
+        errdefer result.deinit();
+        result.descs = try DescStore.init(gpa, root_capacity);
+        result.slots = try SlotStore.init(gpa, root_capacity);
+        result.root_metas = try RootMetaSafeMultiList.initCapacity(gpa, root_capacity);
+        result.union_ranks = try UnionRankSafeList.initCapacity(gpa, root_capacity);
+        result.vars = try VarSafeList.initCapacity(gpa, child_capacity);
+        result.record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity);
+        result.tags = try TagSafeMultiList.initCapacity(gpa, child_capacity);
+        result.interpolation_parts = try InterpolationPartMetadata.SafeList.initCapacity(gpa, child_capacity);
+        result.numeral_infos = try NumeralInfo.SafeList.initCapacity(gpa, child_capacity);
+        result.static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity);
+        result.nominal_decls = try NominalDecl.SafeList.initCapacity(gpa, 16);
+        result.nominal_decl_index = try NominalDeclIndexEntry.SafeList.initCapacity(gpa, 16);
+        return result;
     }
 
     /// Make this store read-only: checking has solved it, and every later
@@ -425,6 +439,14 @@ pub const Store = struct {
             if (self.savepoint_active) base.invariant("a type store was sealed with a savepoint open", .{});
             if (self.frozen_anchors.count() != 0) base.invariant("a type store was sealed with a frozen class", .{});
         }
+        self.slots.payloads.seal();
+        self.slots.kinds.seal();
+        self.descs.backing.seal();
+        self.root_metas.seal();
+        self.union_ranks.seal();
+        self.vars.seal();
+        self.record_fields.seal();
+        self.tags.seal();
         self.releaseCheckerBuffers();
         self.sealed = true;
     }
@@ -460,7 +482,7 @@ pub const Store = struct {
             live_descs.set(@backingInt(storage.desc_idx));
         }
 
-        for (self.vars.items()) |*var_| var_.* = self.representativeVar(var_.*);
+        for (self.vars.items) |*var_| var_.* = self.representativeVar(var_.*);
         for (0..self.record_fields.len()) |index| {
             var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
             field.presence.var_ = self.representativeVar(field.presence.var_);
@@ -679,7 +701,7 @@ pub const Store = struct {
     /// error state. Descriptors not referenced by a current slot are rollback
     /// history and do not affect checked output.
     pub fn containsErrContent(self: *const Self) bool {
-        for (self.slots.kinds.items(), self.slots.payloads.items()) |kind, payload| {
+        for (self.slots.kinds.items, self.slots.payloads.items) |kind, payload| {
             switch (kind) {
                 .root => {
                     if (self.descs.get(@fromBackingInt(payload)).content == .err) return true;
@@ -724,7 +746,7 @@ pub const Store = struct {
     /// trail restored all union-find state to exactly its pre-savepoint values.
     const VerifyClone = struct {
         slots: []Slot,
-        descs: DescStore.DescSafeMultiList,
+        descs: collections.ReservedColumns(Desc, .dense),
         root_metas: RootMetaSafeMultiList,
         union_ranks: []u8,
         derived_map_plans: []DerivedMapPlanEntry,
@@ -753,7 +775,7 @@ pub const Store = struct {
         var root_metas = try self.root_metas.clone(self.gpa);
         errdefer root_metas.deinit(self.gpa);
 
-        const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items());
+        const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items);
         errdefer self.gpa.free(union_ranks);
         const derived_map_plans = try self.gpa.dupe(DerivedMapPlanEntry, self.derived_map_plans.items());
         return .{
@@ -795,7 +817,7 @@ pub const Store = struct {
             .desc_trail_len = self.desc_trail.items.len,
             .root_meta_trail_len = self.root_meta_trail.items.len,
             .union_rank_trail_len = self.union_rank_trail.items.len,
-            .vars_len = self.vars.items().len,
+            .vars_len = self.vars.items.len,
             .record_fields_len = self.record_fields.len(),
             .tags_len = self.tags.len(),
             .interpolation_parts_len = self.interpolation_parts.items().len,
@@ -962,7 +984,7 @@ pub const Store = struct {
             std.debug.assert(std.meta.eql(self.root_metas.get(@fromBackingInt(@intCast(i))), vclone.root_metas.get(@fromBackingInt(@intCast(i)))));
         }
 
-        std.debug.assert(std.mem.eql(u8, self.union_ranks.items(), vclone.union_ranks));
+        std.debug.assert(std.mem.eql(u8, self.union_ranks.items, vclone.union_ranks));
 
         std.debug.assert(self.derived_map_plans.items().len == vclone.derived_map_plans.len);
         for (self.derived_map_plans.items(), vclone.derived_map_plans) |entry, cloned| {
@@ -1904,7 +1926,7 @@ pub const Store = struct {
 
     fn sliceAliasesVars(self: *const Self, s: []const Var) bool {
         if (s.len == 0) return false;
-        const items = self.vars.items();
+        const items = self.vars.items;
         const items_start = @intFromPtr(items.ptr);
         const items_end = items_start + items.len * @sizeOf(Var);
         const source_start = @intFromPtr(s.ptr);
@@ -2864,15 +2886,15 @@ const SlotKind = enum(u8) { root, redirect };
 const SlotStore = struct {
     const Self = @This();
 
-    payloads: collections.SafeList(u32),
-    kinds: collections.SafeList(SlotKind),
+    payloads: collections.ReservedList(u32, .dense),
+    kinds: collections.ReservedList(SlotKind, .dense),
 
     fn init(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
-        var payloads = try collections.SafeList(u32).initCapacity(gpa, capacity);
+        var payloads = try collections.ReservedList(u32, .dense).initCapacity(gpa, capacity);
         errdefer payloads.deinit(gpa);
         return .{
             .payloads = payloads,
-            .kinds = try collections.SafeList(SlotKind).initCapacity(gpa, capacity),
+            .kinds = try collections.ReservedList(SlotKind, .dense).initCapacity(gpa, capacity),
         };
     }
 
@@ -2909,8 +2931,8 @@ const SlotStore = struct {
     /// Serialized representation of SlotStore
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
-        payloads: collections.SafeList(u32).Serialized,
-        kinds: collections.SafeList(SlotKind).Serialized,
+        payloads: collections.ReservedList(u32, .dense).Serialized,
+        kinds: collections.ReservedList(SlotKind, .dense).Serialized,
 
         /// Serialize a SlotStore into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -2949,15 +2971,15 @@ const SlotStore = struct {
     /// Set a value in the store
     pub fn set(self: *Self, idx: Idx, val: Slot) void {
         const i: usize = @backingInt(idx);
-        self.payloads.items()[i] = payloadOf(val);
-        self.kinds.items()[i] = val;
+        self.payloads.items[i] = payloadOf(val);
+        self.kinds.items[i] = val;
     }
 
     /// Get a value from the store
     fn get(self: *const Self, idx: Idx) Slot {
         const i: usize = @backingInt(idx);
-        const payload = self.payloads.items()[i];
-        return switch (self.kinds.items()[i]) {
+        const payload = self.payloads.items[i];
+        return switch (self.kinds.items[i]) {
             .root => .{ .root = @fromBackingInt(payload) },
             .redirect => .{ .redirect = @fromBackingInt(payload) },
         };
@@ -2965,7 +2987,7 @@ const SlotStore = struct {
 
     /// Every slot, in order, as an owned slice.
     fn toOwnedSlots(self: *const Self, gpa: Allocator) Allocator.Error![]Slot {
-        const slots = try gpa.alloc(Slot, self.payloads.items().len);
+        const slots = try gpa.alloc(Slot, self.payloads.items.len);
         for (slots, 0..) |*slot, i| slot.* = self.get(@fromBackingInt(@intCast(i)));
         return slots;
     }
@@ -2989,7 +3011,7 @@ const SlotStore = struct {
 /// Indexes into the list are typesafe
 const DescStore = struct {
     const Self = @This();
-    const DescSafeMultiList = collections.SafeMultiList(Desc);
+    const DescSafeMultiList = collections.ReservedColumns(Desc, .dense);
 
     backing: DescSafeMultiList,
     /// False only while no descriptor in `backing` has ever held `.err`.
@@ -3163,6 +3185,18 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
 }
 
 test "sealing releases checker-only buffers without allocating" {
+    const Snapshot = struct {
+        fn bytes(store: *Store) Allocator.Error![]u8 {
+            const allocator = std.testing.allocator;
+            var writer = collections.CompactWriter.init();
+            defer writer.deinit(allocator);
+            const serialized = try writer.appendAlloc(allocator, Store.Serialized);
+            try serialized.serialize(store, allocator, &writer);
+            const buffer = try allocator.alloc(u8, writer.total_bytes);
+            _ = writer.writeToBuffer(buffer) catch unreachable; // Buffer has exactly the writer's required size.
+            return buffer;
+        }
+    };
     var counter = std.testing.FailingAllocator.init(std.testing.allocator, .{});
     const gpa = counter.allocator();
     {
@@ -3171,7 +3205,8 @@ test "sealing releases checker-only buffers without allocating" {
         const value = try store.fresh();
         const alias = try store.freshRedirect(value);
         const solved_bytes = counter.allocated_bytes - counter.freed_bytes;
-        const retained = store;
+        const before = try Snapshot.bytes(&store);
+        defer std.testing.allocator.free(before);
 
         // Reserve every checker buffer, including capacity in empty lists and
         // maps returned to the nested-instantiation pool. None of this storage
@@ -3208,13 +3243,10 @@ test "sealing releases checker-only buffers without allocating" {
         try std.testing.expectEqual(allocations_before_seal, counter.allocated_bytes);
         try std.testing.expectEqual(solved_bytes, counter.allocated_bytes - counter.freed_bytes);
         try std.testing.expectEqual(value, store.resolveVar(alias).var_);
-        // Every serialized column keeps its storage and length. The full
-        // CompactWriter roundtrip below also checks content across sealing.
-        inline for (@typeInfo(Store.Serialized).@"struct".field_names) |field_name| {
-            if (comptime @hasField(Store, field_name) and !std.mem.eql(u8, field_name, "gpa")) {
-                try std.testing.expectEqualDeep(@field(retained, field_name), @field(store, field_name));
-            }
-        }
+        // Storage ownership changes at seal; persisted contents do not.
+        const after = try Snapshot.bytes(&store);
+        defer std.testing.allocator.free(after);
+        try std.testing.expectEqualSlices(u8, before, after);
     }
     try std.testing.expectEqual(counter.allocated_bytes, counter.freed_bytes);
 }
@@ -3534,7 +3566,7 @@ fn storageDescIdx(store: *const Store, var_: Var) DescStore.Idx {
 
 /// Whether some slot names `desc_idx`.
 fn descIsNamed(store: *const Store, desc_idx: DescStore.Idx) bool {
-    for (store.slots.kinds.items(), store.slots.payloads.items()) |kind, payload| {
+    for (store.slots.kinds.items, store.slots.payloads.items) |kind, payload| {
         switch (kind) {
             .root => if (payload == @backingInt(desc_idx)) return true,
             .redirect => {},
@@ -3912,9 +3944,9 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         defer before_descs.deinit(gpa);
         var before_root_metas = try store.root_metas.clone(gpa);
         defer before_root_metas.deinit(gpa);
-        const before_union_ranks = try gpa.dupe(u8, store.union_ranks.items());
+        const before_union_ranks = try gpa.dupe(u8, store.union_ranks.items);
         defer gpa.free(before_union_ranks);
-        const before_vars_len = store.vars.items().len;
+        const before_vars_len = store.vars.items.len;
 
         // Verifying savepoint: copies the whole store up front; rollback asserts
         // the trail restored it byte-for-byte (same behavior as restoring a copy).
@@ -3950,8 +3982,8 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         while (i < before_root_metas.len()) : (i += 1) {
             try std.testing.expect(std.meta.eql(before_root_metas.get(@fromBackingInt(@intCast(i))), store.root_metas.get(@fromBackingInt(@intCast(i)))));
         }
-        try std.testing.expectEqualSlices(u8, before_union_ranks, store.union_ranks.items());
-        try std.testing.expectEqual(before_vars_len, store.vars.items().len);
+        try std.testing.expectEqualSlices(u8, before_union_ranks, store.union_ranks.items);
+        try std.testing.expectEqual(before_vars_len, store.vars.items.len);
     }
 }
 
@@ -5033,4 +5065,16 @@ test "the written flags travel with the serialized store" {
         defer writable.deinit();
         try std.testing.expectEqual(write_err, writable.mayContainErrorState());
     }
+}
+
+fn exerciseStoreConstructionFailure(gpa: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
+    var store = try Store.initCapacity(gpa, 4, 4);
+    defer store.deinit();
+    const first = try store.fresh();
+    for (0..24) |_| _ = try store.freshRedirect(first);
+    try std.testing.expectEqual(@as(u64, 25), store.len());
+}
+
+test "reserved type columns preserve ownership on construction and growth failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseStoreConstructionFailure, .{});
 }

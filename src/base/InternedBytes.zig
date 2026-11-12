@@ -37,6 +37,11 @@ pub fn Index(comptime Policy: type) type {
         const Self = @This();
         const use_fingerprints = if (@hasDecl(Policy, "use_fingerprints")) Policy.use_fingerprints else false;
 
+        comptime {
+            // A fresh table is all empty cells, so empty must be zero.
+            std.debug.assert(std.meta.eql(Policy.empty_cell, std.mem.zeroes(Policy.Cell)));
+        }
+
         pub const Find = FindResult(Policy.Id);
 
         pub fn fromCells(cells: SafeList(Policy.Cell), len: u32) Self {

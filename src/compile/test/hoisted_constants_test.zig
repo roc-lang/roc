@@ -528,10 +528,10 @@ test "hoisted list constants lower to internal static data in request order" {
 
     if (lowered.lir_result.static_data_values.items.len != 2) return error.StaticDataInitializerCountMismatch;
     try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
-    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.?);
-    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
-    const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
-    const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
+    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.get().?);
+    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.get().?);
+    const first_body = first_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
+    const second_body = second_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
     // Queued initializers lower in request order. ARC leaves initializers as
     // lowered, so their bodies' statement ids still show that order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
@@ -1156,7 +1156,7 @@ fn reachableStatementCount(result: *lir.Program.Result) HoistedConstantsTestErro
     // entrypoint still makes the compiler process it (the regression in #11376).
     var statement_count: usize = 0;
     for (result.store.getProcSpecs()) |proc| {
-        const body = proc.body orelse continue;
+        const body = proc.body.get() orelse continue;
         var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
         defer statements.deinit();
         while (try statements.next()) |_| statement_count += 1;
@@ -1214,9 +1214,9 @@ test "computed callable aliases retain evaluation requests while proven forwards
         var forwarded: usize = 0;
         for (artifact.callable_eval_templates.templates.items()) |template| {
             const requested = for (artifact.root_requests.compile_time_requests) |request| {
-                if (request.compile_time_root == template.root) break true;
+                if (request.compile_time_root.get() == template.root) break true;
             } else false;
-            if (template.forwarded_lookup != null) {
+            if (template.forwarded_lookup != .none) {
                 forwarded += 1;
                 try std.testing.expect(!requested);
             } else {
@@ -2707,8 +2707,8 @@ fn expectPatternExtractionRoots(
         };
         extraction_count += 1;
 
-        try std.testing.expectEqual(extraction.result_pattern, root.source_pattern orelse return error.PatternExtractionMissingSourcePattern);
-        const checked_result_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedRootPattern;
+        try std.testing.expectEqual(extraction.result_pattern, root.source_pattern.get() orelse return error.PatternExtractionMissingSourcePattern);
+        const checked_result_pattern = root.pattern.get() orelse return error.PatternExtractionMissingCheckedRootPattern;
         try std.testing.expectEqual(extraction.result_pattern, checked_result_pattern);
 
         // The root evaluates the match of its base expression against the
@@ -2913,7 +2913,7 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
 
 fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
     for (result.static_data_values.items) |value| {
-        try std.testing.expect(result.store.getProcSpecImmediate(value.initializer.?).is_static_initializer);
+        try std.testing.expect(result.store.getProcSpecImmediate(value.initializer.get().?).is_static_initializer);
     }
 }
 

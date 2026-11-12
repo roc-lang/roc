@@ -151,14 +151,14 @@ const Builder = struct {
             .name = self.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(self.next_identity),
             .args = try self.store.addLocalSpan(args),
-            .body = body,
+            .body = .some(body),
             .ret_layout = ret_layout,
             .frame_locals = try self.store.addLocalSpan(self.proc_locals.items),
             .join_points = try self.store.addJoinPointSpan(options.join_points),
-            .dyn_result = options.dyn_result,
+            .dyn_result = .of(options.dyn_result),
             .abi = options.abi,
-            .erased_capture_arg = options.erased_capture_arg,
-            .tail_group = options.tail_group,
+            .erased_capture_arg = .of(options.erased_capture_arg),
+            .tail_group = .of(options.tail_group),
             .uses_pending_cell = options.uses_pending_cell,
         }, .none);
     }

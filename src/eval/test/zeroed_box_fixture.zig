@@ -58,7 +58,7 @@ pub fn run(allocator: std.mem.Allocator) Error!void {
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{ cell, p, pre, v, st, post, sum }),
-        .body = alloc,
+        .body = .some(alloc),
         .ret_layout = .u64,
     }, .none);
 

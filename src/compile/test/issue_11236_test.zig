@@ -21,7 +21,7 @@ const harness = @import("lower_to_lir_harness.zig");
 // store. A rejected value must still fail when optimizations erase its consumer.
 fn hasTerminalCheckedError(store: *const lir.LirStore) bool {
     for (0..store.procSpecCount()) |i| {
-        var current = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(i))))).body orelse continue;
+        var current = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(i))))).body.get() orelse continue;
         var remaining = store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
             switch (store.getCFStmtImmediate(current).*) {
@@ -152,7 +152,7 @@ fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArt
         rejected += 1;
         const expr = binding.body.checked_error;
         try std.testing.expect(artifact.bodies().exprData(expr) == .runtime_error);
-        for (artifact.compile_time_roots.roots) |root| try std.testing.expect(root.expr != expr);
+        for (artifact.compile_time_roots.roots) |root| try std.testing.expect(root.expr.get() != expr);
     }
     try std.testing.expectEqual(@as(usize, 1), rejected);
     try std.testing.expectEqual(@as(usize, 0), artifact.callable_eval_templates.templates.items().len);

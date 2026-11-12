@@ -30,7 +30,7 @@ ranges: std.ArrayList(Range) = .empty,
 // next procedure (see `Indexes`) allocates only past its earlier sizes.
 blocks: std.ArrayList(Block) = .empty,
 block_states: std.ArrayList(BlockState) = .empty,
-loop_epochs: std.ArrayList(u32) = .empty,
+loop_epochs: collections.EpochSet(u32, .stamps, .internal) = .{},
 units: std.ArrayList(Unit) = .empty,
 write_loops: std.ArrayList(u32) = .empty,
 slot_order: std.ArrayList(u32) = .empty,
@@ -533,7 +533,7 @@ const BlockStructure = struct {
         defer side.deinit(allocator);
         for (0..count) |target_index| {
             for (preds[pred_starts[target_index]..pred_starts[target_index + 1]]) |pred| {
-                var loop = forest.innermost[target_index];
+                var loop = forest.innermostOf(target_index);
                 while (loop != LoopForest.none and !forest.containsNode(loop, pred)) : (loop = forest.loops[loop].parent) {
                     if (forest.loops[loop].header != target_index) try side.append(allocator, .{ .loop = loop, .pred = pred });
                 }
@@ -572,7 +572,7 @@ const BlockStructure = struct {
         const LoopOrder = struct {
             forest: *const LoopForest,
             fn key(ctx: @This(), block: u32) u64 {
-                const loop = ctx.forest.innermost[block];
+                const loop = ctx.forest.innermostOf(block);
                 const position: u64 = if (loop == LoopForest.none) std.math.maxInt(u32) else ctx.forest.loops[loop].enter;
                 return (position << 32) | block;
             }
@@ -619,7 +619,7 @@ const BlockStructure = struct {
             @memset(end_position, 0);
             @memset(covered, 0);
             for (blocks, 0..) |block, index| {
-                const loop = forest.innermost[index];
+                const loop = forest.innermostOf(index);
                 if (loop == LoopForest.none) continue;
                 first_position[loop] = @min(first_position[loop], block.start);
                 end_position[loop] = @max(end_position[loop], block.end);
@@ -682,7 +682,7 @@ const BlockStructure = struct {
         var high: usize = self.blocks_by_loop.len;
         while (low < high) {
             const mid = low + (high - low) / 2;
-            const loop = self.forest.innermost[self.blocks_by_loop[mid]];
+            const loop = self.forest.innermostOf(self.blocks_by_loop[mid]);
             const position = if (loop == LoopForest.none) std.math.maxInt(u32) else self.forest.loops[loop].enter;
             if (position < order) low = mid + 1 else high = mid;
         }
@@ -924,9 +924,8 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
     try self.block_states.resize(self.allocator, blocks.items.len);
     const states = self.block_states.items;
     @memset(states, .{});
-    try self.loop_epochs.resize(self.allocator, structure.forest.loops.len);
-    const loop_epochs = self.loop_epochs.items;
-    @memset(loop_epochs, none);
+    try self.loop_epochs.ensureLen(self.allocator, structure.forest.loops.len);
+    const loop_epochs = &self.loop_epochs;
     const work = &self.units;
     work.clearRetainingCapacity();
     const write_loops = &self.write_loops;
@@ -940,6 +939,7 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
         while (end < self.accesses.items.len and self.accesses.items[end].value == value) : (end += 1) {}
         defer begin = end;
         if (self.values.items[value].size == 0) continue;
+        loop_epochs.reset();
         const range_start = ranges.items.len;
 
         // The loop-tree positions of the loops holding the value's writes:
@@ -947,7 +947,7 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
         write_loops.clearRetainingCapacity();
         for (self.accesses.items[begin..end]) |a| {
             if (!a.write) continue;
-            const loop = structure.forest.innermost[self.nodes.items[a.node].block];
+            const loop = structure.forest.innermostOf(self.nodes.items[a.node].block);
             if (loop != LoopForest.none) try write_loops.append(self.allocator, structure.forest.loops[loop].enter);
         }
         std.mem.sort(u32, write_loops.items, {}, std.sort.asc(u32));
@@ -981,9 +981,8 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
             }
             if (needed_until) |limit| {
                 try ranges.append(self.allocator, .{ .start = blocks.items[block].start, .end = limit });
-                if (transparency.outermost(structure.forest.innermost[block])) |loop| {
-                    if (loop_epochs[loop] != value) {
-                        loop_epochs[loop] = value;
+                if (transparency.outermost(structure.forest.innermostOf(block))) |loop| {
+                    if (!loop_epochs.testAndInsert(loop)) {
                         try work.append(self.allocator, .{ .loop = true, .index = loop });
                     }
                 } else {
@@ -999,9 +998,8 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
                 structure.blockPreds(unit.index);
             if (unit.loop) try structure.appendCoverage(self.allocator, unit.index, blocks.items, ranges);
             for (entries) |pred| {
-                if (transparency.outermost(structure.forest.innermost[pred])) |loop| {
-                    if (loop_epochs[loop] == value) continue;
-                    loop_epochs[loop] = value;
+                if (transparency.outermost(structure.forest.innermostOf(pred))) |loop| {
+                    if (loop_epochs.testAndInsert(loop)) continue;
                     try work.append(self.allocator, .{ .loop = true, .index = loop });
                     continue;
                 }
