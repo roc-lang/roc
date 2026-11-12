@@ -357,7 +357,7 @@ pub const SealedConstraintRows = struct {
             .fn_name = self.view.methodName(source.fn_name),
             .fn_ty = type_ids.fromVar(type_store.resolveVar(source.fn_var).var_),
             .origin = source.origin,
-            .numeral = type_store.constraintNumeralInfo(source),
+            .numeral = .of(type_store.constraintNumeralInfo(source)),
         };
     }
 };

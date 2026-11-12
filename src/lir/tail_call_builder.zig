@@ -161,7 +161,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         }
     }
     self.published = true;
-    return if (head) |first| .{ .head = first, .loop = @fromBackingInt(self.next_join), .entry = self.loop_entry } else null;
+    return if (head) |first| .{ .head = first, .loop = @fromBackingInt(self.next_join), .entry = .of(self.loop_entry) } else null;
 }
 
 /// Whether a call to the procedure itself passes its instance parameters

@@ -1142,6 +1142,23 @@ test "SafeList(32) inserting and getting" {
     try testing.expectEqual(item.*, 1);
 }
 
+test "SafeList iterator counts and visits its bounded domain" {
+    var list = SafeList(u32){};
+    defer list.deinit(testing.allocator);
+    var empty = list.iter();
+    try testing.expectEqual(@as(u32, 0), empty.count());
+    try testing.expectEqual(@as(?u32, null), empty.next());
+    _ = try list.append(testing.allocator, 7);
+    _ = try list.append(testing.allocator, 9);
+    var items = list.iter();
+    try testing.expectEqual(@as(u32, 2), items.count());
+    try testing.expectEqual(@as(?u32, 7), items.next());
+    try testing.expectEqual(@as(u32, 1), items.count());
+    try testing.expectEqual(@as(?u32, 9), items.next());
+    try testing.expectEqual(@as(?u32, null), items.next());
+    try testing.expectEqual(@as(u32, 0), items.count());
+}
+
 test "SafeRange.empty has a defined start that addresses no row" {
     // An empty range reaches persisted columns, so its start is a fixed index
     // past every row a list can hold rather than an undefined placeholder.

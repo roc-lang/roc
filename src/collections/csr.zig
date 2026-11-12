@@ -13,21 +13,8 @@ pub const Csr = struct {
 /// The reversed graph: every edge `a -> b` becomes `b -> a`, with each
 /// node's sources in the order their edges appear.
 pub fn transpose(allocator: Allocator, starts: []const u32, targets: []const u32) Allocator.Error!Csr {
-    const node_count = starts.len - 1;
-    const reversed_starts = try allocator.alloc(u32, node_count + 1);
-    @memset(reversed_starts, 0);
-    for (targets) |target| reversed_starts[target + 1] += 1;
-    for (1..node_count + 1) |index| reversed_starts[index] += reversed_starts[index - 1];
-    const reversed = try allocator.alloc(u32, targets.len);
-    const fill = try allocator.dupe(u32, reversed_starts[0..node_count]);
-    defer allocator.free(fill);
-    for (0..node_count) |source| {
-        for (targets[starts[source]..starts[source + 1]]) |target| {
-            reversed[fill[target]] = @intCast(source);
-            fill[target] += 1;
-        }
-    }
-    return .{ .starts = reversed_starts, .targets = reversed };
+    const groups = try @import("groups.zig").CsrGroups(u32).transpose(allocator, starts, targets);
+    return .{ .starts = groups.starts, .targets = groups.items };
 }
 
 test "transpose reverses every edge in order" {

@@ -139,12 +139,12 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
     // lowering's export inventory. Its generic argument also requires a table
     // contract in producer mode, even though no root calls it.
     const unrelated_template = for (library.checked_procedure_templates.templates.items()) |template| {
-        const name = library.canonical_names.procBase(template.proc_base).export_name orelse continue;
+        const name = library.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
         if (std.mem.eql(u8, library.canonical_names.exportNameText(name), "unrelated")) break template.template_id;
     } else return error.TestUnexpectedResult;
     const unrelated_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), unrelated_template);
     const used_template = for (library.checked_procedure_templates.templates.items()) |template| {
-        const name = library.canonical_names.procBase(template.proc_base).export_name orelse continue;
+        const name = library.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
         if (std.mem.eql(u8, library.canonical_names.exportNameText(name), "used")) break template.template_id;
     } else return error.TestUnexpectedResult;
     const used_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), used_template);
@@ -166,7 +166,9 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         // Runtime producers consume completed roots, unlike the evaluator
         // consumer above whose pending roots are the subject of the test.
         if (!case.compile_time and !completed) {
+            coord.specialization_strategy = .boxy;
             try coord.finishCheckedProgram(.executable_artifacts);
+            try std.testing.expect(!coord.hasUserErrors());
             completed = true;
         }
         // Restored checked modules have their CIR and published tables, but

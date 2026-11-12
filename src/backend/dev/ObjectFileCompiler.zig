@@ -1099,7 +1099,7 @@ fn appendStaticDataExports(
             const id = switch (relocation.target) {
                 .data_symbol => |target| data_symbols[@backingInt(target)],
                 .named => blk: {
-                    if (relocation.procedure) |proc| {
+                    if (relocation.procedure.get()) |proc| {
                         if (functions.get(proc)) |id| break :blk id;
                         const id = table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
                         functions.put(proc, id) catch return CompilationError.OutOfMemory;
@@ -1746,14 +1746,14 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = lir.LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .i64,
     }, .none);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(2),
         .args = lir.LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .i64,
         .is_static_initializer = true,
     }, .none);
@@ -1808,7 +1808,7 @@ test "ObjectFileCompiler runtime static-root excerpts own only reachable canonic
                 .name = store.freshSyntheticSymbol(),
                 .identity = identity,
                 .args = .empty(),
-                .body = body,
+                .body = .some(body),
                 .ret_layout = .str,
             }, .none);
             const descriptor = try a.alloc(u8, 24);

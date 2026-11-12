@@ -3728,7 +3728,7 @@ pub const Coordinator = struct {
                 // A different strategy can still need its function form.
                 if (artifact.hasUnboundPlatformRequirements()) {
                     for (artifact.root_requests.compile_time_requests) |request| {
-                        const root = artifact.compile_time_roots.root(request.compile_time_root.?);
+                        const root = artifact.compile_time_roots.root(request.compile_time_root.get().?);
                         if (root.needsEvaluation(self.specialization_strategy) and root.boxy_value == null and
                             (root.payload == .pending or root.payload == .unevaluated))
                         {
@@ -3957,7 +3957,7 @@ pub const Coordinator = struct {
     fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy) usize {
         var count: usize = 0;
         for (artifact.root_requests.compile_time_requests) |request| {
-            const root = request.compile_time_root orelse continue;
+            const root = request.compile_time_root.get() orelse continue;
             if (artifact.compile_time_roots.root(root).needsEvaluation(strategy)) count += 1;
         }
         return count;
@@ -4140,7 +4140,7 @@ pub const Coordinator = struct {
     /// specialization strategy, so a later compilation can reopen it.
     fn hasUnevaluatedRequestsUnderAnyStrategy(artifact: *const CheckedArtifact.CheckedModuleArtifact) bool {
         for (artifact.root_requests.compile_time_requests) |request| {
-            const root = request.compile_time_root orelse continue;
+            const root = request.compile_time_root.get() orelse continue;
             const payload = artifact.compile_time_roots.root(root).payload;
             if (payload == .unevaluated or payload == .pending) return true;
         }
@@ -4257,7 +4257,9 @@ pub const Coordinator = struct {
     /// iterative Tarjan traversal, then reject the edges inside each cycle.
     fn resolvePackageImportCycles(self: *Coordinator, pkg: *PackageState) Allocator.Error!bool {
         const modules = pkg.modules.items;
-        const unvisited = std.math.maxInt(u32);
+        // Visit indices and cycle numbers are issued from one, so zero marks
+        // an unvisited module.
+        const unvisited: u32 = 0;
 
         const visit_index = try self.gpa.alloc(u32, modules.len);
         defer self.gpa.free(visit_index);
@@ -4283,7 +4285,7 @@ pub const Coordinator = struct {
         var cycle_ends = std.ArrayList(u32).empty;
         defer cycle_ends.deinit(self.gpa);
 
-        var next_visit: u32 = 0;
+        var next_visit: u32 = 1;
         for (modules, 0..) |*root, root_index| {
             if (root.completion != .pending or visit_index[root_index] != unvisited) continue;
 
@@ -4342,11 +4344,12 @@ pub const Coordinator = struct {
         if (cycle_ends.items.len == 0) return false;
 
         // `visit_index` is no longer needed, so it records each cycle member's
-        // component; every other module keeps `unvisited` there.
+        // cycle number, counted from one; every other module keeps
+        // `unvisited` there.
         @memset(visit_index, unvisited);
         var members_start: u32 = 0;
-        for (cycle_ends.items, 0..) |members_end, component| {
-            for (cycle_members.items[members_start..members_end]) |member| visit_index[member] = @intCast(component);
+        for (cycle_ends.items, 1..) |members_end, cycle_number| {
+            for (cycle_members.items[members_start..members_end]) |member| visit_index[member] = @intCast(cycle_number);
             members_start = members_end;
         }
 
@@ -8514,7 +8517,7 @@ fn compileAppRootIdentityExpecting(
     }
     var forwarded_callable_count: usize = 0;
     for (root.callable_eval_templates.templates.items()) |template| {
-        if (template.forwarded_lookup != null) forwarded_callable_count += 1;
+        if (template.forwarded_lookup != .none) forwarded_callable_count += 1;
     }
     return .{
         .compile_time_request_count = root.root_requests.compile_time_requests.len,
@@ -10128,9 +10131,9 @@ fn hashPatternExtractionRegionsForView(
         };
         count.* += 1;
 
-        if (root.source_pattern == null) return error.PatternExtractionMissingSourcePattern;
-        if (root.source_pattern.? != extraction.result_pattern) return error.PatternExtractionSourcePatternMismatch;
-        const root_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedPattern;
+        if (root.source_pattern == .none) return error.PatternExtractionMissingSourcePattern;
+        if (root.source_pattern.get().? != extraction.result_pattern) return error.PatternExtractionSourcePatternMismatch;
+        const root_pattern = root.pattern.get() orelse return error.PatternExtractionMissingCheckedPattern;
         if (root_pattern != extraction.result_pattern) return error.PatternExtractionRootPatternMismatch;
         if (root.rootExpr() != extraction.base_expr) return error.PatternExtractionRootExprWasNotBaseExpr;
         if (root.evaluatedExpr() != null) return error.PatternExtractionRootEvaluatedItsExpr;
@@ -10210,8 +10213,8 @@ fn hashExhaustivenessSitesForView(
             .destructure => 1,
         });
         hashRegionIntoSha256(hasher, site.region);
-        hashOptionalU32IntoSha256(hasher, if (site.checked_expr) |expr| @backingInt(expr) else null);
-        hashOptionalU32IntoSha256(hasher, if (site.checked_pattern) |pattern| @backingInt(pattern) else null);
+        hashOptionalU32IntoSha256(hasher, if (site.checked_expr.get()) |expr| @backingInt(expr) else null);
+        hashOptionalU32IntoSha256(hasher, if (site.checked_pattern.get()) |pattern| @backingInt(pattern) else null);
         hashExhaustivenessOwnerIntoSha256(hasher, site.owner);
         hashExhaustivenessPolicyIntoSha256(hasher, site.policy);
     }
@@ -10721,8 +10724,8 @@ const lifted_const_lib_source =
     \\}
 ;
 
-/// Read one checked-module cache entry's bytes, or null when the cache holds
-/// no entry under `key`.
+/// Read bytes using the checked-entry storage key recorded by the producer,
+/// not the artifact's semantic identity.
 fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key: [32]u8) (CorruptCheckedModuleCacheError || error{NoHomeDirectory})!?[]u8 {
     const io = std.testing.io;
     const config = CacheConfig{ .cache_dir = cache_dir };
@@ -10763,18 +10766,21 @@ test "issue 12059: a checked module's cache entry does not depend on how an impo
     // key in both builds, and its entry holds the same bytes whichever app
     // was compiled: only the app module itself differs.
     var shared_entries: usize = 0;
-    for (lifted.checking) |module| {
-        const key = module.artifact_key orelse continue;
-        const other = for (unlifted.checking) |candidate| {
-            if (candidate.artifact_key) |other_key| {
-                if (std.mem.eql(u8, &key, &other_key)) break candidate;
+    for (lifted.checking) |facts| {
+        const artifact_key = facts.artifact_key orelse continue;
+        const peer = for (unlifted.checking) |other| {
+            if (other.artifact_key) |other_key| {
+                if (std.mem.eql(u8, &artifact_key, &other_key)) break other;
             }
         } else continue;
-        // Checking inputs name storage; the completed artifact key names
-        // the result, not its filename.
-        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, module.storage_key orelse continue)) orelse continue;
+        // Storage is indexed by the typing input, not the published artifact's
+        // identity. Shared artifacts must still have identical input keys and
+        // bytes regardless of the importing app.
+        try std.testing.expectEqual(facts.storage_key, peer.storage_key);
+        const key = facts.storage_key orelse continue;
+        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse continue;
         defer allocator.free(from_lifted);
-        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, other.storage_key orelse return error.TestUnexpectedResult)) orelse return error.TestUnexpectedResult;
+        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, peer.storage_key orelse return error.TestUnexpectedResult)) orelse return error.TestUnexpectedResult;
         defer allocator.free(from_unlifted);
         try std.testing.expectEqualSlices(u8, from_unlifted, from_lifted);
         shared_entries += 1;
@@ -13134,7 +13140,7 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
             defer visited.deinit();
             for (0..store.procSpecCount()) |proc_index| {
                 const proc = store.getProcSpec(@fromBackingInt(@intCast(proc_index)));
-                if (proc.body) |body| try work.append(allocator, body);
+                if (proc.body.get()) |body| try work.append(allocator, body);
             }
             while (work.pop()) |stmt_id| {
                 if ((try visited.getOrPut(stmt_id)).found_existing) continue;

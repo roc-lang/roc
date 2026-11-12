@@ -20,6 +20,7 @@
 //! workers named by their checked identities.
 
 const std = @import("std");
+const collections = @import("collections");
 const lir_core = @import("lir_core");
 
 const types = @import("types.zig");
@@ -226,10 +227,8 @@ pub const Recipes = struct {
     /// numbered in the order a walk from the slots first reaches them, so
     /// equal lists are equal data.
     pub fn needs(self: *const Recipes, allocator: Allocator, scratch: Allocator, input_count: u32, desc_count: u32, slots: []const RecipeId) Allocator.Error!Needs {
-        const unnumbered = std.math.maxInt(u32);
-        const numbers = try scratch.alloc(u32, self.items.items.len);
-        defer scratch.free(numbers);
-        @memset(numbers, unnumbered);
+        var numbers = try collections.OptionalIndexColumn(RecipeId).initFilled(scratch, self.items.items.len);
+        defer numbers.deinit(scratch);
         var order: std.ArrayList(RecipeId) = .empty;
         defer order.deinit(scratch);
         var pending: std.ArrayList(RecipeId) = .empty;
@@ -240,8 +239,8 @@ pub const Recipes = struct {
         for (slots) |slot| {
             try pending.append(scratch, self.resolve(slot));
             while (pending.pop()) |id| {
-                if (numbers[@backingInt(id)] != unnumbered) continue;
-                numbers[@backingInt(id)] = @intCast(order.items.len);
+                if (numbers.isPresent(@backingInt(id))) continue;
+                numbers.set(@backingInt(id), @fromBackingInt(@as(u32, @intCast(order.items.len))));
                 try order.append(scratch, id);
                 operands.clearRetainingCapacity();
                 try appendOperands(scratch, &operands, self.get(id));
@@ -251,21 +250,23 @@ pub const Recipes = struct {
                     switch (operands.items[index]) {
                         .recipe => |next| {
                             const resolved = self.resolve(next);
-                            if (numbers[@backingInt(resolved)] == unnumbered) try pending.append(scratch, resolved);
+                            if (!numbers.isPresent(@backingInt(resolved))) try pending.append(scratch, resolved);
                         },
                         .static => {},
                     }
                 }
             }
         }
+        const Numbering = collections.OptionalIndexColumn(RecipeId).View;
+        const numbered_view = numbers.view();
         const renumber = struct {
-            fn operand(recipes: *const Recipes, numbered: []const u32, value: Operand) Operand {
+            fn operand(recipes: *const Recipes, numbered: Numbering, value: Operand) Operand {
                 return switch (value) {
-                    .recipe => |id| .{ .recipe = @fromBackingInt(numbered[@backingInt(recipes.resolve(id))]) },
+                    .recipe => |id| .{ .recipe = numbered.get(@backingInt(recipes.resolve(id))).? },
                     .static => value,
                 };
             }
-            fn all(alloc: Allocator, recipes: *const Recipes, numbered: []const u32, values: []const Operand) Allocator.Error![]const Operand {
+            fn all(alloc: Allocator, recipes: *const Recipes, numbered: Numbering, values: []const Operand) Allocator.Error![]const Operand {
                 const out = try alloc.alloc(Operand, values.len);
                 for (out, values) |*slot, value| slot.* = operand(recipes, numbered, value);
                 return out;
@@ -278,21 +279,21 @@ pub const Recipes = struct {
                 const scoped = try allocator.alloc(ScopedOverride, desc.scoped.len);
                 for (scoped, desc.scoped) |*out, override| {
                     out.* = .{ .nominal = override.nominal, .methods = undefined };
-                    for (&out.methods, override.methods) |*method, maybe| method.* = if (maybe) |value| renumber.operand(self, numbers, value) else null;
+                    for (&out.methods, override.methods) |*method, maybe| method.* = if (maybe) |value| renumber.operand(self, numbered_view, value) else null;
                 }
                 break :blk .{ .desc = .{ .ty = desc.ty, .scoped = scoped, .substitute_inputs = desc.substitute_inputs } };
             },
-            .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try renumber.all(allocator, self, numbers, args.elems), .capture_record = args.capture_record } },
-            .callable => |callable| .{ .callable = .{ .entry = callable.entry, .captures = try renumber.all(allocator, self, numbers, callable.captures) } },
-            .table => |table| .{ .table = .{ .worker = table.worker, .inputs = try renumber.all(allocator, self, numbers, table.inputs) } },
-            .tag_index => |tag| .{ .tag_index = .{ .desc = renumber.operand(self, numbers, tag.desc), .name = tag.name } },
-            .field_index => |field| .{ .field_index = .{ .desc = renumber.operand(self, numbers, field.desc), .name = field.name } },
-            .update_plan => |update| .{ .update_plan = .{ .base = renumber.operand(self, numbers, update.base), .result = renumber.operand(self, numbers, update.result), .names = try allocator.dupe(NameId, update.names) } },
-            .adapt_plan => |plan| .{ .adapt_plan = .{ .from = renumber.operand(self, numbers, plan.from), .to = renumber.operand(self, numbers, plan.to) } },
-            .names_block => |block| .{ .names_block = .{ .desc = renumber.operand(self, numbers, block.desc) } },
+            .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try renumber.all(allocator, self, numbered_view, args.elems), .capture_record = args.capture_record } },
+            .callable => |callable| .{ .callable = .{ .entry = callable.entry, .captures = try renumber.all(allocator, self, numbered_view, callable.captures) } },
+            .table => |table| .{ .table = .{ .worker = table.worker, .inputs = try renumber.all(allocator, self, numbered_view, table.inputs) } },
+            .tag_index => |tag| .{ .tag_index = .{ .desc = renumber.operand(self, numbered_view, tag.desc), .name = tag.name } },
+            .field_index => |field| .{ .field_index = .{ .desc = renumber.operand(self, numbered_view, field.desc), .name = field.name } },
+            .update_plan => |update| .{ .update_plan = .{ .base = renumber.operand(self, numbered_view, update.base), .result = renumber.operand(self, numbered_view, update.result), .names = try allocator.dupe(NameId, update.names) } },
+            .adapt_plan => |plan| .{ .adapt_plan = .{ .from = renumber.operand(self, numbered_view, plan.from), .to = renumber.operand(self, numbered_view, plan.to) } },
+            .names_block => |block| .{ .names_block = .{ .desc = renumber.operand(self, numbered_view, block.desc) } },
         };
         const numbered_slots = try allocator.alloc(RecipeId, slots.len);
-        for (numbered_slots, slots) |*out, slot| out.* = @fromBackingInt(numbers[@backingInt(self.resolve(slot))]);
+        for (numbered_slots, slots) |*out, slot| out.* = numbers.get(@backingInt(self.resolve(slot))).?;
         return .{ .input_count = input_count, .desc_count = desc_count, .recipes = recipes, .slots = numbered_slots };
     }
 
@@ -389,9 +390,11 @@ pub const Evaluation = struct {
     low: std.ArrayList(u32) = .empty,
     on_stack: std.ArrayList(bool) = .empty,
     stack: std.ArrayList(RecipeId) = .empty,
-    visited: u32 = 0,
+    /// The next visit order. Orders are issued from one, so zero marks an
+    /// unvisited recipe.
+    visited: u32 = 1,
 
-    const unvisited = std.math.maxInt(u32);
+    const unvisited: u32 = 0;
 
     pub fn init(program: *lower.Program, source: Source, inputs: []const StaticDescs.CaptureWord, desc_count: u32) Evaluation {
         return .{ .program = program, .allocator = program.allocator, .source = source, .inputs = inputs, .desc_count = desc_count };
@@ -962,7 +965,7 @@ test "a cyclic group has the same words whichever member its evaluation enters b
     const store = &program.result.store;
     const target = try store.addLocal(.{ .layout_idx = .u8 });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
-    const proc = try store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try store.addLocalSpan(&.{target}), .body = ret, .ret_layout = .u8 }, .none);
+    const proc = try store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try store.addLocalSpan(&.{target}), .body = .some(ret), .ret_layout = .u8 }, .none);
     // The evaluation reads a callable's worker for its procedure alone.
     var entry: lower.Worker = undefined;
     entry.proc = proc;

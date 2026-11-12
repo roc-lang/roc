@@ -248,7 +248,7 @@ pub const Ctx = struct {
         }
         // A field of an open row's remainder: only the record's descriptor
         // knows where it is.
-        if (record.ext == null) invariant("a record pattern's field is absent from its type");
+        if (record.ext == .none) invariant("a record pattern's field is absent from its type");
         const position: u32 = @intCast(self.state.named_fields.items.len);
         try self.state.named_fields.append(self.arena(), name);
         return .{ .index = named_field_base + position, .ty = try self.b.patternType(sub), .pat = sub };
