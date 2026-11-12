@@ -5187,7 +5187,14 @@ rank adjustment and before quantifying (`Check.generalizeRank`,
   which no use could close or lift, so it stays the ground record it is and
   a constant built from it can be hoisted;
 - a tail a derived structural codec reaches, which commits before its
-  boundary generalizes (below).
+  boundary generalizes (below);
+- a tail whose record the binding compared or hashed: deriving `is_eq` or
+  `to_hash` for it commits it at once (Methods On Open Rows), since the
+  binding decided those methods against the plain record. A use that then
+  makes the record a nominal type is a type mismatch whose report says the
+  function compared or hashed it as a plain record, with the fix that needs
+  no annotation first (`Tagged.{ ... }` where the record is built) and then
+  the type annotation.
 
 Rank adjustment then runs again, so structure that held only a committed
 tail is not quantified.
@@ -12294,72 +12301,111 @@ rows in one body, through a forwarding definition and a local alias, in stored
 records, at two state types, through an import, and as bindings nothing uses, on
 every backend under both strategies.
 
-### Derived Equality And Hashing Over Open Rows
+### Methods On Open Rows
 
-Deferred dispatch relations record both their creating binding group and their
-creating scheme root, including an explicit absence outside a scheme. A derived
-equality or hashing component inherits both identities from its parent relation.
-The checker records its scheme requirement under that root and queues its
-unification children with the same owner; draining the relation inside another
-function does not transfer ownership to that function. Registry-only
-instantiations and parked codec relations retain these identities when queued
-later. The independent parser/function expect rows in
-`src/check/test/repros_test.zig` are covered by the checker regression named
-`codec row equality - independent expect parser and function error rows`.
+A record whose row ends in a row variable (`{ id : U64, ..r }`, written in an
+annotation or inferred from field use, as in `|l| l.id`) or a tag union whose
+row ends in one (`[Red, ..t]`) is some type that has these fields or tags: the
+caller supplies the actual type, which may be a plain record or tag union or a
+nominal type over one. A method call on such a value, whether an operator's
+desugared `is_eq` or `to_hash` or any method a program names (`l.foo(r)`), is a
+requirement answered at each call by the type the caller supplied, exactly as
+for a type variable:
 
-Deriving `is_eq` or `to_hash` for a record or tag union covers every field or
-tag the type can hold, including those its extension row supplies. A concrete
-extension is checked like the declared fields and tags, so a function anywhere
-in the row rejects the derivation. An open extension is a component like any
-other generic one: the derivation gives the row variable its own `is_eq` or
-`to_hash` constraint, which generalizes into a `where` requirement. So
-`|a, b| if a == Nope { False } else { a == b }` infers
-`[Nope, ..c], [Nope, ..c] -> Bool where [c.is_eq : c, c -> Bool]`, a call that
-instantiates `c` with a function-carrying row is rejected at that call, and an
-annotation that compares an open row declares the requirement
-(`[Nope, ..a] -> Bool where [a.is_eq : a, a -> Bool]`). The constraint is what
-keeps a tail instantiated after checking inside the derivation; without it,
-lowering would meet whatever the instantiation supplies, functions included.
-The same holds for a concrete extension a value's type hides behind a
-compared literal: `b : [Nope, Yep(Box(U64))]` makes `b == Nope` compare the
-`Box` payload too, and `Box` has no `is_eq`.
+- the caller supplies a nominal type: that type's method runs; if it has no
+  such method, the call is a missing-method error;
+- the caller supplies a plain record or tag union: it has `is_eq` and
+  `to_hash` when every field or payload, the ones the row variable stands for
+  included, supports them (a function field is an error at the call), and no
+  other method, so any other method is a missing-method error at the call.
 
-Closing a row discharges these constraints, since the empty row derives both
-methods. A tail that carries only them therefore still seals to its row
-default (the checked variable records this with
-`row_default_discharges_constraints`), and it does not make a value
-polymorphic. A top-level value is computed once, at one type, so once the
-module solves, each open row in its data whose tail carries only these
-constraints is grounded to the empty row by unifying the tail with it
-(`Check.closeValueRowTailsCarryingDerivations`), as every row of a top-level
-value closes when its module finishes checking (Value Rows: Uses Share One
-Row). The module commits its permitted weak-value row defaults after the
-late annotation audit, then drains the dispatch work they create before
-freezing codec derivations or rejecting unresolved scheme requirements.
-A non-generalized tail shared through a function stored in a weak value
-must receive its default before a borrowing scheme is judged unresolved.
-These are the existing value-row commitments, not another whole-module
-finalization pass. A function's generalized tail is left open: it
-generalizes, and each instantiation supplies its row. An instantiation whose
-copy of the tail nothing pins leaves that copy to its row default too, so the
-ambiguity judgment never reports it: `make : U64 -> Set([X, Y])` built with
-`insert` gives its implicitly opened tail a `to_hash` requirement, and
-`make(0).len()` closes the call's copy rather than reporting a hash with no
-owner. The instantiator records each copy it places in a row's extension
-position (`Instantiator.constrained_row_tail_copies`), the derivation records
-the extension it constrains, and the judgment acquits a candidate in that
-position (`AmbiguityCandidate.Position`) whose constraints the empty row
-discharges. A payload in the same row has no default, so an undetermined
-payload is still reported. Displayed in an output position, such a tail is implicit openness
-like an unconstrained one.
+An operator and a named method behave identically; a plain record or tag
+union differs from a nominal type only in having `is_eq` and `to_hash` and no
+other method. Builtins may be lowered specially for speed, never with
+different observable behavior.
 
-The row variable's evidence parameter is an `erased_row_remainder`: Monotype
-flattens the row, so the remainder has no path of its own from the callable.
-Each use resolves it from the checked use record, never as callable-derived
-evidence.
+The requirement is written and displayed on the row variable, in the syntax
+every requirement uses, but it is about the whole value: in
+`same : { id : U64, ..r }, { id : U64, ..r } -> Bool where [r.is_eq : r, r ->
+Bool]` and `read_foo : { id : U64, ..r }, { id : U64, ..r } -> Bool where
+[r.foo : r, r -> Bool]`, the `r` the method's signature names is the record
+that ends in `..r`, not the fields `r` stands for. A result or argument that
+mentions the whole value names it the same way (`r.bump : r -> r`,
+`r.merge : r, List(r) -> r`). A requirement can be placed on a record or tag
+union only through its row variable: a record or tag union with no row
+variable has no way to carry one.
 
-Both sides are pinned by the `derived_eq_open_row_*` snapshots in
-`test/snapshots/is_eq/` and by `test/echo/boxy_open_union_methods.roc`.
+One row variable can end two record types that differ in a field's type: a
+type-changing record update (`|r| { ..r, a: Str.inspect(r.a) }`) relates
+`{ a : x, ..ρ }` and `{ a : Str, ..ρ }`. A use can make each of them a
+different type (the argument a `Tagged`, the result an `Other`), so a
+requirement on `ρ` holds for every record type that ends in `ρ` in the
+binding's type: each is instantiated separately at a use and must have the
+method, with `r` in the method's signature standing for that record type.
+A requirement on `ρ` therefore never depends on which of those records the
+body called the method on.
+
+A requirement is decided once, when the receiver's type is known, never
+twice and never field by field at the call site of the method:
+
+- within the binding, the receiver may become a specific type: when it is
+  related to a nominal type (passed to a function taking `Tagged`, say), the
+  requirement is that nominal's method or a missing-method error; when its row
+  closes (related to a written `{ id : U64 }`), it is the plain record's
+  derived method or a missing-method error. The order of the method call and
+  the relation in the body does not matter: the relation stays pending until
+  the receiver's type is known (`Check` deferred dispatch, which parks a
+  relation whose receiver is a record or tag union ending in a row variable).
+- when the binding generalizes with the row variable still open, the
+  requirement becomes a requirement of its scheme (Pending Dispatch
+  Requirements In Type Schemes): every use copies it onto its own instance and
+  decides it there by the same rules, and a use whose own instance is still
+  open passes it on to its own scheme.
+- a row variable an annotation names (`..r`, a rigid) carries exactly the
+  requirements its `where` clause states, as every annotated type variable
+  does: a method call needing one the annotation lacks is reported against the
+  annotation.
+
+A value binding's open row closes when its module finishes checking (Value
+Rows: Uses Share One Row), which decides the requirements still pending on
+it against the plain type.
+
+A derivation of `is_eq` or `to_hash` for a value whose type contains such a
+record or tag union as a component (a `List` of them, a field, a payload) asks
+that component for its own requirement in the same way, so a closed record
+holding an open one compares that component by what each call supplies.
+
+A record or tag union with no row variable is a plain record or tag union for
+method purposes: a literal a function builds, a record pattern without `..`,
+a tag union an exhaustive match or a closed tag pattern closes, and a row an
+annotation writes without `..` (its implicit Polarity opening included).
+A method call on it is decided where the binding is checked, against the plain
+type: `is_eq` and `to_hash` are derived, and any other method is the
+missing-method error it is for any structural value. A requirement a generic
+callee's scheme carries (`generic_foo(r, r)` with `generic_foo = |x, y|
+x.foo(y)`) is decided the same way when it lands on such a value. Deriving
+`is_eq` or `to_hash` for a record or tag union that ends in an uncommitted
+tail commits the tail (Uncommitted Record Tails, Uncommitted Tag Tails): the
+binding compared or hashed it as a plain record, so a use can no longer make
+it a nominal type, and a use that tries is a type mismatch whose report says
+so.
+
+Lowering consumes these decisions. A body's method call on an open
+receiver is an evidence-dependent dispatch: Monotype specializes it at each
+instantiation from the use's evidence, and `.boxy` passes one dictionary per
+requirement, filled with the nominal's method or the compiler-derived
+structural implementation, as for a type variable's requirement. Under
+`.boxy` a record or tag union whose row is a variable is described by one
+descriptor of the whole value as the use has it (the nominal's, or the plain
+record's), replacing a descriptor of the row variable's remainder; the
+position of a field or tag (`field_index`, `tag_index`) comes from that
+whole value's closed type, and `dyn_eq`, `dyn_hash` and `dyn_inspect` read
+the whole value's descriptor, so printing a value of such a type renders what
+each call supplied, a nominal's inspect override included, in both lowering
+modes.
+
+Both sides are pinned by tests that do every case through an operator and
+through a method named `foo` (`test/cli/MethodsOnOpenRows*.roc`).
 
 ### Builtin Str Interpolation Part Compatibility
 
