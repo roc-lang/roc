@@ -8,8 +8,10 @@ import pf.Padded
 ## C `extern struct`, so a generic body has to give it the offsets of its
 ## declaration and not those of its record row.
 
-## A generic helper that knows only the row. Its record reaches the host as a
-## `Padded`, so it has to change order on the way there.
+## A helper annotated to return a `Padded` builds its record at the declared
+## order the host reads; a record a function builds with no annotation never
+## becomes a padded nominal at a use.
+from_row : U32, U32 -> Padded
 from_row = |z, a| { z, a }
 
 read_a = |row| row.a

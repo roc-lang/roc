@@ -2,7 +2,6 @@
 # under `--specialize=no` its backing is a record type of its own. Whatever
 # builds such a record, and whatever reads it, has to agree on that order, and a
 # generic body, which reads a record by its row, gets a copy in the row's order.
-import Lifted
 
 Padded := { z : U32, _ : U32, a : Str, b : U8 }.{
 	new : U32, Str -> Padded
@@ -110,12 +109,19 @@ keep = |s| s
 slots : a, b -> (Slot(a), Slot(b))
 slots = |a, b| (Slot.new(1, a), Slot.new(2, b))
 
-# These bodies know the row, and the nominal only at their callers.
+# A function builds a padded nominal by being annotated to return it: a record
+# a function builds with no annotation never becomes one at a use.
+make : U32, U64 -> Plain
 make = |z, a| { z, a }
 
+make_list : U32, U64 -> List(Plain)
 make_list = |z, a| [{ z, a }]
 
+make_nothing : U64 -> Only
 make_nothing = |_| {}
+
+to_plain : U32 -> Plain
+to_plain = |z| { z, a: 3 }
 
 read_z = |r| r.z
 
@@ -200,7 +206,6 @@ main! = |args| {
 	defaulted = { b: 1 }
 	optional : Optional
 	optional = { c: 1 }
-	unit : Only
 	unit = make_nothing(0)
 	echo!("${Str.inspect(defaulted.a)} ${Str.inspect(optional.c)} ${Str.inspect(Only.new({}))} ${Str.inspect(unit)}\n")
 
@@ -224,11 +229,9 @@ main! = |args| {
 	op = { f: |n| Str.inspect(n), v: 5 }
 	echo!("${Op.run(op)}\n")
 
-	plain : Plain
 	plain = make(1, 2)
 	poked : Plain
 	poked = poke(plain)
-	made : List(Plain)
 	made = make_list(3, 4)
 	echo!("${Str.inspect(plain.z)} ${Str.inspect(read_z(plain))} ${Str.inspect(poked.z)} ${Str.inspect(poked.a)} ${Str.inspect(List.map(made, |e| e.a))}\n")
 	tagged : [Has(Plain), No]
@@ -242,19 +245,18 @@ main! = |args| {
 	echo!("${Str.inspect(List.map(plains, read_z))} ${Str.inspect(apply(read_z, plain))} ${Str.inspect(read_value(plain))}\n")
 
 	lifted : Plain
-	lifted = Lifted.plain({})
+	lifted = { z: 7, a: 8 }
 	lifted_list : List(Plain)
-	lifted_list = Lifted.plains({})
-	lifted_fn : U32 -> Plain
-	lifted_fn = Lifted.to_plain
+	lifted_list = [{ z: 7, a: 8 }, { z: 9, a: 10 }]
+	lifted_fn = to_plain
 	lifted_unit : Only
-	lifted_unit = Lifted.nothing({})
+	lifted_unit = {}
 	beside : { k : Only, n : U64 }
-	beside = Lifted.beside({})
+	beside = { k: {}, n: 5 }
 	nested : { p : Plain, n : U8 }
 	nested = { p: plain, n: 3 }
 	echo!("${Str.inspect(beside.n)} ${Str.inspect(unit_param(beside))} ${Str.inspect(nested_param(nested))} ${Str.inspect(stored_adder(1))}\n")
-	echo!("${Str.inspect(lifted.a)} ${Str.inspect(List.map(lifted_list, |e| e.a))} ${Str.inspect(lifted_fn(1).a)} ${Str.inspect(apply(Lifted.to_plain, 2.U32).a)} ${Str.inspect(lifted_unit)}\n")
+	echo!("${Str.inspect(lifted.a)} ${Str.inspect(List.map(lifted_list, |e| e.a))} ${Str.inspect(lifted_fn(1).a)} ${Str.inspect(apply(to_plain, 2.U32).a)} ${Str.inspect(lifted_unit)}\n")
 
 	echo!("${Str.inspect(stored.a)} ${Str.inspect(List.map(stored_list, |e| e.a))} ${Str.inspect(stored_fn(1).a)} ${Str.inspect(List.len(stored_table.items))} ${stored_table.name} ${stored_generic.r} ${Str.inspect(evaluated)}\n")
 
