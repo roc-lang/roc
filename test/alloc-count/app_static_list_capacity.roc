@@ -12,10 +12,11 @@ partly_filled = List.with_capacity(1000).append(1).append(2)
 in_record : { buffer : List(Str), count : U64 }
 in_record = { buffer: List.with_capacity(300), count: 3 }
 
-# Two different functions, so an item is not zero-sized where this is evaluated:
-# a list of zero-sized items has no capacity to keep.
+# One capture-free function is a zero-sized item where this is evaluated, and
+# an item with a tag where `run!` appends a second function. The reservation
+# is recorded as a count there and allocated here.
 functions : List(U64 -> U64)
-functions = List.with_capacity(50).append(|x| x + 1).append(|x| x * 3)
+functions = List.with_capacity(50).append(|x| x + 1)
 
 run! : Str => Str
 run! = |input| {
@@ -43,7 +44,7 @@ run! = |input| {
 
 	var $functions = functions
 	var $k = 0
-	while $k < 48 {
+	while $k < 49 {
 		$functions = List.append($functions, |x| x + 2)
 		$k = $k + 1
 	}
@@ -57,7 +58,7 @@ run! = |input| {
 	}
 	cleared_allocs = Host.alloc_count!() - start - read_allocs - numbers_allocs - strings_allocs - functions_allocs
 
-	expect total == 4
+	expect total == 3
 	expect read_allocs == 0
 	expect numbers_allocs == 1
 	expect strings_allocs == 1

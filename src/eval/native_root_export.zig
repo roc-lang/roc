@@ -254,8 +254,8 @@ const Builder = struct {
         try self.graph.writeWord(job.dest.offsetBy(word_size), list_value.len());
         // The descriptor keeps the capacity the list was evaluated with; the
         // allocation holds the items alone. A list of zero-sized items holds
-        // no allocation, so it has no capacity beyond its length.
-        const capacity = if (physical.tag == .list_of_zst) list_value.len() else list_value.getCapacity();
+        // no allocation, so its capacity is a count alone.
+        const capacity = list_value.getCapacity();
         try self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(capacity));
         if (physical.tag == .list_of_zst or capacity == 0) return;
         const ptr = list_value.bytes orelse invariant("a native list with capacity had a null pointer");

@@ -286,10 +286,13 @@ const Builder = struct {
         const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         const source_physical = self.source_program.layouts.getLayout(job.source_layout);
         // The capacity the list was evaluated with travels with it. A list
-        // of zero-sized items holds no allocation, so on either side it has
-        // no capacity beyond its length.
+        // of zero-sized items holds no allocation, so its capacity is a count
+        // alone, bounded by what the destination's word encodes.
         const source_capacity = builtins.list.RocList.decodeCapacityForWidth(self.readWord(job.source.offsetBy(2 * self.sourceWord())));
-        const capacity = if (physical.tag == .list_of_zst or source_physical.tag == .list_of_zst) count else source_capacity;
+        const capacity = if (physical.tag == .list_of_zst)
+            @max(count, @min(source_capacity, (@as(u64, 1) << @intCast(8 * self.graph.word() - builtins.list.RocList.capacity_shift)) - 1))
+        else
+            source_capacity;
         try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(capacity));
         if (capacity == 0 or physical.tag == .list_of_zst) return;
         const sl: layout.Idx = if (source_physical.tag == .list_of_zst) .zst else source_physical.getIdx();

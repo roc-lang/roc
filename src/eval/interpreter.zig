@@ -4904,9 +4904,11 @@ pub const Interpreter = struct {
         };
     }
 
-    /// The canonical allocation-free representation of a ZST list.
+    /// A list of `len` zero-sized items and no spare capacity. A list of
+    /// zero-sized items holds no allocation, so its capacity is a count alone
+    /// (design.md "Static Lists And Strings Keep Their Capacity").
     fn canonicalZstList(len: usize) RocList {
-        return .{ .bytes = null, .length = len, .capacity_or_alloc_ptr = 0 };
+        return RocList.zeroSized(len, len);
     }
 
     fn zstSublistLen(size: usize, start_u64: u64, len_u64: u64) usize {
@@ -5044,7 +5046,7 @@ pub const Interpreter = struct {
         const elems_rc = self.builtinListElemRc(list_elems);
         const list_val = self.listValue(list_elems, ll.args[0]);
         if (info.width == 0) {
-            return self.listResult(ll, canonicalZstList(list_val.len()));
+            return self.listResult(ll, list_val.zeroSizedReserving(ll.args[1].read(u64)));
         }
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
@@ -5441,9 +5443,6 @@ pub const Interpreter = struct {
             .list_capacity => blk: {
                 const rl = self.listValue(list_elems, args[0]);
                 const val = try self.alloc(ll.ret_layout);
-                // A list of zero-width elements never allocates, so its stored
-                // capacity is zero however many elements it holds. Report the
-                // stored capacity as it is.
                 val.write(u64, @intCast(rl.getCapacity()));
                 break :blk val;
             },
@@ -5473,7 +5472,7 @@ pub const Interpreter = struct {
                 const info = self.listElemInfo(list_elems);
                 const list_val = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
-                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + 1));
+                    break :blk self.listResult(ll, list_val.zeroSizedKeeping(list_val.len() + 1));
                 }
                 const result = builtins.list.listAppendUnsafe(
                     list_val,
@@ -5490,7 +5489,7 @@ pub const Interpreter = struct {
                 const list_b = self.listValue(list_elems, args[1]);
                 if (info.width == 0) {
                     const total_len = list_a.len() + list_b.len();
-                    break :blk self.listResult(ll, canonicalZstList(total_len));
+                    break :blk self.listResult(ll, list_a.zeroSizedKeeping(total_len));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -5521,7 +5520,7 @@ pub const Interpreter = struct {
                 const list_val = self.listValue(list_elems, args[0]);
                 const count = args[2].read(u64);
                 if (info.width == 0) {
-                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + @as(usize, @intCast(count))));
+                    break :blk self.listResult(ll, list_val.zeroSizedKeeping(list_val.len() + @as(usize, @intCast(count))));
                 }
                 if (count == 0) {
                     break :blk self.listResult(ll, list_val);
@@ -5580,7 +5579,7 @@ pub const Interpreter = struct {
                 const list_val = self.listValue(list_elems, args[0]);
                 const count = args[2].read(u64);
                 if (info.width == 0) {
-                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + @as(usize, @intCast(count))));
+                    break :blk self.listResult(ll, list_val.zeroSizedKeeping(list_val.len() + @as(usize, @intCast(count))));
                 }
                 if (count == 0) {
                     break :blk self.listResult(ll, list_val);
@@ -5622,7 +5621,7 @@ pub const Interpreter = struct {
                 const src_val = self.listValue(list_elems, args[1]);
                 const count = args[3].read(u64);
                 if (info.width == 0) {
-                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + @as(usize, @intCast(count))));
+                    break :blk self.listResult(ll, list_val.zeroSizedKeeping(list_val.len() + @as(usize, @intCast(count))));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -5650,7 +5649,7 @@ pub const Interpreter = struct {
                 const elems_rc = self.builtinListElemRc(list_elems);
                 const list_val = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
-                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + 1));
+                    break :blk self.listResult(ll, list_val.zeroSizedKeeping(list_val.len() + 1));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -5678,7 +5677,7 @@ pub const Interpreter = struct {
                 const list_val = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
                     // ZST elements: swap is a no-op on observable contents; length unchanged.
-                    break :blk self.listResult(ll, canonicalZstList(list_val.len()));
+                    break :blk self.listResult(ll, list_val.zeroSizedKeeping(list_val.len()));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -5800,7 +5799,7 @@ pub const Interpreter = struct {
                     const len = source_list.len();
                     const drop_index = args[1].read(u64);
                     const result_len = if (drop_index >= @as(u64, @intCast(len))) len else len -| 1;
-                    break :blk self.listResult(ll, canonicalZstList(result_len));
+                    break :blk self.listResult(ll, source_list.zeroSizedKeeping(result_len));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -5834,7 +5833,7 @@ pub const Interpreter = struct {
                 if (info.width == 0) {
                     // ZST element: list is unchanged, value field is zero-sized so we don't write to it.
                     const source_list = self.listValue(list_elems, args[0]);
-                    const unchanged = canonicalZstList(source_list.len());
+                    const unchanged = source_list.zeroSizedKeeping(source_list.len());
                     @memcpy(val.offset(list_field_off).ptr[0..@sizeOf(RocList)], std.mem.asBytes(&unchanged));
                     break :blk val;
                 }
@@ -5884,7 +5883,7 @@ pub const Interpreter = struct {
                 const elems_rc = self.builtinListElemRc(list_elems);
                 if (info.width == 0) {
                     const source_list = self.listValue(list_elems, args[0]);
-                    break :blk self.listResult(ll, canonicalZstList(source_list.len()));
+                    break :blk self.listResult(ll, source_list.zeroSizedKeeping(source_list.len()));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -5927,7 +5926,7 @@ pub const Interpreter = struct {
                 const result_elems = listElemSource(ll, ll.ret_layout);
                 const info = self.listElemInfo(result_elems);
                 if (info.width == 0) {
-                    break :blk self.listResult(ll, canonicalZstList(0));
+                    break :blk self.listResult(ll, RocList.zeroSized(0, args[0].read(u64)));
                 }
                 const elems_rc = self.builtinListElemRc(result_elems);
                 var crash_boundary = self.enterCrashBoundary();
@@ -5951,7 +5950,7 @@ pub const Interpreter = struct {
                 const elems_rc = self.builtinListElemRc(list_elems);
                 const source_list = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
-                    break :blk self.listResult(ll, canonicalZstList(0));
+                    break :blk self.listResult(ll, source_list.zeroSizedKeeping(0));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -7574,7 +7573,7 @@ pub const Interpreter = struct {
         const rl = self.listValue(list_elems, list_arg);
         const info = self.listElemInfo(list_elems);
         const elems_rc = self.builtinListElemRc(list_elems);
-        if (info.width == 0) return self.listResult(ll, canonicalZstList(rl.len()));
+        if (info.width == 0) return self.listResult(ll, rl.zeroSizedKeeping(rl.len()));
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         if (crash_boundary.set() != 0) return self.crashError();

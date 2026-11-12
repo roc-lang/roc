@@ -59,6 +59,11 @@ pub const RocList = extern struct {
         return capacity << capacity_shift;
     }
 
+    /// The largest capacity a list of zero-sized items records. Such a list
+    /// holds no allocation, so its capacity is a count alone, bounded only by
+    /// what the capacity word encodes.
+    pub const max_zero_sized_capacity: usize = std.math.maxInt(usize) >> capacity_shift;
+
     pub inline fn encodeCapacity(capacity: usize) usize {
         return encodeCapacityGeneric(usize, capacity);
     }
@@ -120,6 +125,28 @@ pub const RocList = extern struct {
 
     pub fn empty() RocList {
         return RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+    }
+
+    /// A list of `length` zero-sized items whose capacity is `capacity`, or
+    /// `length` when that is larger. Such a list holds no allocation, so its
+    /// data pointer is null and its capacity is a count alone, bounded by
+    /// `max_zero_sized_capacity`.
+    pub fn zeroSized(length: usize, capacity: u64) RocList {
+        const bounded: usize = @intCast(@min(capacity, max_zero_sized_capacity));
+        return .{ .bytes = null, .length = length, .capacity_or_alloc_ptr = encodeCapacity(@max(bounded, length)) };
+    }
+
+    /// The list of `length` zero-sized items an operation makes of this list
+    /// in place, which keeps the capacity this list has.
+    pub fn zeroSizedKeeping(self: RocList, length: usize) RocList {
+        return zeroSized(length, self.getCapacity());
+    }
+
+    /// This list of zero-sized items with room for `spare` more, or the
+    /// capacity it already has when that is larger.
+    pub fn zeroSizedReserving(self: RocList, spare: u64) RocList {
+        const wanted = @as(u64, @intCast(self.len())) +| spare;
+        return zeroSized(self.len(), @max(wanted, self.getCapacity()));
     }
 
     pub fn fromSlice(
@@ -443,12 +470,15 @@ pub const RocList = extern struct {
             // the zero-capacity is Clone, copying it will not leak memory
             return 1;
         }
+        // A list of zero-sized items records a capacity and holds no
+        // allocation, so no other reference can share one with it.
+        if (self.bytes == null and !self.isSeamlessSlice()) return 1;
 
         if (self.getAllocationDataPtr(roc_ops)) |non_null_ptr| {
             const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
             return (ptr - 1)[0];
         } else {
-            unreachable; // a seamless slice or a list with nonzero capacity always points into an allocation
+            unreachable; // a seamless slice always points into an allocation, and a list without a data pointer returned above
         }
     }
 
@@ -1093,12 +1123,15 @@ pub fn listOwnedUnique(
 
 /// Number of elements appendable in place without any further ownership or
 /// capacity check: the unused capacity when the list is uniquely owned and
-/// not a seamless slice, zero otherwise.
+/// not a seamless slice, zero otherwise. A list that holds no allocation,
+/// which includes every list of zero-sized items whatever capacity it
+/// records, has no slack.
 pub fn listSlackUnique(
     list: RocList,
     roc_ops: *RocOps,
 ) callconv(.c) u64 {
     if (list.isSeamlessSlice()) return 0;
+    if (list.bytes == null) return 0;
     if (!list.isUnique(roc_ops)) return 0;
     return @intCast(list.getCapacity() - list.len());
 }

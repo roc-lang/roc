@@ -5308,7 +5308,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         if (abi.elem_size == 0) {
-            try self.storeListFields(target_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, elem_locals.len, 0);
+            try self.storeListFields(target_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, elem_locals.len, RocList.encodeCapacityForWidth(elem_locals.len));
             return;
         }
         try self.callBuiltinVoid(
@@ -11179,18 +11179,14 @@ pub const MonoLlvmCodeGen = struct {
     fn emitListWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
-        // Reserving room for zero-sized elements needs no memory, and every
-        // other zero-sized branch in this backend represents such a list as a
-        // null pointer with zero capacity. Going to the builtin here would
-        // hand back a refcounted zero-byte allocation instead, which those
-        // branches then drop on the floor.
+        // Reserving room for zero-sized elements needs no memory: the list
+        // holds no allocation and its capacity alone records the reservation.
+        // Going to the builtin here would hand back a refcounted zero-byte
+        // allocation instead.
         if (abi.elem_size == 0) {
-            const out_ptr = self.slot(target).ptr;
+            const requested = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 0), self.localLayout(GuardedList.at(args, 0))), .i64, false);
             const zero = builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory;
-            try self.storePointer(out_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
-            try self.storeListLen(out_ptr, zero);
-            try self.storeListCapacity(out_ptr, zero);
-            return;
+            return self.storeZstListWithCapacity(target, zero, try self.boundZstCapacity(requested));
         }
         const cap = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 0), self.localLayout(GuardedList.at(args, 0))), .i64, false);
         try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_with_capacity), &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1 }, &.{
@@ -11222,24 +11218,13 @@ pub const MonoLlvmCodeGen = struct {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         // A zero-sized element has no bytes to copy, so appending one only
         // bumps the length. Handled here for the same reason emitListConcat
-        // handles it here: there is no data pointer to walk. The pointer and
-        // capacity still travel across, so this stays correct for a list that
-        // does hold an allocation rather than depending on the zero-sized
-        // representation being unallocated.
+        // handles it here: there is no data pointer to walk.
         if (abi.elem_size == 0) {
             const builder, const wip = try self.builderAndWip();
-            const src_ptr = self.slot(GuardedList.at(args, 0)).ptr;
-            const out_ptr = self.slot(target).ptr;
-            const len = try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListLenOffset()));
+            const len = try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(args, 0)).ptr, self.rocListLenOffset()));
             const one = builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory;
             const new_len = wip.bin(.add, len, one, "") catch return error.OutOfMemory;
-            // listAppendUnsafe hands the incoming list's allocation to its
-            // result, so carry the pointer and capacity across rather than
-            // dropping them, which would leak whatever the source owned.
-            try self.storePointer(out_ptr, try self.loadPointer(src_ptr));
-            try self.storeListLen(out_ptr, new_len);
-            try self.storeListCapacity(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListCapacityOffset())));
-            return;
+            return self.storeZstListKeeping(target, GuardedList.at(args, 0), new_len);
         }
         // The caller has discharged every check: the list uniquely owns an
         // allocation with a spare slot. The append is then a copy of the
@@ -11269,7 +11254,7 @@ pub const MonoLlvmCodeGen = struct {
         if (abi.elem_size == 0) {
             const lhs_len = try self.loadUsize(try self.offsetPtr(self.slot(lhs_local).ptr, self.rocListLenOffset()));
             const rhs_len = try self.loadUsize(try self.offsetPtr(self.slot(rhs_local).ptr, self.rocListLenOffset()));
-            return self.storeZstList(target, (self.wip orelse return error.CompilationFailed).bin(.add, lhs_len, rhs_len, "") catch return error.OutOfMemory);
+            return self.storeZstListKeeping(target, lhs_local, (self.wip orelse return error.CompilationFailed).bin(.add, lhs_len, rhs_len, "") catch return error.OutOfMemory);
         }
         var call_args = try self.rocListArgs1(lhs_local);
         defer call_args.deinit(self.allocator);
@@ -11297,7 +11282,7 @@ pub const MonoLlvmCodeGen = struct {
             // Zero-width elements: only the length grows.
             const count = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
             const len = try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(args, 0)).ptr, self.rocListLenOffset()));
-            return self.storeZstList(target, (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory);
+            return self.storeZstListKeeping(target, GuardedList.at(args, 0), (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory);
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
@@ -11338,7 +11323,7 @@ pub const MonoLlvmCodeGen = struct {
             // Zero-width elements: only the length grows.
             const count = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
             const len = try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(args, 0)).ptr, self.rocListLenOffset()));
-            return self.storeZstList(target, (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory);
+            return self.storeZstListKeeping(target, GuardedList.at(args, 0), (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory);
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
@@ -11460,7 +11445,7 @@ pub const MonoLlvmCodeGen = struct {
             // Zero-width elements: only the length grows.
             const count = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 3), self.localLayout(GuardedList.at(args, 3))), self.ptrSizedIntType(), false);
             const len = try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(args, 0)).ptr, self.rocListLenOffset()));
-            return self.storeZstList(target, (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory);
+            return self.storeZstListKeeping(target, GuardedList.at(args, 0), (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory);
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
@@ -11481,15 +11466,51 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_sublist), call_args.types.items, call_args.values.items);
     }
 
-    /// Store the canonical value for a list of zero-width elements into
-    /// `target`: such a list owns no allocation, so its data pointer is null
-    /// and its stored capacity is zero, and it carries nothing but `len`.
+    /// Store a list of `len` zero-sized items and no spare capacity. A list
+    /// of zero-sized items holds no allocation, so its data pointer is null
+    /// and its capacity is a count alone.
     fn storeZstList(self: *MonoLlvmCodeGen, target: LocalId, len: LlvmBuilder.Value) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
+        return self.storeZstListWithCapacity(target, len, len);
+    }
+
+    /// Store a list of `len` zero-sized items whose capacity is `count`, or
+    /// `len` when that is larger. `count` never exceeds the most a capacity
+    /// word encodes.
+    fn storeZstListWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, len: LlvmBuilder.Value, count: LlvmBuilder.Value) Error!void {
+        const builder, const wip = try self.builderAndWip();
         const out_ptr = self.slot(target).ptr;
+        const shorter = wip.icmp(.ult, count, len, "") catch return error.OutOfMemory;
+        const capacity = wip.select(.normal, shorter, len, count, "") catch return error.OutOfMemory;
+        const shift = builder.intValue(self.ptrSizedIntType(), RocList.capacity_shift) catch return error.OutOfMemory;
+        const encoded = wip.bin(.shl, capacity, shift, "") catch return error.OutOfMemory;
         try self.storePointer(out_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
         try self.storeListLen(out_ptr, len);
-        try self.storeListCapacity(out_ptr, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory);
+        try self.storeListCapacity(out_ptr, encoded);
+    }
+
+    /// The capacity the list of zero-sized items in `list_local` records.
+    fn loadZstListCapacity(self: *MonoLlvmCodeGen, list_local: LocalId) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        const encoded = try self.loadUsize(try self.offsetPtr(self.slot(list_local).ptr, self.rocListCapacityOffset()));
+        const shift = builder.intValue(self.ptrSizedIntType(), RocList.capacity_shift) catch return error.OutOfMemory;
+        return wip.bin(.lshr, encoded, shift, "") catch return error.OutOfMemory;
+    }
+
+    /// Store the list of `len` zero-sized items an operation makes of
+    /// `source` in place, which keeps the capacity `source` has.
+    fn storeZstListKeeping(self: *MonoLlvmCodeGen, target: LocalId, source: LocalId, len: LlvmBuilder.Value) Error!void {
+        return self.storeZstListWithCapacity(target, len, try self.loadZstListCapacity(source));
+    }
+
+    /// `count`, a `U64` number of zero-sized items, as a target word bounded
+    /// by the most a capacity word encodes.
+    fn boundZstCapacity(self: *MonoLlvmCodeGen, count: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        const most: u64 = (@as(u64, 1) << @intCast(self.target.ptrBitWidth() - RocList.capacity_shift)) - 1;
+        const most_value = builder.intValue(.i64, most) catch return error.OutOfMemory;
+        const over = wip.icmp(.ugt, count, most_value, "") catch return error.OutOfMemory;
+        const bounded = wip.select(.normal, over, most_value, count, "") catch return error.OutOfMemory;
+        return self.coerceScalar(bounded, self.ptrSizedIntType(), false);
     }
 
     fn emitListPrepend(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11502,7 +11523,7 @@ pub const MonoLlvmCodeGen = struct {
             const len = try self.loadUsize(try self.offsetPtr(self.slot(list_local).ptr, self.rocListLenOffset()));
             const one = builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory;
             const grown = (self.wip orelse return error.CompilationFailed).bin(.add, len, one, "") catch return error.OutOfMemory;
-            return self.storeZstList(target, grown);
+            return self.storeZstListKeeping(target, list_local, grown);
         }
         var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
@@ -11545,6 +11566,9 @@ pub const MonoLlvmCodeGen = struct {
             const avail = wip.select(.normal, past_end, zero, remaining, "") catch return error.OutOfMemory;
             const wants_more = wip.icmp(.ugt, slice.len, avail, "") catch return error.OutOfMemory;
             const kept = wip.select(.normal, wants_more, avail, slice.len, "") catch return error.OutOfMemory;
+            // Clearing empties the list in place, so it keeps its capacity;
+            // a window of the list has no spare capacity.
+            if (op == .list_clear) return self.storeZstListKeeping(target, GuardedList.at(args, 0), kept);
             return self.storeZstList(target, kept);
         }
 
@@ -11628,7 +11652,7 @@ pub const MonoLlvmCodeGen = struct {
             const out_of_bounds = wip.icmp(.uge, index, len, "") catch return error.OutOfMemory;
             const shortened = wip.bin(.sub, len, one, "") catch return error.OutOfMemory;
             const kept = wip.select(.normal, out_of_bounds, len, shortened, "") catch return error.OutOfMemory;
-            return self.storeZstList(target, kept);
+            return self.storeZstListKeeping(target, list_local, kept);
         }
         var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
@@ -11748,18 +11772,24 @@ pub const MonoLlvmCodeGen = struct {
     /// the list has to grow.
     fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, comptime builtin_fn: BuiltinSymbol, args: anytype, unique_args: u64) Error!void {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
-        // A list of zero-sized elements owns no allocation, so it carries a
-        // length and nothing else and a reserve cannot change anything
-        // observable. Passing it to the builtin instead goes through capacity
-        // bookkeeping that a zero-width element makes degenerate, which loses
-        // the length, so copy the list across here.
+        // A list of zero-sized elements owns no allocation, so a reservation
+        // allocates nothing and the capacity alone records it: room for
+        // `spare` more items, or the capacity the list already has when that
+        // is larger. Passing it to the builtin instead would hand back a
+        // refcounted zero-byte allocation.
         if (abi.elem_size == 0) {
-            const src_ptr = self.slot(GuardedList.at(args, 0)).ptr;
-            const out_ptr = self.slot(target).ptr;
-            try self.storePointer(out_ptr, try self.loadPointer(src_ptr));
-            try self.storeListLen(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListLenOffset())));
-            try self.storeListCapacity(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListCapacityOffset())));
-            return;
+            const zst_builder, const zst_wip = try self.builderAndWip();
+            const list_local = GuardedList.at(args, 0);
+            const len = try self.loadUsize(try self.offsetPtr(self.slot(list_local).ptr, self.rocListLenOffset()));
+            const len_u64 = try self.coerceScalar(len, .i64, false);
+            const spare = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false);
+            const sum = zst_wip.bin(.add, len_u64, spare, "") catch return error.OutOfMemory;
+            const wrapped = zst_wip.icmp(.ult, sum, len_u64, "") catch return error.OutOfMemory;
+            const all_ones = zst_builder.intValue(.i64, std.math.maxInt(u64)) catch return error.OutOfMemory;
+            const wanted = try self.boundZstCapacity(zst_wip.select(.normal, wrapped, all_ones, sum, "") catch return error.OutOfMemory);
+            const held = try self.loadZstListCapacity(list_local);
+            const smaller = zst_wip.icmp(.ult, wanted, held, "") catch return error.OutOfMemory;
+            return self.storeZstListWithCapacity(target, len, zst_wip.select(.normal, smaller, held, wanted, "") catch return error.OutOfMemory);
         }
 
         const builder, const wip = try self.builderAndWip();

@@ -850,6 +850,11 @@ const StaticInitializerMachine = struct {
         return @as(u64, std.math.maxInt(u64)) >> unused_bits;
     }
 
+    /// The largest capacity a list of zero-sized items records on the target.
+    fn maxZeroSizedCapacity(self: *const StaticInitializerMachine) u64 {
+        return builtins.list.RocList.decodeCapacityForWidth(self.targetWordMax());
+    }
+
     const StoredItems = struct {
         elem_layout: layout.Idx,
         items: []const *SymbolicValue,
@@ -864,10 +869,13 @@ const StaticInitializerMachine = struct {
         const result = try self.newValue(layout_idx);
         const abi = self.layouts().builtinListAbi(layout_idx);
         self.writeTargetWord(result.bytes, self.word_size, len);
-        // Zero-sized items occupy no allocation, so such a list has no
-        // capacity beyond its length.
-        try self.writeListCapacity(result, if (abi.elem_size == 0) len else capacity);
-        if (abi.elem_size == 0) return result;
+        // Zero-sized items occupy no allocation, so such a list's capacity
+        // is a count alone, bounded by what the target's word encodes.
+        if (abi.elem_size == 0) {
+            try self.writeListCapacity(result, @max(len, @min(capacity, self.maxZeroSizedCapacity())));
+            return result;
+        }
+        try self.writeListCapacity(result, capacity);
         if (len == 0) {
             if (capacity != 0) try self.pointAtEmptyListAllocation(result, abi);
             return result;
@@ -1561,10 +1569,15 @@ const StaticInitializerMachine = struct {
             if (target.tag != .list and target.tag != .list_of_zst) staticDataInvariant("static initializer list_reserve had non-list target layout");
             const result = try self.cloneValueAs(local(locals, GuardedList.at(args, 0)), target_layout);
             const abi = self.layouts().builtinListAbi(target_layout);
-            if (abi.elem_size == 0) return result;
             const len = self.readTargetWord(result.bytes, self.word_size);
             if (len == 0) staticDataInvariant("static initializer list_reserve was given an empty list");
             const spare = self.readU64(local(locals, GuardedList.at(args, 1)));
+            // Zero-sized items occupy no allocation, so the reservation is a
+            // count alone, bounded by what the target's word encodes.
+            if (abi.elem_size == 0) {
+                try self.writeListCapacity(result, @max(len, @min(len +| spare, self.maxZeroSizedCapacity())));
+                return result;
+            }
             try self.ownListItems(result, abi, @intCast(len));
             try self.writeListCapacity(result, std.math.add(u64, len, spare) catch return error.OutOfMemory);
             return result;

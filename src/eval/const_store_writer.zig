@@ -419,7 +419,7 @@ pub const Writer = struct {
             .list => |elem_plan| blk: {
                 if (try self.storeListLeaf(node, elem_plan, layout_idx, value)) return;
                 try self.appendListRequests(children, elem_plan, layout_idx, value);
-                break :blk .{ .list = .{ .node = node, .capacity = self.listCapacity(layout_idx, value) } };
+                break :blk .{ .list = .{ .node = node, .capacity = listCapacity(value) } };
             },
             .box => |elem_plan| blk: {
                 try self.appendBoxRequest(children, elem_plan, layout_idx, value);
@@ -596,7 +596,7 @@ pub const Writer = struct {
             writerInvariant("list const plan had non-list layout");
         }
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
-        const capacity = self.listCapacity(layout_idx, value);
+        const capacity = listCapacity(value);
         if (roc_list.len() == 0) {
             self.store.fill(target_node, .{ .list = .{ .items = .empty, .capacity = capacity } });
             return true;
@@ -614,10 +614,10 @@ pub const Writer = struct {
     }
 
     /// The capacity the list at `value` was evaluated with, in items. A list
-    /// of zero-sized items holds no allocation, so its capacity is its length.
-    fn listCapacity(self: *const Writer, layout_idx: layout.Idx, value: Value) u64 {
+    /// of zero-sized items holds no allocation and records its capacity as a
+    /// count alone.
+    fn listCapacity(value: Value) u64 {
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
-        if (self.program.layouts.getLayout(layout_idx).tag == .list_of_zst) return roc_list.len();
         return roc_list.getCapacity();
     }
 
@@ -1131,7 +1131,7 @@ pub const Writer = struct {
         return if (ptr) |raw| .{
             .ptr = raw,
             .capacity = switch (layout_value.tag) {
-                .list => self.listCapacity(layout_idx, value),
+                .list => listCapacity(value),
                 .scalar => if (layout_value.getScalar().tag == .str) strCapacity(@ptrCast(@alignCast(value.ptr))) else 0,
                 .hole, .dynamic, .box, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => 0,
             },
