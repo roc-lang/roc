@@ -19,7 +19,7 @@ pub fn collect(allocator: Allocator, store: *const core.LirStore) Allocator.Erro
     defer collector.stack.deinit(allocator);
     defer collector.successors.deinit(allocator);
     for (store.getProcSpecs()) |proc| {
-        if (proc.body) |body| try collector.pushStmt(body);
+        if (proc.body.get()) |body| try collector.pushStmt(body);
         const joins = store.getJoinPointSpan(proc.join_points);
         for (0..joins.len) |index| try collector.pushStmt(GuardedList.at(joins, index).body);
     }

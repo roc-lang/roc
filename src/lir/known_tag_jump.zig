@@ -820,7 +820,7 @@ fn flagLoop(exit_reads: enum { steps, done, tuple_steps, tuple_done }, true_flag
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(0),
         .args = .empty(),
-        .body = header_join,
+        .body = .some(header_join),
         .ret_layout = store.getLocal(exit_value).layout_idx,
     }, .none);
     return .{ .store = store, .proc = proc, .done_arm = done_arm, .exit = exit, .merge = merge, .first_fresh_join = joins.next_join_point };

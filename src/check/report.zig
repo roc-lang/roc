@@ -678,8 +678,8 @@ pub const ReportBuilder = struct {
             return report;
         }
 
-        const actual_formatted = self.getFormattedString(actual_snapshot);
-        const expected_formatted = self.getFormattedString(expected_snapshot);
+        const actual_formatted = try self.getFormattedString(actual_snapshot);
+        const expected_formatted = try self.getFormattedString(expected_snapshot);
         const actual_display = try self.type_displays.insert(self.gpa, actual_formatted);
         const expected_display = try self.type_displays.insert(self.gpa, expected_formatted);
 
@@ -766,7 +766,7 @@ pub const ReportBuilder = struct {
         // Print the actual
         try D.renderSlice(actual_label, self, &report);
         try report.document.addLineBreaks(2);
-        const actual_type_str = try report.addOwnedString(self.getFormattedString(actual_snapshot));
+        const actual_type_str = try report.addOwnedString(try self.getFormattedString(actual_snapshot));
         try report.document.addCodeBlock(actual_type_str);
 
         // Print hints
@@ -1906,7 +1906,7 @@ pub const ReportBuilder = struct {
             try D.renderSlice(&.{D.bytes("But its body evaluates to:")}, self, &report);
         }
         try report.document.addLineBreaks(2);
-        const body_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const body_type_str = try report.addOwnedString(try self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(body_type_str);
         try report.document.addLineBreaks(2);
 
@@ -1975,7 +1975,7 @@ pub const ReportBuilder = struct {
             .flex, .err => return false,
             .rigid, .alias, .structure, .recursive => {},
         }
-        const err_type = self.getFormattedString(err_snapshot);
+        const err_type = try self.getFormattedString(err_snapshot);
 
         try D.renderSlice(&.{
             D.bytes("If this"),
@@ -2029,7 +2029,7 @@ pub const ReportBuilder = struct {
             D.bytes("It has the type:"),
         }, self, &report);
         try report.document.addLineBreaks(2);
-        const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const expected_type_str = try report.addOwnedString(try self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
 
         return report;
@@ -2092,7 +2092,7 @@ pub const ReportBuilder = struct {
             D.bytes(" function has the type:"),
         }, self, &report);
         try report.document.addLineBreaks(2);
-        const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const expected_type_str = try report.addOwnedString(try self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
 
         if (ctx.actual_args < ctx.expected_args) {
@@ -2209,7 +2209,7 @@ pub const ReportBuilder = struct {
                 return report;
             }
 
-            const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+            const expected_type = try report.addOwnedString(try self.getFormattedString(types.expected_snapshot));
 
             try report.document.addText("But the nominal type needs it to one of:");
             try report.document.addLineBreaks(2);
@@ -2237,7 +2237,7 @@ pub const ReportBuilder = struct {
             return report;
         }
 
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const expected_type = try report.addOwnedString(try self.getFormattedString(types.expected_snapshot));
         try report.document.addText("But the nominal type wraps:");
         try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(expected_type);
@@ -2262,8 +2262,8 @@ pub const ReportBuilder = struct {
             try report.document.addLineBreak();
         }
 
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const actual_type = try report.addOwnedString(try self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(try self.getFormattedString(types.expected_snapshot));
 
         try report.document.addText(found_intro);
         try report.document.addLineBreaks(2);
@@ -2640,7 +2640,7 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         }
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
         try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
@@ -2768,7 +2768,7 @@ pub const ReportBuilder = struct {
 
         try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
-        const row_str = try report.addOwnedString(self.getFormattedString(row_extension.row_snapshot));
+        const row_str = try report.addOwnedString(try self.getFormattedString(row_extension.row_snapshot));
         try D.renderSlice(&.{
             D.bytes(if (is_eq) "The values being compared have this type:" else "The values being hashed have this type:"),
         }, self, &report);
@@ -2869,7 +2869,7 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         }
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
         try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
@@ -3100,7 +3100,7 @@ pub const ReportBuilder = struct {
             D.bytes("is a value of the function body around this type, so it can't be called as a method."),
         }, self, &report, &report.headline);
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
         if (self.getRegionSafe(@fromBackingInt(@backingInt(data.fn_var)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
@@ -3136,7 +3136,7 @@ pub const ReportBuilder = struct {
             D.bytes("cannot be resolved."),
         }, self, &report, &report.headline);
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
         if (self.getRegionSafe(@fromBackingInt(@backingInt(data.fn_var)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
@@ -3151,7 +3151,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreaks(2);
 
         if (data.grown_from_snapshot) |grown_from_snapshot| {
-            const grown_from_str = try report.addOwnedString(self.getFormattedString(grown_from_snapshot));
+            const grown_from_str = try report.addOwnedString(try self.getFormattedString(grown_from_snapshot));
             try D.renderSlice(&.{
                 D.bytes("Satisfying this dispatch re-enters"),
                 D.ident(data.method_name).withAnnotation(.inline_code),
@@ -3250,7 +3250,7 @@ pub const ReportBuilder = struct {
     }
 
     fn addDeterminedType(self: *Self, report: *Report, determined: SnapshotContentIdx) Allocator.Error!void {
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(determined));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(determined));
         try D.renderSlice(&.{
             D.bytes("The type was determined to be:"),
         }, self, report);
@@ -3294,7 +3294,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Mismatch", "This number is being used where a non-number type is needed.", .runtime_error);
         errdefer report.deinit();
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
         // Get the region of the number literal from the num_literal info
         const num_literal = data.num_literal.?;
@@ -3438,7 +3438,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Invalid Number", "This number literal does not fit in the inferred type.", .runtime_error);
         errdefer report.deinit();
 
-        const expected_type = try report.addOwnedString(self.getFormattedString(data.expected_type));
+        const expected_type = try report.addOwnedString(try self.getFormattedString(data.expected_type));
 
         try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
@@ -3525,7 +3525,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes(intro),
-            D.bytes(self.getFormattedString(data.default_snapshot)).withAnnotation(.inline_code),
+            D.bytes(try self.getFormattedString(data.default_snapshot)).withAnnotation(.inline_code),
             D.bytes("instead."),
         }, self, &report, &report.headline);
 
@@ -3564,7 +3564,7 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         }
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
         try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
@@ -3614,7 +3614,7 @@ pub const ReportBuilder = struct {
 
         try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
         try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
@@ -3649,7 +3649,7 @@ pub const ReportBuilder = struct {
 
         try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
         try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
@@ -3709,7 +3709,7 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.requirements_snapshot.?));
+        const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.requirements_snapshot.?));
         try D.renderSlice(&.{D.bytes("Its type needs all of these:")}, self, &report);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -3818,11 +3818,11 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{D.bytes("One of them has the type:")}, self, &report);
         try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(leaf.expected_snapshot)));
+        try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(leaf.expected_snapshot)));
         try report.document.addLineBreaks(2);
         try D.renderSlice(&.{D.bytes("But another has the type:")}, self, &report);
         try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(leaf.actual_snapshot)));
+        try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(leaf.actual_snapshot)));
         try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -4013,12 +4013,12 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{D.bytes("One type is:")}, self, &report);
         try report.document.addLineBreaks(2);
-        const actual_type_str = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const actual_type_str = try report.addOwnedString(try self.getFormattedString(types.actual_snapshot));
         try report.document.addCodeBlock(actual_type_str);
         try report.document.addLineBreaks(2);
         try D.renderSlice(&.{D.bytes("The other is:")}, self, &report);
         try report.document.addLineBreaks(2);
-        const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const expected_type_str = try report.addOwnedString(try self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
         try report.document.addLineBreak();
 
@@ -4208,13 +4208,13 @@ pub const ReportBuilder = struct {
 
         try report.document.addReflowingText("One operation uses the error type:");
         try report.document.addLineBreaks(2);
-        const tags_str = try report.addOwnedString(self.getFormattedString(data.tags_snapshot));
+        const tags_str = try report.addOwnedString(try self.getFormattedString(data.tags_snapshot));
         try report.document.addCodeBlock(tags_str);
 
         try report.document.addLineBreaks(2);
         try report.document.addReflowingText("But this parser requires:");
         try report.document.addLineBreaks(2);
-        const row_str = try report.addOwnedString(self.getFormattedString(data.row_snapshot));
+        const row_str = try report.addOwnedString(try self.getFormattedString(data.row_snapshot));
         try report.document.addCodeBlock(row_str);
         try report.document.addLineBreak();
 
@@ -4260,7 +4260,7 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText("Its type is:");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        const record_str = try report.addOwnedString(self.getFormattedString(data.record_snapshot));
+        const record_str = try report.addOwnedString(try self.getFormattedString(data.record_snapshot));
         try report.document.addCodeBlock(record_str);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -4746,7 +4746,7 @@ pub const ReportBuilder = struct {
             fn explain(fields: @This(), builder: *Self, rep: *Report, index: usize) Allocator.Error!void {
                 const field_name = builder.can_ir.getIdentText(fields.names[index]);
 
-                const field_type_str = try rep.addOwnedString(builder.getFormattedString(fields.contents[index]));
+                const field_type_str = try rep.addOwnedString(try builder.getFormattedString(fields.contents[index]));
 
                 try rep.document.addText("    ");
                 try rep.document.addAnnotated(field_name, .emphasized);
@@ -4783,7 +4783,7 @@ pub const ReportBuilder = struct {
             }
 
             fn explain(elems: @This(), builder: *Self, rep: *Report, index: usize) Allocator.Error!void {
-                const elem_type_str = try rep.addOwnedString(builder.getFormattedString(elems.contents[index]));
+                const elem_type_str = try rep.addOwnedString(try builder.getFormattedString(elems.contents[index]));
 
                 try rep.document.addText("    element ");
                 try builder.addAnnotatedFmt(rep, "{d}", .{index}, .emphasized);
@@ -4837,7 +4837,7 @@ pub const ReportBuilder = struct {
                         if (!first) try rep.document.addText(", ");
                         first = false;
 
-                        const arg_type_str = try rep.addOwnedString(builder.getFormattedString(arg_content_idx));
+                        const arg_type_str = try rep.addOwnedString(try builder.getFormattedString(arg_content_idx));
                         try rep.document.addAnnotated(arg_type_str, .type_variable);
                     }
                     try rep.document.addText(")");
@@ -5076,7 +5076,7 @@ pub const ReportBuilder = struct {
         }, self, &report);
         try report.document.addLineBreaks(2);
 
-        const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        const actual_type_str = try report.addOwnedString(try self.getFormattedString(data.snapshot));
         try report.document.addCodeBlock(actual_type_str);
         try report.document.addLineBreaks(2);
 
@@ -5132,7 +5132,7 @@ pub const ReportBuilder = struct {
         }, self, &report);
         try report.document.addLineBreaks(2);
 
-        const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        const actual_type_str = try report.addOwnedString(try self.getFormattedString(data.snapshot));
         try report.document.addCodeBlock(actual_type_str);
         try report.document.addLineBreak();
 
@@ -5173,7 +5173,7 @@ pub const ReportBuilder = struct {
             try report.document.addLineBreak();
         }
         try report.document.addLineBreak();
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.outer_snapshot)));
+        try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(data.outer_snapshot)));
         try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{D.bytes("It also comes from here:")}, self, &report);
@@ -5182,7 +5182,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreaks(2);
         try D.renderSlice(&.{D.bytes("where it is:")}, self, &report);
         try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.inner_snapshot)));
+        try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(data.inner_snapshot)));
         try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{D.bytes(rule)}, self, &report);
@@ -5216,7 +5216,7 @@ pub const ReportBuilder = struct {
         }, self, &report);
         try report.document.addLineBreaks(2);
 
-        const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        const actual_type_str = try report.addOwnedString(try self.getFormattedString(data.snapshot));
         try report.document.addCodeBlock(actual_type_str);
         try report.document.addLineBreaks(2);
 
@@ -5266,7 +5266,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{D.bytes("Its type is:")}, self, &report);
         try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.def_snapshot)));
+        try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(data.def_snapshot)));
         try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
@@ -5337,7 +5337,7 @@ pub const ReportBuilder = struct {
             try report.document.addLineBreak();
         }
 
-        const type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        const type_str = try report.addOwnedString(try self.getFormattedString(data.snapshot));
         try report.document.addLineBreak();
         try report.document.addReflowingText("Its type is:");
         try report.document.addLineBreak();
@@ -6681,11 +6681,9 @@ pub const ReportBuilder = struct {
         }
     }
 
-    /// Get the formatted string for a snapshot.
-    /// Returns a placeholder if the formatted string is missing, allowing error reporting
-    /// to continue gracefully even if snapshots are incomplete.
-    fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) []const u8 {
-        return self.snapshots.?.getFormattedString(idx) orelse "<unknown type>";
+    /// Request only the frozen type this diagnostic displays.
+    fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) Allocator.Error![]const u8 {
+        return @constCast(self.snapshots.?).formatType(idx);
     }
 
     /// Returns the operator symbol for a given method ident, or null if not an operator method.

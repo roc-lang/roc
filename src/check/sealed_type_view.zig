@@ -212,8 +212,12 @@ pub const SealedTypeView = struct {
                     .numeric_default_phase = variable_facts.numeric_default_phase,
                     .row_default = self.rowDefault(var_, resolved.desc.content),
                     .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
-                    .bounded_row_ext = variable_facts.bounded_row_ext,
-                    .uncommitted_record_tail = resolved.desc.flags.uncommitted_record_tail,
+                    .row_tail = if (variable_facts.bounded_row_ext)
+                        .bounded
+                    else if (resolved.desc.flags.uncommitted_record_tail)
+                        .uncommitted_record
+                    else
+                        .ordinary,
                 } };
             },
             .rigid => |rigid| {
@@ -224,7 +228,7 @@ pub const SealedTypeView = struct {
                     .numeric_default_phase = variable_facts.numeric_default_phase,
                     .row_default = self.rowDefault(var_, resolved.desc.content),
                     .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
-                    .bounded_row_ext = variable_facts.bounded_row_ext,
+                    .row_tail = if (variable_facts.bounded_row_ext) .bounded else .ordinary,
                 } };
             },
             .alias => |alias| return .{ .alias = .{
@@ -358,7 +362,7 @@ pub const SealedConstraintRows = struct {
             .fn_name = self.view.methodName(source.fn_name),
             .fn_ty = type_ids.fromVar(type_store.resolveVar(source.fn_var).var_),
             .origin = source.origin,
-            .numeral = type_store.constraintNumeralInfo(source),
+            .numeral = .of(type_store.constraintNumeralInfo(source)),
         };
     }
 };

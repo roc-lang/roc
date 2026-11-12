@@ -199,6 +199,9 @@ const ProcArcDomain = struct {
         const group_leaders_buffer = try allocator.alloc(LIR.LocalId, frame_len);
         var value_use_bit_index = try ArcBitColumn.initFilled(allocator, frame_len);
         const value_use_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+        // Resource bits are numbered in frame order once every resource is known.
+        var resource_frames = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, frame_len);
+        defer resource_frames.deinit(allocator);
 
         var mapped_len: usize = 0;
         errdefer for (frame_locals[0..mapped_len]) |local| {
@@ -231,13 +234,13 @@ const ProcArcDomain = struct {
             };
             for (resource_locals) |resource_local| {
                 const resource_frame_index = requiredFrameIndex(global_local_index, resource_local);
-                resource_bit_index.set(resource_frame_index, @fromBackingInt(0));
+                resource_frames.set(resource_frame_index);
             }
         }
 
         var resource_count: usize = 0;
-        for (0..frame_len) |frame_index| {
-            if (!resource_bit_index.isPresent(frame_index)) continue;
+        var resource_frame_iter = resource_frames.iterator(.{});
+        while (resource_frame_iter.next()) |frame_index| {
             resource_bit_index.set(frame_index, @fromBackingInt(@as(u32, @intCast(resource_count))));
             resource_locals_buffer[resource_count] = frame_locals[frame_index];
             resource_count += 1;
@@ -775,7 +778,7 @@ fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) Resou
     var members = grouped.iterator(.{});
     while (members.next()) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
-        store.getProcSpecPtr(proc).tail_group = @fromBackingInt(groups.find(@intCast(proc_index)));
+        store.getProcSpecPtr(proc).tail_group = .some(@fromBackingInt(groups.find(@intCast(proc_index))));
     }
 }
 
@@ -1075,7 +1078,9 @@ fn installOwnedBindingOverrides(
             try owned_binding_override.set(carrier);
         }
     }
-    for (domain.frame_locals) |local| {
+    // Dismantling also records scalar and prefix reads, which carry no
+    // ownership unit. Only the resource domain can acquire an override.
+    for (domain.resource_locals) |local| {
         if (dismantles.isTakeBinding(local)) try owned_binding_override.set(local);
     }
     // A projected container solved borrowed in the unconditional base
@@ -1308,7 +1313,7 @@ const VariantTable = struct {
             .erased_reuse_arg = source_spec.erased_reuse_arg,
             .erased_call_args = source_spec.erased_call_args,
             .frame_locals = self.sources[@backingInt(callee)].frame,
-            .body = self.sources[@backingInt(callee)].body,
+            .body = .of(self.sources[@backingInt(callee)].body),
             .ret_layout = source_spec.ret_layout,
             .erased_capture_arg = source_spec.erased_capture_arg,
             .dyn_result = source_spec.dyn_result,
@@ -1622,7 +1627,7 @@ const ArcPlanStep = struct {
     pre_release_extra: PlanSpan = .{},
     /// Why `pre_release_extra` was filled: the tail-call frame release of an
     /// `assign_call`. Set by the planner that fills the list.
-    pre_release_extra_reason: ?LIR.RcReason = null,
+    pre_release_extra_reason: collections.OptionalEnum(LIR.RcReason) = .none,
     pre_retain: PlanSpan = .{},
     retain_assign_ref_target: bool = true,
     take_assign_ref_target: bool = false,
@@ -1633,7 +1638,7 @@ const ArcPlanStep = struct {
     residual_shell_all_rc_fields_absent: bool = false,
     /// The view whose container and first slot number the absent pieces,
     /// when the shell is a view's.
-    residual_shell_view: ?LIR.LocalId = null,
+    residual_shell_view: collections.OptionalId(LIR.LocalId) = .none,
     retain_set_target: bool = true,
     preserve_consumed_args: u64 = 0,
     transfer_mask: u64 = 0,
@@ -1649,23 +1654,27 @@ const ArcPlanStep = struct {
     /// The call is a same-SCC tail call whose caller frame owns nothing once
     /// the call starts.
     replaces_frame: bool = false,
-    call_callee: ?LIR.LirProcSpecId = null,
+    call_callee: collections.OptionalId(LIR.LirProcSpecId) = .none,
     call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
-    variant_request: ?VariantRequestId = null,
+    variant_request: collections.OptionalId(VariantRequestId) = .none,
     post_release: PlanSpan = .{},
+
+    comptime {
+        std.debug.assert(@sizeOf(ArcPlanStep) == 184);
+    }
 
     fn reset(self: *ArcPlanStep, stmt: LIR.CFStmtId) void {
         self.initialized = true;
         self.stmt = stmt;
         self.pre_release = null;
         self.pre_release_extra.len = 0;
-        self.pre_release_extra_reason = null;
+        self.pre_release_extra_reason = .none;
         self.pre_retain.len = 0;
         self.retain_assign_ref_target = true;
         self.take_assign_ref_target = false;
         self.residual_shell_absent_mask = 0;
         self.residual_shell_all_rc_fields_absent = false;
-        self.residual_shell_view = null;
+        self.residual_shell_view = .none;
         self.retain_set_target = true;
         self.preserve_consumed_args = 0;
         self.transfer_mask = 0;
@@ -1677,9 +1686,9 @@ const ArcPlanStep = struct {
         self.low_level_selection = null;
         self.retain_call_result = false;
         self.replaces_frame = false;
-        self.call_callee = null;
+        self.call_callee = .none;
         self.call_demanded = arc_sig.RcSig.all_owned;
-        self.variant_request = null;
+        self.variant_request = .none;
         self.post_release.len = 0;
     }
 };
@@ -2322,7 +2331,7 @@ const Inserter = struct {
                             assign,
                             step.residual_shell_absent_mask,
                             step.residual_shell_all_rc_fields_absent,
-                            step.residual_shell_view,
+                            step.residual_shell_view.get(),
                         ),
                     }),
                     .next = next,
@@ -2348,7 +2357,7 @@ const Inserter = struct {
                 };
                 break :blk try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
-                    .proc = if (step.variant_request) |request|
+                    .proc = if (step.variant_request.get()) |request|
                         self.resolved_variants[@backingInt(request)]
                     else
                         assign.proc,
@@ -2540,7 +2549,7 @@ const Inserter = struct {
         var pre_release_index = pre_release_extra.len;
         while (pre_release_index > 0) {
             pre_release_index -= 1;
-            const reason = step.pre_release_extra_reason orelse arcInvariant("ARC plan step filled pre_release_extra without its reason");
+            const reason = step.pre_release_extra_reason.get() orelse arcInvariant("ARC plan step filled pre_release_extra without its reason");
             cloned = try self.materializeReleaseDecision(pre_release_extra[pre_release_index], .{ .stmt = at, .reason = reason }, cloned);
         }
         if (step.preserve_consumed_args != 0) {
@@ -2639,8 +2648,8 @@ const Inserter = struct {
                 .switch_stmt, .initialized_payload_switch, .str_match, .str_match_set => {},
             }
             for (plan.steps.items[0..plan.step_count]) |*step| {
-                if (step.call_callee) |callee| {
-                    step.variant_request = try self.requestVariantForCall(callee, step.call_demanded);
+                if (step.call_callee.get()) |callee| {
+                    step.variant_request = .of(try self.requestVariantForCall(callee, step.call_demanded));
                 }
             }
         }
@@ -2671,12 +2680,12 @@ const Inserter = struct {
                         // A view copies its container's representation,
                         // including slots already given away on this path.
                         step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.target);
-                        step.residual_shell_view = assign.target;
+                        step.residual_shell_view = .some(assign.target);
                     } else if (any_views and assign.op.kind == .local and self.viewForEmission(assign.op.source) != null and self.isBindingBorrowed(assign.op.source) and
                         self.store.getLocal(assign.op.source).layout_idx == self.store.getLocal(assign.target).layout_idx)
                     {
                         step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.op.source);
-                        step.residual_shell_view = assign.op.source;
+                        step.residual_shell_view = .some(assign.op.source);
                     } else if (assign.op.kind == .local and
                         self.store.getLocal(assign.op.source).layout_idx == self.store.getLocal(assign.target).layout_idx and
                         self.layouts.getLayout(self.store.getLocal(assign.op.source).layout_idx).tag == .struct_ and
@@ -2789,7 +2798,7 @@ const Inserter = struct {
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     for (transfer.args.retain_args) |arg| try self.appendStepRetain(step, .{ .local = arg, .reason = .owned_param_demand });
                     step.retain_call_result = transfer.retain_call_result;
-                    step.call_callee = assign.proc;
+                    step.call_callee = .some(assign.proc);
                     step.call_demanded = transfer.args.demanded;
                     self.death_scratch.clearRetainingCapacity();
                     if (tail_call != null) {
@@ -2799,7 +2808,7 @@ const Inserter = struct {
                         // disappearing caller frame and must end first.
                         try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
-                        step.pre_release_extra_reason = .tail_call_frame;
+                        step.pre_release_extra_reason = .some(.tail_call_frame);
                         step.replaces_frame = self.sharesReturnContract(assign);
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, self.death_scratch);
@@ -2829,7 +2838,7 @@ const Inserter = struct {
                         // above; everything else the frame owns ends first.
                         try self.releaseTailCallerFrame(&segment.owned, assign_stmt.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
-                        step.pre_release_extra_reason = .tail_call_frame;
+                        step.pre_release_extra_reason = .some(.tail_call_frame);
                         step.replaces_frame = true;
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign_stmt.target, .owned, assign_stmt.next, self.death_scratch);
@@ -3293,7 +3302,7 @@ const Inserter = struct {
     fn erasedCallIsDeferred(self: *const Inserter, call: @FieldType(LIR.CFStmt, "assign_call_erased")) bool {
         if (self.store.stmtRow(call.data).reuse_closure) return false;
         const caller = self.store.getProcSpec(self.current_proc);
-        if (caller.hosted != null) return false;
+        if (caller.hosted.get() != null) return false;
         const joins = self.solution.joinBodiesOf(self.current_source_proc);
         var current: LIR.CFStmtId = call.next;
         // A join body that jumps back to its own join never returns, so more
@@ -3319,7 +3328,7 @@ const Inserter = struct {
     /// bodies alone, and the procedure is not a hosted one.
     fn dynErasedCallIsDeferred(self: *const Inserter, target: LIR.LocalId, call_next: LIR.CFStmtId) bool {
         const caller = self.store.getProcSpec(self.current_proc);
-        if (caller.hosted != null) return false;
+        if (caller.hosted.get() != null) return false;
         const joins = self.solution.joinBodiesOf(self.current_source_proc);
         var current: LIR.CFStmtId = call_next;
         // A join body that jumps back to its own join never returns, so more
@@ -3347,7 +3356,7 @@ const Inserter = struct {
         const caller = self.store.getProcSpec(self.current_proc);
         const callee = self.store.getProcSpec(call.proc);
         return caller.abi == .roc and callee.abi == .roc and
-            callee.hosted == null and
+            callee.hosted.get() == null and
             self.store.getLocal(call.target).layout_idx == caller.ret_layout and
             callee.ret_layout == caller.ret_layout;
     }
@@ -5018,7 +5027,7 @@ const Inserter = struct {
                     if (!call.reuse_closure or preserve_reuse_source) try self.appendStepRetain(step, .{ .local = call.closure, .reason = .closure_call_capture });
                     try self.releaseTailCallerFrame(owned, target, self.death_scratch);
                     try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
-                    step.pre_release_extra_reason = .tail_call_frame;
+                    step.pre_release_extra_reason = .some(.tail_call_frame);
                     step.replaces_frame = true;
                     return;
                 }
@@ -5519,10 +5528,8 @@ const Inserter = struct {
     fn outcomeArgumentOrigin(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
         var cursor = @backingInt(local);
         var steps: usize = 0;
-        while (cursor < self.solution.alias_source.len and
-            self.solution.alias_source[cursor] != no_arc_bit)
-        {
-            cursor = self.solution.alias_source[cursor];
+        while (cursor < self.solution.alias_source.len) {
+            cursor = self.solution.alias_source[cursor].get() orelse break;
             steps += 1;
             if (steps > self.solution.alias_source.len) {
                 arcInvariant("ARC outcome argument alias chain contained a cycle");
@@ -8189,7 +8196,7 @@ const ArcTest = struct {
             .name = self.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(1),
             .args = try self.span(args),
-            .body = body,
+            .body = .of(body),
             .frame_locals = try self.span(frame_locals),
             .ret_layout = ret_layout,
         }, .none);
@@ -8200,7 +8207,7 @@ const ArcTest = struct {
             .name = self.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(2),
             .args = LIR.LocalSpan.empty(),
-            .body = null,
+            .body = .none,
             .ret_layout = ret_layout,
         }, .none);
     }
@@ -8210,12 +8217,12 @@ const ArcTest = struct {
             .name = self.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(3),
             .args = try self.span(args),
-            .body = null,
+            .body = .none,
             .ret_layout = ret_layout,
-            .hosted = .{
+            .hosted = .some(.{
                 .symbol = try self.store.insertString("roc_test_hosted"),
                 .dispatch_index = 0,
-            },
+            }),
         }, .none);
     }
 
@@ -8466,7 +8473,7 @@ const ArcTest = struct {
         defer work.deinit(self.allocator);
         var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.store.cfStmtCount());
         defer seen.deinit(self.allocator);
-        try work.append(self.allocator, self.store.getProcSpecImmediate(proc).body.?);
+        try work.append(self.allocator, self.store.getProcSpecImmediate(proc).body.get().?);
         while (work.pop()) |cursor| {
             if (seen.isSet(@backingInt(cursor))) continue;
             seen.set(@backingInt(cursor));
@@ -8517,7 +8524,7 @@ const ArcTest = struct {
     fn procBody(self: *const ArcTest) LIR.CFStmtId {
         for (0..self.store.procSpecCount()) |proc_index| {
             const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-            if (proc.body) |body| return body;
+            if (proc.body.get()) |body| return body;
         }
         arcInvariant("ARC test fixture has no procedure body");
     }
@@ -8631,7 +8638,7 @@ const ArcTest = struct {
         defer visited.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
         defer stack.deinit(self.allocator);
-        const body = self.store.getProcSpecImmediate(proc_id).body orelse return 0;
+        const body = self.store.getProcSpecImmediate(proc_id).body.get() orelse return 0;
         try stack.append(self.allocator, body);
         while (stack.pop()) |current| {
             if (visited.contains(current)) continue;
@@ -8914,7 +8921,7 @@ test "ARC preserves erased callable repack reuse" {
         .identity = LIR.ProcIdentity.forTest(4),
         .args = try f.span(&.{callee_arg}),
         .frame_locals = try f.span(&.{callee_arg}),
-        .body = null,
+        .body = .none,
         .ret_layout = erased_callable,
     }, .none);
 
@@ -8944,7 +8951,7 @@ test "ARC preserves erased callable repack reuse" {
 
     try f.run();
 
-    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
     var found = false;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
@@ -9018,7 +9025,7 @@ test "ARC preserves erased call ABI metadata" {
 
     try f.run();
 
-    var cursor = f.store.getProcSpecImmediate(caller).body.?;
+    var cursor = f.store.getProcSpecImmediate(caller).body.get().?;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -9057,7 +9064,7 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
         .identity = LIR.ProcIdentity.forTest(5),
         .args = try f.span(&.{callee_arg}),
         .frame_locals = try f.span(&.{callee_arg}),
-        .body = null,
+        .body = .none,
         .ret_layout = erased_callable,
     }, .none);
 
@@ -9077,7 +9084,7 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
 
     try f.run();
 
-    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -9152,7 +9159,7 @@ test "ARC transfers erased call ownership from an explicit outer source" {
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
 
-    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -9230,7 +9237,7 @@ test "ARC retains an erased call reuse source that is read after the call" {
     var saw_retain = false;
     var saw_call = false;
     var saw_later_use = false;
-    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -9309,7 +9316,7 @@ test "ARC retains an erased callable whose repack input is used later" {
         .identity = LIR.ProcIdentity.forTest(6),
         .args = try f.span(&.{callee_arg}),
         .frame_locals = try f.span(&.{callee_arg}),
-        .body = null,
+        .body = .none,
         .ret_layout = erased_callable,
     }, .none);
 
@@ -9331,7 +9338,7 @@ test "ARC retains an erased callable whose repack input is used later" {
     try f.run();
 
     try testing.expectEqual(@as(usize, 1), f.countRc(old_callable, .incref));
-    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -9450,7 +9457,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
         .name = f.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
-        .body = resource_body,
+        .body = .some(resource_body),
         .frame_locals = try f.span(&.{ resource, scalar }),
         .ret_layout = .str,
     }, .none);
@@ -9460,7 +9467,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
         .name = f.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
-        .body = other_body,
+        .body = .some(other_body),
         .frame_locals = try f.span(&.{other_proc_resource}),
         .ret_layout = .str,
     }, .none);
@@ -9523,7 +9530,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
         .name = f.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(9),
         .args = LIR.LocalSpan.empty(),
-        .body = local_body,
+        .body = .some(local_body),
         .frame_locals = try f.span(&.{ leader, local_alias }),
         .ret_layout = .str,
     }, .none);
@@ -9535,7 +9542,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
         .name = f.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(10),
         .args = LIR.LocalSpan.empty(),
-        .body = external_body,
+        .body = .some(external_body),
         .frame_locals = try f.span(&.{external_member}),
         .ret_layout = .str,
     }, .none);
@@ -9550,7 +9557,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     // only the leader and alias named by its explicit frame.
     solution.borrowed.set(@backingInt(external_member));
     solution.leader[@backingInt(external_member)] = @backingInt(leader);
-    solution.alias_source[@backingInt(external_member)] = @backingInt(leader);
+    solution.alias_source[@backingInt(external_member)] = .some(@backingInt(leader));
     try testing.expectEqual(leader, solution.leaderOf(external_member));
 
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
@@ -9690,7 +9697,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
         .identity = LIR.ProcIdentity.forTest(@intCast(f.store.procSpecCount())),
         .name = f.store.freshSyntheticSymbol(),
         .args = try f.span(&.{local}),
-        .body = body,
+        .body = .some(body),
         .frame_locals = try f.span(&.{local}),
         .ret_layout = .str,
     }, .none);
@@ -9986,8 +9993,8 @@ test "RC shared neutral proc body is rewritten separately for each proc" {
 
     try f.run();
 
-    const first_body = f.store.getProcSpecImmediate(first).body orelse return error.MissingProcBody;
-    const second_body = f.store.getProcSpecImmediate(second).body orelse return error.MissingProcBody;
+    const first_body = f.store.getProcSpecImmediate(first).body.get() orelse return error.MissingProcBody;
+    const second_body = f.store.getProcSpecImmediate(second).body.get() orelse return error.MissingProcBody;
     try testing.expect(first_body != shared_body);
     try testing.expect(second_body != shared_body);
     try testing.expect(first_body != second_body);
@@ -10015,8 +10022,8 @@ test "RC shared neutral join body keeps compact indices per proc" {
 
     try f.run();
 
-    const first_body = f.store.getProcSpecImmediate(first).body orelse return error.MissingProcBody;
-    const second_body = f.store.getProcSpecImmediate(second).body orelse return error.MissingProcBody;
+    const first_body = f.store.getProcSpecImmediate(first).body.get() orelse return error.MissingProcBody;
+    const second_body = f.store.getProcSpecImmediate(second).body.get() orelse return error.MissingProcBody;
     try testing.expect(first_body != shared_body);
     try testing.expect(second_body != shared_body);
     try testing.expect(first_body != second_body);
@@ -12570,7 +12577,7 @@ test "RC atomicity: bodyless callee arguments keep atomic counts" {
         .name = f.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(11),
         .args = try f.span(&.{}),
-        .body = null,
+        .body = .none,
         .ret_layout = .i64,
     }, .none);
 
@@ -12667,7 +12674,7 @@ test "uniqueness: a cached proc's supplied facts reach its callers" {
             .name = f.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(12),
             .args = try f.span(if (case.passes_fresh) &.{param} else &.{}),
-            .body = null,
+            .body = .none,
             .ret_layout = f.list_i64,
             .external = true,
             .rc_ret_unique = case.ret_unique,
@@ -14605,7 +14612,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
         try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
 
         // Follow the caller's call to the callee emission it actually runs.
-        var cursor = f.store.getProcSpecImmediate(caller).body.?;
+        var cursor = f.store.getProcSpecImmediate(caller).body.get().?;
         const target_proc = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call => |assign| break assign.proc,
             .assign_list => |assign| cursor = assign.next,
@@ -14639,7 +14646,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .crash,
             => return error.TestUnexpectedResult,
         };
-        cursor = f.store.getProcSpecImmediate(target_proc).body.?;
+        cursor = f.store.getProcSpecImmediate(target_proc).body.get().?;
         const emitted_op = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_low_level => |assign| {
                 if (assign.target == slice) break assign.op;
@@ -14837,7 +14844,7 @@ test "RC a consuming operand borrowed onward from a field read observes the fiel
         defer work.deinit(testing.allocator);
         var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(testing.allocator, f.store.cfStmtCount());
         defer seen.deinit(testing.allocator);
-        try work.append(testing.allocator, f.store.getProcSpecImmediate(dispatcher).body.?);
+        try work.append(testing.allocator, f.store.getProcSpecImmediate(dispatcher).body.get().?);
         while (work.pop()) |cursor| {
             if (seen.isSet(@backingInt(cursor))) continue;
             seen.set(@backingInt(cursor));
@@ -15169,7 +15176,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, changed));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(outcome_variant, changed));
 
-    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -15505,7 +15512,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
         const base_proc_count = f.store.procSpecCount();
         try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
         try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-        const caller_body = f.store.getCFStmt(f.store.getProcSpecImmediate(caller).body.?);
+        const caller_body = f.store.getCFStmt(f.store.getProcSpecImmediate(caller).body.get().?);
         try testing.expect(caller_body == .assign_call);
         try testing.expectEqual(base_proc_count, @backingInt(caller_body.assign_call.proc));
 
@@ -15629,7 +15636,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
     try testing.expectEqual(@as(usize, 1), f.countRc(rejected_first, .incref));
     try testing.expectEqual(@as(usize, 1), f.countRc(rejected_second, .incref));
 
-    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -15662,7 +15669,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
     }
     try testing.expect(remaining > 0);
 
-    cursor = f.store.getProcSpecImmediate(rejected_caller).body orelse return error.MissingCallerBody;
+    cursor = f.store.getProcSpecImmediate(rejected_caller).body.get() orelse return error.MissingCallerBody;
     remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         const stmt = f.store.getCFStmt(cursor);
@@ -16414,7 +16421,7 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
             .name = f.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(12),
             .args = try f.span(&.{ param, choose }),
-            .body = body,
+            .body = .some(body),
             .frame_locals = try f.span(&.{ param, choose, changed, result }),
             .ret_layout = outcome_layout,
         }, .none);
@@ -16846,7 +16853,7 @@ test "RC a closure taken from a dying record of closures through a borrowed wrap
     // them.
     try testing.expectEqual(@as(usize, 0), f.countRc(record_view, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(closure, .incref));
-    const variant_body = f.store.getProcSpecImmediate(call_from_caller.proc).body orelse return error.MissingProcBody;
+    const variant_body = f.store.getProcSpecImmediate(call_from_caller.proc).body.get() orelse return error.MissingProcBody;
     var cursor = variant_body;
     var released_before_call = false;
     var retained_before_call = false;
@@ -17256,7 +17263,7 @@ test "RC field take restores the exact aggregate field on checked failure withou
         try testing.expectEqual(@as(usize, 0), f.countRc(failure_projection, .incref));
         try testing.expectEqual(@as(usize, 0), f.countRc(pair, .decref));
 
-        var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
+        var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
         var remaining = f.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
             const stmt = f.store.getCFStmt(cursor);
@@ -17415,7 +17422,7 @@ test "RC specialization: caller body survives variant proc append" {
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
 
-    var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
+    var cursor = f.store.getProcSpecImmediate(caller).body.get() orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
         switch (f.store.getCFStmtImmediate(cursor).*) {
@@ -17826,12 +17833,12 @@ test "RC interprocedural: tail self-call transfers an SCC-local argument" {
     // edge targets itself with no cleanup after the call.
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const owned_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
-    const base_switch = f.walkToSwitch(f.store.getProcSpecImmediate(recurse).body.?);
+    const base_switch = f.walkToSwitch(f.store.getProcSpecImmediate(recurse).body.get().?);
     const base_borrow_call = f.walkToDirectCall(base_switch.default_branch);
     try testing.expectEqual(identity, base_borrow_call.proc);
     const base_call = f.walkToDirectCall(base_borrow_call.next);
     try testing.expectEqual(owned_variant, base_call.proc);
-    const variant_switch = f.walkToSwitch(f.store.getProcSpecImmediate(owned_variant).body.?);
+    const variant_switch = f.walkToSwitch(f.store.getProcSpecImmediate(owned_variant).body.get().?);
     const variant_borrow_call = f.walkToDirectCall(variant_switch.default_branch);
     try testing.expectEqual(identity, variant_borrow_call.proc);
     const variant_call = f.walkToDirectCall(variant_borrow_call.next);
@@ -17967,7 +17974,7 @@ test "RC interprocedural: tail call matches the caller return ownership" {
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const owned_return_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expect(!f.store.getProcSpecImmediate(owned_return_variant).rc_ret_borrowed);
-    const caller_switch = f.walkToSwitch(f.store.getProcSpecImmediate(caller).body.?);
+    const caller_switch = f.walkToSwitch(f.store.getProcSpecImmediate(caller).body.get().?);
     const rewritten_tail_call = f.walkToDirectCall(caller_switch.default_branch);
     try testing.expectEqual(owned_return_variant, rewritten_tail_call.proc);
     const after_tail_call = f.store.getCFStmt(rewritten_tail_call.next);
@@ -18388,7 +18395,7 @@ const DynFixture = struct {
     /// A procedure whose frame is every local allocated so far.
     fn proc(self: *DynFixture, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx, dyn_result: ?LIR.LocalId) Allocator.Error!LIR.LirProcSpecId {
         const id = try self.f.addProc(args, body, ret_layout);
-        self.f.store.getProcSpecPtr(id).dyn_result = dyn_result;
+        self.f.store.getProcSpecPtr(id).dyn_result = .of(dyn_result);
         return id;
     }
 
@@ -18485,7 +18492,7 @@ test "ARC erased argument products take fields and preserve prefix and scalar re
         }
         const proc = try d.proc(&.{ table, param }, body, d.dynamic, if (keep_record) param else result);
         d.f.store.getProcSpecPtr(proc).abi = .erased_record;
-        d.f.store.getProcSpecPtr(proc).erased_capture_arg = table;
+        d.f.store.getProcSpecPtr(proc).erased_capture_arg = .of(table);
         try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
         try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
         try d.f.expectRc(param, 0, 0, 0);
@@ -18523,7 +18530,7 @@ test "ARC places no reference counts around a callable read from a type table" {
     defer immortal.deinit(testing.allocator);
     try testing.expect(immortal.contains(callable));
     try testing.expectEqual(@as(usize, 1), try @import("immortal_locals.zig").elide(testing.allocator, &d.f.store));
-    var walk = try body_clone.ReachableStmts.initWithAllocator(&d.f.store, d.f.store.getProcSpec(proc).body.?, testing.allocator);
+    var walk = try body_clone.ReachableStmts.initWithAllocator(&d.f.store, d.f.store.getProcSpec(proc).body.get().?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| switch (d.f.store.getCFStmt(stmt_id)) {
         .incref, .decref, .decref_if_initialized, .free => return error.TestUnexpectedResult,
@@ -18664,7 +18671,7 @@ test "ARC dyn eq and inspect borrow their operand" {
     try d.f.expectRc(text, 0, 0, 0);
     try d.expectDynamicRcShape();
     // The release comes after the last borrowing read.
-    try d.f.expectReachableRcBefore(d.f.store.getProcSpecImmediate(proc).body.?, .decref, param, .ret);
+    try d.f.expectReachableRcBefore(d.f.store.getProcSpecImmediate(proc).body.get().?, .decref, param, .ret);
 }
 
 test "ARC dyn join parameter carries its unit around a loop" {

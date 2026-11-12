@@ -349,22 +349,25 @@ pub const Constants = struct {
     /// 164: sorted array builders serialize zeroed entry padding and an
     ///      integer offset that the cache validator checks.
     /// 165: compile-time reads persist placement and semantic root identity.
-    /// 176: platform invocation scheme uses and deferred diagnostic captures.
-    /// 177: type-store columns serialize independently in declared field order.
-    /// 178: checked artifacts store no platform invocation scheme uses or
-    ///      deferred diagnostic captures.
-    /// 179: stored function recipes name modules the storing module imports.
-    /// 180: type stores list the names of their optional and defaulted fields.
-    /// 181: uncommitted record and tag tails replace per-use structure, type
-    ///      stores list no widening field names, and checked variables record
-    ///      uncommitted record tails.
-    /// 182: descriptors record lift-only uncommitted record tails.
-    /// 183: checked-module entries store reproducible checking and evaluation
-    ///      reports beside body-local type context arguments and
-    ///      generated-codec recurrences.
-    /// 184: quantified record tails are restricted at every use, record
-    ///      pattern tails are marked, and nominal declarations record padding.
-    pub const CACHE_VERSION = 184;
+    /// 175: platform invocation scheme uses and deferred diagnostic captures.
+    /// 176: type-store columns serialize independently in declared field order.
+    /// 177: checked-module entries store reproducible checking and evaluation
+    ///      reports beside body-local type context arguments, per-use
+    ///      anonymous structure and generated-codec recurrences.
+    /// 178: checked-module entries combine independently serialized type-store
+    ///      columns with body-local type context arguments, per-use anonymous
+    ///      structure and generated-codec recurrences.
+    /// 179: selected hoisted roots store their optional ids in four bytes.
+    /// 180: stored function recipes name modules the storing module imports.
+    /// 181: type stores list the names of their optional and defaulted fields
+    ///      once, and anonymous structure nothing visible can lift or widen is
+    ///      shared by every use instead of copied per use.
+    /// 185: uncommitted record and tag tails replace per-use structure,
+    ///      checked variables record uncommitted record tails, type stores
+    ///      list no widening field names, quantified record tails are
+    ///      restricted at every use, record pattern tails are marked, and
+    ///      nominal declarations record padding.
+    pub const CACHE_VERSION = 185;
 };
 
 /// Configuration for the Roc cache system.

@@ -28,6 +28,9 @@ const CheckedTypeId = CheckedArtifact.CheckedTypeId;
 const CheckedModuleArtifact = CheckedArtifact.CheckedModuleArtifact;
 const CheckedTypeStoreView = CheckedArtifact.CheckedTypeStoreView;
 
+/// A module position in the package API being extracted.
+const ApiModuleIndex = enum(u32) { _ };
+
 /// One exact public namespace used for API extraction or reference routing.
 pub const ModuleInput = struct {
     /// The public namespace name, e.g. "Parser" or a platform root's name.
@@ -137,13 +140,13 @@ pub fn extractPackageApi(
             try api.addModule(try api.allocator().dupe(u8, input.exposed_name))
         else
             null;
-        try extractor.input_modules.append(gpa, module_index);
+        try extractor.input_modules.append(gpa, if (module_index) |index| .some(@fromBackingInt(@as(u32, @intCast(index)))) else .none);
     }
     try extractor.sortPublicInputs();
     try extractor.adoptRenamedNominals(api_input_count);
 
     for (extractor.input_modules.items, 0..) |module_index, input_index| {
-        const api_module = module_index orelse continue;
+        const api_module: usize = @backingInt(module_index.get() orelse continue);
         extractor.current_input = input_index;
         try extractor.extractModule(input_index, api_module);
     }
@@ -164,7 +167,7 @@ const Extractor = struct {
     inputs: std.ArrayList(ModuleInput) = .empty,
     /// The PackageApi module that receives each namespace's items, parallel
     /// to `inputs`; null for namespaces used only to route references.
-    input_modules: std.ArrayList(?usize) = .empty,
+    input_modules: std.ArrayList(collections.OptionalId(ApiModuleIndex)) = .empty,
     /// Public namespaces sorted by owning checked artifact for binary routing.
     public_input_order: std.ArrayList(usize) = .empty,
     /// Public alias declarations whose nominal type is extracted in their

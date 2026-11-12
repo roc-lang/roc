@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const check = @import("check");
 const layout = @import("layout");
 const hosted = @import("hosted.zig");
@@ -153,11 +154,24 @@ pub const CFStmtId = enum(u32) {
     _,
 };
 
-/// Identifier of one virtual source frame introduced by inlining.
+/// Identifier of one virtual source frame introduced by inlining, or `none`.
+/// A frame's id is its row in `LirStore.inline_scopes` plus one, so a zeroed
+/// column holds `none`.
 pub const InlineScopeId = enum(u32) {
+    none = 0,
     _,
 
-    pub const none: InlineScopeId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
+    /// The id of the frame at `inline_scopes` row `row_index`.
+    pub fn fromRow(row_index: u32) InlineScopeId {
+        std.debug.assert(row_index < std.math.maxInt(u32));
+        return @fromBackingInt(row_index + 1);
+    }
+
+    /// The `inline_scopes` row of a frame.
+    pub fn row(self: InlineScopeId) u32 {
+        std.debug.assert(self != .none);
+        return @backingInt(self) - 1;
+    }
 };
 
 /// A virtual source frame retained independently of physical procedures.
@@ -506,9 +520,13 @@ pub const ComptimeSite = struct {
     /// the module of whichever compile-time root happens to execute it.
     owner: LoweringModuleId,
     region: base.Region,
-    checked_site: ?CheckedExhaustivenessSiteId = null,
+    checked_site: collections.OptionalId(CheckedExhaustivenessSiteId) = .none,
     proc: LirProcSpecId,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(ComptimeSite) == 24);
+}
 
 /// Identifier of a join point targeted by `jump`.
 pub const JoinPointId = enum(u32) {
@@ -877,6 +895,9 @@ pub const RefOp = packed struct(u128) {
 /// Platform-hosted proc metadata used for external proc ABIs.
 pub const HostedProc = hosted.Proc;
 
+/// An optional `HostedProc` at its own size.
+pub const OptionalHostedProc = collections.OptionalStruct(HostedProc, "dispatch_index");
+
 /// One explicit switch branch keyed by an integer branch value.
 pub const CFSwitchBranch = struct {
     value: u64,
@@ -1040,8 +1061,11 @@ pub const TailCalls = struct {
     loop: JoinPointId,
     /// The statement the loop begins at, when it is not the body's first:
     /// the statements before it run once per call.
-    entry: ?CFStmtId = null,
+    entry: collections.OptionalId(CFStmtId) = .none,
 };
+
+/// An optional `TailCalls` at its own size.
+pub const OptionalTailCalls = collections.OptionalStruct(TailCalls, "head");
 
 /// Which tail-recursion rewrite the TRMC pass (src/lir/trmc.zig) applied to a
 /// proc. Consumed by TRMC debug output, test assertions, and the interpreter's
@@ -1095,13 +1119,28 @@ pub const CrashMessage = union(enum) {
 /// changes one of its fields adds a new row and points the statement at it,
 /// and statements copied from one another share their rows. `none` names no
 /// row; it is valid only for an optional row, whose absence means every field
-/// of the row has its default.
+/// of the row has its default. A row's id is its position in its column plus
+/// one, so a zeroed statement field holds `none`.
 pub fn StmtRowId(comptime T: type) type {
     return enum(u32) {
-        none = std.math.maxInt(u32),
+        none = 0,
         _,
 
+        const Self = @This();
+
         pub const Row = T;
+
+        /// The id of position `index` of the row's column.
+        pub fn fromPosition(index: u32) Self {
+            std.debug.assert(index < std.math.maxInt(u32));
+            return @fromBackingInt(index + 1);
+        }
+
+        /// The position of a row in its column.
+        pub fn position(self: Self) u32 {
+            std.debug.assert(self != .none);
+            return @backingInt(self) - 1;
+        }
     };
 }
 
@@ -1845,21 +1884,21 @@ pub const LirProcSpec = struct {
     /// consumes a non-null transfer; its runtime pointer may be null when the
     /// caller declines reuse. Internal Roc-ABI destination variants preserve
     /// this marker when they forward the same input.
-    erased_reuse_arg: ?LocalId = null,
+    erased_reuse_arg: collections.OptionalId(LocalId) = .none,
     /// Packed explicit-argument layout required by the erased-callable ABI.
-    erased_call_args: ?ErasedCallArgsPlanId = null,
+    erased_call_args: collections.OptionalId(ErasedCallArgsPlanId) = .none,
     /// Complete producer-authored inventory, unique and sorted by LocalId.
     /// Passes adding fresh locals must preserve this ordering.
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
-    body: ?CFStmtId = null,
+    body: collections.OptionalId(CFStmtId) = .none,
     ret_layout: layout.Idx,
     /// Hidden capture-pointer parameter for an erased callable procedure.
-    erased_capture_arg: ?LocalId = null,
+    erased_capture_arg: collections.OptionalId(LocalId) = .none,
     /// For a procedure whose result is dynamic (`ret_layout` is the dynamic
     /// layout): the `result` dynamic local addressing the storage the caller
     /// passes after the explicit arguments.
-    dyn_result: ?LocalId = null,
+    dyn_result: collections.OptionalId(LocalId) = .none,
     abi: ProcAbi = .roc,
     /// The emission unit a direct call must share with this procedure to
     /// demand an ownership variant of it.
@@ -1869,7 +1908,7 @@ pub const LirProcSpec = struct {
     /// and emit only ordinary procedures.
     is_static_initializer: bool = false,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
-    hosted: ?HostedProc = null,
+    hosted: OptionalHostedProc = .none,
     /// The procedure is supplied by another emission unit. Its `rc_*` fields
     /// carry the ownership facts declared by that unit.
     external: bool = false,
@@ -1899,7 +1938,7 @@ pub const LirProcSpec = struct {
     /// symbol has global binding and it is a root of reachability and ARC.
     exported: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
-    tail_calls: ?TailCalls = null,
+    tail_calls: OptionalTailCalls = .none,
     /// Set by the tail-drive pass on an erased-callable procedure with an
     /// `unless_caller_drives` statement: its entry records whether the
     /// erased-call runtime made the call.
@@ -1920,7 +1959,7 @@ pub const LirProcSpec = struct {
     /// passed in memory to a frame-replacing call cannot live in the frame
     /// being replaced, so a backend that passes arguments that way gives
     /// every member of a group one storage contract for them.
-    tail_group: ?TailGroupId = null,
+    tail_group: collections.OptionalId(TailGroupId) = .none,
     /// What the body contains, for pass admission.
     shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.
@@ -1944,12 +1983,16 @@ pub const LirProcSpec = struct {
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: U32Span = U32Span.empty(),
 
+    comptime {
+        std.debug.assert(@sizeOf(LirProcSpec) == 216);
+    }
+
     /// The body ARC analyzes and places reference counts in. A static
     /// initializer is construction-only LIR that the static data
     /// materializer evaluates and no backend emits, so nothing calls it and a
     /// reference count in it would never run: ARC sees it as having none.
     pub fn arcBody(self: *const LirProcSpec) ?CFStmtId {
-        return if (self.is_static_initializer) null else self.body;
+        return if (self.is_static_initializer) null else self.body.get();
     }
 
     /// Whether direct calls pass this procedure the cell it leaves a pending

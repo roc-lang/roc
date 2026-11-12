@@ -24,8 +24,6 @@ platform ""
         "roc_host_store_seed": Host.store_seed!,
         "roc_host_take_seed": Host.take_seed!,
         "roc_host_stored_boxed_call": Host.stored_boxed_call!,
-        "roc_host_release_boxed_iter": Host.release_boxed_iter!,
-        "roc_host_release_boxed_stream": Host.release_boxed_stream!,
         "roc_host_sum_str_bytes": Host.sum_str_bytes!,
         "roc_proc_handle_new": Proc.handle_new!,
         "roc_proc_handle_poll": Proc.handle_poll!,

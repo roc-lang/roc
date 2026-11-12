@@ -344,6 +344,164 @@ tails, **not live virtual usage or RSS**. There is no comparable instrumented
 old-container baseline, so these totals alone cannot prove each migration's
 kill criterion. Commit-ahead remains disabled; its tuning experiment is open.
 
+## Optional-index, epoch, and write-first conversions, 2026-11-09
+
+ReleaseFast, pinned to the performance cores, 180 invocations on a quiet
+machine. The baseline is the tree before the conversions. Corpora: roc-pg,
+roc-pdf at its upstream head (which checks without errors), and a generated
+1,500-function module that checks without errors. Compiler caches were on
+disk. Cold means a fresh compiler cache.
+
+Current tree against baseline, change in instructions (one cold run, median
+of three warm runs):
+
+| Workload | Cold | Warm |
+| --- | ---: | ---: |
+| roc-pg test, specialized | +0.18% | -4.66% |
+| roc-pg test, Boxy | +0.01% | -2.16% |
+| roc-pg build of `examples/small`, Boxy | +0.09% | -1.13% |
+| roc-pdf test, specialized | +0.13% | -4.09% |
+| roc-pdf test, Boxy | -0.03% | -4.48% |
+| roc-pg check, specialized | -0.28% | +0.03% |
+| roc-pdf check, specialized | +0.49% | +0.81% |
+
+Cold build and test are unchanged within noise. The warm build and test rows
+are runs of 0.06 to 0.2 seconds. Peak RSS is between 7.4% lower and 1.7% higher.
+
+Four tuning variants were compared against the current tree on `roc check`
+only, three alternating cold pairs per corpus, so they are diagnostic and do
+not bear on the build/test decision. None moved instructions by more than
+0.5% in either direction: the slot kind packed into the slot word, Linux
+commit-ahead, small-store thresholds of 64K and 1M entries, and a 25%
+reservation estimate. All four settings are unchanged.
+
+Storage work for one cold `roc check` of roc-pg, from the `-Ddev-diagnostics`
+ReleaseFast build of the current tree:
+
+| Counter | Value |
+| --- | ---: |
+| bytes_filled | 86,589,346 |
+| bytes_copied | 16,289,604 |
+| growth_allocations | 937 |
+| mappings / mapped_bytes | 25 / 9,908,224 |
+| reservations / reserved_bytes | 38 / 236,978,176 |
+| reservation_crossings / relocations | 30 / 6 |
+| pages_trimmed | 34,492 |
+| commit_calls / zero_resets | 0 / 0 |
+| epoch_resets / epoch_wraps | 16,977,168 / 0 |
+| scratch_bytes / scratch_resets | 11,568 / 33 |
+
+## Whole-branch comparison with post-edit runs and attribution, 2026-11-10
+
+ReleaseFast with debug information kept, pinned to the performance cores, 168
+invocations. The baseline is main at 1e003132f5 merged with the checker
+codec-entry and diagnostics repair (477821ff0b) and no storage work; the two
+trees differ only in the storage files. The measured tree is 0d1b3f5a07, which
+includes the optional-index sweep recorded under "Lifecycle audit". Host
+policy as above: transparent huge pages `madvise`, defrag `madvise`,
+overcommit 0, no address-space limit.
+
+Every measured and profiled invocation exits 0 on both binaries; the runner
+stops at the first nonzero exit. A compile with warnings exits 2, so each
+corpus compiles with zero errors and zero warnings. The corpora are roc-pdf
+at its upstream head and a copy of roc-pg with three changes: `RowFormat`
+follows the format-owned parser error rule (operations return
+`RowFormat.Err`, and the format has a `missing_field` method); unreachable
+trailing expressions, redundant `return`s and the variables they leave unused
+are removed; and the md5 dependency is a local copy whose `Hasher` type is
+named `Md5Hasher`, because `Hasher` shadows a builtin type. The roc-pg
+`examples/small` build is not used: its platform package reports type
+errors. The build rows are roc-pdf's `examples/business-report`.
+
+Each row is one cold run, the median of three warm runs, and the median of
+three post-edit runs. A post-edit run starts from the warm cache after a new
+top-level `expect` is appended to one mid-level module (`Lex.roc` in roc-pg,
+`KernelDeflate.roc` in roc-pdf), a different `expect` each time. Change in
+instructions, measured tree against baseline:
+
+| Workload | Cold | Warm | Post-edit |
+| --- | ---: | ---: | ---: |
+| roc-pg test, specialized | -4.61% | -12.36% | -3.94% |
+| roc-pg test, Boxy | -2.03% | -12.61% | -1.21% |
+| roc-pdf build, specialized | -6.43% | -7.15% | -6.80% |
+| roc-pdf build, Boxy | -2.73% | -7.12% | -3.41% |
+| roc-pdf test, specialized | -4.75% | -13.25% | -3.93% |
+| roc-pdf test, Boxy | -0.40% | -13.32% | -0.08% |
+| roc-pg check (diagnostic) | -4.62% | -5.26% | -4.03% |
+| roc-pdf check (diagnostic) | -6.87% | -7.69% | -7.19% |
+
+The three post-edit runs of a row differ from each other by under 1% on the
+baseline and under 1.7% on the measured tree. Peak RSS is 0.6% to 8.4% lower
+in every row. Minor faults are lower in every row except the cold and
+post-edit specialized roc-pg test (+0.9%, +0.4%); the Boxy rows drop 15% to
+25% post-edit and the warm test rows 37% to 40%. Warm test and warm Boxy build rows are runs of 0.07 to 0.33 CPU seconds.
+
+Attribution from `perf record` with LBR call graphs on the cold specialized
+test runs, share of cycles:
+
+| Symbol | roc-pg base | roc-pg measured | roc-pdf base | roc-pdf measured |
+| --- | ---: | ---: | ---: | ---: |
+| `memcpy` | 7.32% | 4.89% | 4.79% | 2.99% |
+| `memset` | 0.47% | 0.58% | 0.33% | 0.36% |
+| kernel page zeroing (`kernel_init_pages`) | 1.93% | 1.89% | 0.69% | 0.75% |
+| page fault entry | 0.39% | 0.34% | 0.30% | 0.30% |
+| all kernel | 8.17% | 8.54% | 4.94% | 5.19% |
+
+Fill time and fault time were under 3% of the baseline together and did not
+move. The gain is copy time. By immediate caller, the `memcpy` samples that
+disappear are in Monotype lowering's `scopedNode`, `probeInstNode` and
+`runInst` and in `CheckedTypeStoreView.canonicalId` (2.5% of roc-pg cycles on
+the baseline, 0.2% on the measured tree; 1.3% to 0.1% on roc-pdf). Those
+functions call the checked type store view's key and canonical-id methods,
+which take the view by pointer on this branch and took it by value, copying
+the view on every call, on the baseline. No other caller's `memcpy` share
+moves by more than 0.1%, so growth copies in the converted tables are not a
+measurable part of either profile.
+
+The `memcpy` that remains on the measured tree has no caller above 0.6% of
+roc-pg cycles. The largest are byte appends of digests and names
+(`IdentityWriter.raw` 0.56%, Monotype `computeDigest` and its collect sink
+0.67%, `recursive_digest` 0.25%, `Type.Store.addFields` 0.20%); none is a
+by-value copy of a view or store.
+
+The same profile shows one cost outside the storage tables: a worklist
+`append` called from `InstGraph.unifyConcrete` is 2.2% of roc-pg cycles on
+both trees, and 69% of its samples are on the instruction after an
+eight-byte load of a `NodePair` whose two four-byte ids the caller has just
+stored. `pushPair` stores each field into the new list slot. With it the
+`append` leaves the profile, `addOne` is 0.6% and `unifyConcrete` rises from
+2.2% to 2.7%. Against a control binary of the same tree without `pushPair`,
+instructions are unchanged (within 0.5%) and task-clock time is:
+
+| Workload | Cold | Post-edit |
+| --- | ---: | ---: |
+| roc-pg test, specialized | -1.86% | -0.87% |
+| roc-pg test, Boxy | -1.12% | -5.65% |
+| roc-pdf test, specialized | -1.61% | +0.22% |
+| roc-pdf test, Boxy | -0.25% | -0.02% |
+
+The three post-edit specialized roc-pg runs with `pushPair` are each faster
+than all three control runs (21.41 to 21.50 s against 21.53 to 21.69 s). The
+post-edit Boxy roc-pg row is a 0.9-second run.
+
+Storage work for cold roc-pg runs of the measured tree, from the
+`-Ddev-diagnostics` ReleaseFast build:
+
+| Counter | check | test, specialized |
+| --- | ---: | ---: |
+| bytes_filled | 89,981,721 | 158,520,329 |
+| bytes_copied | 16,207,716 | 16,207,716 |
+| growth_allocations | 933 | 933 |
+| mappings / mapped_bytes | 25 / 9,908,224 | 25 / 9,908,224 |
+| reservations / reserved_bytes | 38 / 236,978,176 | 38 / 236,978,176 |
+| reservation_crossings / relocations | 30 / 6 | 30 / 6 |
+| pages_trimmed | 34,492 | 34,492 |
+| epoch_resets / epoch_wraps | 16,977,172 / 0 | 27,989,383 / 0 |
+| scratch_bytes / scratch_resets | 11,568 / 33 | 11,568 / 33 |
+
+`bytes_filled` counts only fills made through the shared primitives, so it
+rises as tables move onto them.
+
 ## Lifecycle audit
 
 | Area | Decision and reason |
@@ -373,12 +531,14 @@ declarations. It rejects fills through those owners and optional allocations
 for named index types with an existing compact column in that file. It does
 not perform cross-file Zig type inference or prove lifetimes.
 
-Still open: eligible optional-index tables in checked-artifact construction,
-Monotype lowering, solved lowering, compile-time finalization and remaining
-LIR passes; repeated solver/SCC scratch; remaining scatter suffix conversions;
-reservation sizing/commit-ahead tuning; per-site performance attribution;
-the complete cold/warm/post-edit check/build/test corpus matrix. These are not
-silently relabeled as measured keeps.
+The optional-index sweep is complete: every table whose entries are a single
+typed index is a four-byte column or a slice of four-byte optional ids, in
+Boxy, Monotype, solved lowering, static data, compile-time finalization, the
+checker, the parser and the CLI test planner. The tables that keep an
+optional or sentinel form hold pointers, structs, spans, strings, tagged
+operands, addresses or flag bytes, or are append-only stacks and lists never
+looked up by index. The statement and projection sentinel tables in
+`arc_dismantle.zig` are four bytes already and filled once per pass.
 
 roc-pdf's Unicode iterator compatibility fix was validated in an isolated
 copy, not persisted to its repository. Observatory's saved baseline has 77

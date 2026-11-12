@@ -96,7 +96,7 @@ test "a template's stored sealed slots match the independent scalar oracle" {
         const sealed_slots = templates.templateSealedSlots(template);
         for (templates.templateSchemeVars(template), 0..) |variable, slot| {
             switch (artifact.checked_types.view().payload(variable)) {
-                .flex => |flex| if (flex.uncommitted_record_tail) {
+                .flex => |flex| if (flex.row_tail == .uncommitted_record) {
                     tails += 1;
                     if (std.mem.findScalar(u32, sealed_slots, @intCast(slot)) != null) sealed_tails += 1;
                 },
@@ -110,7 +110,7 @@ test "a template's stored sealed slots match the independent scalar oracle" {
 
 fn findTemplate(artifact: *const CheckedArtifact.CheckedModuleArtifact, name: []const u8) ?*const CheckedArtifact.CheckedProcedureTemplate {
     for (artifact.checked_procedure_templates.templates.items) |*template| {
-        const export_name = artifact.canonical_names.procBase(template.proc_base).export_name orelse continue;
+        const export_name = artifact.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
         if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) return template;
     }
     return null;
