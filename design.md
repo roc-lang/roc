@@ -12370,12 +12370,16 @@ twice and never field by field at the call site of the method:
 
 A value binding's open row closes when its module finishes checking (Value
 Rows: Uses Share One Row), which decides the requirements still pending on
-it against the plain type. So does any open row holding requirements that no
-use can supply a type for: at a definition's generalization boundary, an open
-row of the definition's rank that no binding of the boundary reaches (the
-row of an argument a body passes, `is_red(Fn(|x| x + 1))` inside `check`)
-closes and is decided there, and an open row no scheme quantified (in an
-`expect`, or a top-level value) closes when the module finishes. A
+it against the plain type. An open row holding requirements that no use can
+supply a type for is decided against the plain type too: at a definition's
+generalization boundary, an open row of the definition's rank that no binding
+of the boundary reaches (the row of an argument a body passes,
+`is_red(Fn(|x| x + 1))` inside `check`), and when the module finishes, an open
+row no scheme quantified (in an `expect`). Such a row is bounded rather than
+closed (Polarity's bounded row): nothing extends it or makes its value a
+nominal type, its requirements leave it as they are decided, and it stays a
+variable that later stages close as they close every unreached row, so its
+values' types are no more concrete to checking than an unconstrained row's. A
 requirement keeps the expression it was first held with as the place its
 failure is reported: for one a use copied from a scheme, that use.
 
@@ -14326,6 +14330,13 @@ Other solved-graph mutations:
   rigid). Tests pin the accepted side (a call on the annotated value checks
   against the clause, and each use decides it) and the rejected side (a body
   method call the clause lacks is reported against the annotation).
+- `decideOpenRowAsPlain`—policy: Methods On Open Rows (above). At a
+  generalization boundary and when the module finishes, an open row whose
+  requirements no use can answer has them removed from its class
+  (`Store.setVarContent`) and queued on the value they are about, and the row
+  is bounded (`Store.markBoundedRowExt`), so they are decided against the plain
+  type. Tests pin the plain decision (a function payload reported at the call
+  inside a function body) and the refusal to make the value nominal.
 - `commitComparedRowTail` / `Store.markComparedPlain`—policy: Methods On Open
   Rows (above). Comparing or hashing a record or tag union that ends in an
   uncommitted tail, at its definition's boundary, commits the tail by

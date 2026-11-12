@@ -14850,7 +14850,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
     try self.commitUncommittedTails(&env);
-    try self.closeOpenRowsHoldingRequirements(&env);
+    try self.decideOpenRowsAtModuleEnd(&env);
     if (try self.anyDeferredDispatchReceiverResolved(&env)) {
         try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
@@ -20786,7 +20786,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
     try self.commitUncommittedTails(&env);
-    try self.closeOpenRowsHoldingRequirements(&env);
+    try self.decideOpenRowsAtModuleEnd(&env);
     if (try self.anyDeferredDispatchReceiverResolved(&env)) {
         try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
@@ -44812,7 +44812,6 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
 
     try self.relateSameMethodRequirementsAtBoundary(roots, env);
     try self.relateUndischargedInterpolationParts(env);
-    try self.closeUnreachedOpenRowsAtBoundary(roots, env);
     try self.decidePlainMethodsAtBoundary(env);
 
     try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
@@ -44918,6 +44917,7 @@ fn quiesceSchemeRequirementsAtBoundary(
             try self.checkStaticDispatchConstraints(env, false);
             try self.checkAllConstraints(env);
         }
+        try self.decideUnreachedOpenRowsAtBoundary(roots, env);
         try self.checkGroundedSchemeRequirementsAtBoundary(env);
         try self.captureSchemeDispatchRequirements(roots, env, boundary_codecs);
         if (boundary_codecs.items.len == 0) break;
@@ -54565,26 +54565,24 @@ fn rowHoldsRequirement(self: *Self, row: Var, fn_var: Var) bool {
     return false;
 }
 
-/// Close every open row still holding requirements that no scheme
-/// quantified, once the module has solved: nothing can widen it any more,
-/// so it is the plain record or tag union its fields or tags make, and
-/// closing it decides its requirements against that type (design.md
+/// Decide the requirements every open row no scheme quantified still holds,
+/// once the module has solved: nothing can widen it any more, so its value
+/// is the plain record or tag union its fields or tags make (design.md
 /// "Methods On Open Rows").
-fn closeOpenRowsHoldingRequirements(self: *Self, env: *Env) Allocator.Error!void {
+fn decideOpenRowsAtModuleEnd(self: *Self, env: *Env) Allocator.Error!void {
     for (self.open_row_holders.items) |holder| {
         const resolved = self.types.resolveVar(holder);
         if (resolved.desc.rank == .generalized) continue;
-        _ = try self.closeOpenRowHoldingRequirements(resolved.var_, env);
+        _ = try self.decideOpenRowAsPlain(resolved.var_, env);
     }
 }
 
-/// Close every open row of this boundary's rank still holding requirements
-/// that no root reaches: no use of the bindings can supply its type, so it
-/// is the plain record or tag union its fields or tags make, and its
-/// requirements are decided against that type in this definition (design.md
-/// "Methods On Open Rows"). The rows the boundary has already decided or
-/// generalized leave the list.
-fn closeUnreachedOpenRowsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
+/// Decide the requirements every open row of this boundary's rank holds
+/// that no root reaches: no use of the bindings can supply its type, so its
+/// value is the plain record or tag union its fields or tags make, decided
+/// in this definition (design.md "Methods On Open Rows"). The rows the
+/// boundary has already decided or generalized leave the list.
+fn decideUnreachedOpenRowsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
     if (self.open_row_holders.items.len == 0) return;
     std.debug.assert(self.probe_depth == 0 and !self.commit_probe_active);
     const rank = env.rank();
@@ -54603,41 +54601,53 @@ fn closeUnreachedOpenRowsAtBoundary(self: *Self, roots: []const BoundaryRoot, en
     var reached = collections.DenseMap(Var, void).init(self.gpa);
     defer reached.deinit();
     for (roots) |root| try self.collectReachableVars(root.interface, &reached);
-    var closed = false;
+    var decided = false;
     var index: usize = 0;
     while (index < self.open_row_holders.items.len) : (index += 1) {
         const resolved = self.types.resolveVar(self.open_row_holders.items[index]);
         if (resolved.desc.rank != rank or reached.contains(resolved.var_)) continue;
-        if (try self.closeOpenRowHoldingRequirements(resolved.var_, env)) closed = true;
+        if (try self.decideOpenRowAsPlain(resolved.var_, env)) decided = true;
     }
-    if (closed) {
+    if (decided) {
         try self.checkStaticDispatchConstraints(env, false);
         try self.checkAllConstraints(env);
     }
 }
 
-/// Close `row` to the empty row of its kind when it is still a flex row
-/// variable holding requirements; returns whether it did.
-fn closeOpenRowHoldingRequirements(self: *Self, row: Var, env: *Env) Allocator.Error!bool {
+/// Decide the requirements the flex row `row` holds against the plain record
+/// or tag union each is about, when no use can supply its type any more. The
+/// row is bounded: nothing extends it or makes its value a nominal type, so
+/// the value is the plain record or tag union of the fields or tags it has,
+/// and the row stays a variable for later stages to close, as every
+/// unreached row does. Returns whether the row held any.
+fn decideOpenRowAsPlain(self: *Self, row: Var, env: *Env) Allocator.Error!bool {
     const resolved = self.types.resolveVar(row);
     const flex = switch (resolved.desc.content) {
         .flex => |flex| flex,
         .rigid, .alias, .structure, .err, .field_presence => return false,
     };
-    const held = for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-        if (constraint.receiver == .open_row_value) break constraint;
-    } else return false;
-    // A receiver a type error replaced leaves nothing to decide.
-    const empty_row: Content = switch (self.types.resolveThroughAliases(self.openRowValueReceiver(held)).desc.content) {
-        .structure => |flat| switch (flat) {
-            .record => .{ .structure = .empty_record },
-            .tag_union => .{ .structure = .empty_tag_union },
-            .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return false,
-        },
-        .flex, .rigid, .alias, .err, .field_presence => return false,
-    };
-    const empty = try self.freshFromContent(empty_row, env, self.getRegionAt(resolved.var_));
-    _ = try self.unify(resolved.var_, empty, env);
+    var kept: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
+    defer kept.deinit(self.gpa);
+    var decided = false;
+    var constraints = self.types.static_dispatch_constraints.iterRange(flex.constraints);
+    while (constraints.next()) |constraint| {
+        if (constraint.receiver != .open_row_value) {
+            try kept.append(self.gpa, constraint);
+            continue;
+        }
+        decided = true;
+        var at_value = constraint;
+        at_value.receiver = .holder;
+        _ = try env.deferred_static_dispatch_constraints.append(self.gpa, .{
+            .var_ = self.openRowValueReceiver(constraint),
+            .constraints = try self.types.appendStaticDispatchConstraints(&.{at_value}),
+            .failure_expr = self.open_row_failure_exprs.get(constraint.fn_var) orelse .none,
+        });
+    }
+    if (!decided) return false;
+    const range = try self.types.appendStaticDispatchConstraints(kept.items);
+    try self.types.setVarContent(resolved.var_, .{ .flex = flex.withConstraints(range) });
+    try self.types.markBoundedRowExt(resolved.var_);
     return true;
 }
 
