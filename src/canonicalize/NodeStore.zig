@@ -478,6 +478,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "type_module_missing_matching_type", .tag = .diag_type_module_missing_matching_type, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
     .{ .cir = "type_module_has_alias_not_nominal", .tag = .diag_type_module_has_alias_not_nominal, .payload = "diag_single_ident", .names = &.{"module_name"} },
     .{ .cir = "default_app_missing_main", .tag = .diag_default_app_missing_main, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
+    .{ .cir = "module_name_reserved", .tag = .diag_module_name_reserved, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
     .{ .cir = "default_app_wrong_arity", .tag = .diag_default_app_wrong_arity, .payload = "diag_single_value", .names = &.{"arity"} },
     .{ .cir = "cannot_import_default_app", .tag = .diag_cannot_import_default_app, .payload = "diag_single_ident", .names = &.{"module_name"} },
     .{ .cir = "type_name_case_mismatch", .tag = .diag_type_name_case_mismatch, .payload = "diag_two_idents", .names = &.{ "module_name", "type_name" } },
@@ -733,6 +734,7 @@ const DiagnosticNodeTag = enum {
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
+    diag_module_name_reserved,
     diag_default_app_wrong_arity,
     diag_cannot_import_default_app,
     diag_type_name_case_mismatch,
@@ -1247,7 +1249,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 95;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 96;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5361,6 +5363,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .type_module_missing_matching_type,
         .type_module_has_alias_not_nominal,
         .default_app_missing_main,
+        .module_name_reserved,
         .default_app_wrong_arity,
         .cannot_import_default_app,
         .type_name_case_mismatch,
@@ -5533,6 +5536,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_type_module_missing_matching_type,
         .diag_type_module_has_alias_not_nominal,
         .diag_default_app_missing_main,
+        .diag_module_name_reserved,
         .diag_default_app_wrong_arity,
         .diag_cannot_import_default_app,
         .diag_type_name_case_mismatch,

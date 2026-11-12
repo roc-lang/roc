@@ -3461,6 +3461,29 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .module_name_reserved => |data| blk: {
+            var report = try Report.init(allocator, "Reserved Module Name", "", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.headline.addText("This file is named ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(".roc, but ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(" is the name of a builtin type.");
+
+            try report.document.addReflowingText("Module names that match builtin types are reserved for those types, so no module can be named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreaks(2);
+            try report.document.addReflowingText("Rename this module to something else.");
+            try report.document.addLineBreak();
+
+            try report.setFile(filename);
+
+            break :blk report;
+        },
         .default_app_missing_main => blk: {
             var report = try Report.init(allocator, "Missing `main!` Function", "", .runtime_error);
             try report.headline.addReflowingText("This file has no header and declares no types, so it is a default app, but it has no ");

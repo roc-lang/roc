@@ -979,6 +979,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .module_name_reserved = .{
+            .module_name = rand_ident_idx(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .default_app_wrong_arity = .{
             .arity = 2,
             .region = rand_region(),

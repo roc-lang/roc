@@ -120,6 +120,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));
     std.testing.refAllDecls(@import("test/type_view_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9705_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12720_test.zig"));
     std.testing.refAllDecls(@import("test/builtin_type_shadowing_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9709_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9710_test.zig"));

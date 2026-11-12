@@ -233,6 +233,7 @@ pub const Tag = enum {
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
+    diag_module_name_reserved,
     diag_default_app_wrong_arity,
     diag_cannot_import_default_app,
     diag_type_name_case_mismatch,

@@ -2962,6 +2962,9 @@ fn pushTypeShadowingWarning(
 ) std.mem.Allocator.Error!void {
     switch (shadowed) {
         .external_nominal => |external| if (self.externalTypeBindingIsCompilerBuiltin(external)) {
+            // A type named after a reserved module name is already covered by
+            // the module's `module_name_reserved` error.
+            if (name_ident.eql(self.env.display_module_name_idx) and self.moduleNameIsReserved()) return;
             try self.env.pushDiagnostic(Diagnostic{ .builtin_type_shadowed_warning = .{
                 .name = name_ident,
                 .region = region,
@@ -4802,6 +4805,10 @@ pub fn canonicalizeFile(
             self.env.module_kind = .malformed;
             // Skip malformed headers
         },
+    }
+
+    if (self.moduleNameIsReserved()) {
+        try self.pushModuleFileDiagnostic(.module_name_reserved);
     }
 
     // Track the start of scratch defs and statements
@@ -6672,6 +6679,18 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
             .type_aliases = type_aliases_range,
         });
     }
+}
+
+/// Builtin type names are reserved module names: `import Bool` must always
+/// mean the builtin, so an importable module (type, regular, or hosted) may
+/// not take one as its name. The names are exactly the auto-imported builtin
+/// types; the Builtin module itself auto-imports nothing, so it is exempt.
+fn moduleNameIsReserved(self: *const Self) bool {
+    const importable = switch (self.env.module_kind) {
+        .type_module, .module, .hosted => true,
+        .default_app, .app, .package, .platform, .malformed => false,
+    };
+    return importable and self.hasBuiltinAutoImportedType(self.env.display_module_name_idx);
 }
 
 fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {

@@ -3453,6 +3453,20 @@ canonicalization output explicit, keeps diagnostics in `Can`, and keeps release
 builds fast: the work runs once per source suffix or type declaration, with no
 runtime cost in the compiled program.
 
+### Reserved Module Names
+
+Every auto-imported builtin type name (`Bool`, `Str`, `List`, `U8`, and the
+rest of the builtin auto-import table) is a reserved module name, so a
+qualified name such as `Bool.not` or an `import Bool` always means the builtin.
+`canonicalizeFile` reports a single file-level `module_name_reserved` error for
+any importable module (type module, `module`-header module, or hosted module)
+named after one. The reserved set is exactly the builtin auto-import table;
+there is no second list. The Builtin module auto-imports nothing and is exempt.
+Because the error already explains the name, the module's own type of that
+name does not also report `builtin_type_shadowed_warning`. Qualified lookup
+and platform hosted resolution consult the builtin auto-import table before
+user imports; that order is correct only because these names are reserved.
+
 ### Control Flow and Var Writes Inside `expect`
 
 An `expect` body must never move control flow outside the `expect`. Optimized
