@@ -487,6 +487,14 @@ const Builder = struct {
         return self.store.addCFStmt(.{ .set_local = .{ .target = target, .value = value, .mode = mode, .next = next } }, .test_fixture);
     }
 
+    fn incref(self: *Builder, value: LocalId, next: CFStmtId) TestError!CFStmtId {
+        return self.store.addCFStmt(.{ .incref = .{
+            .value = value,
+            .rc = .{ .concrete = .{ .op = .incref, .layout_idx = self.store.getLocal(value).layout_idx } },
+            .next = next,
+        } }, .test_fixture);
+    }
+
     fn decref(self: *Builder, value: LocalId, next: CFStmtId) TestError!CFStmtId {
         return self.store.addCFStmt(.{ .decref = .{
             .value = value,
@@ -1075,6 +1083,217 @@ test "boxy wasm: list operations through an element descriptor" {
     const procs = try buildListProgram(&b);
     try expectWasmInt(&b, procs[0], .u64, 2);
     try expectWasmStr(&b, procs[1], "second");
+}
+
+/// The item types the unsafe list writes are checked over: one of each size
+/// class a descriptor-guided copy distinguishes, with and without refcounted
+/// content.
+const WriteItem = enum {
+    zero_sized,
+    u8,
+    i64,
+    i64_pair,
+    str,
+    str_pair,
+
+    const first_text = "the first heap string of a list item under test";
+    const second_text = "the second heap string of a list item under test";
+    const text_split = 20;
+
+    fn isPair(self: WriteItem) bool {
+        return self == .i64_pair or self == .str_pair;
+    }
+
+    fn field(self: WriteItem) layout_mod.Idx {
+        return switch (self) {
+            .zero_sized => unreachable, // a zero-sized item has no bytes to read back
+            .u8 => .u8,
+            .i64, .i64_pair => .i64,
+            .str, .str_pair => .str,
+        };
+    }
+
+    fn fieldDesc(self: WriteItem, b: *Builder) *const TypeDesc {
+        return switch (self) {
+            .zero_sized => unreachable, // a zero-sized item has no fields
+            .u8 => boxy.desc.scalarDesc(.u8),
+            .i64, .i64_pair => boxy.desc.scalarDesc(.i64),
+            .str, .str_pair => b.descs.str(),
+        };
+    }
+
+    fn desc(self: WriteItem, b: *Builder) *const TypeDesc {
+        return switch (self) {
+            .zero_sized => boxy.desc.zstDesc(),
+            .u8, .i64, .str => self.fieldDesc(b),
+            .i64_pair, .str_pair => b.descs.record(&.{
+                .{ .name = &name_a, .desc = self.fieldDesc(b) },
+                .{ .name = &name_b, .desc = self.fieldDesc(b) },
+            }),
+        };
+    }
+};
+
+/// `target` = `text` as a string the program allocates, so a result holding
+/// it outlives the compiled image.
+fn heapStr(b: *Builder, target: LocalId, comptime text: []const u8, next: CFStmtId) TestError!CFStmtId {
+    const left = try b.local(.str);
+    const right = try b.local(.str);
+    return b.str(left, text[0..WriteItem.text_split], try b.str(right, text[WriteItem.text_split..], try b.lowLevel(target, .str_concat, &.{ left, right }, false, try b.decref(right, next))));
+}
+
+/// A procedure that appends one item three times to a list with room for
+/// three, retaining the item before each further append as a loop appending
+/// one value does. It returns the list's length, or the last item (the second
+/// field of a pair) read back.
+fn buildAppendProgram(b: *Builder, item: WriteItem, read_back: bool) TestError!LirProcSpecId {
+    const elem_desc = try b.local(.opaque_ptr);
+    const field_desc = try b.local(.opaque_ptr);
+    const list_desc = try b.local(.opaque_ptr);
+    const x = try b.dynLocal(elem_desc, .frame);
+    const capacity = try b.local(.u64);
+    const empty = try b.dynLocal(list_desc, .frame);
+    const one = try b.dynLocal(list_desc, .frame);
+    const two = try b.dynLocal(list_desc, .frame);
+    const three = try b.dynLocal(list_desc, .frame);
+
+    const tail: CFStmtId = if (!read_back) blk: {
+        const out = try b.local(.u64);
+        break :blk try b.lowLevel(out, .list_len, &.{ three, elem_desc }, true, try b.decref(three, try b.ret(out)));
+    } else blk: {
+        const index = try b.local(.u64);
+        const elem = try b.dynLocal(elem_desc, .frame);
+        const out = try b.local(item.field());
+        const released = try b.decref(three, try b.ret(out));
+        const read: CFStmtId = if (item.isPair()) pair: {
+            // The retained item outlives the list; its first field is
+            // released and its second returned.
+            const first = try b.dynLocal(field_desc, .view);
+            const second = try b.dynLocal(field_desc, .view);
+            break :pair try b.incref(elem, try b.decref(three, try b.dyn(first, .{ .field_addr = .{ .base = elem, .desc = elem_desc, .field_index = .{ .immediate = 0 } } }, try b.decref(first, try b.dyn(second, .{ .field_addr = .{ .base = elem, .desc = elem_desc, .field_index = .{ .immediate = 1 } } }, try b.dyn(out, .{ .copy = .{ .src = second, .desc = field_desc } }, try b.ret(out)))))));
+        } else try b.incref(elem, try b.dyn(out, .{ .copy = .{ .src = elem, .desc = elem_desc } }, released));
+        break :blk try b.int(index, 2, try b.lowLevel(elem, .list_get_unsafe, &.{ three, index, elem_desc }, true, read));
+    };
+
+    const appends = try b.int(capacity, 3, try b.lowLevel(empty, .list_with_capacity, &.{ capacity, elem_desc }, true, try b.lowLevel(one, .list_append_unsafe, &.{ empty, x, elem_desc }, true, try b.incref(x, try b.lowLevel(two, .list_append_unsafe, &.{ one, x, elem_desc }, true, try b.incref(x, try b.lowLevel(three, .list_append_unsafe, &.{ two, x, elem_desc }, true, tail)))))));
+
+    const built: CFStmtId = switch (item) {
+        .zero_sized => appends,
+        .u8, .i64 => blk: {
+            const value = try b.local(item.field());
+            break :blk try b.int(value, 41, try b.setLocal(x, value, .replace_existing, appends));
+        },
+        .str => blk: {
+            const value = try b.local(.str);
+            break :blk try heapStr(b, value, WriteItem.second_text, try b.setLocal(x, value, .replace_existing, appends));
+        },
+        .i64_pair, .str_pair => blk: {
+            const first_value = try b.local(item.field());
+            const second_value = try b.local(item.field());
+            const first = try b.dynLocal(field_desc, .frame);
+            const second = try b.dynLocal(field_desc, .frame);
+            const record = try b.setLocal(first, first_value, .replace_existing, try b.setLocal(second, second_value, .replace_existing, try b.dyn(x, .{ .record = .{ .desc = elem_desc, .fields = try b.span(&.{ first, second }) } }, appends)));
+            break :blk if (item == .str_pair)
+                try heapStr(b, first_value, WriteItem.first_text, try heapStr(b, second_value, WriteItem.second_text, record))
+            else
+                try b.int(first_value, 40, try b.int(second_value, 41, record));
+        },
+    };
+    const item_desc = item.desc(b);
+    const body = try b.static(elem_desc, .{ .desc = item_desc }, try b.static(field_desc, .{ .desc = if (item == .zero_sized) item_desc else item.fieldDesc(b) }, try b.static(list_desc, .{ .desc = b.descs.list(item_desc) }, try b.dyn(null, .frame_alloc, built))));
+    return b.proc(&.{}, body, if (read_back) item.field() else .u64, .{});
+}
+
+test "boxy unsafe list appends agree across backends for every item size" {
+    inline for (.{ WriteItem.zero_sized, WriteItem.u8, WriteItem.i64, WriteItem.i64_pair, WriteItem.str, WriteItem.str_pair }) |item| {
+        var b = try Builder.init(.native);
+        defer b.deinit();
+        const len = try buildAppendProgram(&b, item, false);
+        const last: ?LirProcSpecId = if (item == .zero_sized) null else try buildAppendProgram(&b, item, true);
+
+        var run: Run = undefined;
+        try run.init(&b);
+        defer run.deinit();
+        try std.testing.expectEqual(@as(u64, 3), (try run.eval(len, .u64)).value.read(u64));
+        if (last) |proc_id| {
+            const result = try run.eval(proc_id, item.field());
+            switch (item.field()) {
+                .u8 => try std.testing.expectEqual(@as(u8, 41), result.value.read(u8)),
+                .i64 => try std.testing.expectEqual(@as(i64, 41), result.value.read(i64)),
+                .str => {
+                    try std.testing.expectEqualStrings(WriteItem.second_text, readStr(result.value));
+                    run.interpreter.dropValue(result.value, .str);
+                },
+                else => unreachable, // `WriteItem.field` yields only these layouts
+            }
+        }
+        try run.env.checkForLeaks();
+    }
+}
+
+/// A procedure that overwrites the second of two `I64` items in place and
+/// reads it back.
+fn buildMapWriteProgram(b: *Builder) TestError!LirProcSpecId {
+    const elem_desc = try b.local(.opaque_ptr);
+    const list_desc = try b.local(.opaque_ptr);
+    const values = .{ try b.local(.i64), try b.local(.i64), try b.local(.i64) };
+    const x = try b.dynLocal(elem_desc, .frame);
+    const y = try b.dynLocal(elem_desc, .frame);
+    const z = try b.dynLocal(elem_desc, .frame);
+    const list = try b.dynLocal(list_desc, .frame);
+    const written = try b.dynLocal(list_desc, .frame);
+    const index = try b.local(.u64);
+    const elem = try b.dynLocal(elem_desc, .frame);
+    const out = try b.local(.i64);
+    const tail = try b.int(index, 1, try b.lowLevel(written, .list_map_write_unsafe, &.{ list, index, z, elem_desc }, true, try b.lowLevel(elem, .list_get_unsafe, &.{ written, index, elem_desc }, true, try b.dyn(out, .{ .copy = .{ .src = elem, .desc = elem_desc } }, try b.decref(written, try b.ret(out))))));
+    const body = try b.static(elem_desc, .{ .desc = boxy.desc.scalarDesc(.i64) }, try b.static(list_desc, .{ .desc = b.descs.list(boxy.desc.scalarDesc(.i64)) }, try b.dyn(null, .frame_alloc, try b.int(values[0], 5, try b.int(values[1], 6, try b.int(values[2], 9, try b.setLocal(x, values[0], .replace_existing, try b.setLocal(y, values[1], .replace_existing, try b.setLocal(z, values[2], .replace_existing, try b.dyn(list, .{ .list = .{ .elem_desc = elem_desc, .elems = try b.span(&.{ x, y }) } }, tail))))))))));
+    return b.proc(&.{}, body, .i64, .{});
+}
+
+test "boxy unsafe list item writes agree across backends" {
+    var b = try Builder.init(.native);
+    defer b.deinit();
+    const proc_id = try buildMapWriteProgram(&b);
+
+    var run: Run = undefined;
+    try run.init(&b);
+    defer run.deinit();
+    try std.testing.expectEqual(@as(i64, 9), (try run.eval(proc_id, .i64)).value.read(i64));
+    try run.env.checkForLeaks();
+}
+
+/// Workers whose one list operation is an unsafe write through an element
+/// descriptor: an append, and a write at an index.
+fn buildListWriteWorkers(b: *Builder) TestError![2]LirProcSpecId {
+    var workers: [2]LirProcSpecId = undefined;
+    inline for (.{ false, true }, 0..) |at_index, slot| {
+        const elem_desc = try b.local(.opaque_ptr);
+        const list_desc = try b.local(.opaque_ptr);
+        const list = try b.dynLocal(list_desc, .param);
+        const x = try b.dynLocal(elem_desc, .param);
+        const index = try b.local(.u64);
+        const result = try b.dynLocal(list_desc, .result);
+        const write = if (at_index)
+            try b.lowLevel(result, .list_map_write_unsafe, &.{ list, index, x, elem_desc }, true, try b.ret(result))
+        else
+            try b.lowLevel(result, .list_append_unsafe, &.{ list, x, elem_desc }, true, try b.ret(result));
+        workers[slot] = try b.proc(&.{ list, x, index, elem_desc, list_desc }, try b.dyn(null, .frame_alloc, write), b.dynamic, .{ .dyn_result = result });
+    }
+    return workers;
+}
+
+test "issue 12889: the dev backend writes a list item without a list operation request" {
+    if (comptime !backend.host_lir_codegen_available) return;
+    var b = try Builder.init(.native);
+    defer b.deinit();
+    for (try buildListWriteWorkers(&b)) |worker| {
+        var codegen = try backend.HostLirCodeGen.init(allocator, &b.store, &b.layouts, .{}, .default);
+        defer codegen.deinit();
+        try codegen.emitProcFragment(worker);
+        for (codegen.getSymbolNames()) |symbol| {
+            try std.testing.expect(!std.mem.eql(u8, symbol, "roc_desc_list_op"));
+        }
+    }
 }
 
 /// A caller of `\(x) -> x`, a worker over a type variable whose type table

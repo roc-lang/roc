@@ -473,6 +473,15 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
+This rule has exactly one exception. For an `incref` or `decref` of a dynamic
+local, the native dev backend may read the `contains_refcounted` flag of the
+local's descriptor and skip the call to `roc_desc_incref` or `roc_desc_decref`
+when the flag is clear ("Ownership" under "Dynamic Values In LIR"). The helper
+would return at once for such a descriptor, so the skip changes no reference
+count and decides nothing: the explicit statement still fully determines what
+happens. No other backend code reads reference-counting facts, and there is no
+other exception.
+
 Walks over post-check types and values must have an explicit termination
 argument. A structure reachable after checking can be
 self-referential—a recursive nominal's backing, or the fixpoint value of a
@@ -14922,13 +14931,14 @@ descriptor explicitly as an operand:
   `Box` whose payload `desc` describes, and `dyn_slot_store(dst, slot, value,
   desc)` moves the built value into it ("Recursive values" above).
 
-The native dev backend emits five of these operations inline, reading the
+The native dev backend emits seven of these operations inline, reading the
 same descriptor fields the runtime helper reads, and calls the helper only
 for the cases listed:
 
-- `dyn_copy` loads `size` and copies a 1-, 2-, 4-, 8-, or 16-byte value with
-  loads and then stores, copies nothing for size 0, and calls `roc_desc_copy`
-  for every other size.
+- `dyn_copy` loads `size` and copies a 1-, 2-, 4-, 8-, 16-, or 24-byte value
+  with loads and then stores, copies nothing for size 0, and calls
+  `roc_desc_copy` for every other size. A `set_local` of a dynamic local is
+  the same copy.
 - `dyn_list_item_addr` is the list's bytes plus `index` times `size`. A
   zero-sized item calls `roc_desc_list_item_addr`, whose address it is.
 - `dyn_field_addr` with an immediate source-field index follows nominal `child`
@@ -14942,11 +14952,18 @@ for the cases listed:
 - `list_get_unsafe`, `list_map_extract_unsafe`, and `list_move_out_unsafe`
   with an item descriptor write nothing for a zero-sized item or a list
   without bytes. Otherwise they copy the item as `dyn_copy` does.
+- `list_append_unsafe` and `list_map_write_unsafe` with an item descriptor
+  copy the item into the list's bytes as `dyn_copy` does, at the list's
+  length or at the given index, and write the list's three words to the
+  target with the length one greater for an append. A zero-sized item copies
+  nothing, and appending one writes a list with no bytes and no capacity.
+- `incref` and `decref` of a dynamic local load the descriptor's
+  `contains_refcounted` flag, do nothing when it is clear, and otherwise call
+  `roc_desc_incref` or `roc_desc_decref` ("Ownership").
 
-Every other dynamic statement, everything that allocates, and every
-reference count operation calls the runtime. The wasm backend, the LLVM
-backend, and the interpreter call the helpers for these five as well, and
-produce the same bytes.
+Every other dynamic statement and everything that allocates calls the
+runtime. The wasm backend, the LLVM backend, and the interpreter call the
+helpers for these seven as well, and produce the same bytes.
 
 A literal whose conversion depends on its instance never converts at a type
 the body does not know: its converted value is a literal argument of the
@@ -15330,8 +15347,11 @@ dynamic parameter as it treats any aggregate parameter, and no pass needs to
 know what the descriptor will say. Backends lower `incref`/`decref` of a
 dynamic local to the runtime's descriptor-guided `roc_desc_incref` and
 `roc_desc_decref`, which do nothing when the descriptor reports no refcounted
-content. Backends remain forbidden from reasoning about reference counting in
-any other way.
+content. The native dev backend reads that one flag inline and skips the call
+when the helper would do nothing. That skip is the only exception to the rule
+that backends do not reason about reference counting: it selects no helper,
+moves no statement, and infers no ownership. Backends remain forbidden from
+reasoning about reference counting in any other way.
 
 #### Host ABI
 
@@ -15371,9 +15391,10 @@ data of the program, immutable, so the runtime and the code calling it share
 nothing mutable between threads or between programs in one process.
 
 A helper that copies a value's bytes (copy, construction, adaptation, list
-item reads, writes, and sets) copies a 1-, 2-, 4-, 8-, or 16-byte value with
-one load and one store and every other size with `memmove`. Overlapping
-operands therefore copy as `memmove` copies them, whatever the size.
+item reads, writes, and sets) copies a 1-, 2-, 4-, 8-, 16-, or 24-byte value
+by loading all of it and then storing it, and every other size with `memmove`.
+Overlapping operands therefore copy as `memmove` copies them, whatever the
+size.
 
 Traversal stacks and other temporary buffers do not escape the operation
 that allocates them. In-process execution allocates these from the
