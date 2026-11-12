@@ -4946,15 +4946,59 @@ Builtin :: [].{
 		## ```roc
 		## expect [1.I64, 2, 3].keep_if_try(|n| Ok(n > 1)) == Ok([2, 3])
 		## ```
+		##
+		## If given a unique list, [List.keep_if_try] will mutate it in place, and will
+		## not allocate any new memory on the heap. If all items in a shared list end
+		## up being kept, Roc will return the original list unaltered. Otherwise, a
+		## shared list is copied into one new list with the original's length as its
+		## capacity.
 		keep_if_try : List(a), (a -> Try(Bool, err)) -> Try(List(a), err)
 		keep_if_try = |list, predicate| {
-			var $out = []
-			for item in list {
-				if predicate(item)? {
-					$out = List.concat($out, [item])
+			prepared = list_map_prepare_reuse(list)
+			len = prepared.len()
+			match list_owned_unique(prepared) {
+				1 => {
+					# Swap each kept item down to the end of the kept prefix. A swap
+					# leaves every slot holding an item, so stopping at an Err
+					# releases the whole list like any other list.
+					var $out = prepared
+					var $kept = 0
+					var $index = 0
+					while $index < len {
+						if predicate(list_get_unsafe($out, $index))? {
+							if $kept != $index {
+								$out = list_swap_unsafe($out, $kept, $index)
+							}
+							$kept = $kept + 1
+						}
+						$index = $index + 1
+					}
+					Ok(List.drop_last($out, len - $kept))
+				}
+				_ => {
+					# A shared list is returned as it is when every item is kept.
+					var $first_dropped = 0
+					while $first_dropped < len and predicate(list_get_unsafe(prepared, $first_dropped))? {
+						$first_dropped = $first_dropped + 1
+					}
+					if $first_dropped == len {
+						Ok(prepared)
+					} else {
+						# The items before $first_dropped were already tested and kept,
+						# so copy them in one step and test only the items after it.
+						var $new_list = list_append_sublist(List.with_capacity(len), prepared, 0, $first_dropped)
+						var $index = $first_dropped + 1
+						while $index < len {
+							item = list_get_unsafe(prepared, $index)
+							if predicate(item)? {
+								$new_list = list_append_unsafe($new_list, item)
+							}
+							$index = $index + 1
+						}
+						Ok($new_list)
+					}
 				}
 			}
-			Ok($out)
 		}
 
 		## Like [List.keep_if_try], but the predicate is effectful. It runs on each
@@ -4964,13 +5008,51 @@ Builtin :: [].{
 		## ```
 		keep_if_try! : List(a), (a => Try(Bool, err)) => Try(List(a), err)
 		keep_if_try! = |list, predicate!| {
-			var $out = []
-			for item in list {
-				if predicate!(item)? {
-					$out = List.concat($out, [item])
+			prepared = list_map_prepare_reuse(list)
+			len = prepared.len()
+			match list_owned_unique(prepared) {
+				1 => {
+					# Swap each kept item down to the end of the kept prefix. A swap
+					# leaves every slot holding an item, so stopping at an Err
+					# releases the whole list like any other list.
+					var $out = prepared
+					var $kept = 0
+					var $index = 0
+					while $index < len {
+						if predicate!(list_get_unsafe($out, $index))? {
+							if $kept != $index {
+								$out = list_swap_unsafe($out, $kept, $index)
+							}
+							$kept = $kept + 1
+						}
+						$index = $index + 1
+					}
+					Ok(List.drop_last($out, len - $kept))
+				}
+				_ => {
+					# A shared list is returned as it is when every item is kept.
+					var $first_dropped = 0
+					while $first_dropped < len and predicate!(list_get_unsafe(prepared, $first_dropped))? {
+						$first_dropped = $first_dropped + 1
+					}
+					if $first_dropped == len {
+						Ok(prepared)
+					} else {
+						# The items before $first_dropped were already tested and kept,
+						# so copy them in one step and test only the items after it.
+						var $new_list = list_append_sublist(List.with_capacity(len), prepared, 0, $first_dropped)
+						var $index = $first_dropped + 1
+						while $index < len {
+							item = list_get_unsafe(prepared, $index)
+							if predicate!(item)? {
+								$new_list = list_append_unsafe($new_list, item)
+							}
+							$index = $index + 1
+						}
+						Ok($new_list)
+					}
 				}
 			}
-			Ok($out)
 		}
 
 		## Like [List.fold], but the step function can fail. Threads `state` through

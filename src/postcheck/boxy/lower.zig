@@ -2786,10 +2786,10 @@ pub const Program = struct {
         const key: WorkerKey = .{ .default = .{ .module = module_index, .expr = expr } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        try view.bodies().demandIndex();
         // The default's type is the field's type at a fresh instantiation of
         // its declaration's parameters (design.md "Defaulted Fields"): each
         // construction takes the types its field gives those variables.
+        try view.bodies().demandIndex();
         const default_ty = view.bodies().exprType(expr);
         const scheme_vars = try self.converter().typeVariables(self.arena.allocator(), module_index, default_ty);
         const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.len);

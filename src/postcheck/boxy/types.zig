@@ -193,6 +193,8 @@ pub const Modules = struct {
     by_key: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
     /// Declaring modules by stable content identity, independent of local name stores.
     by_identity: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
+    /// Each module by its link name, the first module added under a name.
+    by_link_name: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
     /// The names of a module unit's link. A whole program links nothing, and
     /// names each module by its content identity.
     link_names: ?*const ModuleNames = null,
@@ -201,6 +203,7 @@ pub const Modules = struct {
         self.views.deinit(self.allocator);
         self.by_key.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);
+        self.by_link_name.deinit(self.allocator);
     }
 
     /// Add a module unless one with the same key is present.
@@ -212,6 +215,8 @@ pub const Modules = struct {
         const link_name = if (self.link_names) |link_names| link_names.of(view) else view.module_identity.stable_hash;
         try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .link_name = link_name });
         try self.by_identity.put(self.allocator, view.module_identity.stable_hash, index);
+        const named = try self.by_link_name.getOrPut(self.allocator, link_name);
+        if (!named.found_existing) named.value_ptr.* = index;
         return index;
     }
 
@@ -233,6 +238,12 @@ pub const Modules = struct {
     /// under, the same in every object of one link.
     pub fn linkName(self: *const Modules, index: ModuleIndex) [32]u8 {
         return self.get(index).link_name;
+    }
+
+    /// The module of this lowering whose link name is `name`, or null when
+    /// the lowering does not contain it.
+    pub fn findLinkName(self: *const Modules, name: [32]u8) ?ModuleIndex {
+        return self.by_link_name.get(name);
     }
 
     /// The module of this lowering with key `key`, or null when the
