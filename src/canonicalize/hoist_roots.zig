@@ -1,6 +1,7 @@
 //! Shared checked-stage data for top-level-equivalent compile-time roots.
 
 const std = @import("std");
+const collections = @import("collections");
 const CIR = @import("CIR.zig");
 const Allocator = std.mem.Allocator;
 
@@ -60,7 +61,7 @@ pub const SelectedHoistedRoot = struct {
     expr: CIR.Expr.Idx,
     /// Local binding pattern whose RHS is `expr`, when this root preserves local
     /// binding sharing. Null means the expression itself is the selected root.
-    pattern: ?CIR.Pattern.Idx = null,
+    pattern: collections.OptionalId(CIR.Pattern.Idx) = .none,
     /// The root body shape. Pattern extraction and validation roots are sparse
     /// selected-root metadata; no per-expression hoistability summary is stored.
     body: Body = .expr,
@@ -70,7 +71,7 @@ pub const SelectedHoistedRoot = struct {
     /// Prospective expression root that subsumes this validation when that
     /// expression survives post-solve pruning. Checker-only ownership metadata;
     /// checked artifact publication does not persist it.
-    validation_owner_expr: ?CIR.Expr.Idx = null,
+    validation_owner_expr: collections.OptionalId(CIR.Expr.Idx) = .none,
     /// Whether the root's expression is reached only through a branch, guard,
     /// loop body, or expect body. A guarded root whose evaluation crashes is
     /// not a diagnostic: the original expression stays in runtime lowering.
@@ -79,6 +80,10 @@ pub const SelectedHoistedRoot = struct {
     /// with the root in `ModuleEnv.selected_hoisted_roots`.
     top_level: bool = false,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(SelectedHoistedRoot) == 32);
+}
 
 /// A local function binding the checker promoted to a procedure of its own.
 ///

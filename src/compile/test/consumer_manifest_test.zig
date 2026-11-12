@@ -155,7 +155,7 @@ fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
 }
 
 fn rootIdentity(request: CheckedArtifact.RootRequest) error{TestUnexpectedResult}!CheckedArtifact.ComptimeRootId {
-    return request.compile_time_root orelse error.TestUnexpectedResult;
+    return request.compile_time_root.get() orelse error.TestUnexpectedResult;
 }
 
 /// The request for the root declared at `order` in its module.
@@ -264,7 +264,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
     const tables = [_]CheckedArtifact.RootRequest{ try rootWithOrder(helper_roots, 1), try rootWithOrder(helper_roots, 2) };
     try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key.digest(), &tables));
     for (helper_roots) |request| {
-        try std.testing.expect(helper.compile_time_roots.root(request.compile_time_root.?).payload != .unevaluated);
+        try std.testing.expect(helper.compile_time_roots.root(request.compile_time_root.get().?).payload != .unevaluated);
     }
 
     // The runtime program restores the completed table from Helper's store
@@ -304,7 +304,8 @@ test "one evaluated root has one completed-value slot however many places read i
         \\main! = |args| {
         \\    Echo.line!(Str.inspect(Helper.base_value))
         \\    Echo.line!(Str.inspect(Helper.doubled))
-        \\    Echo.line!(Str.inspect((Helper.offset, args.len())))
+        \\    Echo.line!(Str.inspect(Helper.offset))
+        \\    Echo.line!(Str.inspect(args.len()))
         \\    Ok({})
         \\}
     });
@@ -343,10 +344,10 @@ test "one evaluated root has one completed-value slot however many places read i
     try std.testing.expectEqual(@as(usize, 4), helper_roots.len);
     const value_roots = [_]CheckedArtifact.RootRequest{ try rootWithOrder(helper_roots, 1), try rootWithOrder(helper_roots, 2), try rootWithOrder(helper_roots, 3) };
 
-    // Every one of these values is computed, read at runtime, and
-    // materialized for the runtime consumer; `base_value` is additionally
-    // read by `doubled`, at compile time. No program has two slots for one
-    // concrete value, however many places in it read the value.
+    // Every one of these values is computed and read by a constant `main!`
+    // hoists, so it is materialized for the stage evaluating that constant;
+    // `base_value` is additionally read by `doubled`. No program has two
+    // slots for one concrete value, however many places in it read the value.
     for (value_roots) |request| {
         const root = try rootIdentity(request);
         try std.testing.expect(materializingStage(stages, helper.key.digest(), root) != null);

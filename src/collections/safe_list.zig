@@ -368,7 +368,7 @@ pub fn SafeList(comptime T: type) type {
         pub fn iter(self: *const SafeList(T)) Iterator {
             return Iterator{
                 .array = self,
-                .len = self.len(),
+                .len = @intCast(self.len()),
                 .current = .first,
             };
         }
@@ -812,6 +812,23 @@ test "SafeList(32) inserting and getting" {
     const item = list_u32.get(id);
 
     try testing.expectEqual(item.*, 1);
+}
+
+test "SafeList iterator counts and visits its bounded domain" {
+    var list = SafeList(u32){};
+    defer list.deinit(testing.allocator);
+    var empty = list.iter();
+    try testing.expectEqual(@as(u32, 0), empty.count());
+    try testing.expectEqual(@as(?u32, null), empty.next());
+    _ = try list.append(testing.allocator, 7);
+    _ = try list.append(testing.allocator, 9);
+    var items = list.iter();
+    try testing.expectEqual(@as(u32, 2), items.count());
+    try testing.expectEqual(@as(?u32, 7), items.next());
+    try testing.expectEqual(@as(u32, 1), items.count());
+    try testing.expectEqual(@as(?u32, 9), items.next());
+    try testing.expectEqual(@as(?u32, null), items.next());
+    try testing.expectEqual(@as(u32, 0), items.count());
 }
 
 test "SafeRange.empty has a defined start that addresses no row" {

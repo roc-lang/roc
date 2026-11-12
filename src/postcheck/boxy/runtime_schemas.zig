@@ -43,7 +43,7 @@ pub fn collect(program: *Program, roots: []const types.TypeId) std.mem.Allocator
             },
             .record => |record| {
                 for (program.store.fieldSpan(record.fields)) |field| try pending.append(allocator, field.ty);
-                if (record.ext) |ext| try pending.append(allocator, ext);
+                if (record.ext.get()) |ext| try pending.append(allocator, ext);
             },
             .tag_union => |tags| {
                 for (program.store.tagSpan(tags.tags)) |tag| try pending.appendSlice(allocator, program.store.span(tag.payloads));

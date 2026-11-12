@@ -39,6 +39,23 @@ pub const Error = std.mem.Allocator.Error;
 
 const no_index: u32 = std.math.maxInt(u32);
 
+const OptionalU32 = collections.OptionalU32;
+
+/// A store-sized column of optional raw indices on fresh zero pages. Its
+/// rows are written for a small subset of the domain and probed one at a
+/// time, so pages no row was written on are never resident.
+const SparseIndexColumn = collections.zeroed_pages.SparseSlice(OptionalU32);
+
+/// A store-sized column of optional raw indices in an ordinary allocation,
+/// cleared to absent. For columns whose writes reach most of their pages or
+/// whose readers scan every row, where fresh pages would cost a fault per
+/// page on top of the same work.
+fn denseIndexColumn(gpa: Allocator, len: usize) Error![]OptionalU32 {
+    const column = try gpa.alloc(OptionalU32, len);
+    @memset(column, .none);
+    return column;
+}
+
 /// Compact description of an aggregate projection whose result may carry a
 /// stored ownership unit out of its source: the projection form and its
 /// semantic field or tag indices. It has no padding, so its bytes hash
@@ -351,9 +368,10 @@ pub const Dismantles = struct {
     /// container only in an owned-parameter variant (a projected container
     /// moving its parameter root's unit, or a view taking its range out of
     /// such a container), the container root whose owned override activates
-    /// that take, which authorizes the binding-mode override; `no_index`
-    /// means no override.
-    owned_only_binding_roots: []u32,
+    /// that take, which authorizes the binding-mode override; absent means
+    /// no override. Few bindings have one, and consumers probe single
+    /// locals, so the column lives on fresh zero pages.
+    owned_only_binding_roots: SparseIndexColumn,
     /// Consuming operands of borrowed field-read bindings that move the
     /// container's stored field unit at the operand itself, keyed by
     /// statement and argument position. Each is the last observation of its
@@ -397,6 +415,7 @@ pub const Dismantles = struct {
         self.complete_takes.deinit();
         self.projection_aliases.deinit();
         self.views.deinit();
+        self.owned_only_binding_roots.deinit(gpa);
         self.arena.deinit();
     }
 
@@ -444,11 +463,11 @@ pub const Dismantles = struct {
 
     pub fn ownedOnlyBindingRoot(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
         const index = @backingInt(local);
-        if (index >= self.owned_only_binding_roots.len) {
+        if (index >= self.owned_only_binding_roots.items.len) {
             dismantleInvariant("ARC owned-only binding lookup exceeded the analyzed local table");
         }
-        const root = self.owned_only_binding_roots[index];
-        return if (root == no_index) null else @fromBackingInt(@intCast(root));
+        const root = self.owned_only_binding_roots.items[index].get() orelse return null;
+        return @fromBackingInt(root);
     }
 
     pub fn isTakeBinding(self: *const Dismantles, local: LIR.LocalId) bool {
@@ -520,14 +539,9 @@ const EquivalencedRead = struct {
     representative: LIR.LocalId,
 };
 
-const MentionEdge = struct {
-    stmt: u32,
-    next: u32,
-};
-
 /// One edge of the solved borrow forest, reversed: a binding borrowed from
 /// the local whose list holds the edge.
-const BorrowChildEdge = struct { local: u32, next: u32 };
+const BorrowChildEdge = struct { local: u32, next: OptionalU32 };
 
 /// A tag union whose stored units may be taken through one payload view. Any
 /// occurrence of the root other than its definition, a discriminant read, a
@@ -585,30 +599,31 @@ const Analysis = struct {
     /// Dismantling may only claim units that the emitter can release.
     rc_local: []const bool,
     state: []State,
-    /// Root container local per transparent alias or view, `no_index`
-    /// otherwise.
-    alias_root: []u32,
+    /// Root container local per transparent alias or view. Written when a
+    /// local becomes one and read only for locals whose state says so.
+    alias_root: collections.WriteFirstSlice(u32),
     /// First root slot of each view.
     view_base: []u32,
     /// Targets of refcounted reads through a view. Each is a read of the
     /// view's root in its own right, so the view's borrow forest skips it.
     read_through_view: []bool,
     /// The view each view local belongs to: the view a field read defined,
-    /// for that read's target and every borrowed alias of it; `no_index`
-    /// for any other local.
-    view_head: []u32,
+    /// for that read's target and every borrowed alias of it. Written when a
+    /// local becomes a view and read only for views.
+    view_head: collections.WriteFirstSlice(u32),
     /// For each view, the view its defining read went through, `no_index`
     /// when that read named the container or a transparent alias of it.
-    view_parent: []u32,
+    /// Written when the view is defined and read only for views.
+    view_parent: collections.WriteFirstSlice(u32),
     /// Each view as a container of its own, keyed by the view. A view whose
     /// definition takes its slots out of its container holds them, so its
     /// reads, every read through views nested in it, and its whole uses are
     /// the occurrences of that container, numbered from the view's base.
     view_candidates: std.AutoHashMapUnmanaged(u32, Candidate),
-    /// Tag-union root per ownership-complete borrowed payload view,
-    /// `no_index` otherwise. Such a view is the struct candidate through
-    /// which the union dismantles; its unit is the root's.
-    view_root: []u32,
+    /// Tag-union root per ownership-complete borrowed payload view, absent
+    /// otherwise. Such a view is the struct candidate through which the
+    /// union dismantles; its unit is the root's.
+    view_root: SparseIndexColumn,
     /// Tag-union locals that may dismantle through a payload view, keyed by
     /// the root local.
     union_roots: std.AutoHashMapUnmanaged(u32, UnionRoot),
@@ -617,24 +632,24 @@ const Analysis = struct {
     /// owned-only candidate: mode-specialized variants re-emit it owned.
     is_param: []const bool,
     /// Root ownership unit for a borrowed struct reached through an explicit
-    /// chain of ownership-complete projections, `no_index` otherwise.
-    projected_root: []const u32,
+    /// chain of ownership-complete projections, absent otherwise.
+    projected_root: []const OptionalU32,
     /// For a borrowed local defined by an ownership-complete projection,
-    /// the local it projects; `no_index` otherwise. Such a local denotes
-    /// its source's whole ownership unit.
-    projection_source: []const u32,
+    /// the local it projects; absent otherwise. Such a local denotes its
+    /// source's whole ownership unit.
+    projection_source: []const OptionalU32,
     /// Canonical projected struct binding for repeated complete reads of the
     /// same root and committed layout.
-    projected_container: []const u32,
+    projected_container: []const OptionalU32,
     /// Join cells with explicit initialization edges. Each edge supplies a
     /// fresh intact container independently of the other incoming values.
     explicit_init_join: []const bool,
-    /// Every operand mention of a solved-borrowed refcounted local, as a
-    /// per-local linked list into `mention_edges`. A binding borrowed through
+    /// Every operand mention of a solved-borrowed refcounted local, grouped
+    /// contiguously in reverse discovery order. A binding borrowed through
     /// a candidate's field read observes that field at each of its mentions,
     /// so the take dataflow rejects takes such a mention could follow.
-    mention_heads: []u32,
-    mention_edges: std.ArrayList(MentionEdge) = .empty,
+    mention_builder: collections.CsrGroups(u32).Builder,
+    mentions: collections.CsrGroups(u32) = .{},
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
@@ -654,14 +669,14 @@ const Analysis = struct {
         }
         self.view_candidates.deinit(self.gpa);
         self.union_roots.deinit(self.gpa);
-        self.gpa.free(self.view_root);
-        self.gpa.free(self.alias_root);
+        self.view_root.deinit(self.gpa);
+        self.alias_root.deinit(self.gpa);
         self.gpa.free(self.view_base);
         self.gpa.free(self.read_through_view);
-        self.gpa.free(self.view_head);
-        self.gpa.free(self.view_parent);
-        self.gpa.free(self.mention_heads);
-        self.mention_edges.deinit(self.gpa);
+        self.view_head.deinit(self.gpa);
+        self.view_parent.deinit(self.gpa);
+        self.mention_builder.deinit(self.gpa);
+        self.mentions.deinit(self.gpa);
         self.gpa.free(self.state);
     }
 
@@ -673,7 +688,7 @@ const Analysis = struct {
         if (local_index >= self.rc_local.len) dismantleInvariant("ARC dismantle resource table did not cover local");
         if (!self.rc_local[local_index]) return false;
         const fields = ProductFields.of(self.store, self.layouts, local) orelse return false;
-        if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == no_index and self.view_root[local_index] == no_index) return false;
+        if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == .none and self.view_root.items[local_index] == .none) return false;
         if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
@@ -705,11 +720,11 @@ const Analysis = struct {
     /// The container a source local stands for: itself, or its alias root.
     fn resolveRoot(self: *Analysis, local: LIR.LocalId) LIR.LocalId {
         const index = @backingInt(local);
-        if (self.projected_container[index] != no_index and self.projected_container[index] != index) {
-            return @fromBackingInt(@intCast(self.projected_container[index]));
+        if (self.projected_container[index].get()) |container| {
+            if (container != index) return @fromBackingInt(container);
         }
         if (self.state[index] == .transparent_alias or self.state[index] == .view) {
-            return @fromBackingInt(@intCast(self.alias_root[index]));
+            return @fromBackingInt(self.alias_root.get(index));
         }
         return local;
     }
@@ -731,11 +746,7 @@ const Analysis = struct {
     fn noteMention(self: *Analysis, stmt: LIR.CFStmtId, local: LIR.LocalId) Error!void {
         const index = @backingInt(local);
         if (!self.rc_local[index] or !self.solution.isBorrowed(local)) return;
-        try self.mention_edges.append(self.gpa, .{
-            .stmt = @backingInt(stmt),
-            .next = self.mention_heads[index],
-        });
-        self.mention_heads[index] = @intCast(self.mention_edges.items.len - 1);
+        try self.mention_builder.add(self.gpa, @intCast(index), @backingInt(stmt));
     }
 
     /// Any occurrence that is not a field read: the local (or the container
@@ -755,7 +766,7 @@ const Analysis = struct {
 
     /// The container a view local stands for once its view holds its slots.
     fn viewCandidateOf(self: *Analysis, local: LIR.LocalId) *Candidate {
-        return self.view_candidates.getPtr(self.view_head[@backingInt(local)]) orelse
+        return self.view_candidates.getPtr(self.view_head.get(@backingInt(local))) orelse
             dismantleInvariant("ARC dismantle view had no container entry");
     }
 
@@ -818,7 +829,7 @@ const Analysis = struct {
         } else {
             entry.view = ambiguous_view;
         }
-        self.view_root[@backingInt(target)] = root_index;
+        self.view_root.items[@backingInt(target)] = .some(root_index);
         return true;
     }
 
@@ -826,7 +837,9 @@ const Analysis = struct {
     /// or an explicit initialization edge of a join cell.
     fn noteDef(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
         const index = @backingInt(local);
-        if (self.projected_container[index] != no_index and self.projected_container[index] != index) return;
+        if (self.projected_container[index].get()) |container| {
+            if (container != index) return;
+        }
         if (self.state[index] == .transparent_alias or self.state[index] == .view) {
             // A second definition of an alias re-points it; the root can no
             // longer attribute its reads.
@@ -880,7 +893,7 @@ const Analysis = struct {
     fn noteFieldRead(self: *Analysis, stmt: LIR.CFStmtId, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) Error!bool {
         const target_index = @backingInt(target);
         const through_view = self.isView(source);
-        const through: u32 = if (through_view) self.view_head[@backingInt(source)] else no_index;
+        const through: u32 = if (through_view) self.view_head.get(@backingInt(source)) else no_index;
         // A refcounted field read through a borrowed source observes the
         // source's stored unit at the read itself when the target retains.
         // A read through a view is a read of the view's root in its own
@@ -893,12 +906,12 @@ const Analysis = struct {
             }
         }
         const root = self.resolveRoot(source);
-        const representative_index = self.projected_container[target_index];
-        if (representative_index != no_index and representative_index != target_index) {
+        const representative_index = self.projected_container[target_index].get() orelse target_index;
+        if (representative_index != target_index) {
             // The root settles this read against the representative's plan,
             // so no view it went through can hold it as its own read.
             var enclosing = through;
-            while (enclosing != no_index) : (enclosing = self.view_parent[enclosing]) {
+            while (enclosing != no_index) : (enclosing = self.view_parent.get(enclosing)) {
                 (self.view_candidates.getPtr(enclosing) orelse dismantleInvariant("ARC dismantle view had no container entry")).disqualified = true;
             }
             try self.noteEquivalencedRead(stmt, root, self.readSlots(source, field_idx, target), target, @fromBackingInt(@intCast(representative_index)));
@@ -917,14 +930,14 @@ const Analysis = struct {
             self.solution.isBorrowed(target) and
             !self.is_param[target_index] and
             (target_layout_tag == .struct_ or target_layout_tag == .tag_union) and
-            self.projected_root[target_index] == no_index and
-            self.view_root[target_index] == no_index;
+            self.projected_root[target_index] == .none and
+            self.view_root.items[target_index] == .none;
         if (view) {
             self.state[target_index] = .view;
-            self.alias_root[target_index] = @backingInt(root);
+            self.alias_root.set(target_index, @backingInt(root));
             self.view_base[target_index] = slots.first;
-            self.view_head[target_index] = target_index;
-            self.view_parent[target_index] = through;
+            self.view_head.set(target_index, target_index);
+            self.view_parent.set(target_index, through);
             try self.view_candidates.put(self.gpa, target_index, .{ .def_stmt = stmt, .def_count = 1 });
         }
         try candidate.reads.append(self.gpa, .{
@@ -937,7 +950,7 @@ const Analysis = struct {
         // Every view the read went through reads the same slots, from its
         // own base, as the container it becomes when it holds them.
         var enclosing = through;
-        while (enclosing != no_index) : (enclosing = self.view_parent[enclosing]) {
+        while (enclosing != no_index) : (enclosing = self.view_parent.get(enclosing)) {
             const enclosing_candidate = self.view_candidates.getPtr(enclosing) orelse
                 dismantleInvariant("ARC dismantle view had no container entry");
             try enclosing_candidate.reads.append(self.gpa, .{
@@ -989,9 +1002,9 @@ const Analysis = struct {
             if (self.solution.isBorrowed(target) and self.state[target_index] == .unknown) {
                 // A borrowed alias of a view is the same view.
                 self.state[target_index] = .view;
-                self.alias_root[target_index] = self.alias_root[source_index];
+                self.alias_root.set(target_index, self.alias_root.get(source_index));
                 self.view_base[target_index] = self.view_base[source_index];
-                self.view_head[target_index] = self.view_head[source_index];
+                self.view_head.set(target_index, self.view_head.get(source_index));
                 return;
             }
             // An owned binding retains the view's slots here, observing
@@ -1011,7 +1024,7 @@ const Analysis = struct {
         // is the container for an owned struct but the union root for a
         // payload view, so the unit chain is the same-value test that covers
         // both.
-        const explicit_projected_alias = self.projected_container[target_index] == @backingInt(root);
+        const explicit_projected_alias = self.projected_container[target_index].get() == @backingInt(root);
         const transparent = self.solution.isBorrowed(target) and
             (explicit_projected_alias or self.solution.leaderOf(target) == root or self.solution.unitLocalOf(target) == root) and
             ((try self.entryOf(root)) != null);
@@ -1021,7 +1034,7 @@ const Analysis = struct {
                 if (self.candidates.getPtr(target_index)) |candidate| candidate.disqualified = true;
             }
             self.state[target_index] = .transparent_alias;
-            self.alias_root[target_index] = @backingInt(root);
+            self.alias_root.set(target_index, @backingInt(root));
         } else {
             // An owned same-value binding is a path-local whole use. It can
             // move an intact container on this edge, while takes on mutually
@@ -1673,15 +1686,19 @@ fn restoredFieldMaskForDefault(
 /// immediate-dominator iteration handles shared successors and cycles; tree
 /// intervals then answer each query in constant time.
 const StatementDominance = struct {
-    enter: []u32,
-    leave: []u32,
+    /// Preorder entry time in the dominator tree; absent for a node the
+    /// entry does not reach.
+    enter: []OptionalU32,
+    /// Exit time in the dominator tree, written for exactly the nodes with
+    /// an entry time and read only for them.
+    leave: collections.WriteFirstSlice(u32),
     /// The graph's successors in compressed-row form, for queries that walk
     /// paths rather than the dominator tree.
     succ_starts: []u32,
     succs: []u32,
 
     const Edge = struct { from: u32, to: u32 };
-    const Frame = struct { node: u32, edge: u32 };
+    const Frame = struct { node: u32, edge: OptionalU32 };
 
     fn initGraph(gpa: Allocator, count: usize, entry: u32, edges: []const Edge) Error!StatementDominance {
         const succ_starts = try gpa.alloc(u32, count + 1);
@@ -1699,74 +1716,75 @@ const StatementDominance = struct {
                 fill[edge.from] += 1;
             }
         }
-        const outgoing = try gpa.alloc(u32, count);
+        // Chain heads, read before their first push: every node's chain
+        // starts empty.
+        const outgoing = try denseIndexColumn(gpa, count);
         defer gpa.free(outgoing);
-        const incoming = try gpa.alloc(u32, count);
+        const incoming = try denseIndexColumn(gpa, count);
         defer gpa.free(incoming);
-        const next_out = try gpa.alloc(u32, edges.len);
+        const next_out = try gpa.alloc(OptionalU32, edges.len);
         defer gpa.free(next_out);
-        const next_in = try gpa.alloc(u32, edges.len);
+        const next_in = try gpa.alloc(OptionalU32, edges.len);
         defer gpa.free(next_in);
-        @memset(outgoing, no_index);
-        @memset(incoming, no_index);
         for (edges, 0..) |edge, index| {
             next_out[index] = outgoing[edge.from];
-            outgoing[edge.from] = @intCast(index);
+            outgoing[edge.from] = .some(@intCast(index));
             next_in[index] = incoming[edge.to];
-            incoming[edge.to] = @intCast(index);
+            incoming[edge.to] = .some(@intCast(index));
         }
-        const order = try gpa.alloc(u32, count);
+        // Reverse-postorder rank per node, absent until the walk discovers it.
+        const order = try denseIndexColumn(gpa, count);
         defer gpa.free(order);
-        @memset(order, no_index);
         var postorder = std.ArrayList(u32).empty;
         defer postorder.deinit(gpa);
         var frames = std.ArrayList(Frame).empty;
         defer frames.deinit(gpa);
-        order[entry] = 0;
+        order[entry] = .some(0);
         try frames.append(gpa, .{ .node = entry, .edge = outgoing[entry] });
         while (frames.items.len != 0) {
             const frame = &frames.items[frames.items.len - 1];
-            if (frame.edge == no_index) {
-                try postorder.append(gpa, frame.node);
-                _ = frames.pop();
-            } else {
-                const edge_index = frame.edge;
+            if (frame.edge.get()) |edge_index| {
                 frame.edge = next_out[edge_index];
                 const child = edges[edge_index].to;
-                if (order[child] != no_index) continue;
-                order[child] = 0;
+                if (order[child] != .none) continue;
+                order[child] = .some(0);
                 try frames.append(gpa, .{ .node = child, .edge = outgoing[child] });
+            } else {
+                try postorder.append(gpa, frame.node);
+                _ = frames.pop();
             }
         }
         std.mem.reverse(u32, postorder.items);
-        for (postorder.items, 0..) |node, index| order[node] = @intCast(index);
-        const idom = try gpa.alloc(u32, count);
+        for (postorder.items, 0..) |node, index| order[node] = .some(@intCast(index));
+        // Immediate dominators, absent until solved.
+        const idom = try denseIndexColumn(gpa, count);
         defer gpa.free(idom);
-        @memset(idom, no_index);
-        idom[entry] = entry;
+        idom[entry] = .some(entry);
         var changed = true;
         while (changed) {
             changed = false;
             for (postorder.items[1..]) |node| {
-                var parent: u32 = no_index;
-                var edge_index = incoming[node];
-                while (edge_index != no_index) : (edge_index = next_in[edge_index]) {
+                var parent: OptionalU32 = .none;
+                var edge_cursor = incoming[node];
+                while (edge_cursor.get()) |edge_index| : (edge_cursor = next_in[edge_index]) {
                     const predecessor = edges[edge_index].from;
-                    if (idom[predecessor] == no_index) continue;
-                    if (parent == no_index) {
-                        parent = predecessor;
-                    } else {
-                        var other = predecessor;
-                        while (parent != other) {
-                            if (order[parent] > order[other]) {
-                                parent = idom[parent];
-                            } else {
-                                other = idom[other];
-                            }
+                    if (idom[predecessor] == .none) continue;
+                    const current = parent.get() orelse {
+                        parent = .some(predecessor);
+                        continue;
+                    };
+                    var left = current;
+                    var other = predecessor;
+                    while (left != other) {
+                        if (order[left].get().? > order[other].get().?) {
+                            left = idom[left].get().?;
+                        } else {
+                            other = idom[other].get().?;
                         }
                     }
+                    parent = .some(left);
                 }
-                std.debug.assert(parent != no_index);
+                std.debug.assert(parent != .none);
                 if (idom[node] != parent) {
                     idom[node] = parent;
                     changed = true;
@@ -1775,33 +1793,31 @@ const StatementDominance = struct {
         }
         // Reuse the node columns as first-child and next-sibling links for
         // the solved dominator tree. Unreachable nodes retain no interval.
-        @memset(outgoing, no_index);
-        @memset(incoming, no_index);
+        @memset(outgoing, .none);
+        @memset(incoming, .none);
         for (postorder.items[1..]) |node| {
-            incoming[node] = outgoing[idom[node]];
-            outgoing[idom[node]] = node;
+            const parent = idom[node].get().?;
+            incoming[node] = outgoing[parent];
+            outgoing[parent] = .some(node);
         }
-        const enter = try gpa.alloc(u32, count);
+        const enter = try denseIndexColumn(gpa, count);
         errdefer gpa.free(enter);
-        const leave = try gpa.alloc(u32, count);
-        errdefer gpa.free(leave);
-        @memset(enter, no_index);
-        @memset(leave, no_index);
+        var leave = try collections.WriteFirstSlice(u32).init(gpa, count);
+        errdefer leave.deinit(gpa);
         var clock: u32 = 0;
-        enter[entry] = clock;
+        enter[entry] = .some(clock);
         clock += 1;
         try frames.append(gpa, .{ .node = entry, .edge = outgoing[entry] });
         while (frames.items.len != 0) {
             const frame = &frames.items[frames.items.len - 1];
-            if (frame.edge == no_index) {
-                leave[frame.node] = clock;
-                _ = frames.pop();
-            } else {
-                const child = frame.edge;
+            if (frame.edge.get()) |child| {
                 frame.edge = incoming[child];
-                enter[child] = clock;
+                enter[child] = .some(clock);
                 clock += 1;
                 try frames.append(gpa, .{ .node = child, .edge = outgoing[child] });
+            } else {
+                leave.set(frame.node, clock);
+                _ = frames.pop();
             }
         }
         return .{ .enter = enter, .leave = leave, .succ_starts = succ_starts, .succs = succs };
@@ -1809,7 +1825,7 @@ const StatementDominance = struct {
 
     fn deinit(self: *StatementDominance, gpa: Allocator) void {
         gpa.free(self.enter);
-        gpa.free(self.leave);
+        self.leave.deinit(gpa);
         gpa.free(self.succ_starts);
         gpa.free(self.succs);
     }
@@ -1821,8 +1837,9 @@ const StatementDominance = struct {
     /// A node the entry does not reach runs on no path, so it dominates
     /// nothing and nothing dominates it.
     fn dominatesNode(self: StatementDominance, a: u32, b: u32) bool {
-        if (self.enter[a] == no_index or self.enter[b] == no_index) return false;
-        return self.enter[a] <= self.enter[b] and self.enter[b] < self.leave[a];
+        const a_enter = self.enter[a].get() orelse return false;
+        const b_enter = self.enter[b].get() orelse return false;
+        return a_enter <= b_enter and b_enter < self.leave.get(a);
     }
 
     fn successorsOf(self: StatementDominance, node: u32) []const u32 {
@@ -1965,15 +1982,17 @@ const ComponentDominance = struct {
     /// unites them.
     proc_parent: []u32,
     /// First procedure (in procedure order) reaching each statement.
-    stmt_first_proc: []const u32,
-    /// Index of each statement within its solved component's graph.
-    dense: []u32 = &.{},
+    stmt_first_proc: []const OptionalU32,
+    /// Index of each statement within its solved component's graph. Only
+    /// components a projection query reaches are solved, so few statements
+    /// get one.
+    dense: SparseIndexColumn = .{},
     /// Procedures grouped by component root, built with the first solve.
     component_offsets: []u32 = &.{},
     component_procs: []u32 = &.{},
     solved: std.AutoHashMapUnmanaged(u32, StatementDominance) = .empty,
 
-    fn init(gpa: Allocator, store: *const LirStore, solution: *const arc_solve.Solution, stmt_first_proc: []const u32) Error!ComponentDominance {
+    fn init(gpa: Allocator, store: *const LirStore, solution: *const arc_solve.Solution, stmt_first_proc: []const OptionalU32) Error!ComponentDominance {
         const proc_parent = try gpa.alloc(u32, store.procSpecCount());
         for (proc_parent, 0..) |*parent, index| parent.* = @intCast(index);
         return .{ .store = store, .solution = solution, .proc_parent = proc_parent, .stmt_first_proc = stmt_first_proc };
@@ -1985,7 +2004,7 @@ const ComponentDominance = struct {
         self.solved.deinit(gpa);
         gpa.free(self.component_procs);
         gpa.free(self.component_offsets);
-        gpa.free(self.dense);
+        self.dense.deinit(gpa);
         gpa.free(self.proc_parent);
     }
 
@@ -2005,14 +2024,14 @@ const ComponentDominance = struct {
     }
 
     fn dominates(self: *ComponentDominance, gpa: Allocator, dominator: LIR.CFStmtId, target: LIR.CFStmtId) Error!bool {
-        const component = self.root(self.stmt_first_proc[@backingInt(target)]);
-        if (self.root(self.stmt_first_proc[@backingInt(dominator)]) != component) return false;
+        const component = self.root(self.stmt_first_proc[@backingInt(target)].get().?);
+        if (self.root(self.stmt_first_proc[@backingInt(dominator)].get().?) != component) return false;
         const slot = try self.solved.getOrPut(gpa, component);
         if (!slot.found_existing) {
             errdefer _ = self.solved.remove(component);
             slot.value_ptr.* = try self.solve(gpa, component);
         }
-        return slot.value_ptr.dominatesNode(self.dense[@backingInt(dominator)], self.dense[@backingInt(target)]);
+        return slot.value_ptr.dominatesNode(self.denseOf(dominator), self.denseOf(target));
     }
 
     /// Whether a path from `from` to `to` runs through one of `writes`
@@ -2021,17 +2040,18 @@ const ComponentDominance = struct {
     /// `memo` holds the set computed for `from` across the queries of one
     /// root's reads; the caller resets it when it moves to another root.
     fn rebindOnPath(self: *ComponentDominance, gpa: Allocator, memo: *RebindMemo, from: LIR.CFStmtId, to: LIR.CFStmtId, writes: []const LIR.CFStmtId, dense_writes: *std.ArrayList(u32)) Error!bool {
-        const component = self.root(self.stmt_first_proc[@backingInt(to)]);
-        if (self.root(self.stmt_first_proc[@backingInt(from)]) != component) return false;
+        const component = self.root(self.stmt_first_proc[@backingInt(to)].get().?);
+        if (self.root(self.stmt_first_proc[@backingInt(from)].get().?) != component) return false;
         const dominance = self.solved.getPtr(component) orelse dismantleInvariant("ARC dismantle asked about rebinds in a component it never solved");
         dense_writes.clearRetainingCapacity();
         for (writes) |write| {
             const write_index = @backingInt(write);
-            if (self.stmt_first_proc[write_index] == no_index or self.root(self.stmt_first_proc[write_index]) != component) continue;
-            try dense_writes.append(gpa, self.dense[write_index]);
+            const write_proc = self.stmt_first_proc[write_index].get() orelse continue;
+            if (self.root(write_proc) != component) continue;
+            try dense_writes.append(gpa, self.denseOf(write));
         }
         if (dense_writes.items.len == 0) return false;
-        const from_dense = self.dense[@backingInt(from)];
+        const from_dense = self.denseOf(from);
         const slot = try memo.slots.getOrPut(gpa, from_dense);
         if (!slot.found_existing) {
             if (memo.used == memo.sets.items.len) try memo.sets.append(gpa, .{});
@@ -2043,7 +2063,13 @@ const ComponentDominance = struct {
             try memo.reached.resize(gpa, count, false);
             try dominance.afterWrites(gpa, from_dense, dense_writes.items, &memo.reached, set, &memo.stack);
         }
-        return memo.sets.items[slot.value_ptr.*].isSet(self.dense[@backingInt(to)]);
+        return memo.sets.items[slot.value_ptr.*].isSet(self.denseOf(to));
+    }
+
+    /// The node of a statement in its solved component's graph.
+    fn denseOf(self: *const ComponentDominance, stmt: LIR.CFStmtId) u32 {
+        return self.dense.items[@backingInt(stmt)].get() orelse
+            dismantleInvariant("ARC dismantle queried a statement outside every solved component");
     }
 
     fn solve(self: *ComponentDominance, gpa: Allocator, component: u32) Error!StatementDominance {
@@ -2054,9 +2080,9 @@ const ComponentDominance = struct {
         const procs = self.component_procs[self.component_offsets[component]..self.component_offsets[component + 1]];
         for (procs) |proc| {
             for (self.solution.procStatements(@fromBackingInt(@intCast(proc)))) |stmt_id| {
-                const dense = &self.dense[@backingInt(stmt_id)];
-                if (dense.* != no_index) continue;
-                dense.* = @intCast(stmts.items.len);
+                const dense = &self.dense.items[@backingInt(stmt_id)];
+                if (dense.* != .none) continue;
+                dense.* = .some(@intCast(stmts.items.len));
                 try stmts.append(gpa, stmt_id);
             }
         }
@@ -2071,11 +2097,11 @@ const ComponentDominance = struct {
         for (stmts.items, 0..) |stmt_id, index| {
             successors.clearRetainingCapacity();
             try appendControlFlowSuccessors(store, &successors, stmt_id, &joins, gpa);
-            for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = self.dense[@backingInt(next)] });
+            for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = self.denseOf(next) });
         }
         for (procs) |proc| {
             const body = store.getProcSpec(@fromBackingInt(@intCast(proc))).arcBody() orelse continue;
-            try edges.append(gpa, .{ .from = entry, .to = self.dense[@backingInt(body)] });
+            try edges.append(gpa, .{ .from = entry, .to = self.denseOf(body) });
         }
         return StatementDominance.initGraph(gpa, stmts.items.len + 1, entry, edges.items);
     }
@@ -2096,8 +2122,7 @@ const ComponentDominance = struct {
             procs[cursors[component]] = @intCast(proc);
             cursors[component] += 1;
         }
-        const dense = try gpa.alloc(u32, self.store.cfStmtCount());
-        @memset(dense, no_index);
+        const dense = try SparseIndexColumn.init(gpa, self.store.cfStmtCount());
         self.component_offsets = offsets;
         self.component_procs = procs;
         self.dense = dense;
@@ -2145,7 +2170,7 @@ test "component dominance agrees with whole-store dominance across shared proced
             .name = store.freshSyntheticSymbol(),
             .args = .empty(),
             .frame_locals = frame,
-            .body = body,
+            .body = .some(body),
             .ret_layout = .i64,
         }, .none);
     }
@@ -2155,9 +2180,8 @@ test "component dominance agrees with whole-store dominance across shared proced
     var solution = try arc_solve.solve(gpa, &store, &layouts, rc, &.{}, true);
     defer solution.deinit();
 
-    const stmt_first_proc = try gpa.alloc(u32, store.cfStmtCount());
+    const stmt_first_proc = try denseIndexColumn(gpa, store.cfStmtCount());
     defer gpa.free(stmt_first_proc);
-    @memset(stmt_first_proc, no_index);
     var components = try ComponentDominance.init(gpa, &store, &solution, stmt_first_proc);
     defer components.deinit(gpa);
     var edges = std.ArrayList(StatementDominance.Edge).empty;
@@ -2173,11 +2197,11 @@ test "component dominance agrees with whole-store dominance across shared proced
         const proc: u32 = @intCast(proc_index);
         for (solution.procStatements(@fromBackingInt(proc))) |stmt_id| {
             const index = @backingInt(stmt_id);
-            if (stmt_first_proc[index] != no_index) {
-                components.unite(stmt_first_proc[index], proc);
+            if (stmt_first_proc[index].get()) |first| {
+                components.unite(first, proc);
                 continue;
             }
-            stmt_first_proc[index] = proc;
+            stmt_first_proc[index] = .some(proc);
             successors.clearRetainingCapacity();
             try appendControlFlowSuccessors(&store, &successors, stmt_id, &joins, gpa);
             for (successors.items) |next| try edges.append(gpa, .{ .from = index, .to = @backingInt(next) });
@@ -2191,9 +2215,9 @@ test "component dominance agrees with whole-store dominance across shared proced
     try std.testing.expect(components.root(2) != components.root(0));
     var comparisons: usize = 0;
     for (0..store.cfStmtCount()) |a| {
-        if (stmt_first_proc[a] == no_index) continue;
+        if (stmt_first_proc[a] == .none) continue;
         for (0..store.cfStmtCount()) |b| {
-            if (stmt_first_proc[b] == no_index) continue;
+            if (stmt_first_proc[b] == .none) continue;
             const dominator: LIR.CFStmtId = @fromBackingInt(@intCast(a));
             const target: LIR.CFStmtId = @fromBackingInt(@intCast(b));
             try std.testing.expectEqual(whole.dominates(dominator, target), try components.dominates(gpa, dominator, target));
@@ -2227,7 +2251,7 @@ test "statement dominance agrees with deleted-node reachability on every four-no
         var dominance = try StatementDominance.initGraph(gpa, 4, 0, edges);
         defer dominance.deinit(gpa);
         for (0..4) |removed| {
-            if (dominance.enter[removed] == no_index) continue;
+            if (dominance.enter[removed] == .none) continue;
             var reachable: [4]bool = .{ removed != 0, false, false, false };
             var changed = true;
             while (changed) {
@@ -2240,7 +2264,7 @@ test "statement dominance agrees with deleted-node reachability on every four-no
                 }
             }
             for (0..4) |target| {
-                if (dominance.enter[target] == no_index) continue;
+                if (dominance.enter[target] == .none) continue;
                 try std.testing.expectEqual(!reachable[target], dominance.dominates(
                     @fromBackingInt(@intCast(@as(u32, @intCast(removed)))),
                     @fromBackingInt(@intCast(@as(u32, @intCast(target)))),
@@ -2257,8 +2281,8 @@ fn classifyStatement(
     analysis: *Analysis,
     store: *const LirStore,
     operand_read_counts: []u32,
-    direct_call_stmt_by_arg: []u32,
-    direct_call_position_by_arg: []u8,
+    direct_call_stmt_by_arg: []OptionalU32,
+    direct_call_position_by_arg: *collections.WriteFirstSlice(u8),
     current: LIR.CFStmtId,
 ) Error!void {
     const current_stmt = store.getCFStmtImmediate(current);
@@ -2309,8 +2333,8 @@ fn classifyStatement(
             for (0..GuardedList.borrowLen(args)) |i| {
                 const arg = GuardedList.at(args, i);
                 if (i < arc_sig.tracked_param_count) {
-                    direct_call_stmt_by_arg[@backingInt(arg)] = @backingInt(current);
-                    direct_call_position_by_arg[@backingInt(arg)] = @intCast(i);
+                    direct_call_stmt_by_arg[@backingInt(arg)] = .some(@backingInt(current));
+                    direct_call_position_by_arg.set(@backingInt(arg), @intCast(i));
                 }
                 try analysis.useWholeAt(arg, current);
             }
@@ -2456,9 +2480,8 @@ fn carriesReadValue(analysis: *const Analysis, solution: *const arc_solve.Soluti
     var cursor = @backingInt(solution.unitLocalOf(local));
     var steps: usize = 0;
     while (cursor != root) {
-        const source = analysis.projection_source[cursor];
-        if (source == no_index) return false;
-        cursor = @backingInt(solution.unitLocalOf(@fromBackingInt(@intCast(source))));
+        const source = analysis.projection_source[cursor].get() orelse return false;
+        cursor = @backingInt(solution.unitLocalOf(@fromBackingInt(source)));
         steps += 1;
         if (steps > analysis.projection_source.len) dismantleInvariant("ARC dismantle projection chain contained a cycle");
     }
@@ -2600,7 +2623,7 @@ fn forwardsWholeOnEveryReturn(
     solution: *const arc_solve.Solution,
     analysis: *const Analysis,
     result: *const Dismantles,
-    borrow_child_heads: []const u32,
+    borrow_child_heads: []const OptionalU32,
     borrow_child_edges: []const BorrowChildEdge,
     borrow_stack: *std.ArrayList(u32),
     forest: *std.ArrayList(u32),
@@ -2617,17 +2640,14 @@ fn forwardsWholeOnEveryReturn(
     };
     scratch.forwards.clearRetainingCapacity();
     for (forest.items) |member| {
-        var mention = analysis.mention_heads[member];
-        while (mention != no_index) {
-            const edge = analysis.mention_edges.items[mention];
-            mention = edge.next;
-            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
+        for (analysis.mentions.group(member)) |mention| {
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(mention);
             switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_ref => |stmt| {
                     if (stmt.op.kind == .discriminant) continue;
                     const defines_member = forest_mark[@backingInt(stmt.target)] and switch (stmt.op.kind) {
                         .local => true,
-                        .field, .tag_payload, .tag_payload_struct => analysis.projection_source[@backingInt(stmt.target)] != no_index,
+                        .field, .tag_payload, .tag_payload_struct => analysis.projection_source[@backingInt(stmt.target)] != .none,
                         .discriminant, .list_reinterpret, .nominal => false,
                     };
                     if (!defines_member) return false;
@@ -2647,7 +2667,7 @@ fn forwardsWholeOnEveryReturn(
                         found = true;
                     }
                     if (!found) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .assign_low_level => |stmt| {
                     const args = store.getLocalSpan(stmt.args);
@@ -2662,25 +2682,25 @@ fn forwardsWholeOnEveryReturn(
                         found = true;
                     }
                     if (!found) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .assign_struct => |stmt| {
                     if (!aggregateMovesWhole(solution, analysis, forest_mark, root, store.getLocalSpan(stmt.fields))) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .assign_list => |stmt| {
                     if (!aggregateMovesWhole(solution, analysis, forest_mark, root, store.getLocalSpan(stmt.elems))) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .assign_tag => |stmt| {
                     const payload = stmt.payload orelse return false;
                     if (!forest_mark[@backingInt(payload)] or !carriesReadValue(analysis, solution, payload, root)) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .ret => |stmt| {
                     if (sig.ret_mode != .owned) return false;
                     if (!forest_mark[@backingInt(stmt.value)] or !carriesReadValue(analysis, solution, stmt.value, root)) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .init_uninitialized,
                 .assign_literal,
@@ -2767,7 +2787,7 @@ fn collectBorrowForest(
     gpa: Allocator,
     store: *const LirStore,
     analysis: *const Analysis,
-    borrow_child_heads: []const u32,
+    borrow_child_heads: []const OptionalU32,
     borrow_child_edges: []const BorrowChildEdge,
     borrow_stack: *std.ArrayList(u32),
     forest: *std.ArrayList(u32),
@@ -2784,8 +2804,8 @@ fn collectBorrowForest(
         try forest.append(gpa, borrower);
         forest_mark[borrower] = true;
         var child = borrow_child_heads[borrower];
-        while (child != no_index) {
-            const child_edge = borrow_child_edges[child];
+        while (child.get()) |child_index| {
+            const child_edge = borrow_child_edges[child_index];
             if (!analysis.read_through_view[child_edge.local]) {
                 try borrow_stack.append(gpa, child_edge.local);
             }
@@ -2809,11 +2829,8 @@ fn forestHasOperandSite(
     root: u32,
 ) bool {
     for (forest) |borrower| {
-        var mention = analysis.mention_heads[borrower];
-        while (mention != no_index) {
-            const edge = analysis.mention_edges.items[mention];
-            mention = edge.next;
-            const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
+        for (analysis.mentions.group(borrower)) |mention| {
+            const stmt: LIR.CFStmtId = @fromBackingInt(mention);
             if (operandSiteUse(store, solution, analysis, owner, param_benefits, rc_local, forest_mark, root, stmt) != null) return true;
         }
     }
@@ -3094,7 +3111,7 @@ const ComponentBuckets = struct {
 /// solved (`no_index` for any other container).
 fn readsThroughHeldView(analysis: *const Analysis, held: *const std.AutoHashMapUnmanaged(u32, void), through: u32, stop: u32) bool {
     var view = through;
-    while (view != no_index and view != stop) : (view = analysis.view_parent[view]) {
+    while (view != no_index and view != stop) : (view = analysis.view_parent.get(view)) {
         if (held.contains(view)) return true;
     }
     return false;
@@ -3120,14 +3137,14 @@ fn materializedPlaceLink(
     layouts: *const layout_mod.Store,
     solution: *const arc_solve.Solution,
     result: *const Dismantles,
-    projected_container: []const u32,
-    projected_stmt: []const u32,
+    projected_container: []const OptionalU32,
+    projected_stmt: []const OptionalU32,
     read: PlaceRead,
 ) ?PlaceLink {
     const assign = store.getCFStmtImmediate(@fromBackingInt(read.stmt)).assign_ref;
     const target_index = @backingInt(assign.target);
-    const representative = projected_container[target_index];
-    if (representative == no_index or representative == target_index or projected_stmt[target_index] != read.stmt) return read.link;
+    const representative = projected_container[target_index].get() orelse return read.link;
+    if (representative == target_index or projected_stmt[target_index].get() != read.stmt) return read.link;
     const representative_local: LIR.LocalId = @fromBackingInt(representative);
     if (!result.containers.contains(representative_local) and
         !result.owned_only_containers.contains(representative_local)) return read.link;
@@ -3149,7 +3166,7 @@ pub fn compute(
     // Proc parameters are defined by the proc entry rather than a statement;
     // remember each parameter's body so its spine has a start. A local that
     // parameterizes more than one proc spec never dismantles.
-    var param_bodies = collections.DenseMap(LIR.LocalId, ?LIR.CFStmtId).init(gpa);
+    var param_bodies = collections.DenseMap(LIR.LocalId, collections.OptionalId(LIR.CFStmtId)).init(gpa);
     defer param_bodies.deinit();
     const is_param = try gpa.alloc(bool, store.localCount());
     defer gpa.free(is_param);
@@ -3157,12 +3174,13 @@ pub fn compute(
     const operand_read_counts = try gpa.alloc(u32, store.localCount());
     defer gpa.free(operand_read_counts);
     @memset(operand_read_counts, 0);
-    const direct_call_stmt_by_arg = try gpa.alloc(u32, store.localCount());
+    // Every tracked argument of every direct call records its call, so the
+    // writes reach most pages of the local domain. The position is written
+    // with the call and read only where a call was recorded.
+    const direct_call_stmt_by_arg = try denseIndexColumn(gpa, store.localCount());
     defer gpa.free(direct_call_stmt_by_arg);
-    @memset(direct_call_stmt_by_arg, no_index);
-    const direct_call_position_by_arg = try gpa.alloc(u8, store.localCount());
-    defer gpa.free(direct_call_position_by_arg);
-    @memset(direct_call_position_by_arg, std.math.maxInt(u8));
+    var direct_call_position_by_arg = try collections.WriteFirstSlice(u8).init(gpa, store.localCount());
+    defer direct_call_position_by_arg.deinit(gpa);
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         const body = proc.arcBody() orelse continue;
@@ -3172,9 +3190,9 @@ pub fn compute(
             is_param[@backingInt(param)] = true;
             const slot = try param_bodies.getOrPut(param);
             if (slot.found_existing) {
-                slot.value_ptr.* = null;
+                slot.value_ptr.* = .none;
             } else {
-                slot.value_ptr.* = body;
+                slot.value_ptr.* = .some(body);
             }
         }
     }
@@ -3191,9 +3209,9 @@ pub fn compute(
     // specialization frame.
     var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
     defer reachable.deinit(gpa);
-    const stmt_proc = try gpa.alloc(u32, store.cfStmtCount());
+    // Every reachable statement records its first procedure.
+    const stmt_proc = try denseIndexColumn(gpa, store.cfStmtCount());
     defer gpa.free(stmt_proc);
-    @memset(stmt_proc, no_index);
     // Statements reached by more than one procedure have no single owner.
     var shared_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
     defer shared_stmts.deinit(gpa);
@@ -3204,10 +3222,11 @@ pub fn compute(
         for (solution.procStatements(@fromBackingInt(proc))) |stmt_id| {
             const stmt_index = @backingInt(stmt_id);
             reachable.set(stmt_index);
-            const owner = stmt_proc[stmt_index];
-            if (owner == no_index) {
-                stmt_proc[stmt_index] = proc;
-            } else if (owner != proc) {
+            const owner = stmt_proc[stmt_index].get() orelse {
+                stmt_proc[stmt_index] = .some(proc);
+                continue;
+            };
+            if (owner != proc) {
                 shared_stmts.set(stmt_index);
                 dominance.unite(owner, proc);
             }
@@ -3240,9 +3259,14 @@ pub fn compute(
         for (range.join_init_targets.items) |target| explicit_init_join[@backingInt(target)] = true;
     }
 
-    const projected_root = try gpa.alloc(u32, store.localCount());
+    // Rows reached by a projection edge from more than one root during the
+    // fixpoint; such rows end with no root.
+    const ambiguous_root: OptionalU32 = .some(no_index - 1);
+    // Grouping by root below scans every row of this column and of
+    // `projected_stmt`, and `projected_container` is scanned in full when
+    // aliases are materialized, so all three are filled.
+    const projected_root = try denseIndexColumn(gpa, store.localCount());
     defer gpa.free(projected_root);
-    @memset(projected_root, no_index);
     var projection_edge_count: usize = 0;
     for (fact_ranges) |range| projection_edge_count += range.projection_edges.items.len;
     var projection_edges = try std.ArrayList(ProjectionEdge).initCapacity(gpa, projection_edge_count);
@@ -3254,103 +3278,86 @@ pub fn compute(
         for (projection_edges.items) |edge| {
             const source_index = @backingInt(edge.source);
             const source_unit = solution.unitLocalOf(edge.source);
-            const source_root = if (projected_root[source_index] != no_index)
+            const source_root: OptionalU32 = if (projected_root[source_index] != .none)
                 projected_root[source_index]
             else if (edge.is_projection and (!solution.isBorrowed(source_unit) or is_param[@backingInt(source_unit)] or solution.isJoinParam(source_unit)))
-                @backingInt(source_unit)
+                .some(@backingInt(source_unit))
             else
-                no_index;
-            if (source_root == no_index) continue;
+                .none;
+            if (source_root == .none) continue;
             const target_index = @backingInt(edge.target);
-            if (projected_root[target_index] == no_index) {
+            if (projected_root[target_index] == .none) {
                 projected_root[target_index] = source_root;
                 projection_changed = true;
-            } else if (projected_root[target_index] != source_root and projected_root[target_index] != no_index - 1) {
-                projected_root[target_index] = no_index - 1;
+            } else if (projected_root[target_index] != source_root and projected_root[target_index] != ambiguous_root) {
+                projected_root[target_index] = ambiguous_root;
                 projection_changed = true;
             }
         }
     }
     for (projected_root) |*root| {
-        if (root.* == no_index - 1) root.* = no_index;
+        if (root.* == ambiguous_root) root.* = .none;
     }
-    const projection_source = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(projection_source);
-    @memset(projection_source, no_index);
+    // Only ownership-complete projections have a source, and readers probe
+    // single locals.
+    var projection_source = try SparseIndexColumn.init(gpa, store.localCount());
+    defer projection_source.deinit(gpa);
     for (projection_edges.items) |edge| {
-        if (edge.is_projection) projection_source[@backingInt(edge.target)] = @backingInt(edge.source);
+        if (edge.is_projection) projection_source.items[@backingInt(edge.target)] = .some(@backingInt(edge.source));
     }
-    const projected_container = try gpa.alloc(u32, store.localCount());
+    const projected_container = try denseIndexColumn(gpa, store.localCount());
     defer gpa.free(projected_container);
-    @memset(projected_container, no_index);
-    const projected_stmt = try gpa.alloc(u32, store.localCount());
+    const projected_stmt = try denseIndexColumn(gpa, store.localCount());
     defer gpa.free(projected_stmt);
-    @memset(projected_stmt, no_index);
-    for (projection_edges.items) |edge| projected_stmt[@backingInt(edge.target)] = @backingInt(edge.stmt);
+    for (projection_edges.items) |edge| projected_stmt[@backingInt(edge.target)] = .some(@backingInt(edge.stmt));
     // Compare only projections of the same explicit ownership root, rather
     // than scanning every local in the module for each projected container.
-    const root_heads = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(root_heads);
-    @memset(root_heads, no_index);
-    const root_next = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(root_next);
-    @memset(root_next, no_index);
-    for (projected_root, 0..) |root, index| {
-        if (root == no_index or projected_stmt[index] == no_index) continue;
-        root_next[index] = root_heads[root];
-        root_heads[root] = @intCast(index);
-    }
-    // The writes of each root, so a read that a write can separate from an
-    // earlier read of the same root keeps its own read: it may observe the
-    // written value, which the earlier read never saw.
-    const write_heads = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(write_heads);
-    @memset(write_heads, no_index);
-    var write_edges = std.ArrayList(struct { stmt: LIR.CFStmtId, next: u32 }).empty;
-    defer write_edges.deinit(gpa);
-    for (fact_ranges) |range| {
-        for (range.rebinds.items) |rebind| {
-            const target_index = @backingInt(rebind.target);
-            try write_edges.append(gpa, .{ .stmt = rebind.stmt, .next = write_heads[target_index] });
-            write_heads[target_index] = @intCast(write_edges.items.len - 1);
+    var roots = try collections.CsrGroups(u32).fromIndices(gpa, store.localCount(), projected_root.len, .{
+        .roots = projected_root,
+        .stmts = projected_stmt,
+    }, struct {
+        fn key(context: anytype, index: usize) ?u32 {
+            return if (context.stmts[index] == .none) null else context.roots[index].get();
         }
+    }.key, true);
+    defer roots.deinit(gpa);
+    var writes_builder = collections.CsrGroups(LIR.CFStmtId).Builder.init(store.localCount());
+    defer writes_builder.deinit(gpa);
+    for (fact_ranges) |range| {
+        for (range.rebinds.items) |rebind| try writes_builder.add(gpa, @backingInt(rebind.target), rebind.stmt);
     }
-    var root_writes = std.ArrayList(LIR.CFStmtId).empty;
-    defer root_writes.deinit(gpa);
+    var writes = try writes_builder.buildReversed(gpa);
+    defer writes.deinit(gpa);
+    writes_builder.deinit(gpa);
     var dense_writes = std.ArrayList(u32).empty;
     defer dense_writes.deinit(gpa);
     var rebind_memo = RebindMemo{};
     defer rebind_memo.deinit(gpa);
-    for (root_heads, 0..) |head, root| {
-        if (head == no_index) continue;
-        root_writes.clearRetainingCapacity();
-        var write_index = write_heads[root];
-        while (write_index != no_index) : (write_index = write_edges.items[write_index].next) {
-            try root_writes.append(gpa, write_edges.items[write_index].stmt);
-        }
+    for (0..roots.keyCount()) |root| {
+        const members = roots.group(root);
+        if (members.len == 0) continue;
+        const root_writes = writes.group(root);
         rebind_memo.reset();
-        var local_index = head;
-        while (local_index != no_index) : (local_index = root_next[local_index]) {
+        for (members) |local_index| {
             const local: LIR.LocalId = @fromBackingInt(local_index);
             const local_layout = layouts.getLayout(store.getLocal(local).layout_idx);
             if (local_layout.tag != .struct_) continue;
-            const target_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[local_index]);
+            const target_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[local_index].get().?);
             var representative: u32 = local_index;
-            var other_index = head;
-            while (other_index != no_index) : (other_index = root_next[other_index]) {
+            for (members) |other_index| {
                 // A projection dominates itself and the representative it starts as.
                 if (other_index == local_index) continue;
                 const other: LIR.LocalId = @fromBackingInt(other_index);
                 if (store.getLocal(other).layout_idx != store.getLocal(local).layout_idx) continue;
-                const other_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[other_index]);
+                const other_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[other_index].get().?);
                 if (!try dominance.dominates(gpa, other_stmt, target_stmt)) continue;
-                if (try dominance.rebindOnPath(gpa, &rebind_memo, other_stmt, target_stmt, root_writes.items, &dense_writes)) continue;
-                const representative_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[representative]);
+                if (try dominance.rebindOnPath(gpa, &rebind_memo, other_stmt, target_stmt, root_writes, &dense_writes)) continue;
+                const representative_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[representative].get().?);
                 if (try dominance.dominates(gpa, other_stmt, representative_stmt)) {
                     representative = other_index;
                 }
             }
-            projected_container[local_index] = representative;
+            projected_container[local_index] = .some(representative);
         }
     }
     var analysis = Analysis{
@@ -3360,31 +3367,28 @@ pub fn compute(
         .solution = solution,
         .rc_local = rc_local,
         .state = try gpa.alloc(State, store.localCount()),
-        .alias_root = try gpa.alloc(u32, store.localCount()),
+        .alias_root = try .init(gpa, store.localCount()),
         .view_base = try gpa.alloc(u32, store.localCount()),
         .read_through_view = try gpa.alloc(bool, store.localCount()),
-        .view_head = try gpa.alloc(u32, store.localCount()),
-        .view_parent = try gpa.alloc(u32, store.localCount()),
+        .view_head = try .init(gpa, store.localCount()),
+        .view_parent = try .init(gpa, store.localCount()),
         .view_candidates = .empty,
-        .view_root = try gpa.alloc(u32, store.localCount()),
+        // Only ownership-complete payload views of tag unions have a root,
+        // and the candidate gate probes single locals.
+        .view_root = try .init(gpa, store.localCount()),
         .union_roots = .empty,
         .candidates = .empty,
         .is_param = is_param,
         .projected_root = projected_root,
-        .projection_source = projection_source,
+        .projection_source = projection_source.items,
         .projected_container = projected_container,
         .explicit_init_join = explicit_init_join,
-        .mention_heads = try gpa.alloc(u32, store.localCount()),
+        .mention_builder = .init(store.localCount()),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
-    @memset(analysis.alias_root, no_index);
     @memset(analysis.view_base, 0);
     @memset(analysis.read_through_view, false);
-    @memset(analysis.view_head, no_index);
-    @memset(analysis.view_parent, no_index);
-    @memset(analysis.view_root, no_index);
-    @memset(analysis.mention_heads, no_index);
 
     // One linear scan over every reachable statement, classifying each
     // occurrence of each local. The order is one depth-first walk from every
@@ -3403,7 +3407,7 @@ pub fn compute(
             const stmt_index = @backingInt(current);
             if (visited.isSet(stmt_index)) continue;
             visited.set(stmt_index);
-            try classifyStatement(&analysis, store, operand_read_counts, direct_call_stmt_by_arg, direct_call_position_by_arg, current);
+            try classifyStatement(&analysis, store, operand_read_counts, direct_call_stmt_by_arg, &direct_call_position_by_arg, current);
             // A restitution boundary hands each restituted parameter's exact
             // entry unit back to the caller, so it is a whole use of that
             // parameter: no field take may run before it on any path.
@@ -3416,6 +3420,9 @@ pub fn compute(
             }
         }
     }
+
+    analysis.mentions = try analysis.mention_builder.buildReversed(gpa);
+    analysis.mention_builder.deinit(gpa);
 
     var own_counts_it = analysis.candidates.valueIterator();
     while (own_counts_it.next()) |candidate| {
@@ -3433,7 +3440,7 @@ pub fn compute(
         .owned_only_param_benefits = &.{},
         .owned_only_param_totals = &.{},
         .take_bindings = &.{},
-        .owned_only_binding_roots = &.{},
+        .owned_only_binding_roots = .{},
         .field_restitution_args = .empty,
         .projection_units = .init(gpa),
         .complete_takes = .init(gpa),
@@ -3447,8 +3454,7 @@ pub fn compute(
     @memset(result.owned_only_param_totals, 0);
     result.take_bindings = try result.arena.allocator().alloc(bool, store.localCount());
     @memset(result.take_bindings, false);
-    result.owned_only_binding_roots = try result.arena.allocator().alloc(u32, store.localCount());
-    @memset(result.owned_only_binding_roots, no_index);
+    result.owned_only_binding_roots = try SparseIndexColumn.init(gpa, store.localCount());
 
     var read_kinds = collections.DenseMap(LIR.CFStmtId, ReadKind).init(gpa);
     defer read_kinds.deinit();
@@ -3502,14 +3508,15 @@ pub fn compute(
     // mentions, and so does every binding borrowed onward from it.
     var borrow_child_edges = std.ArrayList(BorrowChildEdge).empty;
     defer borrow_child_edges.deinit(gpa);
-    const borrow_child_heads = try gpa.alloc(u32, store.localCount());
+    // Every borrowed local with a lender links into its lender's chain, so
+    // the heads are written across the local domain.
+    const borrow_child_heads = try denseIndexColumn(gpa, store.localCount());
     defer gpa.free(borrow_child_heads);
-    @memset(borrow_child_heads, no_index);
     for (0..store.localCount()) |index| {
         const source = solution.borrowSourceOf(@fromBackingInt(@intCast(@as(u32, @intCast(index))))) orelse continue;
         const source_index = @backingInt(source);
         try borrow_child_edges.append(gpa, .{ .local = @intCast(index), .next = borrow_child_heads[source_index] });
-        borrow_child_heads[source_index] = @intCast(borrow_child_edges.items.len - 1);
+        borrow_child_heads[source_index] = .some(@intCast(borrow_child_edges.items.len - 1));
     }
     var borrow_stack = std.ArrayList(u32).empty;
     defer borrow_stack.deinit(gpa);
@@ -3617,12 +3624,12 @@ pub fn compute(
     }
     const succ_starts = try scc_allocator.alloc(u32, proc_count + 1);
     @memset(succ_starts, 0);
-    for (call_stmts.items) |call_index| succ_starts[group_of_proc[stmt_proc[call_index]] + 1] += 1;
+    for (call_stmts.items) |call_index| succ_starts[group_of_proc[stmt_proc[call_index].get().?] + 1] += 1;
     for (1..proc_count + 1) |index| succ_starts[index] += succ_starts[index - 1];
     const succs = try scc_allocator.alloc(u32, call_stmts.items.len);
     const succ_fill = try scc_allocator.dupe(u32, succ_starts[0..proc_count]);
     for (call_stmts.items) |call_index| {
-        const caller = group_of_proc[stmt_proc[call_index]];
+        const caller = group_of_proc[stmt_proc[call_index].get().?];
         const callee = store.getCFStmtImmediate(@fromBackingInt(call_index)).assign_call.proc;
         succs[succ_fill[caller]] = group_of_proc[@backingInt(callee)];
         succ_fill[caller] += 1;
@@ -3637,7 +3644,7 @@ pub fn compute(
     var candidate_values = std.ArrayList(u32).empty;
     for (candidate_order.items) |candidate_index| {
         const stmt = candidateStatement(analysis.candidates.getPtr(candidate_index).?) orelse continue;
-        try candidate_keys.append(scc_allocator, component_of_proc[stmt_proc[@backingInt(stmt)]]);
+        try candidate_keys.append(scc_allocator, component_of_proc[stmt_proc[@backingInt(stmt)].get().?]);
         try candidate_values.append(scc_allocator, candidate_index);
     }
     for (candidate_order.items) |candidate_index| {
@@ -3646,21 +3653,21 @@ pub fn compute(
         for (candidate.equivalenced_reads.items) |deferred| {
             const representative = analysis.candidates.getPtr(@backingInt(deferred.representative)) orelse continue;
             const representative_stmt = candidateStatement(representative) orelse continue;
-            if (component_of_proc[stmt_proc[@backingInt(representative_stmt)]] != component_of_proc[stmt_proc[@backingInt(stmt)]]) {
+            if (component_of_proc[stmt_proc[@backingInt(representative_stmt)].get().?] != component_of_proc[stmt_proc[@backingInt(stmt)].get().?]) {
                 dismantleInvariant("ARC dismantle projection representative left its root's call-graph component");
             }
         }
     }
     const candidate_buckets = try ComponentBuckets.build(scc_allocator, component_count, candidate_keys.items, candidate_values.items);
     const call_keys = try scc_allocator.alloc(u32, call_stmts.items.len);
-    for (call_keys, call_stmts.items) |*key, call_index| key.* = component_of_proc[stmt_proc[call_index]];
+    for (call_keys, call_stmts.items) |*key, call_index| key.* = component_of_proc[stmt_proc[call_index].get().?];
     const call_buckets = try ComponentBuckets.build(scc_allocator, component_count, call_keys, call_stmts.items);
     var all_place_reads = std.ArrayList(PlaceRead).empty;
     for (fact_ranges) |range| try all_place_reads.appendSlice(scc_allocator, range.place_reads.items);
     const place_read_keys = try scc_allocator.alloc(u32, all_place_reads.items.len);
     const place_read_values = try scc_allocator.alloc(u32, all_place_reads.items.len);
     for (all_place_reads.items, place_read_keys, place_read_values, 0..) |read, *key, *value, index| {
-        key.* = component_of_proc[stmt_proc[read.stmt]];
+        key.* = component_of_proc[stmt_proc[read.stmt].get().?];
         value.* = @intCast(index);
     }
     const place_read_buckets = try ComponentBuckets.build(scc_allocator, component_count, place_read_keys, place_read_values);
@@ -3723,32 +3730,17 @@ pub fn compute(
         source: u32,
         target: u32,
         kind: PlaceEdgeKind,
-        next: u32,
     };
     var places = std.AutoHashMapUnmanaged(u32, PlaceOrigin).empty;
     defer places.deinit(gpa);
     var component_place_keys = std.ArrayList(u32).empty;
     defer component_place_keys.deinit(gpa);
-    var place_edges = std.ArrayList(PlaceEdge).empty;
+    var place_edges: collections.SortedGroups(PlaceEdge) = .{};
     defer place_edges.deinit(gpa);
-    // Per-component edge lists, headed by flat per-key tables whose touched
-    // entries alone are reset between components.
-    const place_heads = try scc_allocator.alloc(u32, store.localCount());
-    @memset(place_heads, no_index);
-    var place_sources = std.ArrayList(u32).empty;
-    defer place_sources.deinit(gpa);
     var place_work = std.ArrayList(u32).empty;
     defer place_work.deinit(gpa);
-    const BenefitEdge = struct {
-        source_key: u32,
-        next: u32,
-    };
-    var benefit_edges = std.ArrayList(BenefitEdge).empty;
+    var benefit_edges: collections.SortedGroups(u32) = .{};
     defer benefit_edges.deinit(gpa);
-    const benefit_heads = try scc_allocator.alloc(u32, proc_count * arc_sig.tracked_param_count);
-    @memset(benefit_heads, no_index);
-    var benefit_targets = std.ArrayList(u32).empty;
-    defer benefit_targets.deinit(gpa);
     var benefit_work = std.ArrayList(u32).empty;
     defer benefit_work.deinit(gpa);
 
@@ -3802,7 +3794,7 @@ pub fn compute(
                         .owned_only_take => |stmt| _ = result.owned_only_takes.remove(stmt),
                         .complete_take => |stmt| _ = result.complete_takes.remove(stmt),
                         .take_binding => |local| result.take_bindings[@backingInt(local)] = false,
-                        .binding_root => |local| result.owned_only_binding_roots[@backingInt(local)] = no_index,
+                        .binding_root => |local| result.owned_only_binding_roots.items[@backingInt(local)] = .none,
                         .restitution => |call_arg| _ = result.field_restitution_args.remove(call_arg),
                         .operand_take => |call_arg| _ = result.operand_takes.remove(call_arg),
                         .owned_only_operand_take => |call_arg| _ = result.owned_only_operand_takes.remove(call_arg),
@@ -3848,8 +3840,8 @@ pub fn compute(
                 // its own, but an ownership-complete view of a root that dies whole,
                 // is defined once, and is otherwise only aliased or discriminated
                 // spends the root's unit through its fields.
-                const union_root: ?*UnionRoot = if (!entry.view and analysis.view_root[@backingInt(local)] != no_index) blk: {
-                    const root_entry = analysis.union_roots.getPtr(analysis.view_root[@backingInt(local)]) orelse continue :candidates;
+                const union_root: ?*UnionRoot = if (entry.view) null else if (analysis.view_root.items[@backingInt(local)].get()) |view_root| blk: {
+                    const root_entry = analysis.union_roots.getPtr(view_root) orelse continue :candidates;
                     if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @backingInt(local)) continue :candidates;
                     break :blk root_entry;
                 } else null;
@@ -3865,7 +3857,7 @@ pub fn compute(
                         inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
                         .assign_ref => |stmt| if (entry.view or
                             union_root != null or
-                            analysis.projected_root[@backingInt(local)] != no_index or
+                            analysis.projected_root[@backingInt(local)] != .none or
                             (stmt.op.kind == .local and !solution.isBorrowed(local))) stmt.next else continue :candidates,
                         .set_local => continue :candidates,
                         .dyn => |stmt| if (solution.isBorrowed(local)) continue :candidates else stmt.next,
@@ -3892,7 +3884,7 @@ pub fn compute(
                         => continue :candidates,
                     }
                 else if (candidate.def_count == 0)
-                    ((param_bodies.get(local) orelse continue :candidates) orelse continue :candidates)
+                    ((param_bodies.get(local) orelse continue :candidates).get() orelse continue :candidates)
                 else
                     continue :candidates;
 
@@ -3934,12 +3926,12 @@ pub fn compute(
 
                 if (candidate.reads.items.len == 0) dismantleInvariant("field-take candidate had no field projection");
                 const first_read = @backingInt(candidate.reads.items[0].stmt);
-                const owner = stmt_proc[first_read];
-                if (owner == no_index or shared_stmts.isSet(first_read)) continue;
+                const owner = stmt_proc[first_read].get() orelse continue;
+                if (shared_stmts.isSet(first_read)) continue;
                 if (!joins_ready[owner]) {
                     joins_ready[owner] = true;
                     try collectProcJoinBodies(store, solution.procStatements(@fromBackingInt(@intCast(owner))), &proc_joins[owner]);
-                    const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.?;
+                    const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.get().?;
                     proc_graphs[owner] = try future_fields.buildProcGraph(gpa, store, &.{proc_body}, &proc_joins[owner]);
                 }
                 const join_bodies = &proc_joins[owner];
@@ -4009,10 +4001,9 @@ pub fn compute(
                         // continuation. This is a total syntactic/metadata boundary:
                         // unsupported continuations simply keep the ordinary schedule.
                         if (!consuming or operand_read_counts[@backingInt(read.target)] != 1) continue;
-                        const call_stmt_index = direct_call_stmt_by_arg[@backingInt(read.target)];
-                        const position = direct_call_position_by_arg[@backingInt(read.target)];
-                        if (call_stmt_index == no_index or position == std.math.maxInt(u8)) continue;
-                        const call_stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(call_stmt_index));
+                        const call_stmt_index = direct_call_stmt_by_arg[@backingInt(read.target)].get() orelse continue;
+                        const position = direct_call_position_by_arg.get(@backingInt(read.target));
+                        const call_stmt_id: LIR.CFStmtId = @fromBackingInt(call_stmt_index);
                         const call_stmt = store.getCFStmtImmediate(call_stmt_id);
                         if (call_stmt.* != .assign_call) continue;
                         const args = store.getLocalSpan(call_stmt.assign_call.args);
@@ -4066,11 +4057,8 @@ pub fn compute(
                         if (demanded and !declined_takes.contains(target_index)) continue;
                         try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, target_index);
                         for (forest.items) |borrower| {
-                            var mention = analysis.mention_heads[borrower];
-                            while (mention != no_index) {
-                                const edge = analysis.mention_edges.items[mention];
-                                mention = edge.next;
-                                const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
+                            for (analysis.mentions.group(borrower)) |mention| {
+                                const stmt: LIR.CFStmtId = @fromBackingInt(mention);
                                 const site_use = operandSiteUse(store, solution, &analysis, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, target_index, stmt);
                                 const slot = try read_kinds.getOrPut(stmt);
                                 if (site_use) |use| {
@@ -4294,9 +4282,9 @@ pub fn compute(
                 // A parameter solved borrowed dismantles only in emissions whose
                 // demand vector overrides it to owned; everything else applies to
                 // every emission of its proc.
-                const projection_root_index = analysis.projected_root[@backingInt(local)];
-                const projected = projection_root_index != no_index and union_root == null;
-                const activation_root: LIR.LocalId = if (projected) @fromBackingInt(@intCast(projection_root_index)) else local;
+                const projection_root = analysis.projected_root[@backingInt(local)].get();
+                const projected = projection_root != null and union_root == null;
+                const activation_root: LIR.LocalId = if (projected) @fromBackingInt(projection_root.?) else local;
                 // A view holds its slots exactly in the emissions its own take
                 // applies to.
                 const owned_only = if (entry.view)
@@ -4323,7 +4311,7 @@ pub fn compute(
                     try result.complete_takes.put(candidate.def_stmt, activation_root);
                     try undo.append(gpa, .{ .complete_take = candidate.def_stmt });
                     if (owned_only) {
-                        result.owned_only_binding_roots[@backingInt(local)] = @backingInt(activation_root);
+                        result.owned_only_binding_roots.items[@backingInt(local)] = .some(@backingInt(activation_root));
                         try undo.append(gpa, .{ .binding_root = local });
                     } else {
                         result.take_bindings[@backingInt(local)] = true;
@@ -4349,11 +4337,10 @@ pub fn compute(
                         // read, so exactly one root authorizes the override.
                         if (!solution.isBorrowed(read.target)) continue;
                         const target_index = @backingInt(read.target);
-                        const prior = result.owned_only_binding_roots[target_index];
-                        if (prior != no_index and prior != @backingInt(activation_root)) {
-                            dismantleInvariant("ARC owned-only field binding had conflicting parameter roots");
+                        if (result.owned_only_binding_roots.items[target_index].get()) |prior| {
+                            if (prior != @backingInt(activation_root)) dismantleInvariant("ARC owned-only field binding had conflicting parameter roots");
                         }
-                        result.owned_only_binding_roots[target_index] = @backingInt(activation_root);
+                        result.owned_only_binding_roots.items[target_index] = .some(@backingInt(activation_root));
                         try undo.append(gpa, .{ .binding_root = read.target });
                     } else {
                         try result.takes.put(read.stmt, take);
@@ -4406,7 +4393,7 @@ pub fn compute(
                     }
                 }
                 if (union_root) |view_root_entry| {
-                    const root_local: LIR.LocalId = @fromBackingInt(@intCast(analysis.view_root[@backingInt(local)]));
+                    const root_local: LIR.LocalId = @fromBackingInt(analysis.view_root.items[@backingInt(local)].get().?);
                     try result.containers.put(root_local, .{
                         .layout_idx = local_layout_idx,
                         .pieces = stored_pieces,
@@ -4446,8 +4433,7 @@ pub fn compute(
             for (scc_candidates) |candidate_index| {
                 const local: LIR.LocalId = @fromBackingInt(candidate_index);
                 if (!result.owned_only_containers.contains(local)) continue;
-                const root_index = result.owned_only_binding_roots[candidate_index];
-                if (root_index == no_index) continue;
+                const root_index = result.owned_only_binding_roots.items[candidate_index].get() orelse continue;
                 const source_info = param_info.get(root_index) orelse continue;
                 if (source_info.proc == ambiguous_index) continue;
                 if (solution.isPinnedProc(@fromBackingInt(source_info.proc))) continue;
@@ -4464,21 +4450,15 @@ pub fn compute(
             // A projection that materializes as an alias of its committed
             // representative links as that alias.
             place_edges.clearRetainingCapacity();
-            for (place_sources.items) |source| place_heads[source] = no_index;
-            place_sources.clearRetainingCapacity();
             component_place_keys.clearRetainingCapacity();
             for (scc_place_reads) |read_index| {
                 const read = all_place_reads.items[read_index];
                 const link = materializedPlaceLink(store, layouts, solution, &result, projected_container, projected_stmt, read) orelse continue;
-                const previous_head = place_heads[link.source];
-                if (previous_head == no_index) try place_sources.append(gpa, link.source);
-                try place_edges.append(gpa, .{
+                try place_edges.add(gpa, link.source, .{
                     .source = link.source,
                     .target = link.target,
                     .kind = link.kind,
-                    .next = previous_head,
                 });
-                place_heads[link.source] = @intCast(place_edges.items.len - 1);
             }
 
             // Seed only locals that can actually carry a unit: owned
@@ -4487,8 +4467,11 @@ pub fn compute(
             // resolves to one of those roots. A borrowed payload local is
             // therefore reached only through its explicit complete-projection
             // edge.
+            place_edges.finish();
             place_work.clearRetainingCapacity();
-            for (place_sources.items) |source_index| {
+            var place_runs = place_edges.runs();
+            while (place_runs.next()) |run| {
+                const source_index = run.key;
                 const source: LIR.LocalId = @fromBackingInt(source_index);
                 const root = solution.unitLocalOf(source);
                 const root_index = @backingInt(root);
@@ -4499,7 +4482,7 @@ pub fn compute(
                     is_param[root_index] or
                     solution.isJoinParam(root) or
                     result.take_bindings[root_index] or
-                    result.owned_only_binding_roots[root_index] != no_index;
+                    result.owned_only_binding_roots.items[root_index] != .none;
                 if (!root_can_own) continue;
                 try places.put(gpa, source_index, .{ .root = root_index, .owner = root_index, .projected = false });
                 try component_place_keys.append(gpa, source_index);
@@ -4509,9 +4492,11 @@ pub fn compute(
             while (place_work.pop()) |source_index| {
                 const source_origin = places.get(source_index) orelse continue;
                 if (source_origin.root == ambiguous_index) continue;
-                var edge_index = place_heads[source_index];
-                while (edge_index != no_index) {
-                    const edge = place_edges.items[edge_index];
+                const edges = place_edges.group(source_index);
+                var edge_index = edges.len;
+                while (edge_index > 0) {
+                    edge_index -= 1;
+                    const edge = edges[edge_index].item;
                     const target: LIR.LocalId = @fromBackingInt(edge.target);
                     // A join parameter is a cell with one definition per
                     // incoming edge, not an SSA value. Its edge-specific
@@ -4519,11 +4504,9 @@ pub fn compute(
                     // origin would incorrectly apply one edge's source to
                     // every arrival.
                     if (solution.isJoinParam(target)) {
-                        edge_index = edge.next;
                         continue;
                     }
                     if (edge.kind == .projection and !solution.isBorrowed(target)) {
-                        edge_index = edge.next;
                         continue;
                     }
                     // A take binding (owned-only ones included, in the
@@ -4531,7 +4514,7 @@ pub fn compute(
                     // its take consumed, so it starts an ownership place of
                     // its own; the root's unit no longer includes that field.
                     const target_holds_unit = result.take_bindings[edge.target] or
-                        result.owned_only_binding_roots[edge.target] != no_index;
+                        result.owned_only_binding_roots.items[edge.target] != .none;
                     const arrival: PlaceOrigin = if (target_holds_unit)
                         .{ .root = source_origin.root, .owner = edge.target, .projected = false }
                     else
@@ -4558,7 +4541,6 @@ pub fn compute(
                             try place_work.append(gpa, edge.target);
                         }
                     }
-                    edge_index = edge.next;
                 }
             }
 
@@ -4568,7 +4550,8 @@ pub fn compute(
             // path solver remains responsible for proving whether the move is
             // legal at this particular read (including outcome-conditioned
             // restitution).
-            for (place_edges.items) |edge| {
+            for (place_edges.pairs.items) |pair| {
+                const edge = pair.item;
                 if (edge.kind != .projection) continue;
                 if (solution.isBorrowed(@fromBackingInt(edge.target))) continue;
                 const origin = places.get(edge.source) orelse continue;
@@ -4588,8 +4571,6 @@ pub fn compute(
             // variants all the way up a derived-encoder wrapper chain. Every
             // callee outside the component is already final.
             benefit_edges.clearRetainingCapacity();
-            for (benefit_targets.items) |target_key| benefit_heads[target_key] = no_index;
-            benefit_targets.clearRetainingCapacity();
             benefit_work.clearRetainingCapacity();
             for (scc_calls) |call_index| {
                 const call = store.getCFStmtImmediate(@fromBackingInt(call_index)).assign_call;
@@ -4607,20 +4588,18 @@ pub fn compute(
                         dismantleInvariant("ARC dismantle parameter benefit left its call-graph component");
                     }
                     const target_key: u32 = @intCast(@backingInt(call.proc) * arc_sig.tracked_param_count + position);
-                    const previous_head = benefit_heads[target_key];
-                    try benefit_edges.append(gpa, .{
-                        .source_key = @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position),
-                        .next = previous_head,
-                    });
-                    benefit_heads[target_key] = @intCast(benefit_edges.items.len - 1);
-                    if (previous_head == no_index) try benefit_targets.append(gpa, target_key);
-                    // A final benefit outside the component seeds the
-                    // propagation once; the component's own bits seed below.
-                    if (previous_head == no_index and component_of_proc[@backingInt(call.proc)] != component and
-                        (result.owned_only_param_benefits[@backingInt(call.proc)] & arc_sig.paramBit(position).?) != 0)
-                    {
-                        try benefit_work.append(gpa, target_key);
-                    }
+                    try benefit_edges.add(gpa, target_key, @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position));
+                }
+            }
+            benefit_edges.finish();
+            var benefit_runs = benefit_edges.runs();
+            while (benefit_runs.next()) |run| {
+                const proc_index = run.key / arc_sig.tracked_param_count;
+                const position = run.key % arc_sig.tracked_param_count;
+                if (component_of_proc[proc_index] != component and
+                    (result.owned_only_param_benefits[proc_index] & arc_sig.paramBit(position).?) != 0)
+                {
+                    try benefit_work.append(gpa, run.key);
                 }
             }
             // Propagate each newly beneficial parameter exactly once. A
@@ -4634,16 +4613,17 @@ pub fn compute(
                 }
             }
             while (benefit_work.pop()) |target_key| {
-                var edge_index = benefit_heads[target_key];
-                while (edge_index != no_index) {
-                    const edge = benefit_edges.items[edge_index];
-                    const source_proc_index = edge.source_key / arc_sig.tracked_param_count;
-                    const source_bit = arc_sig.paramBit(edge.source_key % arc_sig.tracked_param_count).?;
+                const edges = benefit_edges.group(target_key);
+                var edge_index = edges.len;
+                while (edge_index > 0) {
+                    edge_index -= 1;
+                    const source_key = edges[edge_index].item;
+                    const source_proc_index = source_key / arc_sig.tracked_param_count;
+                    const source_bit = arc_sig.paramBit(source_key % arc_sig.tracked_param_count).?;
                     if ((result.owned_only_param_benefits[source_proc_index] & source_bit) == 0) {
                         result.owned_only_param_benefits[source_proc_index] |= source_bit;
-                        try benefit_work.append(gpa, edge.source_key);
+                        try benefit_work.append(gpa, source_key);
                     }
-                    edge_index = edge.next;
                 }
             }
 
@@ -4663,7 +4643,8 @@ pub fn compute(
             if (!solution.isBorrowed(local) or solution.isJoinParam(local)) continue;
             try result.projection_units.put(local, @fromBackingInt(origin.owner));
         }
-        for (place_edges.items) |edge| {
+        for (place_edges.pairs.items) |pair| {
+            const edge = pair.item;
             if (edge.kind != .projection) continue;
             const target: LIR.LocalId = @fromBackingInt(edge.target);
             // Unlike a borrowed place origin, this move is attached to one
@@ -4702,9 +4683,10 @@ pub fn compute(
     // Materialize only equivalences whose representative actually acquired a
     // committed dismantle plan. Lookup-only projections retain their original
     // LIR and ownership schedule.
-    for (projected_container, 0..) |representative, local_index| {
-        if (representative == no_index or representative == local_index) continue;
-        const representative_local: LIR.LocalId = @fromBackingInt(@intCast(representative));
+    for (projected_container, 0..) |maybe_representative, local_index| {
+        const representative = maybe_representative.get() orelse continue;
+        if (representative == local_index) continue;
+        const representative_local: LIR.LocalId = @fromBackingInt(representative);
         if (!result.containers.contains(representative_local) and
             !result.owned_only_containers.contains(representative_local)) continue;
         // The deferred reads of this alias were settled against this exact
@@ -4712,9 +4694,8 @@ pub fn compute(
         if (order_marks[representative] != .ordered) {
             dismantleInvariant("ARC dismantle materialized an alias of a representative that was never solved");
         }
-        const stmt_index = projected_stmt[local_index];
-        if (stmt_index == no_index) continue;
-        const stmt = store.getCFStmtPtr(@fromBackingInt(@intCast(stmt_index)));
+        const stmt_index = projected_stmt[local_index].get() orelse continue;
+        const stmt = store.getCFStmtPtr(@fromBackingInt(stmt_index));
         if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
         stmt.assign_ref.op = .local(representative_local);
         try result.projection_aliases.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
@@ -4726,25 +4707,25 @@ pub fn compute(
         // A tag union view holds its slot or reads it; it has no
         // representation shell to write.
         if (layouts.getLayout(store.getLocal(@fromBackingInt(@intCast(@as(u32, @intCast(local_index))))).layout_idx).tag != .struct_) continue;
-        const root_index = analysis.alias_root[local_index];
-        const union_index = analysis.view_root[root_index];
-        const key: LIR.LocalId = @fromBackingInt(@intCast(if (union_index != no_index) union_index else root_index));
+        const root_index = analysis.alias_root.get(local_index);
+        const key: LIR.LocalId = @fromBackingInt(analysis.view_root.items[root_index].get() orelse root_index);
         if (!result.containers.contains(key) and !result.owned_only_containers.contains(key)) continue;
         // Takes nested in a view's take apply in exactly its emissions, so
         // the innermost view whose definition is a take decides them all.
-        var holder = analysis.view_head[local_index];
-        while (holder != no_index and !result.take_bindings[holder] and result.owned_only_binding_roots[holder] == no_index) {
-            holder = analysis.view_parent[holder];
+        const head = analysis.view_head.get(local_index);
+        var holder = head;
+        while (holder != no_index and !result.take_bindings[holder] and result.owned_only_binding_roots.items[holder] == .none) {
+            holder = analysis.view_parent.get(holder);
         }
         // A view whose definition takes its slots in every emission holds
         // them itself.
-        if (holder == analysis.view_head[local_index] and result.take_bindings[holder]) continue;
+        if (holder == head and result.take_bindings[holder]) continue;
         try result.views.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), .{
             .root = key,
             .base = analysis.view_base[local_index],
             .holder = if (holder == no_index) null else @fromBackingInt(@intCast(holder)),
             .holder_base = if (holder == no_index) 0 else analysis.view_base[holder],
-            .is_holder = holder == analysis.view_head[local_index],
+            .is_holder = holder == head,
         });
     }
     return result;

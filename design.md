@@ -242,6 +242,55 @@ must revisit an entry, so it has found a cycle, which is an invariant
 violation. A walk whose store cannot be counted detects the cycle directly.
 No walk uses a fixed step limit that a legal program could exceed.
 
+### Table Storage Lifecycles
+
+Table owners choose storage from the lifecycle, not the initial bit pattern:
+
+| Lifecycle | Storage | Reset |
+| --- | --- | --- |
+| Every entry is written before read | `WriteFirstSlice` | Produce each entry again |
+| Read-first, dense, used once | Filled slices or `OptionalIndexColumn.initFilled` | Explicit fill |
+| Read-first, sparse, large domain | Fresh zero pages or `OptionalIndexColumn.initSparse` | Guaranteed-zero page reset or release |
+| Repeated scratch over a retained domain | `EpochSet` or `EpochColumn` | Advance an epoch |
+| Small flag-only domain | Bitset form of `EpochSet` | Clear the bits |
+| Growing columns | `ReservedList` or `ReservedColumns` | Explicit append writes; trim on seal |
+| Tables with one pass lifetime | `ScratchArena` | Reset to the pass boundary |
+
+Fresh zero storage guarantees the initial state of a new mapping and newly
+accessible reservation suffix. It says nothing about retained capacity,
+rollback/regrowth, descriptor recycling, or sharing with another thread.
+Every appended entry is written explicitly. Resetting a sparse mapping must
+guarantee zeros, not merely advise that its contents may be discarded.
+
+Optional-index columns preserve the owning domain's IDs. A zero-based shared
+domain stores `id + 1`, reserving the stored zero for absence. A private domain
+may instead reserve array slot zero and issue IDs from one; its column
+stores those IDs unchanged, and every iteration over entries excludes the unused
+slot. This choice never silently renumbers IDs crossing a compiler boundary.
+Borrowed column views own no allocation.
+
+Internally counted epochs start at one. Before an advance would reach
+`maxInt(u32)`, the stamps are cleared and the epoch restarts at one. Natural
+epochs are increasing producer-owned IDs; restarting their domain requires
+clearing the stamps. Data are read only under a matching stamp.
+
+Dense storage requests huge-page backing where supported; sparse storage
+avoids it so a small touched subset does not make large regions resident.
+Address stability below a reservation limit is a performance property, never
+a consumer contract. Exceeding a reservation may relocate the column, and
+allocation failure propagates without changing logical contents or ownership.
+Borrowed serialized views own no backing memory and cannot grow.
+
+Groupings use CSR for dense keys and sorted pairs for sparse keys. Chains are
+appropriate only when construction and queries interleave. Group order is
+explicit: both collection builders preserve insertion order, so a consumer
+of a reverse-insertion chain must preserve its ordering deliberately.
+
+These primitives do not authorize blanket conversions. Each migration must
+preserve padding and value-byte initialization, prove its lifecycle,
+and pass the corpus performance gate. Reservation thresholds and commit-ahead
+policy remain measurement decisions, not guarantees of a speedup.
+
 ### Dense IDs and structural keys
 
 Compiler-owned identity domains prefer dense, store-local integer IDs. The
@@ -1910,7 +1959,9 @@ a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
 record, or guard exists for the root. Discriminant-only enums (including Bool)
 are scalar values for this rule, even though their layout is a tag union.
-Small strings may likewise use their immediate representation. All aggregate
+Small strings may likewise use their immediate representation. Restoring
+stored constants uses the same rule, so these values stay constructions,
+visible to constant propagation and worker preparation. All aggregate
 values, including empty lists, records, tuples, payload-bearing tags, boxes,
 and captured functions, read immutable stored
 data. There is no construction tree, runtime constructor, or fresh alternative
@@ -1978,10 +2029,10 @@ program's root module, taken from its checked `runtime_requests`, and the
 package and the packages it reaches through filesystem paths), with every
 literal conversion those roots reach hoisted, at the host's width, with
 expects run (`compileTimeTarget`). Every compilation evaluates every requested
-root ("Demand-Driven Compile-Time Evaluation"). Its Solved policy is that of the program
-being built, so evaluation runs inside that program's one specialization;
-with no runtime program, as in `roc check`, it is a dev build's
-(`CheckedPipeline.dev_inline_mode`). Inlining and SpecConstr preserve meaning,
+root ("Demand-Driven Compile-Time Evaluation"). When an LSS runtime consumer
+continues that specialization (see "Runtime Programs Read Stored Values"), its
+Solved policy is that of the program being built; otherwise, as in `roc check`,
+it is a dev build's (`CheckedPipeline.dev_inline_mode`). Inlining and SpecConstr preserve meaning,
 and every function value keeps the captures the checked program gives it
 ("Stored Function Capture Contract"), so the policy changes how evaluation's
 code is built, never what it computes or stores.
@@ -2003,10 +2054,11 @@ no LSS runtime consumer continues that program, as in `roc check`, the
 program roots in that union are discovery roots and only the bodies that can
 register a literal root are specialized (see "Demand-Driven Compile-Time
 Specialization" below). An
-LSS runtime consumer continues that program and borrows it, unless the
-evaluation completed a compile-time root the program demands, when it
-continues the program specialized again from the stored values instead
-(see "Runtime Programs Read Stored Values"): none copies it,
+LSS runtime consumer continues that program and borrows it only when the
+evaluation has no compile-time root to evaluate and no discovery root to
+specialize; otherwise evaluation is specialized as in `roc check` and the
+consumer continues a specialization of its own roots made from the stored
+values (see "Runtime Programs Read Stored Values"): none copies it,
 none reruns any of those stages for it, and callable correspondence compares ids
 from one producer domain, never ids allocated by separate solver runs. A
 consumer continuing it chooses its target width, the explicitly shared
@@ -2199,12 +2251,14 @@ discovery request otherwise.
 Literal roots registered in discovery bodies are evaluated exactly as before,
 so `roc check` reports every rejected or crashing conversion a build reports.
 
-An LSS runtime consumer needs its own runtime bodies specialized and continues
-the evaluation's program. An application build names its entrypoints as runtime
-roots; tests discovered in its modules are compile-time discovery roots. These test bodies
-must still validate specialization-dependent literals and replay compile-time
+An LSS runtime consumer needs its own runtime bodies specialized. An
+application build names its entrypoints as runtime roots; tests discovered in
+its modules are compile-time discovery roots. These test bodies must still
+validate specialization-dependent literals and replay compile-time
 observations, but do not become runtime demand merely because an unrelated
-application entrypoint has a runtime consumer. Its compile-time consumer lowers and evaluates the
+application entrypoint has a runtime consumer, so a runtime consumer never
+continues a specialization that kept a discovery root (see "Runtime Programs
+Read Stored Values"). Its compile-time consumer lowers and evaluates the
 same compile-time and literal roots.
 
 `--timings` reports these decisions under "Demand-driven specialization":
@@ -4423,7 +4477,11 @@ Checking records its problems in the checker's problem store and evaluation
 appends its own to the same store. An entry stores them as `CheckedReports`:
 every problem with the store's strings, the count of checking's, the snapshots
 and regions checking's problems render with (copied out of the checker before
-it is released), and the checker's import display names. A hit reports, after
+it is released), and the checker's import display names. The snapshots keep
+their frozen captures and node formats beside the text the miss rendered, so a
+snapshot whose text was never rendered renders on demand with the module's
+names, the stored import display names and the module's default sources, the
+same context the checker's type writer used. A hit reports, after
 parsing and canonicalization reports and before anything else is appended,
 the diagnostics import resolution recorded on the env beyond canonicalization's,
 then checking's problems and evaluation's, rendered by the same report
@@ -5636,6 +5694,11 @@ were bound. Completed independent roots are
 read as stored values and never evaluated again. A pairing is never serialized
 into the platform's checked module.
 
+The pairing recomputes exact-alias forwarding after binding required values,
+before classifying calls or scheduling roots. That forwarding is a changed
+pairing column and survives a pairing-cache hit; borrowing the unbound
+platform's forwarding would incorrectly demand a computed callable.
+
 ### Type Content Keys
 
 A type content key is the content identity of a type: alpha-invariant over
@@ -5955,7 +6018,17 @@ inspecting solved type shape or by comparing the eventual runtime value kind.
 A procedure requirement's root evidence follows the complete scheme of its
 recorded app definition, including captured codec requirements. The copied
 platform requirement type supplies the solved interface, not the scheme's
-evidence identity. The pairing's root-request analysis validates a direct
+evidence identity. Once the binding's scheme is complete, checking records a
+source-free invocation with the ordinary scheme-use substitution and validates
+all of its copied requirements. The solved requirement and its identity slots
+name that instance. Checked output consumes the invocation's evidence. An attached
+codec parameter has a variable receiver, so its scheme has no uninstantiated
+root contract: a literal default is not a checked codec derivation. This rule
+also covers unused and aliased procedures, not just platform-bound definitions.
+Explicit composite codec requirements retain their private-validation verdict.
+This is one use, not a second body check or an output-time
+codec derivation. A monomorphic invocation with no evidence needs no record.
+The pairing's root-request analysis validates a direct
 procedure's root vector against the app template's parameter count. Monotype
 selects this root evidence before materializing an edge for a direct call,
 procedure value, or interface relation; downstream specialization receives
@@ -6315,6 +6388,14 @@ resolved. An undetermined field-kind cell remains specialization-owned even
 when its associated checked type cell is otherwise concrete, so it cannot make
 a compile-time root request eligible.
 
+A Boxy entry for such an ineligible root runs its expression under the
+worker's arguments. Only an eligible context-free root requires a completed
+stored representation before runtime lowering; request eligibility itself must
+already be decided by checking.
+An exact procedure alias likewise runs its checked forwarding lookup, not an
+evaluator. Module-unit wrapper emission consumes the recorded
+`CallableEvalTemplate.forwarded_lookup` decision for this case.
+
 A data root whose value contains a callable slot is context-free only when its
 producer fixes that callable graph with an explicit source annotation. A
 callable root itself also supplies producer-side callable evidence. An
@@ -6505,6 +6586,10 @@ type identity key includes them; the resulting `CheckedNominalDeclaration` takes
 the same variables as formals after its declared ones (`context_len` of
 them). The declaration's backing names those variables directly, so binding
 the formals to a use's arguments substitutes them like any other formal.
+The backing walk binds each formal by its binder annotation, never by its
+name: in `Pair(a) := [Pair(Captured, a)]` inside a body over `a`, the
+backing's `a` resolves to the enclosing function's binder, so it stays that
+context variable rather than becoming the same-named parameter.
 Monotype's declaration scopes and its nominal caches, keyed by arguments,
 therefore tell `Wrap` at `U64` from `Wrap` at `Str`, and give each its own
 methods' specializations, with no rule of their own; Boxy reads the same
@@ -9614,8 +9699,11 @@ one pass over the source bodies, every use of every expression and local (a
 lifted body may share an expression node between parents, and bodies may share
 nodes with each other, so a node keeps one list of uses per body), each body's
 loops, its single definitions and slots, and the strongly connected components
-of the call graph over direct calls and function values. The index is
-read-only afterwards. Each task owns a `Session` with its own memo tables, so
+of the call graph over direct calls and function values. Slots are keyed by
+body: a lifted closure's capture slots are the very locals its enclosing body
+binds, so a local reads as a parameter or capture only within the body that
+declares that slot, and a summary memoizes an expression per body that reads
+it. The index is read-only afterwards. Each task owns a `Session` with its own memo tables, so
 queries share no mutable state and take no locks.
 
 A query walks forward from the crossing value: from the callee's parameter or
@@ -10177,6 +10265,34 @@ The following properties require focused tests:
 Backends receive only ordinary LIR and explicit ARC statements. They must not
 know whether a value originated as a public iterator, a minted iterator,
 forced-dynamic callable state, or a scalarized loop.
+
+## Immutable Diagnostic Captures
+
+Diagnostics capture their type evidence before error poisoning, but render only
+the roots and tags their reports request. A capture retains variable identity,
+recursive references, polarity, naming scope, and literal-constraint display
+policy. Later solver writes, identifier insertion, or another capture's display
+options cannot change its text.
+
+The structural snapshot is the durable source of truth. Completed subgraphs share
+nodes within a capture; recursion markers retain their source identity rather
+than requiring repeated expansion of cyclic subgraphs. Only a capture whose text
+is requested acquires a private `TypeWriter` adapter graph, which restores that
+sharing and recursion without consulting the
+solver. Filling newly allocated presentation nodes is diagnostic construction,
+not a solver-mutating rewrite. Rendered strings have stable owned storage:
+requesting another root cannot invalidate a string already borrowed by a report.
+
+Constraint collection visits each receiver once per rendering and deduplicates
+exact callable identities before formatting. Equal displayed signatures are
+deduplicated without rescanning the accumulated list. These are presentation
+rules, not changes to evidence identity or constraint solving.
+
+Checking capsules retain the immutable capture and already-requested text, not
+an eager rendering of every node. Restored diagnostics use the same rendering
+path. Probe rollback discards speculative captures and rendered-result entries.
+Performance tests count capture and rendering visits as well as duplicate
+comparisons; eliminating one comparison loop alone is not sufficient.
 
 ## Solver-Mutating Rewrites
 
@@ -11492,6 +11608,16 @@ checked module data records for flex and rigid variables alike).
 Specialization therefore never meets a request wider than a template
 that cannot take it.
 
+A direct call is lowered at the wider row only when its template takes
+one by these two rules: the template's OWN root has a closed result row or
+a request-determined result row variable
+(`Builder.templateTakesWiderResultRow`). The call's instantiated type is
+not enough. A template whose result row variable it shares with an
+argument, like `same : Try(ok, err) -> Try(ok, err)`, is closed at a call
+whose argument builds no error tags (`same(Ok(x))`), yet its request's
+result row is its argument's, which the request does not widen. Such a
+call keeps its own row and is widened by a `row_widen`.
+
 The set of positions a use may WIDEN is kept within the row coercion's reach
 by construction rather than by a second rule that could drift: polarity's
 per-use opening is withheld at generation time from every position outside
@@ -11909,6 +12035,11 @@ it states the instance's callable, whose types that derivation was built at. So
 a procedure that runs as a root, which has no caller, relates to the instance as
 it would to a use, and a generalized binding nothing uses (`_ = any_parser`)
 still has evidence at its construction.
+Every dispatch relation the private instance copies, including constraints
+attached to its nested variables, belongs to the pending codec relation's
+recorded owner. Shared relations keep their original owner. Registering these
+copies is part of instantiation, before any of them can reach a dispatch drain;
+the later finalization boundary is not their creator.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
@@ -11984,7 +12115,13 @@ module solves, each open row in its data whose tail carries only these
 constraints is grounded to the empty row by unifying the tail with it
 (`Check.closeValueRowTailsCarryingDerivations`), as every row of a top-level
 value closes when its module finishes checking (Value Rows: Uses Share One
-Row). A function's tail is left open: it
+Row). The module commits its permitted weak-value row defaults after the
+late annotation audit, then drains the dispatch work they create before
+freezing codec derivations or rejecting unresolved scheme requirements.
+A non-generalized tail shared through a function stored in a weak value
+must receive its default before a borrowing scheme is judged unresolved.
+These are the existing value-row commitments, not another whole-module
+finalization pass. A function's generalized tail is left open: it
 generalizes, and each instantiation supplies its row. An instantiation whose
 copy of the tail nothing pins leaves that copy to its row default too, so the
 ambiguity judgment never reports it: `make : U64 -> Set([X, Y])` built with
@@ -14471,7 +14608,11 @@ callable carries the caller's instantiation: a `where` requirement whose
 interface mentions the variable (the dictionary's methods), or any
 parameter holding a nominal over a callable payload, whose callable's
 interface its methods hide from the signature
-(the argument traversal of `SealedSchemeSlots`). A bounded flex that unification
+(the argument traversal of `SealedSchemeSlots`). This includes
+`Encoding.ParseTagUnionSpec`: its nominal exposes the parsed shape, but its
+callback exchanges the format invocation's error row in both arguments and
+results. Sealing the format's row would change that callback's ABI.
+A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.
@@ -15308,6 +15449,10 @@ immortal callables under both strategies, rather than allocations at each use.
 The `out_desc` slot of the erased-callable ABI is always
 written null: the caller knows the result type's descriptor itself.
 
+Completed callable parts carry the producer-selected drop helper along with
+the procedure. The static-data encoder preserves that relocation: an immortal
+allocation does not erase its callable ABI, including a host's explicit drop call.
+
 Every `.boxy` erased worker (a lambda, an adapter, a method entry, a literal
 or root thunk) takes the erased ABI's reuse argument as its last parameter,
 named by `LirProcSpec.erased_reuse_arg`, and consumes it exactly once
@@ -15907,7 +16052,9 @@ program is specialized (`evaluateBoxyRoots`, `.before_solved`), so the
 specialization restores every value it reads exactly as a compilation of
 cached modules does: the Solved program of a cold compilation and of a warm
 one are the same program, and an LSS runtime consumer continues it without
-the program being specialized again. A root holding a function value is the
+the program being specialized again when it has no root left to evaluate and
+no discovery root to specialize ("Runtime Programs Read Stored Values").
+A root holding a function value is the
 Solved program's, since a `.boxy` function value means nothing to Monotype
 ("Stored Function Values"), and so is every root reading one; the Solved
 program evaluates them, and the literal roots its specializations register,
@@ -20523,6 +20670,15 @@ successful pattern locals before lowering the branch statement span, so later
 stages consume this ordering directly; no source record-rest pattern survives
 Monotype lowering.
 
+An or-pattern's alternatives share one source body before specialization work
+can multiply it. Monotype gives a multi-alternative arm a typed body join;
+successful alternatives supply its canonical checked binders. Guards and
+pattern-derived preludes remain alternative-specific, preserving ordered guard
+failure and retry semantics. The shared body's runtime-demand exemption requires
+every incoming alternative to be impossible, not just one. Its interface carries
+the actual state/result and producer representation evidence, including capture
+identity; a source arm is not a new callable boundary.
+
 **The sharing invariant.** Monotype is a DAG: an expression id referenced from
 multiple positions is re-lowered at each reference, so downstream control
 sharing must go through typed lifted join points or LIR join points, never
@@ -21322,6 +21478,11 @@ not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
+
+An erased argument product's recorded slot boundaries are authoritative for
+both the start and width of each field read. Its non-owning prefix and scalar
+fields may occupy zero slots; their standalone layouts cannot supply widths in
+that product's coordinate system.
 
 ARC uses this explicit shape for the same field-take and residual-release
 rules as concrete products. Generic record field reads copy representation
@@ -24495,21 +24656,36 @@ once for the module. The same rule forbids reintroducing that search at the
 producer: a whole-module finalization pass whose only consumer is wasm local
 binding trades one redundant traversal for another.
 
+Pointer-local slots and the aggregate bytes they address have separate storage
+lifetimes. They share one procedure CFG and base lifetime solve; backing storage
+extends the solved ranges through admitted aliases before assigning byte slots.
+Every aggregate assignment has a planned destination, including a result local
+defined by several mutually exclusive calls. A closed value exposed through a
+dynamic view has dedicated backing storage, since its address escapes the
+static-local access inventory.
+
+Instruction-selection scratch does not survive its operation. It occupies a
+separate frame region whose extent is the maximum required by an operation, not
+the sum across emitted branches. Persistent slots and scratch are on opposite
+sides of the frame pointer; the prologue reserves both and every split fragment
+uses that same frame. Explicit address-producing allocations remain persistent.
+Assignment commits aggregate results before scratch is reused, so neither
+emission order nor a branch-local allocator reset determines value lifetime.
+
 ### Wasm Aggregate Aliases
 
 An aggregate local of the wasm backend holds the address of its bytes: a slot
-of the procedure's frame, or for a parameter the caller's storage, and
-either stays put for the rest of the procedure. An `assign_ref.local` of an
+of the procedure's frame, or for a parameter the caller's storage. An `assign_ref.local` of an
 aggregate therefore binds its target to the source's address rather than
-copying the bytes, exactly when `LocalWrites` proves the alias for the pair:
+copying the bytes when the shared stack planner proves the alias for the pair:
 the target has one definition, the source at most one, and neither is
 written in place (`set_local`, `init_uninitialized`, a join parameter, a
-string-match capture, a dynamic write); dynamic locals never alias. This is
-the rule the native dev backend's stack plan proves ("Dev Backend Register
-Lifetimes"), taken from the same shared definition walk, so a frame holds
-one copy of a record however many field reads name it. A `ref.local` the
-rule rejects copies, so a snapshot keeps the bytes it saw when its source is
-rewritten.
+string-match capture, a dynamic write), and the snapshot does not live across
+its owner's next definition around a back edge. Dynamic locals never alias by
+this rule. This is the native dev backend's proof ("Dev Backend Register
+Lifetimes"), with the same shared definition inventory and runtime CFG. The
+owner keeps its bytes through every alias read; a rejected alias copies, so
+storage reuse cannot change a snapshot when its source is rewritten.
 
 ## Wasm Body Generation
 
@@ -24815,7 +24991,9 @@ above the guard, with no compiler frames beneath the generated entry, so how
 deep a program recurses before it overflows, and the instruction that
 overflows, are a function of the program and the compiler build alone, and an
 overflow's reported position is reproducible. The crash boundary is set on the
-evaluation stack (`CrashBoundary.run`), so the escape from a crash or an
+evaluation stack (`CrashBoundary.run`). Its guarded callback is never tail-called:
+the frame containing the recovery point must remain live while the callback
+can escape to it. Thus the escape from a crash or an
 overflow lands there and the root returns to the thread's own stack through
 the switch it entered by. The guarded callback is explicitly never tail-called:
 the frame holding the recovery point must remain live until the callback returns
@@ -25601,22 +25779,28 @@ construction as its parts), and no runtime program declares a slot, a
 failure record, or a guard for a compile-time root that completed.
 
 The point at which this holds for a live compilation is explicit: the end of the
-program's evaluation (`finalizeProgram`). The specialization evaluation made declared
-each pending root's read as a slot read, because the value did not exist
-yet, so when that evaluation completed any compile-time root the program
-demands, its Solved program is not the one a runtime consumer continues.
-The program is specialized again from the checked modules, now holding
-every demanded value stored, exactly as a compilation that found them all
-in the cache specializes it (`ProgramSession.RuntimeStages.respecialized`).
-Runtime roots still register every conversion
-their own code uses. That specialization demands no compile-time root; it registers the
-runtime program's literal roots again and evaluates them, and their outcomes, which
-the first evaluation already reported, report nowhere. A literal root is
-not stored by any compilation, so both kinds of compilation read literal
-roots' completed values from the stages that evaluated them, the same way.
-A compilation that
-evaluated no compile-time root its program demands continues its one
-specialization, which is already that program.
+program's evaluation (`finalizeProgram`). The specialization evaluation makes
+declares each pending root's read as a slot read, because the value does not
+exist yet, so a specialization that evaluates a compile-time root is never the
+one a runtime consumer continues. Neither is one that keeps a discovery root:
+a test is no part of the runtime program, but its closures would join the
+lambda sets the runtime program shares with it, and the runtime program would
+then reach the test's values. Which case applies is decided before anything is
+specialized, from the pending compile-time roots and the discovery roots that
+can register a literal root (`planRoots`). When there are any, evaluation
+specializes exactly what `roc check` specializes, with the program roots as
+discovery roots, and afterwards the program roots alone are specialized from
+the checked modules, now holding every value stored, exactly as a compilation
+that found them all in the cache specializes it
+(`ProgramSession.RuntimeStages.respecialized`). Runtime roots still register
+every conversion their own code uses. That specialization demands no
+compile-time root; it registers the runtime program's literal roots again and
+evaluates them, and their outcomes, which the first evaluation already
+reported, report nowhere. A literal root is not stored by any compilation, so
+both kinds of compilation read literal roots' completed values from the stages
+that evaluated them, the same way. A compilation with neither specializes
+once, with its program roots in full, and its runtime consumer continues that
+specialization.
 
 ### Dependency-Ordered Compile-Time Evaluation
 
