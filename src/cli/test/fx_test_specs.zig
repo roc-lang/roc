@@ -96,6 +96,11 @@ pub const inline_list_slow_arms_test = TestSpec{
 /// the compiled binary's IO behavior, not build-time features.
 pub const io_spec_tests = [_]TestSpec{
     .{
+        .roc_file = "test/fx/issue_12953_host_held_state.roc",
+        .io_spec = "1>a label long enough to live on the heap rather than inline: 35",
+        .description = "A boxed app state whose fields hold functions survives a host round trip (issue #12953)",
+    },
+    .{
         .roc_file = "test/fx/host_constant_boxed_sequence.roc",
         .io_spec = "1>[1, 2, 3]|1>[4, 5]|1>[93]|1>[93]",
         .description = "Constant boxed iterators and streams survive storage and host round trips (issue #12887)",

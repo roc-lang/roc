@@ -26115,14 +26115,24 @@ producer metadata; only non-debug size builds remove target-feature metadata.
 
 ## Host Symbol ABI
 
-Every function value, `Iter`, and `Stream` visible to the host must be the
-immediate payload of its own `Box`. Boxing an enclosing record, tuple, list,
-tag, or user nominal does not satisfy this requirement. Aliases are transparent;
-nominal and opaque user types are checked through their declared backing with
-their actual parameters substituted. The rule applies equally to hosted and
-provided arguments and results. A procedure's own signature is not a function
-value. Boxed iterators and streams are opaque handles: their private step
-closures are implementation state, not further host-visible values.
+Every function value visible to the host must be inside a `Box`, and every
+`Iter` and `Stream` visible to the host must be the immediate payload of its
+own `Box`. A directly boxed function is a callable the host may invoke, so its
+arguments and result are host-visible values in turn. Any other `Box` payload
+is a value the host only holds: it may store the pointer and hand it back.
+Every function a `Box` holds is an erased callable (see Erased Callable
+Requirements), so the payload's bytes are fixed whatever functions it contains,
+at any depth and in any record, tuple, list, tag, or user nominal; those
+functions' signatures are not host-visible. This is what lets a platform keep
+an app's whole state, including the app's own functions, in one `Box(State)`
+between calls. Sequences take their handle representation only as an immediate
+`Box` payload, so a held payload still needs each `Iter` and `Stream` it
+contains directly boxed. Aliases are transparent; nominal and opaque user types
+are checked through their declared backing with their actual parameters
+substituted. The rule applies equally to hosted and provided arguments and
+results. A procedure's own signature is not a function value. Boxed iterators
+and streams are opaque handles: their private step closures are implementation
+state, not further host-visible values.
 
 Boxed sequences share the erased-callable ownership protocol. Their captures
 and private record view occupy one allocation; the view's step points back to
