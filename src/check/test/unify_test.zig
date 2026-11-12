@@ -1130,7 +1130,7 @@ test "unify - issue 11024 - empty nominal row absorption respects field kinds an
                 const nominal = try store.freshFromContent(try env.mkNominalType("Cfg", backing, &.{}));
                 // A `{}` literal: no fields over an uncommitted tail.
                 const tail = try store.fresh();
-                try store.markUncommittedRecordTail(tail);
+                try store.markUncommittedRecordTail(tail, false);
                 const empty = try store.freshFromContent((try env.mkRecord(&.{}, tail)).content);
                 const a = if (order == 0) nominal else empty;
                 const b = if (order == 0) empty else nominal;
@@ -1187,7 +1187,7 @@ test "unify - issue 11024 - zero-field nominal backing stays structural across c
         const nominal = try store.freshFromContent(try env.mkNominalType("Cfg", backing, &.{}));
         for (0..2) |_| {
             const tail = try store.fresh();
-            try store.markUncommittedRecordTail(tail);
+            try store.markUncommittedRecordTail(tail, false);
             const empty = try store.freshFromContent((try env.mkRecord(&.{}, tail)).content);
             const result = if (order == 0)
                 try env.unifyExact(nominal, empty)

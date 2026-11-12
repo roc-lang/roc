@@ -362,7 +362,9 @@ pub const Constants = struct {
     /// 183: checked-module entries store reproducible checking and evaluation
     ///      reports beside body-local type context arguments and
     ///      generated-codec recurrences.
-    pub const CACHE_VERSION = 183;
+    /// 184: quantified record tails are restricted at every use, record
+    ///      pattern tails are marked, and nominal declarations record padding.
+    pub const CACHE_VERSION = 184;
 };
 
 /// Configuration for the Roc cache system.

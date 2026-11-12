@@ -649,6 +649,31 @@ pub const UnusedValue = struct {
 
 // type mismatch //
 
+/// Why the record of a use of a binding that quantified the record's tail
+/// could not become the type the use asked for (design.md "Uncommitted
+/// Record Tails"). A use may close that record or make it a nominal type
+/// with exactly its fields stored the same way; the report names what else
+/// the use asked for.
+pub const RecordTailRefusal = struct {
+    kind: Kind,
+    /// The nominal type the record was to become, when it was one.
+    nominal: ?Ident.Idx,
+    /// The field the use asked for that the record lacks (`added_field`).
+    field: ?Ident.Idx,
+    /// The record is one the binding takes apart with a record pattern,
+    /// rather than one it builds.
+    taken_apart: bool,
+
+    pub const Kind = enum {
+        /// The nominal type declares unnamed fields, so its values are not
+        /// stored like the record.
+        padded_nominal,
+        /// The use asked for an optional or defaulted field the record was
+        /// built without.
+        added_field,
+    };
+};
+
 /// Why a failed relation follows from a body-local type leaving the
 /// functions its identity depends on.
 pub const LocalTypeEscapeCause = union(enum) {
@@ -693,6 +718,9 @@ pub const TypeMismatch = struct {
     /// once the escape rule reports that type (design.md "Body-Local Types
     /// Stay In Their Context").
     local_type_escape: ?LocalTypeEscapeCause = null,
+    /// Set when the relation failed because a use's record asked for more
+    /// than the record its binding built or took apart.
+    record_tail_refusal: ?RecordTailRefusal = null,
     /// How the report suggests turning the actual value into the expected
     /// builtin `Str`.
     str_conversion: StrConversion = .none,

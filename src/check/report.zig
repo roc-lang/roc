@@ -183,6 +183,10 @@ pub const ReportBuilder = struct {
     /// explains that conflict at the context's region instead of comparing the
     /// operands, whose difference it would not show.
     method_conflict: ?MethodConflict = null,
+    /// When the current mismatch refused a use's record a field its function
+    /// built it without, the report explains that refusal, so the generic
+    /// missing-field hint is left out.
+    record_gained_field: bool = false,
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -246,6 +250,7 @@ pub const ReportBuilder = struct {
         self.typo_suggestions.clearRetainingCapacity();
         self.record_pattern_hint = null;
         self.method_conflict = null;
+        self.record_gained_field = false;
     }
 
     // Helpers
@@ -810,7 +815,11 @@ pub const ReportBuilder = struct {
 
     /// Render type comparison hints (arity mismatch, missing fields, typos, effect mismatch)
     fn renderDiffHints(self: *Self, report: *Report, hints: diff.HintList, had_static_hints: bool) Allocator.Error!void {
-        for (hints.slice(), 0..) |hint, i| {
+        var rendered: usize = 0;
+        for (hints.slice()) |hint| {
+            if (hint == .fields_missing and self.record_gained_field) continue;
+            const i = rendered;
+            rendered += 1;
             // Add spacing before first hint
             if (i == 0 and !had_static_hints) {
                 try report.document.addLineBreak();
@@ -1009,10 +1018,12 @@ pub const ReportBuilder = struct {
                     if (mismatch.leaf) |leaf| return self.buildInterpolationTieReport(tie, leaf);
                 }
                 self.method_conflict = mismatch.method_conflict;
+                self.record_gained_field = if (mismatch.record_tail_refusal) |refusal| refusal.kind == .added_field else false;
                 var report = try self.buildTypeMismatchForContext(mismatch);
                 errdefer report.deinit();
                 try self.addStrConversionHint(&report, mismatch.str_conversion, false);
                 if (mismatch.host_fixed_row) try self.appendHostFixedRowHint(&report, mismatch.host_fixed_origin, mismatch.types.actual_snapshot);
+                if (mismatch.record_tail_refusal) |refusal| try self.appendRecordTailRefusal(&report, refusal);
                 return report;
             },
             .type_apply_mismatch_arities => |data| {
@@ -5603,6 +5614,112 @@ pub const ReportBuilder = struct {
     /// A value whose tag row a host-boundary annotation wrote cannot be used
     /// as part of a wider union (design.md "Row Joins"): the hint says to
     /// write the value again, with the cases spelled out for its own tags.
+    /// Explain why a use's record could not become what the use asked for:
+    /// a use may close the record a function built or takes apart, or make
+    /// it a nominal type with exactly its fields stored the same way, and
+    /// nothing more (design.md "Uncommitted Record Tails").
+    fn appendRecordTailRefusal(self: *Self, report: *Report, refusal: problem_mod.RecordTailRefusal) Allocator.Error!void {
+        try report.document.addLineBreaks(2);
+        switch (refusal.kind) {
+            .padded_nominal => {
+                const nominal = refusal.nominal orelse unreachable;
+                if (refusal.taken_apart) {
+                    try D.renderSlice(&.{
+                        D.typeIdent(nominal).withAnnotation(.inline_code),
+                        D.bytes("has more (anonymous) fields than the record this function takes apart, making it incompatible."),
+                    }, self, report);
+                    try report.document.addLineBreaks(2);
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("If you want this function to take a"),
+                        D.typeIdent(nominal).withAnnotation(.inline_code),
+                        D.bytes(", give it a type annotation that says it takes a").withNoPrecedingSpace(),
+                        D.typeIdent(nominal).withAnnotation(.inline_code),
+                        D.bytes(".").withNoPrecedingSpace(),
+                    }, self, report);
+                } else {
+                    try D.renderSlice(&.{
+                        D.typeIdent(nominal).withAnnotation(.inline_code),
+                        D.bytes("has more (anonymous) fields than this, making it incompatible."),
+                    }, self, report);
+                    try report.document.addLineBreaks(2);
+                    try self.renderNominalConstructorHint(report, nominal, "the anonymous fields");
+                }
+            },
+            .added_field => {
+                const field = refusal.field orelse unreachable;
+                if (refusal.taken_apart) {
+                    try D.renderSlice(&.{
+                        D.bytes("This function takes apart a record that has no"),
+                        D.ident(field).withAnnotation(.inline_code),
+                        D.bytes("field, so it can't take a record that has one."),
+                    }, self, report);
+                    try report.document.addLineBreaks(2);
+                    if (refusal.nominal) |nominal| {
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("If you want this function to take a"),
+                            D.typeIdent(nominal).withAnnotation(.inline_code),
+                            D.bytes(", give it a type annotation that says it takes a").withNoPrecedingSpace(),
+                            D.typeIdent(nominal).withAnnotation(.inline_code),
+                            D.bytes(".").withNoPrecedingSpace(),
+                        }, self, report);
+                    } else {
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("End the function's record pattern with"),
+                            D.bytes("..").withAnnotation(.inline_code),
+                            D.bytes("so it accepts records with more fields, or give the function a type annotation whose record has"),
+                            D.ident(field).withAnnotation(.inline_code),
+                            D.bytes(".").withNoPrecedingSpace(),
+                        }, self, report);
+                    }
+                } else {
+                    try D.renderSlice(&.{
+                        D.bytes("This record has no"),
+                        D.ident(field).withAnnotation(.inline_code),
+                        D.bytes("field. The function it came from built it without one, and a record can't gain fields after it's built."),
+                    }, self, report);
+                    try report.document.addLineBreaks(2);
+                    if (refusal.nominal) |nominal| {
+                        var what = std.ArrayList(u8).empty;
+                        defer what.deinit(self.gpa);
+                        try what.print(self.gpa, "`{s}`", .{self.can_ir.getIdent(field)});
+                        try self.renderNominalConstructorHint(report, nominal, what.items);
+                    } else {
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("Give the function that builds this record a type annotation whose record has"),
+                            D.ident(field).withAnnotation(.inline_code),
+                            D.bytes(", so the record is built with that field.").withNoPrecedingSpace(),
+                        }, self, report);
+                    }
+                }
+            },
+        }
+    }
+
+    /// "If you want a `Name`, you can write `Name.{ ... }` instead of
+    /// `{ ... }` …, since that provides `provides` automatically."
+    fn renderNominalConstructorHint(self: *Self, report: *Report, nominal: Ident.Idx, provides: []const u8) Allocator.Error!void {
+        const mapped = self.import_mapping.get(nominal) orelse nominal;
+        const name = types_mod.TypeWriter.stripBuiltinQualification(self.can_ir.getIdent(mapped));
+        const constructor = try std.fmt.allocPrint(self.gpa, "{s}.{{ ... }}", .{name});
+        defer self.gpa.free(constructor);
+        const fills = try std.fmt.allocPrint(self.gpa, "where this record is built, since that provides {s} automatically.", .{provides});
+        defer self.gpa.free(fills);
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("If you want a"),
+            D.typeIdent(nominal).withAnnotation(.inline_code),
+            D.bytes(", you can write").withNoPrecedingSpace(),
+            D.bytes(try report.addOwnedString(constructor)).withAnnotation(.inline_code),
+            D.bytes("instead of"),
+            D.bytes("{ ... }").withAnnotation(.inline_code),
+            D.bytes(try report.addOwnedString(fills)),
+        }, self, report);
+    }
+
     fn appendHostFixedRowHint(self: *Self, report: *Report, origin: ?Ident.Idx, actual: SnapshotContentIdx) Allocator.Error!void {
         try report.document.addLineBreaks(2);
         if (origin) |hosted_origin| {

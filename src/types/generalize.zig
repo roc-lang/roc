@@ -167,15 +167,11 @@ pub const Generalizer = struct {
     rank_frames: std.ArrayList(RankFrame),
     /// Settled child ranks, consumed by the frame that requested them.
     pending_ranks: std.ArrayList(Rank),
-    /// The uncommitted record tails the next pass may quantify (design.md
-    /// "Uncommitted Record Tails"). The caller fills it before each pass. An
-    /// uncommitted tag tail is always quantified (design.md "Uncommitted Tag
-    /// Tails").
-    quantifiable_tails: @import("collections").DenseMap(Var, void),
-    /// The uncommitted record tails the last pass would have quantified but
-    /// `quantifiable_tails` does not hold. The pass leaves them unquantified
-    /// at their rank, and the caller commits each to the empty record.
-    unquantified_tails: std.ArrayListUnmanaged(Var) = .empty,
+    /// The uncommitted record tails the last `adjust` left at the rank it
+    /// generalizes (design.md "Uncommitted Record Tails"). The caller commits
+    /// those its binding may not quantify before `quantify`; the rest are
+    /// quantified like any other variable the pass owns.
+    owned_tails: std.ArrayListUnmanaged(Var) = .empty,
 
     const Self = @This();
 
@@ -187,7 +183,6 @@ pub const Generalizer = struct {
             .store = store,
             .rank_adjusted_vars = @import("collections").DenseMap(Var, void).init(gpa),
             .vars_to_generalized = @import("collections").DenseMap(Var, void).init(gpa),
-            .quantifiable_tails = @import("collections").DenseMap(Var, void).init(gpa),
             .rank_frames = .empty,
             .pending_ranks = .empty,
         };
@@ -198,15 +193,14 @@ pub const Generalizer = struct {
         self.tmp_vars.clearRetainingCapacity();
         self.rank_adjusted_vars.clearRetainingCapacity();
         self.vars_to_generalized.clearRetainingCapacity();
-        self.unquantified_tails.clearRetainingCapacity();
+        self.owned_tails.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *Self, _: std.mem.Allocator) void {
         self.tmp_vars.deinit(self.gpa);
         self.rank_adjusted_vars.deinit();
         self.vars_to_generalized.deinit();
-        self.quantifiable_tails.deinit();
-        self.unquantified_tails.deinit(self.gpa);
+        self.owned_tails.deinit(self.gpa);
         self.rank_frames.deinit(self.gpa);
         self.pending_ranks.deinit(self.gpa);
     }
@@ -244,13 +238,12 @@ pub const Generalizer = struct {
     /// - `rank_to_generalize`: The rank level to generalize (must be var_pool.current_rank)
     pub fn generalize(self: *Self, gpa: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
         try self.adjust(gpa, var_pool, rank_to_generalize);
-        try self.quantify(var_pool, rank_to_generalize);
+        try self.quantify(var_pool, rank_to_generalize, false);
     }
 
     /// The first half of `generalize`: adjust the ranks of the vars at
-    /// `rank_to_generalize`, and list in `unquantified_tails` the uncommitted
-    /// record tails the pass would quantify that `quantifiable_tails` does not
-    /// hold. The caller commits each of them before `quantify`.
+    /// `rank_to_generalize`, and list in `owned_tails` the uncommitted record
+    /// tails the pass would quantify.
     pub fn adjust(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
         if (rank_to_generalize == Rank.generalized) return;
 
@@ -289,26 +282,23 @@ pub const Generalizer = struct {
             _ = try self.adjustRank(ranked.var_, ranked.rank);
         }
 
-        // An uncommitted record tail the binding does not hold in its
-        // result's data commits instead of being quantified (design.md
-        // "Uncommitted Record Tails").
         for (self.tmp_vars.items) |ranked| {
             const resolved = self.store.resolveVar(ranked.var_);
             if (!resolved.is_root or resolved.desc.content != .flex or !resolved.desc.flags.uncommitted_record_tail) continue;
             if (@backingInt(resolved.desc.rank) != rank_to_generalize_int) continue;
-            if (self.quantifiable_tails.contains(resolved.var_)) continue;
-            try self.unquantified_tails.append(self.gpa, resolved.var_);
+            try self.owned_tails.append(self.gpa, resolved.var_);
         }
     }
 
     /// The second half of `generalize`: quantify the vars `adjust` left at
     /// `rank_to_generalize` and return the escaped ones to their pools. When
-    /// the caller committed tails `adjust` listed, ranks are adjusted again
-    /// first, so structure that held them alone escapes the quantification.
-    pub fn quantify(self: *Self, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+    /// the caller committed tails `adjust` listed (`committed_tails`), ranks
+    /// are adjusted again first, so structure that held them alone escapes
+    /// the quantification.
+    pub fn quantify(self: *Self, var_pool: *VarPool, rank_to_generalize: Rank, committed_tails: bool) std.mem.Allocator.Error!void {
         if (rank_to_generalize == Rank.generalized) return;
         const rank_to_generalize_int = @backingInt(rank_to_generalize);
-        if (self.unquantified_tails.items.len != 0) {
+        if (committed_tails) {
             self.rank_adjusted_vars.clearRetainingCapacity();
             for (self.tmp_vars.items) |ranked| {
                 _ = try self.adjustRank(ranked.var_, ranked.rank);
@@ -343,9 +333,6 @@ pub const Generalizer = struct {
                     // Escaped var, so move it to the right pool.
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
-                    // The caller committed every tail `adjust` listed.
-                    std.debug.assert(!(resolved.desc.content == .flex and resolved.desc.flags.uncommitted_record_tail and
-                        !self.quantifiable_tails.contains(resolved.var_)));
                     // Safe to generalize
                     try self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }

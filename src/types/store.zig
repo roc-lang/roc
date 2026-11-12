@@ -1618,25 +1618,15 @@ pub const Store = struct {
     }
 
     /// Make a flex class an uncommitted record tail (design.md "Uncommitted
-    /// Record Tails"). The mark travels with the class and its copies.
-    pub fn markUncommittedRecordTail(self: *Self, target_var: Var) Allocator.Error!void {
+    /// Record Tails"), minted by a record pattern when `pattern` holds. The
+    /// mark travels with the class and its copies.
+    pub fn markUncommittedRecordTail(self: *Self, target_var: Var, pattern: bool) Allocator.Error!void {
         self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
         std.debug.assert(resolved.desc.content == .flex);
         var desc = resolved.desc;
         desc.flags.uncommitted_record_tail = true;
-        try self.setDesc(resolved.desc_idx, desc);
-    }
-
-    /// Mark a quantified uncommitted record tail lift-only: a value of its
-    /// record enters the binding, so no use's copy absorbs a field
-    /// (design.md "Uncommitted Record Tails").
-    pub fn markUncommittedLiftOnly(self: *Self, target_var: Var) Allocator.Error!void {
-        self.debugAssertUnsealed();
-        const resolved = try self.resolveWriteTarget(target_var);
-        std.debug.assert(resolved.desc.content == .flex and resolved.desc.flags.uncommitted_record_tail);
-        var desc = resolved.desc;
-        desc.flags.uncommitted_lift_only = true;
+        desc.flags.record_pattern_tail = pattern;
         try self.setDesc(resolved.desc_idx, desc);
     }
 
@@ -2598,8 +2588,13 @@ pub const Store = struct {
             (a_data.desc.flags.uncommitted_record_tail or b_data.desc.flags.uncommitted_record_tail);
         merged_desc.flags.uncommitted_copy = merged_desc.content == .flex and
             (a_data.desc.flags.uncommitted_copy or b_data.desc.flags.uncommitted_copy);
-        merged_desc.flags.uncommitted_lift_only = merged_desc.content == .flex and
-            (a_data.desc.flags.uncommitted_lift_only or b_data.desc.flags.uncommitted_lift_only);
+        // A record a pattern takes apart stays one only while no tail a
+        // construction minted joins its class.
+        const a_constructed = a_data.desc.flags.uncommitted_record_tail and !a_data.desc.flags.record_pattern_tail;
+        const b_constructed = b_data.desc.flags.uncommitted_record_tail and !b_data.desc.flags.record_pattern_tail;
+        merged_desc.flags.record_pattern_tail = merged_desc.content == .flex and
+            (a_data.desc.flags.record_pattern_tail or b_data.desc.flags.record_pattern_tail) and
+            !a_constructed and !b_constructed;
         // Annotated structure stays annotated: a tag union that merged with
         // one an annotation wrote is that annotation's union.
         merged_desc.flags.annotation_tag_union = a_data.desc.flags.annotation_tag_union or

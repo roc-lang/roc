@@ -24969,125 +24969,12 @@ fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView,
     templates.sealed_slots_pool = try slots.toOwnedSlice(allocator);
 }
 
-/// Where a walk of a worker's interface has reached a type, for sealing an
-/// uncommitted record tail (design.md "Sealed Result Rows"): whether the path
-/// passed through data, and whether a conversion at a call reaches it. A
-/// conversion reaches every position through data and through function types
-/// that are not inside data, since a call adapts a value it passes or
-/// receives, including a function value; it does not reach a function inside
-/// data, an evidence callable, or a nominal's arguments other than a list's,
-/// a box's, or a `Try`'s.
-const RecordTailPosition = packed struct(u2) {
-    in_data: bool,
-    unconvertible: bool,
-
-    const top: RecordTailPosition = .{ .in_data = false, .unconvertible = false };
-    const unconvertible_position: RecordTailPosition = .{ .in_data = false, .unconvertible = true };
-
-    fn mask(self: RecordTailPosition) u8 {
-        return @as(u8, 1) << @as(u2, @bitCast(self));
-    }
-
-    fn data(self: RecordTailPosition) RecordTailPosition {
-        return .{ .in_data = true, .unconvertible = self.unconvertible };
-    }
-
-    /// An argument or the result of a function type at this position.
-    fn functionPart(self: RecordTailPosition) RecordTailPosition {
-        return .{ .in_data = false, .unconvertible = self.unconvertible or self.in_data };
-    }
-};
-
 /// Whether a scheme variable is an uncommitted record tail that may seal.
 fn recordTailCandidate(payload: CheckedTypePayload) bool {
     return switch (payload) {
         .flex => |flex| flex.uncommitted_record_tail and flex.row_default == .empty_record and payload.variableSealsToRowDefault(),
         .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
     };
-}
-
-/// Whether a nominal's arguments are plain data its runtime value holds at
-/// their own types: a list's item, a box's payload, and a `Try`'s payloads.
-fn nominalArgsArePlainData(nominal: CheckedNominalType) bool {
-    return switch (nominal.representation) {
-        .builtin => |builtin_nominal| switch (builtin_nominal) {
-            .list, .box, .try_ => true,
-            .bool,
-            .str,
-            .u8,
-            .i8,
-            .u16,
-            .i16,
-            .u32,
-            .i32,
-            .u64,
-            .i64,
-            .u128,
-            .i128,
-            .f32,
-            .f64,
-            .dec,
-            .u8x16,
-            .i8x16,
-            .u16x8,
-            .i16x8,
-            .u32x4,
-            .i32x4,
-            .u64x2,
-            .i64x2,
-            .dict,
-            .set,
-            .iter,
-            .stream,
-            .parse_tag_union_spec,
-            .fields,
-            .field,
-            .crypto_sha256_digest,
-            .crypto_sha256_hasher,
-            .crypto_blake3_digest,
-            .crypto_blake3_hasher,
-            => false,
-        },
-        .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => false,
-    };
-}
-
-/// Whether any of `args` holds a nominal over a callable payload, whose
-/// callable's interface its methods hide from the signature.
-fn argumentsHoldCallablePayloadIn(allocator: Allocator, checked_types: CheckedTypeStoreView, args: []const CheckedTypeId) Allocator.Error!bool {
-    var seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty;
-    defer seen.deinit(allocator);
-    var pending: std.ArrayList(CheckedTypeId) = .empty;
-    defer pending.deinit(allocator);
-    try pending.appendSlice(allocator, args);
-    while (pending.pop()) |ty| {
-        if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
-        switch (checked_types.payload(ty)) {
-            .nominal => |nominal| switch (nominal.representation) {
-                .local_box_payload_capability, .imported_box_payload_capability => return true,
-                .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => try pending.appendSlice(allocator, nominal.args),
-            },
-            .alias => |alias| {
-                try pending.appendSlice(allocator, alias.args);
-                try pending.append(allocator, alias.backing);
-            },
-            .record => |record| {
-                for (0..record.fields.len()) |index| try pending.append(allocator, record.fields.get(index).ty);
-                try pending.append(allocator, record.ext);
-            },
-            .tuple => |items| try pending.appendSlice(allocator, items),
-            .tag_union => |tag_union| {
-                for (0..tag_union.tags.len()) |index| try pending.appendSlice(allocator, tag_union.tags.get(index).args);
-                try pending.append(allocator, tag_union.ext);
-            },
-            .function => |function| {
-                try pending.appendSlice(allocator, function.args);
-                try pending.append(allocator, function.ret);
-            },
-            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
-        }
-    }
-    return false;
 }
 
 /// Compute every sealed scheme-variable slot of one template together. A type
@@ -25126,7 +25013,7 @@ const SealedSchemeSlots = struct {
         slots: *std.ArrayList(u32),
     ) Allocator.Error!void {
         try self.sealTagRows(variables, fn_root, evidence_params);
-        try self.sealRecordTails(variables, fn_root, evidence_params);
+        try self.sealRecordTails(variables);
         // The maps record facts about variables, not slot numbers. Retain
         // original order and every slot even when two slots name one variable.
         for (variables, 0..) |variable, slot| {
@@ -25223,80 +25110,14 @@ const SealedSchemeSlots = struct {
     }
 
     /// Decide which uncommitted record tails seal (design.md "Sealed Result
-    /// Rows"): those whose every occurrence in the worker's interface is
-    /// convertible (`RecordTailPosition`), and whose constraints closing the
-    /// row discharges, when no argument holds a nominal over a callable
-    /// payload. Every value of such a type crosses the worker's boundary where
-    /// a call's conversion reaches it. An instantiation can give the tail only
-    /// absent optional fields of a value leaving the worker, which the
-    /// conversion adds, or, for a lift-only tail, a nominal wrapper with
-    /// exactly the record's fields, which it removes or restores.
-    fn sealRecordTails(
-        self: *SealedSchemeSlots,
-        variables: []const CheckedTypeId,
-        fn_root: CheckedTypeId,
-        evidence_params: []const static_dispatch.EvidenceParamRecord,
-    ) Allocator.Error!void {
+    /// Rows"): every one whose row default is the empty record and whose
+    /// constraints closing the row discharges. A use can only close such a
+    /// tail or make its record a nominal type stored exactly like it, so no
+    /// instantiation changes the representation of anything the tail is in.
+    fn sealRecordTails(self: *SealedSchemeSlots, variables: []const CheckedTypeId) Allocator.Error!void {
         self.record_candidates.clearRetainingCapacity();
         for (variables) |variable| {
-            const payload = self.types.payload(variable);
-            if (recordTailCandidate(payload)) try self.record_candidates.put(self.allocator, variable, true);
-        }
-        if (self.record_candidates.count() == 0) return;
-
-        var root = fn_root;
-        const signature = while (true) switch (self.types.payload(root)) {
-            .alias => |alias| root = alias.backing,
-            .function => |found| break found,
-            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {
-                self.record_candidates.clearRetainingCapacity();
-                return;
-            },
-        };
-        if (try argumentsHoldCallablePayloadIn(self.allocator, self.types, signature.args)) {
-            self.record_candidates.clearRetainingCapacity();
-            return;
-        }
-        const Item = struct { ty: CheckedTypeId, position: RecordTailPosition };
-        var seen: collections.DenseMapUnmanaged(CheckedTypeId, u8) = .empty;
-        defer seen.deinit(self.allocator);
-        var pending: std.ArrayList(Item) = .empty;
-        defer pending.deinit(self.allocator);
-        const top = RecordTailPosition.top;
-        try pending.append(self.allocator, .{ .ty = signature.ret, .position = top.functionPart() });
-        for (evidence_params) |param| try pending.append(self.allocator, .{ .ty = param.callable_ty, .position = RecordTailPosition.unconvertible_position });
-        for (signature.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = top.functionPart() });
-        while (pending.pop()) |item| {
-            const entry = try seen.getOrPut(self.allocator, item.ty);
-            if (!entry.found_existing) entry.value_ptr.* = 0;
-            if (entry.value_ptr.* & item.position.mask() != 0) continue;
-            entry.value_ptr.* |= item.position.mask();
-            if (self.record_candidates.getPtr(item.ty)) |eligible| {
-                if (item.position.unconvertible) eligible.* = false;
-                continue;
-            }
-            const position = item.position;
-            switch (self.types.payload(item.ty)) {
-                .alias => |alias| try pending.append(self.allocator, .{ .ty = alias.backing, .position = position }),
-                .record => |record| {
-                    for (0..record.fields.len()) |index| try pending.append(self.allocator, .{ .ty = record.fields.get(index).ty, .position = position.data() });
-                    try pending.append(self.allocator, .{ .ty = record.ext, .position = position.data() });
-                },
-                .tuple => |items| for (items) |item_ty| try pending.append(self.allocator, .{ .ty = item_ty, .position = position.data() }),
-                .tag_union => |tag_union| {
-                    for (0..tag_union.tags.len()) |index| for (tag_union.tags.get(index).args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = position.data() });
-                    try pending.append(self.allocator, .{ .ty = tag_union.ext, .position = position.data() });
-                },
-                .function => |function| {
-                    for (function.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = position.functionPart() });
-                    try pending.append(self.allocator, .{ .ty = function.ret, .position = position.functionPart() });
-                },
-                .nominal => |nominal| {
-                    const arg_position = if (nominalArgsArePlainData(nominal)) position.data() else RecordTailPosition.unconvertible_position;
-                    for (nominal.args) |arg| try pending.append(self.allocator, .{ .ty = arg, .position = arg_position });
-                },
-                .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
-            }
+            if (recordTailCandidate(self.types.payload(variable))) try self.record_candidates.put(self.allocator, variable, true);
         }
     }
 
@@ -25369,7 +25190,7 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
     /// it involves.
     pub fn sealed(self: *SealedSchemeVarWalk, variable: CheckedTypeId, fn_root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
         const payload = self.types.payload(variable);
-        if (recordTailCandidate(payload)) return self.recordTailSealed(variable, fn_root, evidence_params);
+        if (recordTailCandidate(payload)) return true;
         const bounded = switch (payload) {
             .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
             .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
@@ -25390,54 +25211,6 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
             if (try self.mentionsVariable(param.callable_ty, variable)) return false;
         }
         return !try self.argumentsHoldCallablePayload(fn_root);
-    }
-
-    /// Whether an uncommitted record tail seals: every occurrence of it is
-    /// one a call's conversion reaches, no
-    /// evidence callable mentions it, and no argument holds a callable whose
-    /// interface the signature does not show.
-    fn recordTailSealed(self: *SealedSchemeVarWalk, variable: CheckedTypeId, fn_root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
-        const signature = self.function(fn_root) orelse return false;
-        for (evidence_params) |param| if (try self.mentionsVariable(param.callable_ty, variable)) return false;
-        if (try self.argumentsHoldCallablePayload(fn_root)) return false;
-        const Item = struct { ty: CheckedTypeId, position: RecordTailPosition };
-        var stack: std.ArrayList(Item) = .empty;
-        defer stack.deinit(self.allocator);
-        var visited: collections.DenseMapUnmanaged(u64, void) = .empty;
-        defer visited.deinit(self.allocator);
-        try stack.append(self.allocator, .{ .ty = signature.ret, .position = RecordTailPosition.top.functionPart() });
-        for (signature.args) |arg| try stack.append(self.allocator, .{ .ty = arg, .position = RecordTailPosition.top.functionPart() });
-        while (stack.pop()) |item| {
-            if (item.ty == variable) {
-                if (item.position.unconvertible) return false;
-                continue;
-            }
-            const key = (@as(u64, @backingInt(item.ty)) << 2) | @as(u2, @bitCast(item.position));
-            if ((try visited.getOrPut(self.allocator, key)).found_existing) continue;
-            const position = item.position;
-            switch (self.types.payload(item.ty)) {
-                .alias => |alias| try stack.append(self.allocator, .{ .ty = alias.backing, .position = position }),
-                .record => |record| {
-                    for (0..record.fields.len()) |index| try stack.append(self.allocator, .{ .ty = record.fields.get(index).ty, .position = position.data() });
-                    try stack.append(self.allocator, .{ .ty = record.ext, .position = position.data() });
-                },
-                .tuple => |items| for (items) |item_ty| try stack.append(self.allocator, .{ .ty = item_ty, .position = position.data() }),
-                .tag_union => |tag_union| {
-                    for (0..tag_union.tags.len()) |index| for (tag_union.tags.get(index).args) |arg| try stack.append(self.allocator, .{ .ty = arg, .position = position.data() });
-                    try stack.append(self.allocator, .{ .ty = tag_union.ext, .position = position.data() });
-                },
-                .function => |fn_type| {
-                    for (fn_type.args) |arg| try stack.append(self.allocator, .{ .ty = arg, .position = position.functionPart() });
-                    try stack.append(self.allocator, .{ .ty = fn_type.ret, .position = position.functionPart() });
-                },
-                .nominal => |nominal| {
-                    const arg_position = if (nominalArgsArePlainData(nominal)) position.data() else RecordTailPosition.unconvertible_position;
-                    for (nominal.args) |arg| try stack.append(self.allocator, .{ .ty = arg, .position = arg_position });
-                },
-                .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
-            }
-        }
-        return true;
     }
 
     fn function(self: *const SealedSchemeVarWalk, fn_root: CheckedTypeId) ?CheckedFunctionType {

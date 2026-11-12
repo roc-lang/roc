@@ -2,6 +2,7 @@
 //! (design.md "Uncommitted Record Tails", "Uncommitted Tag Tails"): which
 //! anonymous structure can still be lifted into a nominal type or widened
 //! with optional fields, and where it commits.
+const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
 
 fn expectOk(comptime source: []const u8) TestEnv.TestEnvError!void {
@@ -20,6 +21,19 @@ fn expectOneMismatch(comptime source: []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeError("Type Mismatch");
+}
+
+const Refusal = @import("../problem.zig").RecordTailRefusal;
+
+/// Expect exactly one type mismatch, refused because a use's record was asked
+/// for more than its binding built or took apart.
+fn expectRefusal(comptime source: []const u8, kind: Refusal.Kind, taken_apart: bool) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+    const refusal = test_env.checker.problems.problems.items[0].type_mismatch.record_tail_refusal orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(kind, refusal.kind);
+    try std.testing.expectEqual(taken_apart, refusal.taken_apart);
 }
 
 const counter =
@@ -106,7 +120,9 @@ test "an annotated record result rejects a nominal its body returns" {
     );
 }
 
-// Unannotated functions: each call owns its result
+// A record nobody wrote a type for stays open in its function's scheme. A use
+// closes it or makes it a nominal type with exactly its fields stored the same
+// way, wherever it sits in the function's type.
 
 test "an unannotated function's result lifts at one call and stays a record at another" {
     try expectDefType(counter ++
@@ -117,13 +133,14 @@ test "an unannotated function's result lifts at one call and stays a record at a
     , "p", "{ count: U64 }");
 }
 
-test "an unannotated function's result widens differently at two calls" {
-    try expectOk(
-        \\make = |value| { a: value }
-        \\r1 : { a ?: U8, b ?: U8 }
-        \\r1 = make(11)
-        \\r2 : { a ?: U8, b ?: Str }
-        \\r2 = make(5)
+test "two calls lift one function's result into two nominal types" {
+    try expectOk(counter ++
+        \\Other := { count : U64 }
+        \\make = |n| { count: n }
+        \\c : Counter
+        \\c = make(1)
+        \\o : Other
+        \\o = make(2)
     );
 }
 
@@ -151,8 +168,6 @@ test "a record a returned function returns lifts at the call" {
         \\p = reader(3.U64)(4)
     );
 }
-
-// Tails where a value enters the binding stay quantified, lift-only
 
 test "a record pattern parameter of an unannotated function lifts at the call" {
     try expectOk(
@@ -194,66 +209,123 @@ test "a record pattern in a callback's own callback argument lifts at the call" 
     );
 }
 
-test "a lift-only tail absorbs no optional field" {
-    try expectOneMismatch(
-        \\keep = |r| if r.a > 0 r else { a: 1.U8 }
-        \\x : { a : U8, b ?: U8 }
-        \\x = keep({ a: 2 })
+test "a record only a static dispatch constraint holds lifts at the call" {
+    try expectOk(counter ++
+        \\Sink := {}.{
+        \\    take : Sink, Counter -> U64
+        \\    take = |_, c| c.count
+        \\}
+        \\make = |sink, n| sink.take({ count: n })
+        \\sink : Sink
+        \\sink = {}
+        \\n = make(sink, 1)
     );
 }
 
-test "a lift-only tail absorbs no defaulted field" {
-    try expectOneMismatch(
+test "a record in a function stored in a list lifts at the call" {
+    try expectOk(counter ++
+        \\makers = |n| [|m| { count: n + m }]
+        \\fs : List(U64 -> Counter)
+        \\fs = makers(1)
+    );
+}
+
+test "a record in a nominal type's argument lifts at the call" {
+    try expectOk(counter ++
+        \\Holder(a) := { item : a }
+        \\hold = |n| Holder.{ item: { count: n } }
+        \\h : Holder(Counter)
+        \\h = hold(1)
+    );
+}
+
+// A use's record never gains a field, and never becomes a nominal type stored
+// differently from it
+
+test "a use's record gains no optional field" {
+    try expectRefusal(
+        \\make = |value| { a: value }
+        \\r : { a : U8, b ?: U8 }
+        \\r = make(11)
+    , .added_field, false);
+}
+
+test "a use's record gains no optional field through its nominal" {
+    try expectRefusal(
+        \\Wide := { a : U8, note ?: Str }
+        \\make = |value| { a: value }
+        \\w : Wide
+        \\w = make(1)
+    , .added_field, false);
+}
+
+test "a use's record gains no defaulted field through its nominal" {
+    try expectRefusal(
         \\Cfg := { a : U8, b : U8 ?? 7 }
         \\keep = |r| if r.a > 0 r else { a: 1.U8 }
         \\c : Cfg
         \\c = keep({ a: 2 })
-    );
+    , .added_field, false);
 }
 
-test "a lift-only tail does not lift into a nominal with an extra optional field" {
-    try expectOneMismatch(
+test "a record a function takes apart gains no field from the nominal passed to it" {
+    try expectRefusal(
         \\Wide := { x : U8, note ?: Str }
         \\get_x = |{ x }| x
         \\w : Wide
         \\w = { x: 1 }
         \\n = get_x(w)
-    );
+    , .added_field, true);
 }
 
-test "a tail only results hold still absorbs an optional field" {
+test "a nominal whose backing supplies every defaulted field takes the record" {
     try expectOk(
-        \\make = |n| { a: n }
-        \\x : { a : U8, b ?: U8 }
-        \\x = make(2)
+        \\Cfg := { a : U8, b : U8 ?? 7 }
+        \\make = |n| { a: n, b: n }
+        \\c : Cfg
+        \\c = make(1)
     );
 }
 
-test "a record only a static dispatch constraint holds commits closed" {
+test "a missing required field stays an ordinary mismatch" {
     try expectOneMismatch(counter ++
-        \\Sink := {}.{
-        \\    take : Sink, a -> a
-        \\    take = |_, a| a
-        \\}
-        \\make = |sink, n| sink.take({ count: n })
-        \\sink : Sink
-        \\sink = {}
-        \\c : Counter
-        \\c = make(sink, 1)
+        \\Pair := { count : U64, more : U64 }
+        \\make = |n| { count: n }
+        \\p : Pair
+        \\p = make(1)
     );
 }
 
-test "the same record the function returns itself still lifts" {
-    try expectOk(counter ++
-        \\Sink := {}.{
-        \\    take : Sink, a -> a
-        \\    take = |_, a| a
-        \\}
-        \\make = |_sink, n| { count: n }
-        \\sink : Sink
-        \\sink = {}
-        \\c : Counter
-        \\c = make(sink, 1)
+// Rejecting a padded nominal is deliberate: turning a record into a nominal
+// type with unnamed fields would need its values rebuilt at every use, an
+// extremely rare want whose only gain is slightly shorter code, and the
+// compiler is faster for not doing that work (design.md "Uncommitted Record
+// Tails").
+
+test "a use's record does not become a padded nominal" {
+    try expectRefusal(
+        \\Row := { columns : U64, _ : U32, values : U64 }
+        \\make = |c, v| { columns: c, values: v }
+        \\r : Row
+        \\r = make(1, 2)
+    , .padded_nominal, false);
+}
+
+test "a padded nominal is not passed to a function that takes its record apart" {
+    try expectRefusal(
+        \\Row := { columns : U64, _ : U32, values : U64 }
+        \\product = |{ columns, values }| columns * values
+        \\row : Row
+        \\row = { columns: 3, values: 4 }
+        \\n = product(row)
+    , .padded_nominal, true);
+}
+
+test "a record literal checked at a padded nominal is built at it" {
+    try expectOk(
+        \\Row := { columns : U64, _ : U32, values : U64 }
+        \\row : Row
+        \\row = { columns: 3, values: 4 }
     );
 }
 

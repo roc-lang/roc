@@ -156,16 +156,17 @@ pub const DescriptorFlags = packed struct(u16) {
     /// rigid. Copies carry it, and a merge keeps it while the class is a flex.
     uncommitted_record_tail: bool = false,
     /// The class holds a copy instantiation made of an uncommitted record
-    /// tail. Such a class absorbs optional fields only, never a defaulted
-    /// one (design.md "Uncommitted Record Tails"). Copies carry it, and a
-    /// merge keeps it while the class is a flex.
+    /// tail: the record of a use of a binding that quantified the tail. Such
+    /// a class commits, or lets its record lift into a nominal type whose
+    /// backing has exactly the record's fields and is stored like it, and
+    /// absorbs no field (design.md "Uncommitted Record Tails"). Copies carry
+    /// it, and a merge keeps it while the class is a flex.
     uncommitted_copy: bool = false,
-    /// The class is an uncommitted record tail a generalization boundary
-    /// quantified although a value of its record enters the binding, so a
-    /// use's copy may lift its record into a nominal type or commit, but
-    /// absorbs no field at all (design.md "Uncommitted Record Tails"). Copies
-    /// carry it, and a merge keeps it while the class is a flex.
-    uncommitted_lift_only: bool = false,
+    /// The class is an uncommitted record tail a record pattern minted, met
+    /// by no tail a construction minted: the record is one its binding takes
+    /// apart rather than builds. Only a diagnostic about the record reads it
+    /// (design.md "Uncommitted Record Tails"). Copies carry it.
+    record_pattern_tail: bool = false,
     /// A tag union an annotation or type declaration wrote. Annotated
     /// structure never lifts into a nominal type, whatever its row's tail
     /// (design.md "Uncommitted Record Tails"). Copies carry it and a merge
@@ -195,7 +196,7 @@ pub const DescriptorFlags = packed struct(u16) {
             .host_fixed_row = self.host_fixed_row,
             .uncommitted_record_tail = self.uncommitted_record_tail,
             .uncommitted_copy = self.uncommitted_copy,
-            .uncommitted_lift_only = self.uncommitted_lift_only,
+            .record_pattern_tail = self.record_pattern_tail,
             .annotation_tag_union = self.annotation_tag_union,
             .uncommitted_tag_tail = self.uncommitted_tag_tail,
         };
@@ -786,7 +787,12 @@ pub const NominalDecl = struct {
         /// How many trailing formals are context variables. Only a
         /// declaration in a function body has any.
         context_len: u16 = 0,
-        _unused: u15 = 0,
+        /// The declaration's record backing has unnamed fields, so its
+        /// values are stored in declared order with padding rather than like
+        /// the record of its named fields (design.md "Nominal Record Field
+        /// Order").
+        padded: bool = false,
+        _unused: u14 = 0,
     };
 
     /// How many of the declaration's formals it declares itself, before its

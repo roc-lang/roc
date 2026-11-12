@@ -85,11 +85,11 @@ test "a template's stored sealed slots match the independent scalar oracle" {
     try std.testing.expect(templates.templateEvidenceParams(run).len >= 1);
     try std.testing.expectEqual(@as(usize, 1), templates.templateSealedSlots(run).len);
 
-    // A record's uncommitted tail is sealed in each of these wherever a value
-    // of it crosses the worker's boundary, leaving or entering (design.md
-    // "Uncommitted Record Tails"): the worker takes no hidden descriptor for
-    // it, whatever else its scheme quantifies.
-    for ([_][]const u8{ "make", "unit", "ok_unit", "listed", "apply_one", "reader", "both_sides", "pattern_arg", "folded" }) |name| {
+    // A record's uncommitted tail is sealed in each of these, wherever it
+    // sits in the function's type (design.md "Uncommitted Record Tails"): a
+    // use only closes it or makes its record a nominal type stored the same
+    // way, so the worker takes no hidden descriptor for it.
+    for ([_][]const u8{ "make", "unit", "ok_unit", "listed", "apply_one", "reader", "both_sides", "pattern_arg", "folded", "nested_fn" }) |name| {
         const template = findTemplate(artifact, name) orelse return error.TestUnexpectedResult;
         var tails: usize = 0;
         var sealed_tails: usize = 0;
@@ -105,18 +105,6 @@ test "a template's stored sealed slots match the independent scalar oracle" {
         }
         try std.testing.expectEqual(@as(usize, 1), tails);
         try std.testing.expectEqual(@as(usize, 1), sealed_tails);
-    }
-
-    // A tail inside a function held in data commits at the boundary: no
-    // scheme variable is an uncommitted tail.
-    for ([_][]const u8{"nested_fn"}) |name| {
-        const template = findTemplate(artifact, name) orelse return error.TestUnexpectedResult;
-        for (templates.templateSchemeVars(template)) |variable| {
-            switch (artifact.checked_types.view().payload(variable)) {
-                .flex => |flex| try std.testing.expect(!flex.uncommitted_record_tail),
-                .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
-            }
-        }
     }
 }
 

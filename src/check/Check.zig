@@ -5864,31 +5864,29 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
 }
 
 /// Generalize the variables of `env`'s current rank, for a boundary whose
-/// bindings have the types `roots`. An uncommitted record tail the boundary
-/// would quantify stays quantified only when every occurrence of it in the
-/// roots lies in a function's own result, reached through data alone; every
-/// other one commits to the empty record before anything is quantified
-/// (design.md "Uncommitted Record Tails").
+/// bindings have the types `roots`. The boundary quantifies every uncommitted
+/// record tail it owns, except that a definition a `provides` entry names
+/// commits all of them (its host compiled against closed rows), and so does
+/// any tail whose own constraints the empty record does not discharge; those
+/// commit to the empty record before anything is quantified (design.md
+/// "Uncommitted Record Tails").
 fn generalizeRank(self: *Self, env: *Env, roots: []const Var) Allocator.Error!void {
-    var entering: std.ArrayListUnmanaged(Var) = .empty;
-    defer entering.deinit(self.gpa);
-    try self.collectQuantifiableTails(roots, &entering);
     try self.generalizer.adjust(self.gpa, &env.var_pool, env.rank());
-    if (self.generalizer.unquantified_tails.items.len != 0) {
+    var committed = false;
+    if (self.generalizer.owned_tails.items.len != 0) {
+        const commit_all = self.rootsIncludeProvidedDef(roots);
         var tails: std.ArrayListUnmanaged(Var) = .empty;
         defer tails.deinit(self.gpa);
-        try tails.appendSlice(self.gpa, self.generalizer.unquantified_tails.items);
-        for (tails.items) |tail| try self.commitUncommittedTail(tail, env);
+        try tails.appendSlice(self.gpa, self.generalizer.owned_tails.items);
+        for (tails.items) |tail| {
+            const resolved = self.types.resolveVar(tail);
+            if (resolved.desc.content != .flex or !resolved.desc.flags.uncommitted_record_tail) continue;
+            if (!commit_all and self.rowDefaultDischargesConstraints(resolved.desc.content.flex.constraints)) continue;
+            try self.commitUncommittedTail(resolved.var_, env);
+            committed = true;
+        }
     }
-    try self.generalizer.quantify(&env.var_pool, env.rank());
-    // A tail this boundary quantified where a value of its record enters the
-    // binding is lift-only (design.md "Uncommitted Record Tails").
-    for (entering.items) |tail| {
-        const resolved = self.types.resolveVar(tail);
-        if (resolved.desc.content != .flex or !resolved.desc.flags.uncommitted_record_tail) continue;
-        if (resolved.desc.rank != .generalized or resolved.desc.flags.uncommitted_lift_only) continue;
-        try self.types.markUncommittedLiftOnly(resolved.var_);
-    }
+    try self.generalizer.quantify(&env.var_pool, env.rank(), committed);
 }
 
 /// Commit an uncommitted tail. A record tail commits to the empty record by
@@ -5959,143 +5957,6 @@ fn rootsIncludeProvidedDef(self: *Self, roots: []const Var) bool {
         }
     }
     return false;
-}
-
-/// Where a walk of a binding's type has reached a var (design.md
-/// "Uncommitted Record Tails"): whether a value there leaves the binding
-/// (`positive`) or enters it, and whether the path passed through data on
-/// its way. A function inside data is outside every conversion's reach, so
-/// a tail anywhere under one is `unconvertible`, as is a tail in a
-/// static-dispatch constraint or in the arguments of a nominal type whose
-/// arguments are not plain data. A function's effect dependencies name
-/// functions whose effects it shares, not values it exchanges, so the walk
-/// does not enter them.
-const TailPosition = packed struct(u3) {
-    positive: bool,
-    in_data: bool,
-    unconvertible: bool,
-
-    const unreachable_position: TailPosition = .{ .positive = false, .in_data = false, .unconvertible = true };
-
-    fn mask(self: TailPosition) u8 {
-        return @as(u8, 1) << @as(u3, @bitCast(self));
-    }
-
-    fn data(self: TailPosition) TailPosition {
-        return .{ .positive = self.positive, .in_data = true, .unconvertible = self.unconvertible };
-    }
-
-    fn functionArg(self: TailPosition) TailPosition {
-        return .{ .positive = !self.positive, .in_data = false, .unconvertible = self.unconvertible or self.in_data };
-    }
-
-    fn functionResult(self: TailPosition) TailPosition {
-        return .{ .positive = self.positive, .in_data = false, .unconvertible = self.unconvertible or self.in_data };
-    }
-};
-
-/// Fill `generalizer.quantifiable_tails` with the uncommitted record tails
-/// whose every occurrence in `roots` is convertible and whose own
-/// constraints the empty record discharges, and list in `entering` those of
-/// them with an occurrence where a value enters the binding (a negative
-/// one: an argument, a callback's result, through data and further
-/// functions by polarity), which stay lift-only (design.md "Uncommitted
-/// Record Tails").
-fn collectQuantifiableTails(self: *Self, roots: []const Var, entering: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
-    const quantifiable = &self.generalizer.quantifiable_tails;
-    quantifiable.clearRetainingCapacity();
-    // A definition the platform provides to the host has a fixed host ABI, so
-    // its record tails commit (design.md "Host Symbol ABI").
-    if (self.rootsIncludeProvidedDef(roots)) return;
-    var disqualified: collections.DenseMapUnmanaged(Var, void) = .empty;
-    defer disqualified.deinit(self.gpa);
-    var seen: collections.DenseMapUnmanaged(Var, u8) = .empty;
-    defer seen.deinit(self.gpa);
-    const Item = struct { var_: Var, position: TailPosition };
-    var pending: std.ArrayListUnmanaged(Item) = .empty;
-    defer pending.deinit(self.gpa);
-
-    const top: TailPosition = .{ .positive = true, .in_data = false, .unconvertible = false };
-    for (roots) |root| {
-        const resolved = self.types.resolveVar(root);
-        switch (resolved.desc.content) {
-            .structure => |flat| switch (flat) {
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    const entry = try seen.getOrPut(self.gpa, resolved.var_);
-                    entry.value_ptr.* = 0xff;
-                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = top.functionArg() });
-                    try pending.append(self.gpa, .{ .var_ = func.ret, .position = top.functionResult() });
-                    continue;
-                },
-                .record, .tag_union, .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
-            },
-            .flex, .rigid, .alias, .field_presence, .err => {},
-        }
-        // A binding that is not a function quantifies no record tail.
-        try pending.append(self.gpa, .{ .var_ = root, .position = TailPosition.unreachable_position });
-    }
-
-    while (pending.pop()) |item| {
-        const resolved = self.types.resolveVar(item.var_);
-        const position = item.position;
-        const entry = try seen.getOrPut(self.gpa, resolved.var_);
-        if (!entry.found_existing) entry.value_ptr.* = 0;
-        if (entry.value_ptr.* & position.mask() != 0) continue;
-        entry.value_ptr.* |= position.mask();
-        switch (resolved.desc.content) {
-            .err, .field_presence => {},
-            .flex => |flex| {
-                for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = TailPosition.unreachable_position });
-                }
-                if (resolved.desc.flags.uncommitted_record_tail) {
-                    if (!position.positive and !position.unconvertible) try entering.append(self.gpa, resolved.var_);
-                    const keeps = !position.unconvertible and self.rowDefaultDischargesConstraints(flex.constraints);
-                    if (keeps) {
-                        if (!disqualified.contains(resolved.var_)) try quantifiable.put(resolved.var_, {});
-                    } else {
-                        try disqualified.put(self.gpa, resolved.var_, {});
-                        _ = quantifiable.remove(resolved.var_);
-                    }
-                }
-            },
-            .rigid => |rigid| for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                try pending.append(self.gpa, .{ .var_ = constraint.fn_var, .position = TailPosition.unreachable_position });
-            },
-            // An alias is transparent: its backing is the type.
-            .alias => |alias| try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .position = position }),
-            .structure => |flat| switch (flat) {
-                .empty_record, .empty_tag_union => {},
-                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try pending.append(self.gpa, .{ .var_ = elem, .position = position.data() }),
-                .nominal_type => |nominal| {
-                    // Only a builtin nominal whose arguments are plain data
-                    // carries a conversion through its arguments.
-                    const data_args = if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| switch (builtin_decl) {
-                        .list, .box, .try_type => true,
-                        .dict, .set, .fields, .field, .numeral, .num => false,
-                    } else false;
-                    const arg_position: TailPosition = if (data_args) position.data() else TailPosition.unreachable_position;
-                    for (self.types.sliceNominalArgs(nominal)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = arg_position });
-                },
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position.functionArg() });
-                    try pending.append(self.gpa, .{ .var_ = func.ret, .position = position.functionResult() });
-                },
-                .record => |record| {
-                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
-                        try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .position = position.data() });
-                    }
-                    try pending.append(self.gpa, .{ .var_ = record.ext, .position = position.data() });
-                },
-                .tag_union => |tag_union| {
-                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
-                        for (self.types.sliceVars(args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .position = position.data() });
-                    }
-                    try pending.append(self.gpa, .{ .var_ = tag_union.ext, .position = position.data() });
-                },
-            },
-        }
-    }
 }
 
 /// Mark every dispatch edge that selected an unpromoted local procedure,
@@ -8876,6 +8737,7 @@ fn appendTypeMismatch(
         .host_fixed_origin = host_fixed_origin,
         .method_conflict = method_conflict,
         .local_type_escape = unifier.localTypeEscapeCause(&unify_env, expected, actual),
+        .record_tail_refusal = self.unify_scratch.record_tail_refusal,
         .str_conversion = try self.strConversionFor(
             diagnostic_ctx,
             self.types.resolveThroughAliases(expected).desc.content,
@@ -13113,11 +12975,18 @@ fn freshFromContent(self: *Self, content: Content, env: *Env, new_region: Region
 }
 
 /// A fresh uncommitted record tail (design.md "Uncommitted Record Tails"):
-/// the row extension a record construction or a record pattern without `..`
-/// ends in.
+/// the row extension a record construction ends in.
 fn freshUncommittedTail(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
     const tail = try self.fresh(env, new_region);
-    try self.types.markUncommittedRecordTail(tail);
+    try self.types.markUncommittedRecordTail(tail, false);
+    return tail;
+}
+
+/// A fresh uncommitted record tail for a record pattern without `..`: the
+/// record its binding takes apart (design.md "Uncommitted Record Tails").
+fn freshUncommittedPatternTail(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
+    const tail = try self.fresh(env, new_region);
+    try self.types.markUncommittedRecordTail(tail, true);
     return tail;
 }
 
@@ -23453,8 +23322,30 @@ fn registerLocalNominalDecl(
         ),
         .formals = try self.types.appendVars(self.scratch_vars.sliceFromStart(formals_top)),
         .backing = backing_var,
-        .flags = .{ .valid = true, .context_len = std.math.cast(u16, context.len) orelse return error.OutOfMemory },
+        .flags = .{
+            .valid = true,
+            .context_len = std.math.cast(u16, context.len) orelse return error.OutOfMemory,
+            .padded = self.nominalDeclHasUnnamedFields(@fromBackingInt(decl_statement)),
+        },
     });
+}
+
+/// Whether the nominal declaration at `statement_idx` writes a record
+/// backing with an unnamed field.
+fn nominalDeclHasUnnamedFields(self: *const Self, statement_idx: CIR.Statement.Idx) bool {
+    var anno_idx = self.cir.store.getStatement(statement_idx).s_nominal_decl.anno;
+    if (anno_idx == .placeholder) return false;
+    const record = while (true) {
+        switch (self.cir.store.getTypeAnno(anno_idx)) {
+            .parens => |parens| anno_idx = parens.anno,
+            .record => |record| break record,
+            .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .@"fn", .malformed => return false,
+        }
+    };
+    for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+        if (self.cir.store.getAnnoRecordField(field_idx).is_unnamed) return true;
+    }
+    return false;
 }
 
 /// The content of an application of the nominal type declaration
@@ -28877,7 +28768,7 @@ fn stepPatternCheck(
             // is a type mismatch the user must resolve (e.g. by adding the field
             // or a `..` rest).
             const ext_var = state.mb_ext_var orelse
-                try self.freshUncommittedTail(env, pattern_region);
+                try self.freshUncommittedPatternTail(env, pattern_region);
             try self.unifyWith(pattern_var, .{ .structure = .{
                 .record = .{
                     .fields = record_fields_range,

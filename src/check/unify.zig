@@ -456,6 +456,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             .leaf = leaf,
             .method_conflict = method_conflict,
             .local_type_escape = local_type_escape,
+            .record_tail_refusal = env.unify_scratch.record_tail_refusal,
         } });
         try env.types.poisonOnMismatch(a, b);
         try poisonMethodConflictReceivers(env);
@@ -466,6 +467,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     if (!env.types.savepointActive()) try env.unify_scratch.persistOpenings();
     // A refusal a mismatch handler absorbed did not reject this relation.
     env.unify_scratch.bounded_row_violation = null;
+    env.unify_scratch.record_tail_refusal = null;
     return .unified;
 }
 
@@ -2259,6 +2261,23 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
+        // A use's record becomes a nominal type only when the nominal stores
+        // exactly its fields the way the record does (design.md "Uncommitted
+        // Record Tails").
+        if (self.rowCopyTail(anon_record_ext)) |copy_tail| {
+            if (self.types_store.lookupNominalDecl(nominal_type)) |decl_idx| {
+                if (self.types_store.getNominalDecl(decl_idx).flags.padded) {
+                    self.refuseRecordTail(.{
+                        .kind = .padded_nominal,
+                        .nominal = nominal_type.ident.ident_idx,
+                        .field = null,
+                        .taken_apart = copy_tail.flags.record_pattern_tail,
+                    });
+                    return error.TypeMismatch;
+                }
+            }
+        }
+
         // Open the declaration: instantiate its backing template with this
         // application's actual args.
         const opened_backing = switch (try self.openNominalBacking(vars, nominal_type)) {
@@ -2307,6 +2326,18 @@ const Unifier = struct {
         }
 
         const nominal_backing_record = nominal_backing_flat.record;
+
+        if (self.rowCopyTail(anon_record_ext)) |copy_tail| {
+            if (self.omittableFieldMissingFrom(nominal_backing_record.fields, anon_record_fields, anon_record_ext)) |field_name| {
+                self.refuseRecordTail(.{
+                    .kind = .added_field,
+                    .nominal = nominal_type.ident.ident_idx,
+                    .field = field_name,
+                    .taken_apart = copy_tail.flags.record_pattern_tail,
+                });
+                return error.TypeMismatch;
+            }
+        }
 
         // Unification succeeded—the nominal type wins.
         try self.pushWorkFrame(.{ .merge_to_nominal = .{
@@ -2554,14 +2585,24 @@ const Unifier = struct {
             },
             .record => |record| {
                 if (record.fields.len() != 0) {
-                    // A value of a lift-only tail's record enters a body
-                    // compiled without these fields.
-                    if (tail.desc.flags.uncommitted_lift_only) return error.TypeMismatch;
+                    // A use's record is the one its binding built or took
+                    // apart, and gains no field.
+                    if (tail.desc.flags.uncommitted_copy) {
+                        var iter = self.types_store.iterRecordFields(record.fields);
+                        while (iter.next()) |field| {
+                            if (!self.fieldIsOmittable(field)) continue;
+                            self.refuseRecordTail(.{
+                                .kind = .added_field,
+                                .nominal = null,
+                                .field = field.name,
+                                .taken_apart = tail.desc.flags.record_pattern_tail,
+                            });
+                            break;
+                        }
+                        return error.TypeMismatch;
+                    }
                     if (self.row_width_relation == .exact) return error.TypeMismatch;
-                    // A copy's values were built by a body compiled at its own
-                    // type, so no construction here can materialize a default.
-                    const owner_exists = !tail.desc.flags.uncommitted_copy and self.absorptionOwnerExists(tail_var);
-                    try self.validateAbsorbableRecordRow(record.fields, record.ext, owner_exists);
+                    try self.validateAbsorbableRecordRow(record.fields, record.ext, self.absorptionOwnerExists(tail_var));
                     try self.recordAbsorbedRecordDefaults(tail_var, record.fields, record.ext);
                 }
                 try self.recordDeferredConstraintOn(tail_var, constraints);
@@ -2571,7 +2612,7 @@ const Unifier = struct {
                     .flags = .{
                         .uncommitted_record_tail = true,
                         .uncommitted_copy = tail.desc.flags.uncommitted_copy,
-                        .uncommitted_lift_only = tail.desc.flags.uncommitted_lift_only,
+                        .record_pattern_tail = tail.desc.flags.record_pattern_tail,
                     },
                 });
                 _ = try self.scratch.fresh_vars.append(self.scratch.gpa, rest);
@@ -2587,6 +2628,97 @@ const Unifier = struct {
             .empty_tag_union,
             => return error.TypeMismatch,
         }
+    }
+
+    /// The quantified-tail copy a record row ends in, followed through record
+    /// segments and aliases: the row is the record of a use of a binding
+    /// that quantified its tail (design.md "Uncommitted Record Tails").
+    fn rowCopyTail(self: *Self, ext: Var) ?types_mod.Descriptor {
+        var current = ext;
+        var guard = types_mod.debug.IterationGuard.init("rowCopyTail");
+        while (true) {
+            guard.tick();
+            const resolved = self.types_store.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .record => |record| current = record.ext,
+                    .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return null,
+                },
+                .flex => return if (resolved.desc.flags.uncommitted_copy) resolved.desc else null,
+                .rigid, .field_presence, .err => return null,
+            }
+        }
+    }
+
+    /// Whether a field is optional or defaulted: one a construction may omit.
+    fn fieldIsOmittable(self: *Self, field: RecordField) bool {
+        return switch (field.presence.decode()) {
+            .required => false,
+            .unknown => |unknown| switch (self.types_store.resolveVar(unknown.presence).desc.content) {
+                .field_presence => |presence| switch (presence) {
+                    .optional, .defaulted => true,
+                    .required => false,
+                },
+                .flex, .rigid, .alias, .structure, .err => false,
+            },
+        };
+    }
+
+    /// The name of the first optional or defaulted field of `fields` that
+    /// the record row `row_fields` over `row_ext` lacks, if a required field
+    /// of `fields` is not also missing (that mismatch is reported as such).
+    fn omittableFieldMissingFrom(
+        self: *Self,
+        fields: RecordFieldSafeMultiList.Range,
+        row_fields: RecordFieldSafeMultiList.Range,
+        row_ext: Var,
+    ) ?Ident.Idx {
+        var found: ?Ident.Idx = null;
+        var iter = self.types_store.iterRecordFields(fields);
+        while (iter.next()) |field| {
+            if (self.rowHasField(row_fields, row_ext, field.name)) continue;
+            if (!self.fieldIsOmittable(field)) return null;
+            if (found == null) found = field.name;
+        }
+        return found;
+    }
+
+    /// Whether the record row `fields` over `ext` holds a field named `name`.
+    fn rowHasField(self: *Self, fields: RecordFieldSafeMultiList.Range, ext: Var, name: Ident.Idx) bool {
+        var segment = fields;
+        var current = ext;
+        var guard = types_mod.debug.IterationGuard.init("rowHasField");
+        while (true) {
+            guard.tick();
+            var iter = self.types_store.iterRecordFields(segment);
+            while (iter.next()) |field| {
+                if (field.name.eql(name)) return true;
+            }
+            while (true) {
+                const resolved = self.types_store.resolveVar(current);
+                switch (resolved.desc.content) {
+                    .alias => |alias| {
+                        current = self.types_store.getAliasBackingVar(alias);
+                        continue;
+                    },
+                    .structure => |flat_type| switch (flat_type) {
+                        .record => |record| {
+                            segment = record.fields;
+                            current = record.ext;
+                            break;
+                        },
+                        .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return false,
+                    },
+                    .flex, .rigid, .field_presence, .err => return false,
+                }
+            }
+        }
+    }
+
+    /// Keep the first refusal of a use's record this relation meets.
+    fn refuseRecordTail(self: *Self, refusal: problem_mod.RecordTailRefusal) void {
+        if (self.scratch.record_tail_refusal == null) self.scratch.record_tail_refusal = refusal;
     }
 
     /// Whether a record row may still be lifted into a nominal type: the
@@ -4465,6 +4597,9 @@ pub const Scratch = struct {
     /// The bounded extension and the tag the current unify call refused to add
     /// to it, when a refusal caused its mismatch.
     bounded_row_violation: ?BoundedRowViolation,
+    /// The first refusal of a use's record to become more than its binding
+    /// built (design.md "Uncommitted Record Tails").
+    record_tail_refusal: ?problem_mod.RecordTailRefusal,
     /// The root operands' contents, read through aliases just before the
     /// reported mismatch of the current unify call poisoned them.
     rejected_roots: ?RejectedRoots,
@@ -4643,6 +4778,7 @@ pub const Scratch = struct {
             .absorbed_record_defaults = try AbsorbedRecordDefault.SafeList.initCapacity(gpa, 4),
             .gathered_tags = try TagSafeList.initCapacity(gpa, 32),
             .bounded_row_violation = null,
+            .record_tail_refusal = null,
             .rejected_roots = null,
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
@@ -4724,6 +4860,7 @@ pub const Scratch = struct {
         self.absorbed_record_defaults.items.clearRetainingCapacity();
         self.gathered_tags.items.clearRetainingCapacity();
         self.bounded_row_violation = null;
+        self.record_tail_refusal = null;
         self.rejected_roots = null;
         self.only_in_a_tags.items.clearRetainingCapacity();
         self.only_in_b_tags.items.clearRetainingCapacity();
