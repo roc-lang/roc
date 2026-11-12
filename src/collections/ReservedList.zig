@@ -801,7 +801,7 @@ test "borrowed columns copy every column on their first growth" {
     const Columns = ReservedColumns(Row, .dense);
     var original = try Columns.init(testing.allocator, 2);
     defer original.deinit(testing.allocator);
-    _ = try original.append(testing.allocator, .{ .wide = 1, .narrow = 2, .mid = 3 });
+    const first = try original.append(testing.allocator, .{ .wide = 1, .narrow = 2, .mid = 3 });
     var writer = CompactWriter.init();
     defer writer.deinit(testing.allocator);
     var header: Columns.Serialized = undefined;
@@ -816,7 +816,7 @@ test "borrowed columns copy every column on their first growth" {
     inline for (@typeInfo(Row).@"struct".field_names) |name| {
         try testing.expectEqual(Storage.allocated, @field(view.columns, name).storage);
     }
-    try testing.expectEqual(Row{ .wide = 1, .narrow = 2, .mid = 3 }, view.get(@fromBackingInt(0)));
+    try testing.expectEqual(Row{ .wide = 1, .narrow = 2, .mid = 3 }, view.get(first));
     try testing.expectEqual(Row{ .wide = 4, .narrow = 5, .mid = 6 }, view.get(second));
 }
 
