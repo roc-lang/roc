@@ -17953,7 +17953,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// bytes at `index`, or at the list's length when `index` is null,
         /// then write the list to the target, one item longer when `index` is
         /// null. A zero-sized item copies nothing, and appending one writes
-        /// the list of zero-sized items of that length. The sizes
+        /// the list of zero-sized items of that length, which keeps the
+        /// capacity the list has. The sizes
         /// `emitSizedCopy` handles copy inline; others copy through the
         /// runtime's `roc_desc_copy`.
         fn emitDynListWriteUnsafe(self: *Self, dst_local: LocalId, elem_desc: LocalId, list: LocalId, element: LocalId, index: ?LocalId) Allocator.Error!void {
@@ -18009,9 +18010,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, len, from, list_len_offset);
             try self.emitLoad(.w64, from, from, list_capacity_offset);
             if (index == null) {
-                // `compiled.zstList`: no bytes and no capacity.
+                // `RocList.zeroSizedKeeping`: no bytes, and the capacity the
+                // list has, or its new length when that is larger.
                 try self.codegen.emitLoadImm(bytes, 0);
-                try self.codegen.emitLoadImm(from, 0);
+                try self.emitShiftImm(.shr, .w64, from, from, RocList.capacity_shift);
+                try self.emitAddImm(to, len, 1);
+                try self.emitSaturatingSub(from, from, to);
+                try self.codegen.emitAdd(.w64, from, from, to);
+                try self.emitShiftImm(.shl, .w64, from, from, RocList.capacity_shift);
             }
             try self.codegen.patchJump(written, self.codegen.currentOffset());
             if (index == null) try self.emitAddImm(len, len, 1);
