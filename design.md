@@ -7289,34 +7289,6 @@ nominal type with arguments (`List(U8)`), one of this module, one whose
 `is_eq` is derived or has another signature, and one whose `is_eq` invokes a
 function value. Both sides are pinned in `closed_operator_test.zig`.
 
-A deferred operator requirement lets closed operator resolution apply to an
-operator whose operands' type is not known yet when it is checked. When that
-type is the still-undetermined type of a deferred literal (Deferred Literal
-Conversion), as in `$step + 1` before anything has said what `$step` is, the
-operator is checked as always (its operands are unified, and its result is
-its operands' type or `Bool`) but states no constraint: it waits on the
-checker's pending list (`deferOperatorRequirement`) with the context it was
-checked in. `settlePendingOperators` runs wherever pending literals settle.
-An operator whose operands' type has settled is resolved by closed operator
-resolution, or gets its ordinary constraint. One whose operands' type is
-still undetermined keeps waiting, but only until the generalization boundary
-of the scope it was checked in, where it gets its ordinary constraint: a
-requirement belongs to that scope's scheme, which the boundary relates,
-defaults, and generalizes, so every decision that reads requirements sees
-this one exactly as if it had been created with the operator. A constraint
-created late is created under the scheme root, `expect`, ambiguity judgment,
-and relation owner the operator was checked under.
-
-This is a mechanism: an operator requirement on an undetermined type
-establishes nothing until that type is determined, and it is present before
-anything decides the type for it. Only an operand type marked as a deferred
-literal's waits, because that marker already keeps an erroneous type from
-replacing the variable and already reports the unification that determines
-it. An operator on any other undetermined type, a range operator, an
-operator checked inside a probe, and any operator in a module that declares
-a method in a function body keep their constraint from the start. Both sides
-are pinned in `closed_operator_test.zig`.
-
 A where alias (`a.Sortable : where [...]`) is a source-level abbreviation for a
 set of method constraints, not a type. Its declaration solves to its receiver: a
 rigid variable carrying the constraints it names. A signature that references

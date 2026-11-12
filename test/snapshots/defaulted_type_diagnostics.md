@@ -410,12 +410,12 @@ written_method = written.foo()
 						(ty-lookup (name "I64") (builtin)))))))
 	(d-let
 		(p-assign (ident "materialized"))
-		(e-call (constraint-fn-var 323)
+		(e-call (constraint-fn-var 325)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-lambda
 				(args
 					(p-assign (ident "n")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 341)
+				(e-dispatch-call (method "plus") (constraint-fn-var 323)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "n"))))

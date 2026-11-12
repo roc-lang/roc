@@ -88,42 +88,42 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "sub_nested"))
-		(e-dispatch-call (method "minus") (constraint-fn-var 245)
+		(e-dispatch-call (method "minus") (constraint-fn-var 241)
 			(receiver
 				(e-num (value "1")))
 			(args
-				(e-dispatch-call (method "minus") (constraint-fn-var 243)
+				(e-dispatch-call (method "minus") (constraint-fn-var 239)
 					(receiver
 						(e-num (value "2")))
 					(args
 						(e-num (value "3")))))))
 	(d-let
 		(p-assign (ident "div_nested"))
-		(e-dispatch-call (method "div_by") (constraint-fn-var 249)
+		(e-dispatch-call (method "div_by") (constraint-fn-var 245)
 			(receiver
 				(e-num (value "8")))
 			(args
-				(e-dispatch-call (method "div_by") (constraint-fn-var 247)
+				(e-dispatch-call (method "div_by") (constraint-fn-var 243)
 					(receiver
 						(e-num (value "4")))
 					(args
 						(e-num (value "2")))))))
 	(d-let
 		(p-assign (ident "mixed_nested"))
-		(e-dispatch-call (method "minus") (constraint-fn-var 253)
+		(e-dispatch-call (method "minus") (constraint-fn-var 249)
 			(receiver
 				(e-num (value "1")))
 			(args
-				(e-dispatch-call (method "plus") (constraint-fn-var 251)
+				(e-dispatch-call (method "plus") (constraint-fn-var 247)
 					(receiver
 						(e-num (value "2")))
 					(args
 						(e-num (value "3")))))))
 	(d-let
 		(p-assign (ident "neg_nested"))
-		(e-dispatch-call (method "negate") (constraint-fn-var 241)
+		(e-dispatch-call (method "negate") (constraint-fn-var 253)
 			(receiver
-				(e-dispatch-call (method "negate") (constraint-fn-var 239)
+				(e-dispatch-call (method "negate") (constraint-fn-var 251)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "sub_nested"))))
