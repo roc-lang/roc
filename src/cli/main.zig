@@ -1921,7 +1921,7 @@ fn entrypointAbiDigestFromLirData(
     }
 
     for (store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         updateHashU32(&hasher, hosted.dispatch_index);
         updateHashBytes(&hasher, store.getString(hosted.symbol));
     }
@@ -8600,7 +8600,7 @@ fn hostedSymbolsFromLir(arena: std.mem.Allocator, store: *const lir.LirStore) st
     var seen = std.StringHashMap(void).init(arena);
     var symbols = std.ArrayList([]const u8).empty;
     for (store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         const text = store.getString(hosted.symbol);
         const gop = try seen.getOrPut(text);
         // Dupe into the arena: a diagnostic naming these symbols renders
@@ -8626,14 +8626,14 @@ fn wasmRocHostRequirements(
 fn hostedSymbolsFromLirDispatch(arena: std.mem.Allocator, store: *const lir.LirStore) std.mem.Allocator.Error![]const []const u8 {
     var hosted_count: usize = 0;
     for (store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         hosted_count = @max(hosted_count, @as(usize, hosted.dispatch_index) + 1);
     }
 
     const hosted_symbols = try arena.alloc([]const u8, hosted_count);
     for (hosted_symbols) |*symbol| symbol.* = "";
     for (store.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         hosted_symbols[hosted.dispatch_index] = store.getString(hosted.symbol);
     }
     return hosted_symbols;
@@ -9282,7 +9282,7 @@ fn rejectWasmHostParameterOverflow(
     var seen = std.AutoHashMap(u32, void).init(ctx.gpa);
     defer seen.deinit();
     for (store.getProcSpecs()) |proc| {
-        const hosted = proc.hosted orelse continue;
+        const hosted = proc.hosted.get() orelse continue;
         if (seen.contains(hosted.dispatch_index)) continue;
         try seen.put(hosted.dispatch_index, {});
         const params = store.getLocalSpan(proc.args);
@@ -9468,7 +9468,7 @@ test "a dev object defines every static datum its link keeps" {
             .name = store.freshSyntheticSymbol(),
             .identity = lir.ProcIdentity.forTest(719),
             .args = .empty(),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .str,
         }, .none);
         const descriptor = try a.alloc(u8, 24);
@@ -9530,7 +9530,7 @@ test "a composed program object holds only the pieces its roots reach" {
             const local = try library_store.addLocal(.{ .layout_idx = .u64 });
             const ret = try library_store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const body = try library_store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } }, .next = ret } }, .test_fixture);
-            _ = try library_store.addProcSpec(.{ .name = library_store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = body, .ret_layout = .u64, .exported = true }, .none);
+            _ = try library_store.addProcSpec(.{ .name = library_store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = .some(body), .ret_layout = .u64, .exported = true }, .none);
         }
         var library_compiler = backend.ObjectFileCompiler.init(allocator);
         library_compiler.link_unit = true;
@@ -9546,7 +9546,7 @@ test "a composed program object holds only the pieces its roots reach" {
         const result = try app_store.addLocal(.{ .layout_idx = .u64 });
         const ret = try app_store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const body = try app_store.addCFStmt(.{ .assign_call = .{ .target = result, .proc = linked, .args = .empty(), .next = ret } }, .test_fixture);
-        const entry_proc = try app_store.addProcSpec(.{ .name = app_store.freshSyntheticSymbol(), .identity = entry_identity, .args = .empty(), .body = body, .ret_layout = .u64 }, .none);
+        const entry_proc = try app_store.addProcSpec(.{ .name = app_store.freshSyntheticSymbol(), .identity = entry_identity, .args = .empty(), .body = .some(body), .ret_layout = .u64 }, .none);
         const entrypoints = [_]backend.Entrypoint{.{ .symbol_name = "roc__main", .proc = entry_proc, .arg_layouts = &.{}, .ret_layout = .u64 }};
         var app_compiler = backend.ObjectFileCompiler.init(allocator);
         var app_pieces = try app_compiler.compileToPieces(&app_store, &app_layouts, &entrypoints, &.{}, app_store.getProcSpecs(), target);
@@ -12788,6 +12788,10 @@ const CliTestTranscriptEvent = struct {
     payload: []const u8,
 };
 
+/// An outcome's position in a module's outcome file.
+const OutcomeIndex = enum(u32) { first = 0, _ };
+const OptionalOutcomeIndex = collections.OptionalId(OutcomeIndex);
+
 /// Where a result's `failure_detail` came from: the expect's own source,
 /// which a reused outcome rebuilds from the current checked module, or
 /// execution, whose message a reused outcome stores (design.md "Test
@@ -12988,14 +12992,14 @@ const CliTestPlanModule = struct {
     /// For each source root, the index of its outcome in the module's
     /// outcome file when that outcome is reused (design.md "Test outcome
     /// files"); only roots without one run.
-    reused: []?u32,
+    reused: []OptionalOutcomeIndex,
     /// The module's outcome file, when this command caches test outcomes.
     outcome_file: ?CliTestOutcomeFile = null,
 
     /// How many of the module's roots this command runs.
     fn runCount(self: *const CliTestPlanModule) usize {
         var count: usize = 0;
-        for (self.reused) |reused| count += @intFromBool(reused == null);
+        for (self.reused) |reused| count += @intFromBool(reused == .none);
         return count;
     }
 
@@ -13230,9 +13234,9 @@ fn buildCliTestPlan(
 
         const result_indices = try ctx.gpa.alloc(u32, test_roots.len);
         errdefer ctx.gpa.free(result_indices);
-        const reused = try ctx.gpa.alloc(?u32, test_roots.len);
+        const reused = try ctx.gpa.alloc(OptionalOutcomeIndex, test_roots.len);
         errdefer ctx.gpa.free(reused);
-        @memset(reused, null);
+        @memset(reused, .none);
         for (test_roots, result_indices, 0..) |root, *result_slot, root_index| {
             const result_index: u32 = @intCast(entries.items.len);
             result_slot.* = result_index;
@@ -13344,7 +13348,7 @@ fn admitCliTestOutcomes(
                 if (source_module.env == null) renderable = false;
             }
             if (!renderable) continue;
-            reused.* = @intCast(index);
+            reused.* = .some(@fromBackingInt(@as(u32, @intCast(index))));
             reused_count += 1;
         }
     }
@@ -13507,8 +13511,8 @@ fn publishCliTestOutcomes(
     try outcomes.ensureTotalCapacity(ctx.gpa, planned.test_roots.len);
     const observations = results[planned.test_roots.len..];
     for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
-        if (reused) |index| {
-            outcomes.appendAssumeCapacity(try test_outcome_file.dupeBorrowed(ctx.gpa, file.outcomes[index]));
+        if (reused.get()) |index| {
+            outcomes.appendAssumeCapacity(try test_outcome_file.dupeBorrowed(ctx.gpa, file.outcomes[@backingInt(index)]));
             continue;
         }
         const own = results[root_index];
@@ -14161,7 +14165,7 @@ fn collectCliTestRootRuns(
             );
         }
         const root_index: usize = @intCast(test_plan.root_index);
-        if (planned.reused[root_index] != null) base.invariant("CLI test invariant violated: a test root whose outcome is reused was lowered", .{});
+        if (planned.reused[root_index] != .none) base.invariant("CLI test invariant violated: a test root whose outcome is reused was lowered", .{});
         const root = planned.test_roots[root_index];
         const plan_entry = plan_entries[@intCast(test_plan.result_index)];
         if (builtin.mode == .debug and
@@ -15130,14 +15134,14 @@ fn mergeCliRootOutcomes(ctx: *CliCtx, planned: *CliTestPlanModule, fresh: []cons
     // handed over in the merged slice; `fresh` items are the caller's.
     var reused_own_end: usize = 0;
     errdefer {
-        for (merged.items[0..reused_own_end], planned.reused[0..reused_own_end]) |item, reused| if (reused != null) deinitCliTestResultItemPayload(allocator, item);
+        for (merged.items[0..reused_own_end], planned.reused[0..reused_own_end]) |item, reused| if (reused != .none) deinitCliTestResultItemPayload(allocator, item);
         deinitCliTestResultItemPayloads(allocator, reused_inline.items);
         merged.deinit(allocator);
     }
     var fresh_index: usize = 0;
     for (planned.test_roots, planned.reused) |root, reused| {
-        if (reused) |index| {
-            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[index], source_modules, &merged, &reused_inline);
+        if (reused.get()) |index| {
+            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[@backingInt(index)], source_modules, &merged, &reused_inline);
             reused_own_end = merged.items.len;
             continue;
         }
@@ -15179,7 +15183,7 @@ fn completePlannedModuleResults(
         // Replayed root payloads were allocated by mergeCliRootOutcomes;
         // inline replay items only borrow current source-module data.
         for (results[0..planned.test_roots.len], planned.reused) |item, reused| {
-            if (reused != null) deinitCliTestResultItemPayload(ctx.gpa, item);
+            if (reused != .none) deinitCliTestResultItemPayload(ctx.gpa, item);
         }
         ctx.gpa.free(results);
     }
@@ -15224,7 +15228,7 @@ fn exerciseCliOutcomeOwnership(
     var manager = CacheManager.init(allocator, .{ .enabled = false }, ctx.coreCtx());
     defer manager.deinit();
 
-    const replay_index: usize = if (planned.reused[0] != null) 0 else 1;
+    const replay_index: usize = if (planned.reused[0] != .none) 0 else 1;
     const fresh_index = 1 - replay_index;
     if (operation == .replay) {
         var own: std.ArrayList(CliTestResultItem) = .empty;
@@ -15341,7 +15345,7 @@ fn checkCliOutcomeOwnership(operation: CliOutcomeOwnershipTest) (Allocator.Error
         .inline_expects = &.{.{ .module = identity, .region_start = 7, .region_end = 9, .passed = 3, .failed = 1 }},
     }};
     var indices = [_]u32{ 0, 1 };
-    var reused = [_]?u32{ 0, null };
+    var reused = [_]OptionalOutcomeIndex{ .some(.first), .none };
     var planned: CliTestPlanModule = .{
         .module_index = 0,
         .module = .{
@@ -15366,8 +15370,8 @@ fn checkCliOutcomeOwnership(operation: CliOutcomeOwnershipTest) (Allocator.Error
     // Both first-entry constructors must be safe: replay duplicates borrowed
     // arrays, while fresh publication constructs them from result items.
     for (0..2) |replay_index| {
-        reused = .{ null, null };
-        reused[replay_index] = 0;
+        reused = .{ .none, .none };
+        reused[replay_index] = .some(.first);
         outcomes[0].order = @intCast(replay_index);
         try std.testing.checkAllAllocationFailures(deterministic.allocator(), exerciseCliOutcomeOwnership, .{ &planned, &sources, operation });
     }
@@ -15459,8 +15463,8 @@ fn publishReusedCliTestOutcomesLive(
     defer inline_expects.deinit(ctx.gpa);
     for (test_plan.modules) |*planned| {
         for (planned.test_roots, planned.reused, planned.result_indices) |root, reused, result_index| {
-            const index = reused orelse continue;
-            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[index], source_modules, &own, &inline_expects);
+            const index = reused.get() orelse continue;
+            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[@backingInt(index)], source_modules, &own, &inline_expects);
             live.publishCopiedEntry(result_index, planned.module.semantic.env, planned.module.path, own.items[own.items.len - 1]);
         }
     }
@@ -16024,7 +16028,7 @@ fn runUnitImageTestPlan(
         errdefer ctx.gpa.free(roots);
         var cursor: usize = 0;
         for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
-            if (reused != null) continue;
+            if (reused != .none) continue;
             const entry = program.wrappers.get(.{ .module = module, .root_index = @intCast(root_index) }) orelse
                 base.invariant("roc test invariant violated: no loaded test unit exports the wrapper of root {d} of module {s}", .{ root_index, planned.module.semantic.env.qualifiedModuleName() });
             roots[cursor] = .{ .entry = entry };
@@ -17242,16 +17246,17 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     // nor a default app is tested as a plain module, and an app is tested
     // whether or not it supplies the definitions its platform requires.
     build_env.setEntryValidation(.explicit_roots);
+    // A module takes its package aliases from its owning `main.roc` (or
+    // `--main`), the same as under `roc check`, but only the module's own
+    // import closure is checked and tested: the rest of the app and its
+    // platform cannot affect the module's `expect`s.
+    build_env.setEntryClosureOnly(true);
 
     var extra_buf: [2][]const u8 = undefined;
     const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);
 
     reporter.begin("Resolving Dependencies");
-    const discovered = if (args.main) |main_path|
-        build_env.discoverWithMain(args.path, main_path)
-    else
-        build_env.discoverDependencies(args.path);
-    discovered catch |err| {
+    build_env.discoverResolvingMain(args.path, args.main) catch |err| {
         _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
         if (args.watch_inputs_file) |file_path| {
             try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
@@ -17326,7 +17331,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     defer runtime_metadata.deinit(ctx.gpa);
     for (test_plan.modules) |planned| {
         for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
-            if (reused != null) continue;
+            if (reused != .none) continue;
             try runtime_requests.append(ctx.gpa, root);
             try runtime_sources.append(ctx.gpa, planned.artifact.key.digest());
             const entry = test_plan.entries[planned.result_indices[root_index]];

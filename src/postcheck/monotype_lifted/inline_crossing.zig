@@ -155,7 +155,7 @@ const Use = union(enum) {
     result,
 };
 
-const UseRow = struct { body: u32, use: Use, next: u32 };
+const UseRow = struct { body: u32, use: Use, next: collections.OptionalU32 };
 
 const LocalUseRow = struct { body: u32, expr: Ast.ExprId, next: u32 };
 
@@ -171,8 +171,10 @@ pub const Index = struct {
     /// Each original function's source body.
     bodies: []const ?Ast.ExprId,
     /// The first use of each source expression, by expression id, in a
-    /// list of every body's uses of it.
-    use_head: []u32,
+    /// list of every body's uses of it; absent for an expression no body
+    /// uses. Read for any expression a walk reaches, so it starts cleared
+    /// to absent (zero).
+    use_head: []collections.OptionalU32,
     uses: std.ArrayList(UseRow) = .empty,
     local_use_head: collections.DenseMapUnmanaged(Ast.LocalId, u32) = .empty,
     local_use_rows: std.ArrayList(LocalUseRow) = .empty,
@@ -180,7 +182,7 @@ pub const Index = struct {
     enclosing_loop: std.AutoHashMapUnmanaged(LoopKey, u32) = .empty,
     /// Locals bound once by a plain binding, to their value; null for a
     /// local bound more than once or recursively.
-    defs: collections.DenseMapUnmanaged(Ast.LocalId, ?Ast.ExprId) = .empty,
+    defs: collections.DenseMapUnmanaged(Ast.LocalId, collections.OptionalId(Ast.ExprId)) = .empty,
     /// Each function's parameters and captures, by body. A lifted function's
     /// capture slots are the locals its enclosing body binds, so a local is
     /// a slot only of a particular body.
@@ -203,13 +205,13 @@ pub const Index = struct {
         self.* = .{
             .gpa = gpa,
             .bodies = try gpa.dupe(?Ast.ExprId, source_bodies),
-            .use_head = try gpa.alloc(u32, expr_count),
+            .use_head = try gpa.alloc(collections.OptionalU32, expr_count),
             .returns = try gpa.alloc(std.ArrayList(Ast.ExprId), source_bodies.len),
             .scc = try gpa.alloc(u32, source_bodies.len),
             .on_cycle = try gpa.alloc(bool, source_bodies.len),
             .wrapper = try gpa.alloc(bool, source_bodies.len),
         };
-        @memset(self.use_head, none);
+        @memset(self.use_head, .none);
         for (self.returns) |*list| list.* = .empty;
         @memset(self.wrapper, false);
         for (source_bodies, 0..) |maybe_body, index| {
@@ -247,8 +249,8 @@ pub const Index = struct {
     pub fn bodyHolds(self: *const Index, fn_id: Ast.FnId, expr: Ast.ExprId) bool {
         const raw = @backingInt(expr);
         if (raw >= self.use_head.len) return false;
-        var row = self.use_head[raw];
-        while (row != none) : (row = self.uses.items[row].next) {
+        var cursor = self.use_head[raw];
+        while (cursor.get()) |row| : (cursor = self.uses.items[row].next) {
             if (self.uses.items[row].body == @backingInt(fn_id)) return true;
         }
         return false;
@@ -289,15 +291,15 @@ pub const Index = struct {
     fn addUse(self: *Index, body: u32, expr: Ast.ExprId, use: Use) Allocator.Error!bool {
         const raw = @backingInt(expr);
         var fresh = true;
-        var row = self.use_head[raw];
-        while (row != none) : (row = self.uses.items[row].next) {
+        var cursor = self.use_head[raw];
+        while (cursor.get()) |row| : (cursor = self.uses.items[row].next) {
             const existing = self.uses.items[row];
             if (existing.body != body) continue;
             fresh = false;
             if (std.meta.eql(existing.use, use)) return false;
         }
         try self.uses.append(self.gpa, .{ .body = body, .use = use, .next = self.use_head[raw] });
-        self.use_head[raw] = @intCast(self.uses.items.len - 1);
+        self.use_head[raw] = .some(@intCast(self.uses.items.len - 1));
         return fresh;
     }
 
@@ -305,7 +307,7 @@ pub const Index = struct {
         switch (program.getPat(pat).data) {
             .bind => |local| {
                 const gop = try self.defs.getOrPut(self.gpa, local);
-                gop.value_ptr.* = if (gop.found_existing) null else value;
+                gop.value_ptr.* = if (gop.found_existing) .none else .of(value);
             },
             .wildcard, .as, .tag, .nominal, .list, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern, .record, .tuple => {},
         }
@@ -427,7 +429,7 @@ pub const Index = struct {
                             const b = GuardedList.at(bs, i);
                             const bind = p.stmtSpan(b.bindings);
                             for (0..bind.len) |j| try tasks.append(gpa, .{ .stmt = GuardedList.at(bind, j) });
-                            if (b.guard) |g| try push(&tasks, gpa, g, .stop);
+                            if (b.guard.get()) |g| try push(&tasks, gpa, g, .stop);
                             try push(&tasks, gpa, b.body, .{ .same = e });
                         }
                     },
@@ -570,7 +572,9 @@ pub const Index = struct {
         defer gpa.free(low);
         const on_stack = try gpa.alloc(bool, n);
         defer gpa.free(on_stack);
-        @memset(order, none);
+        // Visit orders are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
+        @memset(order, unvisited);
         @memset(on_stack, false);
         @memset(self.on_cycle, false);
         const DfsFrame = struct { node: u32, next: u32 };
@@ -578,11 +582,11 @@ pub const Index = struct {
         defer frames.deinit(gpa);
         var component: std.ArrayList(u32) = .empty;
         defer component.deinit(gpa);
-        var next_order: u32 = 0;
+        var next_order: u32 = 1;
         var next_scc: u32 = 0;
         for (0..n) |root_index| {
             const root: u32 = @intCast(root_index);
-            if (order[root] != none) continue;
+            if (order[root] != unvisited) continue;
             order[root] = next_order;
             low[root] = next_order;
             next_order += 1;
@@ -595,7 +599,7 @@ pub const Index = struct {
                 if (frame.next < edges[node].items.len) {
                     const target = edges[node].items[frame.next];
                     frame.next += 1;
-                    if (order[target] == none) {
+                    if (order[target] == unvisited) {
                         order[target] = next_order;
                         low[target] = next_order;
                         next_order += 1;
@@ -913,7 +917,7 @@ pub const Session = struct {
                     return .{ .passes = passes };
                 }
                 const maybe_def = self.index.defs.get(local) orelse return .{};
-                const def = maybe_def orelse return .{};
+                const def = maybe_def.get() orelse return .{};
                 return self.child(exprKey(body_fn, def, path), missing) orelse .{};
             },
             .let_ => |let_| return self.child(exprKey(body_fn, let_.rest, path), missing) orelse .{},
@@ -1441,8 +1445,8 @@ const Walk = struct {
                 const raw = c.item.id;
                 if (raw >= index.use_head.len) Common.invariant("inline crossing walked an expression created after indexing");
                 const body = @backingInt(self.entries.items[c.entry].fn_id);
-                var row = index.use_head[raw];
-                while (row != none) : (row = index.uses.items[row].next) {
+                var cursor = index.use_head[raw];
+                while (cursor.get()) |row| : (cursor = index.uses.items[row].next) {
                     const use = index.uses.items[row];
                     if (use.body == body) try self.stepUse(c, use.use);
                 }

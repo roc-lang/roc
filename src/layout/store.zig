@@ -1458,7 +1458,7 @@ pub const Store = struct {
         const value_layouts = try scratch.alloc(Idx, node_count);
         const resolved = try scratch.alloc(bool, node_count);
         const recursive_nodes = try scratch.alloc(bool, node_count);
-        const component_ids = try LayoutComponentColumn.initFilled(scratch, node_count);
+        var component_ids = try LayoutComponentColumn.initFilled(scratch, node_count);
         const reaches_cycle = try scratch.alloc(bool, node_count);
         @memset(resolved, false);
         @memset(recursive_nodes, false);
@@ -1482,7 +1482,7 @@ pub const Store = struct {
             on_stack: []bool,
             stack: *std.ArrayList(GraphNodeId),
             recursive_nodes: []bool,
-            component_ids: LayoutComponentColumn,
+            component_ids: *LayoutComponentColumn,
             reaches_cycle: []bool,
             next_index: i32 = 0,
             next_component_id: u32 = 0,
@@ -1723,7 +1723,7 @@ pub const Store = struct {
             .on_stack = on_stack,
             .stack = &tarjan_stack,
             .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
+            .component_ids = &component_ids,
             .reaches_cycle = reaches_cycle,
         };
 
@@ -1763,7 +1763,7 @@ pub const Store = struct {
             finalize_state: []FinalizeState,
             raw_used: []bool,
             recursive_nodes: []bool,
-            component_ids: LayoutComponentColumn,
+            component_ids: LayoutComponentColumn.View,
 
             /// The layout of child `ref`, or the node that must be finalized
             /// first to produce it.
@@ -1992,7 +1992,7 @@ pub const Store = struct {
             .finalize_state = finalize_state,
             .raw_used = raw_used,
             .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
+            .component_ids = component_ids.view(),
         };
 
         // A node that reaches no cycle reads no raw slot, and neither does
@@ -2029,7 +2029,7 @@ pub const Store = struct {
             value_layouts: []Idx,
             resolved: []bool,
             recursive_nodes: []bool,
-            component_ids: LayoutComponentColumn,
+            component_ids: LayoutComponentColumn.View,
 
             fn valueIdx(self_resolver: *@This(), ref: GraphRef) Idx {
                 return switch (ref) {
@@ -2242,7 +2242,7 @@ pub const Store = struct {
             .value_layouts = value_layouts,
             .resolved = resolved,
             .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
+            .component_ids = component_ids.view(),
         };
 
         // A node resolves once the children it waits on have, so each node is

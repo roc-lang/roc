@@ -5,6 +5,7 @@
 //! types, function identities, and capture/binder identities verbatim.
 
 const std = @import("std");
+const collections = @import("collections");
 const ast = @import("ast.zig");
 const Mono = @import("../monotype/ast.zig");
 const Common = @import("../common.zig");
@@ -139,10 +140,12 @@ const Relocation = struct {
         if (T == ast.StmtId) return self.id("stmts", item);
         if (T == ast.LocalId) return self.id("locals", item);
         if (T == ast.StringLiteralId) return self.id("string_literals", item);
-        if (T == ast.InlineScopeId) return if (item == ast.InlineScopeId.none) item else self.id("inline_scopes", item);
+        if (T == ast.InlineScopeId) return if (item == ast.InlineScopeId.none) item else .fromRow(@intCast(self.index("inline_scopes", item.row())));
         if (T == Common.Symbol) return @fromBackingInt(@intCast(@backingInt(item) + if (@backingInt(item) >= self.symbol_start) self.symbol_offset else @as(u32, 0)));
         if (T == ast.JoinPointId) return @fromBackingInt(@intCast(@backingInt(item) + if (@backingInt(item) >= self.join_start) self.join_offset else @as(u32, 0)));
         if (T == ast.Span(void)) @compileError("body spans must be relocated through their owning field");
+        // A compact optional relocates exactly like the `?Payload` it stores.
+        if (comptime collections.CompactOptionalPayload(T) != null) return .of(if (item.get()) |payload| self.value(payload) else null);
         const info = @typeInfo(T);
         if (comptime std.meta.activeTag(info) == .@"struct") {
             var result = item;

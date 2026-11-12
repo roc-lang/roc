@@ -284,6 +284,7 @@ const RootOrdinalColumn = collections.OptionalIndexColumn(RootOrdinal);
 const ProgramPlanIndex = enum(u32) { _ };
 const ProgramPlanColumn = collections.OptionalIndexColumn(ProgramPlanIndex);
 const SlotSymbolColumn = collections.OptionalIndexColumn(static_data_exports.StaticDataSymbolId);
+const OptionalStaticData = collections.OptionalId(lir.LIR.StaticDataId);
 /// A position in a module's pending roots.
 const PendingPosition = enum(u32) { _ };
 const PendingPositionColumn = collections.OptionalIndexColumn(PendingPosition);
@@ -703,7 +704,7 @@ pub const CompletedStages = struct {
     fn producerSlotKey(producers: Producers, lowering_modules: []const checked.ModuleId, ordinal: usize) ProducerSlotKey {
         if (ordinal < producers.roots.len) {
             const root = producers.roots[ordinal];
-            return .{ .module = lowering_modules[@backingInt(root.owner)], .root = .{ .checked = root.request.compile_time_root.? } };
+            return .{ .module = lowering_modules[@backingInt(root.owner)], .root = .{ .checked = root.request.compile_time_root.get().? } };
         }
         const index = ordinal - producers.roots.len;
         return .{ .module = producers.literals[index].module, .root = .{ .literal = @fromBackingInt(@intCast(index)) } };
@@ -964,10 +965,11 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
 /// root that specialization registers, under `compileTimeTarget`. Neither the
 /// roots nor the policy depend on the command, so every command that checks
 /// a program performs the same evaluation. A runtime consumer
-/// (`runtime_roots`, which must be among `program_roots`) continues that
-/// specialization when it evaluated nothing but literal roots of the program
-/// roots, and otherwise a specialization of the program roots alone, made
-/// after evaluation from the completed values (`planRoots`).
+/// (`runtime_roots`, whose requests must be `program_roots`' requests in the
+/// same order; see `runtimeRootPositions`) continues that specialization when
+/// it evaluated nothing but literal roots of the program roots, and otherwise
+/// a specialization of the program roots alone, made after evaluation from
+/// the completed values (`planRoots`).
 pub fn finalizeProgram(
     allocator: Allocator,
     modules: []const ProgramModule,
@@ -2783,7 +2785,7 @@ fn markRootSlotsUnfilled(program: anytype, lowered: *lir.CheckedPipeline.Lowered
         const owner = result.loweringModuleId(root.module) orelse finalizationInvariant("a compile-time value slot names a module its program does not lower");
         if (builtin.mode == .debug) {
             const evaluated = for (result.const_roots.items) |plan| {
-                const root_id = plan.request.compile_time_root orelse continue;
+                const root_id = plan.request.compile_time_root.get() orelse continue;
                 if (plan.owner == owner and root.root.eql(.{ .checked = root_id })) break true;
             } else false;
             if (!evaluated) finalizationInvariant("a compile-time program reads the slot of a root it does not evaluate");
@@ -2944,7 +2946,7 @@ const PublishedRequests = struct {
         var demanded = std.AutoHashMapUnmanaged(Key, void).empty;
         defer demanded.deinit(allocator);
         for (roots) |root| {
-            const id = root.request.compile_time_root orelse finalizationInvariant("published compile-time root lacked its checked root identity");
+            const id = root.request.compile_time_root.get() orelse finalizationInvariant("published compile-time root lacked its checked root identity");
             try demanded.put(allocator, .{ .module = lowering_modules[@backingInt(root.owner)].bytes, .root = id }, {});
         }
         self.by_module = try allocator.alloc([]checked.RootRequest, modules.len);
@@ -3053,7 +3055,7 @@ fn isLiteralArgumentRequest(
     request: checked.RootRequest,
     index: usize,
 ) bool {
-    const root_id = request.compile_time_root orelse return false;
+    const root_id = request.compile_time_root.get() orelse return false;
     const owner = if (set.source_modules.len == 0) root_key else set.source_modules[index];
     for (modules) |entry| {
         if (!entry.module.key.digest().eql(owner)) continue;
@@ -3091,9 +3093,13 @@ pub fn lowerBoxyRuntime(
 }
 
 /// Where each runtime request sits in the specialized program's root plan.
-/// A runtime consumer continues the program compile-time evaluation
-/// specialized, so everything it lowers is among the program roots that
-/// specialization started from.
+/// A runtime consumer continues a specialization whose plan evaluates no
+/// compile-time root and leads with every program root, in order
+/// (`planRoots`), and its requests are those program roots in the same
+/// order, so request `i` is root `i`.
+/// Positions are never recovered by comparing requests: two modules with
+/// identical content share one checked artifact, so their roots are equal
+/// requests that still belong to distinct test-plan entries.
 fn runtimeRootPositions(
     allocator: Allocator,
     program_roots: lir.CheckedPipeline.RootRequestSet,
@@ -3109,14 +3115,16 @@ fn runtimeRootPositions(
         finalizationInvariant("runtime consumer requested layouts the program roots omit");
     if (!std.meta.eql(runtime_roots.static_data_requests, program_roots.static_data_requests) and runtime_roots.static_data_requests.len != 0)
         finalizationInvariant("runtime consumer requested static data the program roots omit");
-    const positions = try allocator.alloc(u32, runtime_roots.requests.len);
-    for (runtime_roots.requests, positions) |request, *position| {
-        for (program_roots.requests, 0..) |program_request, index| {
-            if (!std.meta.eql(program_request, request)) continue;
-            position.* = @intCast(index);
-            break;
-        } else finalizationInvariant("runtime consumer named a root compile-time evaluation did not specialize");
+    if (runtime_roots.requests.len != program_roots.requests.len)
+        finalizationInvariant("runtime consumer's requests differ from the program roots compile-time evaluation specialized");
+    if (std.debug.runtime_safety) {
+        for (runtime_roots.requests, program_roots.requests) |request, program_request| {
+            if (!std.meta.eql(program_request, request))
+                finalizationInvariant("runtime consumer's requests differ from the program roots compile-time evaluation specialized");
+        }
     }
+    const positions = try allocator.alloc(u32, runtime_roots.requests.len);
+    for (positions, 0..) |*position, index| position.* = @intCast(index);
     return positions;
 }
 
@@ -3242,7 +3250,7 @@ fn evaluateStaged(
                 try stage_roots.append(allocator, @intCast(ordinal));
                 const root = roots[ordinal];
                 const module = lifted.loweringModules()[@backingInt(root.owner)];
-                if (read_roots.get(.{ .module = module.bytes, .root = root.request.compile_time_root.? })) |read| {
+                if (read_roots.get(.{ .module = module.bytes, .root = root.request.compile_time_root.get().? })) |read| {
                     try completed_values.append(allocator, .{ .root = @intCast(ordinal), .value = read });
                 }
             } else {
@@ -3397,7 +3405,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
             for (producers.roots, roots, 0..) |producer, *root, ordinal| {
                 const module_index = owners.position(producer.owner) orelse
                     finalizationInvariant("compile-time root named a checked module this finalization does not complete");
-                const root_id = producer.request.compile_time_root orelse
+                const root_id = producer.request.compile_time_root.get() orelse
                     finalizationInvariant("compile-time root request reached finalization without its checked root identity");
                 const state = &states[module_index];
                 root.* = .{ .module = module_index, .request = state.completion.requestIndexForRoot(root_id) };
@@ -3768,15 +3776,17 @@ const ProducerGroups = struct {
         const count = deps_of.len;
         var result = ProducerGroups{};
         errdefer result.deinit(allocator);
-        const unvisited = std.math.maxInt(u32);
+        // Visit indices are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
         const index = try allocator.alloc(u32, count);
         defer allocator.free(index);
         @memset(index, unvisited);
         const low = try allocator.alloc(u32, count);
         defer allocator.free(low);
-        const group_of = try allocator.alloc(u32, count);
-        defer allocator.free(group_of);
-        @memset(group_of, unvisited);
+        // A group reads only its own members and earlier groups, so every
+        // read finds a group already assigned.
+        var group_of = try collections.WriteFirstSlice(u32).init(allocator, count);
+        defer group_of.deinit(allocator);
         const on_stack = try allocator.alloc(bool, count);
         defer allocator.free(on_stack);
         @memset(on_stack, false);
@@ -3785,7 +3795,7 @@ const ProducerGroups = struct {
         const Frame = struct { node: usize, next: usize };
         var frames = std.ArrayList(Frame).empty;
         defer frames.deinit(allocator);
-        var next_index: u32 = 0;
+        var next_index: u32 = 1;
         for (0..count) |start| {
             if (scheduler.canonical(start) != start) continue;
             if (index[start] != unvisited) continue;
@@ -3827,7 +3837,7 @@ const ProducerGroups = struct {
                 while (true) {
                     const member = stack.pop().?;
                     on_stack[member] = false;
-                    group_of[member] = group_id;
+                    group_of.set(member, group_id);
                     try result.member_list.append(allocator, member);
                     if (member == node) break;
                 }
@@ -3837,10 +3847,11 @@ const ProducerGroups = struct {
                 for (members) |member| {
                     for (deps_of[member]) |raw_dep| {
                         const dep = scheduler.canonical(raw_dep);
-                        if (group_of[dep] == group_id) {
+                        const dep_group = group_of.get(dep);
+                        if (dep_group == group_id) {
                             reads_itself = true;
                         } else {
-                            level = @max(level, result.groups.items[group_of[dep]].level + 1);
+                            level = @max(level, result.groups.items[dep_group].level + 1);
                         }
                     }
                 }
@@ -5745,18 +5756,18 @@ const InterpreterProgram = struct {
 /// Module and root ids are the existing lowering identities, including every
 /// representation of a checked root. No source identities are reconstructed.
 const PublicationSlots = struct {
-    checked_heads: []std.ArrayList(?lir.LIR.StaticDataId),
-    literal_heads: []?lir.LIR.StaticDataId,
+    checked_heads: []std.ArrayList(OptionalStaticData),
+    literal_heads: []OptionalStaticData,
     next: collections.OptionalIndexColumn(lir.LIR.StaticDataId),
 
     fn init(allocator: Allocator, result: *const LirProgram.Result) Allocator.Error!PublicationSlots {
-        const checked_heads = try allocator.alloc(std.ArrayList(?lir.LIR.StaticDataId), result.lowering_modules.items.len);
+        const checked_heads = try allocator.alloc(std.ArrayList(OptionalStaticData), result.lowering_modules.items.len);
         @memset(checked_heads, .empty);
         errdefer {
             for (checked_heads) |*heads| heads.deinit(allocator);
             allocator.free(checked_heads);
         }
-        var literal_heads = std.ArrayList(?lir.LIR.StaticDataId).empty;
+        var literal_heads = std.ArrayList(OptionalStaticData).empty;
         errdefer literal_heads.deinit(allocator);
         var next = try collections.OptionalIndexColumn(lir.LIR.StaticDataId).initFilled(allocator, result.static_data_values.items.len);
         errdefer next.deinit(allocator);
@@ -5767,7 +5778,7 @@ const PublicationSlots = struct {
             const head = switch (root.root) {
                 .literal => |id| blk: {
                     const raw = @backingInt(id);
-                    if (raw >= literal_heads.items.len) try literal_heads.appendNTimes(allocator, null, raw + 1 - literal_heads.items.len);
+                    if (raw >= literal_heads.items.len) try literal_heads.appendNTimes(allocator, .none, raw + 1 - literal_heads.items.len);
                     break :blk &literal_heads.items[raw];
                 },
                 .checked => |id| blk: {
@@ -5779,23 +5790,23 @@ const PublicationSlots = struct {
                     }
                     const heads = &checked_heads[@backingInt(last_owner)];
                     const raw = @backingInt(id);
-                    if (raw >= heads.items.len) try heads.appendNTimes(allocator, null, raw + 1 - heads.items.len);
+                    if (raw >= heads.items.len) try heads.appendNTimes(allocator, .none, raw + 1 - heads.items.len);
                     break :blk &heads.items[raw];
                 },
             };
-            if (head.*) |previous| next.set(index, previous);
-            head.* = @fromBackingInt(@intCast(index));
+            if (head.get()) |previous| next.set(index, previous);
+            head.* = .some(@fromBackingInt(@intCast(index)));
         }
         return .{ .checked_heads = checked_heads, .literal_heads = try literal_heads.toOwnedSlice(allocator), .next = next };
     }
 
     fn first(self: *const PublicationSlots, owner: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer) ?lir.LIR.StaticDataId {
         return switch (producer) {
-            .literal => |id| if (@backingInt(id) < self.literal_heads.len) self.literal_heads[@backingInt(id)] else null,
+            .literal => |id| if (@backingInt(id) < self.literal_heads.len) self.literal_heads[@backingInt(id)].get() else null,
             .checked => |id| blk: {
                 const heads = self.checked_heads[@backingInt(owner)].items;
                 const raw = @backingInt(id);
-                break :blk if (raw < heads.len) heads[raw] else null;
+                break :blk if (raw < heads.len) heads[raw].get() else null;
             },
         };
     }
@@ -5836,7 +5847,7 @@ fn testPublicationSlots(allocator: Allocator) (Allocator.Error || error{TestExpe
     for (producers, modules, &slots) |producer, module, *slot| {
         slot.* = @fromBackingInt(@intCast(result.static_data_values.items.len));
         try result.static_data_values.append(allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = .u8,
             .compile_time_root = .{
                 .module = keys[module],
@@ -6319,8 +6330,8 @@ const DevProgram = struct {
                     const offset = self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null;
                     return @intFromPtr(self.executable.codePtr() + offset);
                 }
-                if (relocation.callable_capture_offset == null) return null;
-                const proc_id = relocation.procedure orelse return null;
+                if (relocation.callable_capture_offset == .none) return null;
+                const proc_id = relocation.procedure.get() orelse return null;
                 if (self.codegen.compiledProcSymbol(proc_id)) |compiled| return @intFromPtr(self.executable.codePtr() + compiled.code_start);
                 // A worker another object defines.
                 const images = self.images orelse return null;
@@ -6400,7 +6411,7 @@ const DevProgram = struct {
         const self: *DevProgram = @ptrCast(@alignCast(raw.?));
         const base_address = @intFromPtr(self.executable.codePtr());
         if (relocation.rc_helper) |helper| return base_address + (self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null);
-        const proc = relocation.procedure orelse return null;
+        const proc = relocation.procedure.get() orelse return null;
         return base_address + (self.codegen.compiledProcSymbol(proc) orelse return null).code_start;
     }
 
@@ -6898,7 +6909,7 @@ fn rootBodySourceRegion(
     const body = root.hoisted_body orelse return store.getExprRegion(root.rootExpr());
     return switch (body) {
         .expr, .valueless_binding => store.getExprRegion(root.rootExpr()),
-        .pattern_error => store.getPatternRegion(root.pattern orelse finalizationInvariant("pattern-error hoisted root had no binding pattern")),
+        .pattern_error => store.getPatternRegion(root.pattern.get() orelse finalizationInvariant("pattern-error hoisted root had no binding pattern")),
         .pattern_extraction => |extraction| store.getPatternRegion(extraction.scrutinee_pattern),
         .pattern_validation => |validation| store.getPatternRegion(validation.scrutinee_pattern),
     };
@@ -7319,7 +7330,7 @@ fn discardUnreachedRootComptimeSites(
 ) void {
     for (lir_result.comptime_sites.items) |root_site| {
         if (root_site.proc != root_proc) continue;
-        const checked_site = root_site.checked_site orelse continue;
+        const checked_site = root_site.checked_site.get() orelse continue;
         if (root_site.owner == failed_owner and checked_site == failed_checked_site) continue;
         var alias = owners.position(root_site.owner);
         while (alias) |index| : (alias = owners.nextAlias(index)) {
@@ -7618,7 +7629,7 @@ fn compileTimeRootForRequest(
     module: *const checked.CheckedModuleArtifact,
     request: checked.RootRequest,
 ) checked.ComptimeRootId {
-    const root_id = request.compile_time_root orelse {
+    const root_id = request.compile_time_root.get() orelse {
         finalizationInvariant("compile-time request had no exact checked root identity");
     };
     const raw = @backingInt(root_id);
@@ -8090,7 +8101,7 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         .identity = lir.LIR.ProcIdentity.forTest(901),
         .args = .empty(),
         .frame_locals = try program.store.addLocalSpan(&.{answer}),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u64,
     }, .none);
     var timing = Timing.init(std.testing.io);
@@ -8226,14 +8237,14 @@ fn testInterpreterSlot(failure_message: ?[]const u8) (FinalizeError || Interpret
     defer checked_roots.deinit(allocator);
     const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(checked_roots.items.len));
     // This execution fixture consumes only root identity, never checked syntax.
-    try checked_roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .pending });
+    try checked_roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = .none, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .pending });
     const failure_layout = try result.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = result.layouts.getLayout(failure_layout).getStruct().idx;
     const failed_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const message_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
     const failure_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(result.static_data_values.items.len));
     try result.static_data_values.append(allocator, .{
-        .initializer = null,
+        .initializer = .none,
         .layout_idx = failure_layout,
         .compile_time_root = .{ .module = module_key, .root = .{ .checked = root_id }, .const_locator = null, .role = .{ .failure_message = .{
             .failed_field = 0,
@@ -8246,7 +8257,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8) (FinalizeError || Interpret
     try result.const_plans.append(allocator, .str);
     const value_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(result.static_data_values.items.len));
     try result.static_data_values.append(allocator, .{
-        .initializer = null,
+        .initializer = .none,
         .layout_idx = .str,
         .compile_time_root = .{ .module = module_key, .root = .{ .checked = root_id }, .const_locator = null, .role = .{ .value = .{ .failure_slot = failure_slot, .plan = value_plan } } },
     });
@@ -8258,7 +8269,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8) (FinalizeError || Interpret
         .value = .{ .str_literal = .{ .backing = try result.store.insertString(text), .offset = 0, .len = text.len } },
         .next = source_ret,
     } }, .test_fixture);
-    const source_proc = try result.store.addProcSpec(.{ .name = .fromRaw(0), .identity = lir.LIR.ProcIdentity.forTest(3), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{source_local}), .body = source_body, .ret_layout = .str }, .none);
+    const source_proc = try result.store.addProcSpec(.{ .name = .fromRaw(0), .identity = lir.LIR.ProcIdentity.forTest(3), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{source_local}), .body = .some(source_body), .ret_layout = .str }, .none);
     const consumer_local = try result.store.addLocal(.{ .layout_idx = .str });
     const consumer_ret = try result.store.addCFStmt(.{ .ret = .{ .value = consumer_local } }, .test_fixture);
     const live_int = try result.store.addLocal(.{ .layout_idx = .u64 });
@@ -8286,7 +8297,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8) (FinalizeError || Interpret
     const float_input_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_float, .value = .{ .f64_literal = 10.0 }, .next = float_addend_stmt } }, .test_fixture);
     const int_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_int, .value = .{ .i64_literal = .{ .value = 345, .layout_idx = .u64 } }, .next = float_input_stmt } }, .test_fixture);
     const consumer_body = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_int, .value = .{ .i64_literal = .{ .value = 12000, .layout_idx = .u64 } }, .next = int_addend_stmt } }, .test_fixture);
-    const consumer_proc = try result.store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{ consumer_local, live_int, live_float, expected_int, expected_float, equal_int, equal_float, input_int, addend_int, input_float, addend_float }), .body = consumer_body, .ret_layout = .str }, .none);
+    const consumer_proc = try result.store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{ consumer_local, live_int, live_float, expected_int, expected_float, equal_int, equal_float, input_int, addend_int, input_float, addend_float }), .body = .some(consumer_body), .ret_layout = .str }, .none);
     try lir.ComptimeValueGuards.insert(allocator, result, null);
 
     const failure_size = result.layouts.layoutSize(result.layouts.getLayout(failure_layout));
@@ -8352,7 +8363,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer program.deinit();
     const erased_layout = try program.layouts.insertErasedCallable();
     const closure_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
-    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = erased_layout });
+    try program.static_data_values.append(allocator, .{ .initializer = .none, .layout_idx = erased_layout });
     const capture_arg = try program.store.addLocal(.{ .layout_idx = .opaque_ptr });
     const reuse_arg = try program.store.addLocal(.{ .layout_idx = erased_layout });
     const answer = try program.store.addLocal(.{ .layout_idx = .bool });
@@ -8364,11 +8375,11 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
         .identity = lir.LIR.ProcIdentity.forTest(2),
         .abi = .erased_callable,
         .args = try program.store.addLocalSpan(&.{ capture_arg, reuse_arg }),
-        .erased_capture_arg = capture_arg,
-        .erased_reuse_arg = reuse_arg,
-        .erased_call_args = arg_plan,
+        .erased_capture_arg = .of(capture_arg),
+        .erased_reuse_arg = .of(reuse_arg),
+        .erased_call_args = .of(arg_plan),
         .frame_locals = try program.store.addLocalSpan(&.{ capture_arg, reuse_arg, answer }),
-        .body = worker_body,
+        .body = .some(worker_body),
         .ret_layout = .bool,
     }, .none);
     const closure = try program.store.addLocal(.{ .layout_idx = erased_layout });
@@ -8384,7 +8395,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
         .next = caller_ret,
     } }, .test_fixture);
     const caller_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = closure, .value = .{ .static_data = .{ .id = closure_slot } }, .next = call } }, .test_fixture);
-    const caller = try program.store.addProcSpec(.{ .name = .fromRaw(56), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ closure, call_result }), .body = caller_body, .ret_layout = .bool }, .none);
+    const caller = try program.store.addProcSpec(.{ .name = .fromRaw(56), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ closure, call_result }), .body = .some(caller_body), .ret_layout = .bool }, .none);
     const closure_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     const erased_set: LirProgram.ErasedFnsId = @fromBackingInt(@intCast(program.erased_fns.items.len));
     try program.const_plans.append(allocator, .{ .erased_fn = erased_set });
@@ -8411,7 +8422,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer allocator.free(drop_name);
     const exports = try static_data_exports.cloneStaticData(allocator, &.{
         .{ .symbol_name = slot_name, .value_id = closure_slot, .bytes = &(@as([word]u8, @splat(0))), .alignment = @alignOf(usize), .relocations = &.{.{ .offset = 0, .target_symbol_name = "closure_payload", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 2 * word }} },
-        .{ .symbol_name = "closure_payload", .bytes = &payload_bytes, .alignment = builtins.erased_callable.payload_alignment, .relocations = &.{ .{ .offset = 2 * word, .target_symbol_name = proc_name, .kind = .function_pointer, .procedure = worker, .callable_capture_offset = builtins.erased_callable.capture_offset }, .{ .offset = 3 * word, .target_symbol_name = drop_name, .kind = .function_pointer, .rc_helper = .{ .op = .host_drop, .layout_idx = .str } } } },
+        .{ .symbol_name = "closure_payload", .bytes = &payload_bytes, .alignment = builtins.erased_callable.payload_alignment, .relocations = &.{ .{ .offset = 2 * word, .target_symbol_name = proc_name, .kind = .function_pointer, .procedure = .some(worker), .callable_capture_offset = .some(builtins.erased_callable.capture_offset) }, .{ .offset = 3 * word, .target_symbol_name = drop_name, .kind = .function_pointer, .rc_helper = .{ .op = .host_drop, .layout_idx = .str } } } },
     });
     defer static_data_exports.deinitStaticData(allocator, exports);
     const StaticInterpreterData = @import("interpreter_static_data.zig").InterpreterStaticData;
@@ -8502,7 +8513,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     // Exercise the inspected-run ownership path with procedure and drop-helper
     // relocations, then return a separate frozen string through its Str ABI.
     const result_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
-    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
+    try program.static_data_values.append(allocator, .{ .initializer = .none, .layout_idx = .str });
     const inspected_closure = try program.store.addLocal(.{ .layout_idx = erased_layout });
     const inspected_bool = try program.store.addLocal(.{ .layout_idx = .bool });
     const inspected_str = try program.store.addLocal(.{ .layout_idx = .str });
@@ -8518,7 +8529,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
         .next = inspected_load,
     } }, .test_fixture);
     const inspected_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_closure, .value = .{ .static_data = .{ .id = closure_slot } }, .next = inspected_call } }, .test_fixture);
-    const inspected_root = try program.store.addProcSpec(.{ .name = .fromRaw(57), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ inspected_closure, inspected_bool, inspected_str }), .body = inspected_body, .ret_layout = .str }, .none);
+    const inspected_root = try program.store.addProcSpec(.{ .name = .fromRaw(57), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ inspected_closure, inspected_bool, inspected_str }), .body = .some(inspected_body), .ret_layout = .str }, .none);
     const result_name = try LirProgram.staticDataSymbolName(allocator, result_slot);
     defer allocator.free(result_name);
     const result_str = builtins.str.RocStr.fromSliceSmall("relocated");
@@ -8549,11 +8560,11 @@ test "inspected runners consume frozen string slots on every backend" {
         var program = try LirProgram.Result.init(allocator, width);
         defer program.deinit();
         const slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
-        try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
+        try program.static_data_values.append(allocator, .{ .initializer = .none, .layout_idx = .str });
         const value = try program.store.addLocal(.{ .layout_idx = .str });
         const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
         const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = .{ .id = slot } }, .next = ret } }, .test_fixture);
-        const root = try program.store.addProcSpec(.{ .name = .fromRaw(101), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{value}), .body = body, .ret_layout = .str }, .none);
+        const root = try program.store.addProcSpec(.{ .name = .fromRaw(101), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{value}), .body = .some(body), .ret_layout = .str }, .none);
         const name = try LirProgram.staticDataSymbolName(allocator, slot);
         defer allocator.free(name);
         const bytes = try allocator.alloc(u8, 3 * width.size());
@@ -8619,7 +8630,7 @@ test "LLVM test roots run a float remainder in process" {
             .identity = lir.LIR.ProcIdentity.forTest(@intCast(index + 1)),
             .args = try store.addLocalSpan(&.{offset}),
             .frame_locals = try store.addLocalSpan(&.{ offset, dividend_base, dividend, divisor_base, divisor, remainder, expected, matches }),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .bool,
         }, .none);
         roots[index] = .{

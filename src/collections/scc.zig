@@ -6,6 +6,7 @@
 //! Kosaraju's two passes run on explicit work stacks.
 
 const std = @import("std");
+const WriteFirstSlice = @import("WriteFirstSlice.zig").WriteFirstSlice;
 const Allocator = std.mem.Allocator;
 
 /// Strongly connected components of a graph, numbered in topological order.
@@ -33,9 +34,9 @@ pub fn compute(
     preds: []const u32,
 ) Allocator.Error!Components {
     const node_count = succ_starts.len - 1;
-    const no_component = std.math.maxInt(u32);
-    const component_of = try allocator.alloc(u32, node_count);
-    @memset(component_of, no_component);
+    // The second pass assigns every node exactly once, so the column needs
+    // no fill; a node awaits its component while it is still in `seen`.
+    var component_of = try WriteFirstSlice(u32).init(allocator, node_count);
     var component_nodes = std.ArrayList(u32).empty;
     var component_starts = std.ArrayList(u32).empty;
     const Frame = struct { node: u32, next_successor: u32 };
@@ -66,22 +67,24 @@ pub fn compute(
     while (order_index > 0) {
         order_index -= 1;
         const root = finish_order.items[order_index];
-        if (component_of[root] != no_component) continue;
+        if (!seen.isSet(root)) continue;
         const component: u32 = @intCast(component_starts.items.len);
         try component_starts.append(allocator, @intCast(component_nodes.items.len));
-        component_of[root] = component;
+        seen.unset(root);
+        component_of.set(root, component);
         try reverse_work.append(allocator, root);
         while (reverse_work.pop()) |member| {
             try component_nodes.append(allocator, member);
             for (preds[pred_starts[member]..pred_starts[member + 1]]) |predecessor| {
-                if (component_of[predecessor] != no_component) continue;
-                component_of[predecessor] = component;
+                if (!seen.isSet(predecessor)) continue;
+                seen.unset(predecessor);
+                component_of.set(predecessor, component);
                 try reverse_work.append(allocator, predecessor);
             }
         }
     }
     try component_starts.append(allocator, @intCast(component_nodes.items.len));
-    return .{ .component_of = component_of, .nodes = component_nodes.items, .starts = component_starts.items };
+    return .{ .component_of = component_of.finish(allocator), .nodes = component_nodes.items, .starts = component_starts.items };
 }
 
 test "components never number a successor's component lower" {

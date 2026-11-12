@@ -6678,8 +6678,8 @@ const TailDriver = struct {
 const tail_area_args_offset: u32 = 16;
 
 fn isTailGroupMember(proc: LirProcSpec) bool {
-    return proc.tail_group != null and proc.abi == .roc and proc.hosted == null and
-        proc.body != null and !proc.is_static_initializer;
+    return proc.tail_group != .none and proc.abi == .roc and proc.hosted.get() == null and
+        proc.body != .none and !proc.is_static_initializer;
 }
 
 fn tailDriverFor(self: *const Self, proc: LirProcSpec) Allocator.Error!?*const TailDriver {
@@ -6691,7 +6691,7 @@ fn tailDriverIndex(self: *const Self, proc: LirProcSpec) Allocator.Error!?usize 
     if (!isTailGroupMember(proc)) return null;
     const result = try self.resolveValType(proc.ret_layout);
     for (self.tables().tail_drivers.items, 0..) |driver, index| {
-        if (driver.group == proc.tail_group.? and driver.result == result) return index;
+        if (driver.group == proc.tail_group.get().? and driver.result == result) return index;
     }
     return null;
 }
@@ -6731,7 +6731,7 @@ fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.E
             const type_idx = try self.internFuncType(&.{result}, &.{result});
             const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
             _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_tail_driver", self.tail_drivers.items.len);
-            try self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.?, .result = result, .defined = defined });
+            try self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.get().?, .result = result, .defined = defined });
             break :blk &self.tail_drivers.items[self.tail_drivers.items.len - 1];
         };
         try driver.members.append(self.allocator, @fromBackingInt(@as(u32, @intCast(i))));
@@ -7072,7 +7072,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.pinned_backing.clearRetainingCapacity();
     self.backing_frame_bytes = 0;
     defer self.local_slots.clearRetainingCapacity();
-    if (proc.body) |body| {
+    if (proc.body.get()) |body| {
         try self.planProcLocals(proc.frame_locals, body);
     }
 
@@ -7170,7 +7170,7 @@ fn emitProcSpecBody(
         try self.bindErasedCallableAdapterParams(
             proc,
             args,
-            proc.erased_call_args orelse unreachable, // ARC certification requires an argument plan on every erased-callable ABI proc
+            proc.erased_call_args.get() orelse unreachable, // ARC certification requires an argument plan on every erased-callable ABI proc
             args_ptr,
             capture_ptr,
             reuse_ptr,
@@ -7190,7 +7190,7 @@ fn emitProcSpecBody(
         }
         const stored_args: ?u32 = if (direct_count < args.len) self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory else null;
         const hidden = self.hiddenParams(proc);
-        if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.?);
+        if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.get().?);
         if (hidden.carry) self.carry = .{ .idx = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
         if (hidden.pending) self.pending_cell = .{ .idx = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
         if (stored_args) |base_local| {
@@ -7263,8 +7263,8 @@ fn emitProcSpecBody(
     // every function of a split procedure's family shares.
     if (self.split_mode) try self.spillProcStateToFrame(scope);
 
-    if (proc.hosted) |hosted| {
-        if (builtin.mode == .debug and proc.body != null) {
+    if (proc.hosted.get()) |hosted| {
+        if (builtin.mode == .debug and proc.body != .none) {
             base.invariant(
                 "WASM/codegen invariant violated: hosted proc {d} unexpectedly carried a statement body",
                 .{proc.name.raw()},
@@ -7282,7 +7282,7 @@ fn emitProcSpecBody(
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
         // A dynamic result was written to the caller's storage by `ret`.
-        if (erased_abi and proc.dyn_result == null) {
+        if (erased_abi and proc.dyn_result == .none) {
             try self.emitErasedCallableAdapterReturnStore(erased_ret_ptr.?, proc.ret_layout);
         }
         // This procedure owns its tail carry, which its dynamic parameters
@@ -7373,7 +7373,7 @@ fn spillProcStateToFrame(self: *Self, scope: Storage.Scope) Allocator.Error!void
 }
 
 fn requireProcBody(proc_id: LIR.LirProcSpecId, proc: LirProcSpec) LIR.CFStmtId {
-    return proc.body orelse wasmInvariantFmt(
+    return proc.body.get() orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
         .{ @backingInt(proc_id), proc.name.raw() },
     );
@@ -7567,7 +7567,7 @@ pub fn registerHostedSymbolTargets(self: *Self, proc_specs: []const LIR.LirProcS
         };
     }
     for (proc_specs) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         if (self.hosted_symbol_targets.contains(hosted.dispatch_index)) continue;
 
         const symbol_text = self.store.getString(hosted.symbol);
@@ -7766,7 +7766,7 @@ fn bindErasedCallableAdapterParams(
     }
 
     const explicit_count = args.len - 2;
-    const hidden_capture_arg = proc.erased_capture_arg orelse wasmInvariantFmt(
+    const hidden_capture_arg = proc.erased_capture_arg.get() orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: erased callable adapter has no hidden capture arg",
         .{},
     );
@@ -9133,7 +9133,7 @@ const HiddenParams = struct {
 
 fn hiddenParams(self: *const Self, proc: LirProcSpec) HiddenParams {
     return .{
-        .result = proc.abi == .roc and proc.dyn_result != null,
+        .result = proc.abi == .roc and proc.dyn_result != .none,
         .carry = procCarriesTailArgs(self.store, proc),
         .pending = proc.takesPendingCell(),
     };
@@ -9161,7 +9161,7 @@ fn localDyn(self: *const Self, local: ProcLocalId) ?LIR.DynLocal {
 /// result is dynamic.
 fn currentDynResult(self: *const Self) ?ProcLocalId {
     const proc_id = self.current_proc_id orelse return null;
-    return self.store.getProcSpec(proc_id).dyn_result;
+    return self.store.getProcSpec(proc_id).dyn_result.get();
 }
 
 fn emitBoxyRuntimeCall(self: *Self, entry: BoxyRuntimeSignatures.Entry) Allocator.Error!void {
@@ -9387,11 +9387,11 @@ fn generateDynResultReturn(self: *Self, result: ProcLocalId, value: ProcLocalId)
 /// (`ProcAbi.erased_record`): the result pointer, the argument record
 /// pointer, the capture pointer, and the reuse pointer.
 fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr: u32, capture_ptr: u32, reuse_ptr: u32) Allocator.Error!void {
-    if (proc.dyn_result) |result| {
+    if (proc.dyn_result.get()) |result| {
         try self.emitLocalGet(ret_ptr);
         try self.emitBindingSet(try self.procLocalBinding(result));
     }
-    const capture_param = proc.erased_capture_arg orelse wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has no capture parameter", .{});
+    const capture_param = proc.erased_capture_arg.get() orelse wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has no capture parameter", .{});
     const params = self.store.getLocalSpan(proc.args);
     var explicit_count: usize = 0;
     for (0..params.len) |i| {
@@ -9402,7 +9402,7 @@ fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr
             try self.emitBindingSet(binding);
             continue;
         }
-        if (proc.erased_reuse_arg != null and param == proc.erased_reuse_arg.?) {
+        if (proc.erased_reuse_arg != .none and param == proc.erased_reuse_arg.get().?) {
             try self.emitLocalGet(reuse_ptr);
             try self.emitBindingSet(binding);
             continue;
@@ -9435,7 +9435,7 @@ fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr
 /// dynamic parameter or result, or the target is dynamic.
 fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLocalId) bool {
     const callee = self.store.getProcSpec(proc_id);
-    if (callee.dyn_result != null or callee.takesPendingCell() or self.localDyn(target) != null) return true;
+    if (callee.dyn_result != .none or callee.takesPendingCell() or self.localDyn(target) != null) return true;
     const params = self.store.getLocalSpan(callee.args);
     for (0..params.len) |i| {
         if (self.localDyn(GuardedList.at(params, i)) != null) return true;
@@ -9449,7 +9449,7 @@ fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLoca
 /// callee leaves pending are run into the target's storage as `drive` says.
 fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan, target: ProcLocalId, drive: LIR.PendingDrive) Allocator.Error!void {
     const callee = self.store.getProcSpec(proc_id);
-    if (callee.hosted != null) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
+    if (callee.hosted.get() != null) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
     const arg_refs = self.store.getLocalSpan(args);
     const param_refs = self.store.getLocalSpan(callee.args);
     if (arg_refs.len != param_refs.len) wasmInvariantFmt(
@@ -9478,7 +9478,7 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
     }
     if (stored) |s| try self.emitLocalGet(s.base_local);
     var result_target: ?DynTarget = null;
-    if (callee.dyn_result != null) {
+    if (callee.dyn_result != .none) {
         const t = try self.dynTarget(target);
         result_target = t;
         try self.emitTargetAddress(t);
@@ -18371,7 +18371,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = lhs_literal,
+        .body = .some(lhs_literal),
         .ret_layout = .u64,
     }, .none);
 
@@ -18512,7 +18512,7 @@ test "wasm bodies that share lazily created entities commit in spec order at eve
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i + 1)),
             .args = try store.addLocalSpan(&.{arg}),
-            .body = release,
+            .body = .some(release),
             .ret_layout = .str,
         }, .none);
     }
@@ -18554,7 +18554,7 @@ test "U128 to I64 try conversion bounds the low word by I64's highest value" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{source}),
-        .body = convert,
+        .body = .some(convert),
         .ret_layout = try_layout,
     }, .none);
 
@@ -18781,7 +18781,7 @@ fn timeProcCompileNs(allocator: Allocator, proc_count: usize) Allocator.Error!u6
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .args = LIR.LocalSpan.empty(),
-            .body = lhs_literal,
+            .body = .some(lhs_literal),
             .ret_layout = .u64,
         }, .none);
     }
@@ -18846,7 +18846,7 @@ fn procCompileBindingRowsVisited(allocator: Allocator, proc_count: usize) Alloca
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .args = LIR.LocalSpan.empty(),
-            .body = lhs_literal,
+            .body = .some(lhs_literal),
             .ret_layout = .u64,
         }, .none);
     }
@@ -19065,7 +19065,7 @@ fn compileJoinFixture(allocator: Allocator, shape: JoinFixtureShape) ScanError!B
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = proc_body,
+        .body = .some(proc_body),
         .ret_layout = .u64,
     }, .none);
 
@@ -19115,7 +19115,7 @@ test "procedure parameters keep their ABI local indices when the body reads them
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ first, second }),
-        .body = ret,
+        .body = .some(ret),
         .ret_layout = .u64,
     }, .none);
 
@@ -19158,7 +19158,7 @@ test "sibling procedures that share LocalIds emit identical independent bodies" 
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .args = LIR.LocalSpan.empty(),
-            .body = assign,
+            .body = .some(assign),
             .ret_layout = .u64,
         }, .none);
     }
@@ -19204,7 +19204,7 @@ fn frameInventoryDeclaredLocals(allocator: Allocator, obsolete_locals: usize) Sc
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .frame_locals = try store.addLocalSpan(inventory.items),
-        .body = assign,
+        .body = .some(assign),
         .ret_layout = .u64,
     }, .none);
 
@@ -19541,7 +19541,7 @@ fn addSplitFixtureProc(store: *LirStore) Allocator.Error!void {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ a, b }),
-        .body = init_acc,
+        .body = .some(init_acc),
         .ret_layout = .u64,
     }, .none);
 }
@@ -19782,7 +19782,7 @@ fn runAggregateBranchFixture(
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{arg}),
-        .body = read_first,
+        .body = .some(read_first),
         .ret_layout = record,
     }, .none);
 
@@ -19846,7 +19846,7 @@ fn runAggregateBranchFixture(
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ selector, n }),
-        .body = construct_held,
+        .body = .some(construct_held),
         .ret_layout = .u64,
     }, .none);
     var codegen = Self.init(allocator, &store, &layouts, cpu_level);
@@ -19938,7 +19938,7 @@ test "issue 12922 a snapshot survives its owner's next definition across a back 
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ seed, other }),
-        .body = init_one,
+        .body = .some(init_one),
         .ret_layout = .u64,
     }, .none);
     for ([_]CpuLevel{ .default, .v1 }) |cpu| {
@@ -19997,7 +19997,7 @@ fn addRecordAliasChainProc(store: *LirStore, layouts: *layout.Store, alias_count
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ a, b }),
-        .body = build,
+        .body = .some(build),
         .ret_layout = .u64,
     }, .none);
 }
@@ -20063,7 +20063,7 @@ test "a ref.local of a record that is written again is a copy of the bytes it sa
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ a, b }),
-        .body = build_first,
+        .body = .some(build_first),
         .ret_layout = .u64,
     }, .none);
     var codegen = Self.init(allocator, &store, &layouts, .default);
@@ -20102,7 +20102,7 @@ fn runI128Narrow(allocator: Allocator, op: LIR.LowLevel, source_layout: layout.I
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{source}),
-        .body = convert,
+        .body = .some(convert),
         .ret_layout = try_layout,
     }, .none);
     var codegen = Self.init(allocator, &store, &layouts, .default);

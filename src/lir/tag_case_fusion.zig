@@ -32,8 +32,12 @@ const BuildSite = struct {
     edge_jump: LIR.CFStmtId,
     variant_index: u32,
     discriminant: u32,
-    payload: ?LIR.LocalId,
+    payload: collections.OptionalId(LIR.LocalId),
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(BuildSite) == 20);
+}
 
 fn variantKey(variant_index: u32, discriminant: u32) u64 {
     return (@as(u64, variant_index) << 32) | discriminant;
@@ -59,7 +63,7 @@ const Variants = struct {
         stats.variant_lookups += 1;
         const entry = try self.indices.getOrPut(variantKey(build.variant_index, build.discriminant));
         if (entry.found_existing) {
-            return (self.builds.items[entry.value_ptr.*].payload == null) == (build.payload == null);
+            return (self.builds.items[entry.value_ptr.*].payload == .none) == (build.payload == .none);
         }
         entry.value_ptr.* = self.builds.items.len;
         try self.builds.append(self.indices.allocator, build);
@@ -118,10 +122,14 @@ const Candidate = struct {
 };
 
 const VariantDest = struct {
-    payload_param: ?LIR.LocalId,
+    payload_param: collections.OptionalId(LIR.LocalId),
     join_id: LIR.JoinPointId,
     join_stmt: LIR.CFStmtId,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(VariantDest) == 12);
+}
 
 const BranchRewriter = struct {
     param: LIR.LocalId,
@@ -315,7 +323,7 @@ pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) Resource
 
 /// Fusion applies to every available body, including erased-ABI procedures.
 pub fn rewritableProcBody(store: *const LirStore, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
-    return store.getProcSpecImmediate(proc).body;
+    return store.getProcSpecImmediate(proc).body.get();
 }
 
 /// Reach the procedure's fixed point using task-owned scratch. The caller must
@@ -403,7 +411,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
     defer visited.deinit();
     var declarations = collections.DenseMap(LIR.JoinPointId, void).init(allocator);
     defer declarations.deinit();
-    try work.append(allocator, .{ .stmt = store.getProcSpecImmediate(proc).body orelse return, .depth = 0 });
+    try work.append(allocator, .{ .stmt = store.getProcSpecImmediate(proc).body.get() orelse return, .depth = 0 });
     while (work.pop()) |item| {
         if ((try visited.getOrPut(item.stmt)).found_existing) continue;
         scope.shrinkRetainingCapacity(item.depth);
@@ -613,7 +621,7 @@ fn findCandidate(
                 .edge_jump = edge_jump,
                 .variant_index = assign.variant_index,
                 .discriminant = assign.discriminant,
-                .payload = assign.payload,
+                .payload = .of(assign.payload),
             };
             try builds.append(allocator, build);
             if (!try variants.add(build, stats)) consistent_payloads = false;
@@ -621,7 +629,7 @@ fn findCandidate(
             // of a variant whose consumer only needs to be analyzed once.
             const payload_layout = variantPayloadLayout(store, layouts, param, build.variant_index);
             if (payload_layout) |expected| {
-                if (build.payload) |payload| {
+                if (build.payload.get()) |payload| {
                     if (store.getLocal(payload).layout_idx != expected) consistent_payloads = false;
                 }
             } else consistent_payloads = false;
@@ -1074,7 +1082,7 @@ fn branchesUseOnlyPayloads(
 ) ResourceError!bool {
     for (variants.builds.items, variants.targets.items) |build, branch| {
         const payload_layout = variantPayloadLayout(store, layouts, layout_param, build.variant_index) orelse return false;
-        if (build.payload) |payload| {
+        if (build.payload.get()) |payload| {
             if (store.getLocal(payload).layout_idx != payload_layout) return false;
         }
         const facts = try cache.get(store, branch, stats);
@@ -1103,7 +1111,7 @@ fn branchesUseOnlyPayloads(
                 }
             }
         }
-        if (build.payload == null and allowed != 0) return false;
+        if (build.payload == .none and allowed != 0) return false;
         if (facts.reads.get(matched_value) != allowed + facts.releases.get(matched_value)) return false;
     }
     return true;
@@ -1154,7 +1162,7 @@ fn applyCandidate(
     }
     for (candidate.variants.builds.items, candidate.variants.targets.items) |build, branch| {
         const payload_layout = variantPayloadLayout(store, layouts, candidate.param, build.variant_index) orelse unreachable; // branchesUseOnlyPayloads accepted this candidate only after resolving every variant's payload layout
-        const payload_param = if (build.payload != null) try store.addLocal(.{ .layout_idx = payload_layout }) else null;
+        const payload_param = if (build.payload != .none) try store.addLocal(.{ .layout_idx = payload_layout }) else null;
         const join_id = join_params.freshJoinPoint();
         const params = if (payload_param) |payload| try store.addLocalSpan(&.{payload}) else LIR.LocalSpan.empty();
 
@@ -1190,7 +1198,7 @@ fn applyCandidate(
         try cloned_locals.appendSlice(allocator, cloner.new_locals.items);
         store.getCFStmtPtr(join_stmt).join.body = body;
         try dests.append(allocator, .{
-            .payload_param = payload_param,
+            .payload_param = .of(payload_param),
             .join_id = join_id,
             .join_stmt = join_stmt,
         });
@@ -1201,8 +1209,8 @@ fn applyCandidate(
         const dest_index = candidate.variants.indices.get(variantKey(build.variant_index, build.discriminant)).?;
         const dest = dests.items[dest_index];
         const edge = try redirectProducerEdge(store, store.getCFStmtImmediate(build.stmt).assign_tag.next, build.edge_jump, dest.join_id);
-        if (dest.payload_param) |payload_param| {
-            const payload = build.payload orelse unreachable; // Variants.add rejects candidates whose builds of one variant disagree on having a payload
+        if (dest.payload_param.get()) |payload_param| {
+            const payload = build.payload.get() orelse unreachable; // Variants.add rejects candidates whose builds of one variant disagree on having a payload
             try store.replaceCFStmt(build.stmt, .{ .set_local = .{
                 .target = payload_param,
                 .value = payload,
@@ -1244,7 +1252,7 @@ fn applyCandidate(
     defer frame.deinit(allocator);
     const old_frame = store.getLocalSpan(proc.frame_locals);
     for (0..old_frame.len) |old_index| try frame.append(allocator, GuardedList.at(old_frame, old_index));
-    for (dests.items) |dest| if (dest.payload_param) |payload| try frame.append(allocator, payload);
+    for (dests.items) |dest| if (dest.payload_param.get()) |payload| try frame.append(allocator, payload);
     try frame.appendSlice(allocator, cloned_locals.items);
     std.mem.sort(LIR.LocalId, frame.items, {}, body_clone.localIdLessThan);
     const unique_len = body_clone.uniqueSortedLocals(frame.items);
@@ -1411,7 +1419,7 @@ const TestGraph = struct {
             .name = LIR.Symbol.fromRaw(1),
             .identity = LIR.ProcIdentity.forTest(2),
             .args = try self.store.addLocalSpan(self.locals.items[0..2]),
-            .body = body,
+            .body = .some(body),
             .frame_locals = try self.store.addLocalSpan(self.locals.items),
             .ret_layout = .u64,
         }, .none);
@@ -1882,7 +1890,7 @@ test "tag case fusion variant index preserves pair identity and checks repeated 
         .edge_jump = jump,
         .variant_index = 1,
         .discriminant = 2,
-        .payload = null,
+        .payload = .none,
     };
     try std.testing.expect(try variants.add(first, &stats));
     try std.testing.expect(try variants.add(first, &stats));
@@ -1893,7 +1901,7 @@ test "tag case fusion variant index preserves pair identity and checks repeated 
     different.discriminant = 1;
     try std.testing.expect(try variants.add(different, &stats));
     different = first;
-    different.payload = payload;
+    different.payload = .some(payload);
     try std.testing.expect(!try variants.add(different, &stats));
     try std.testing.expectEqual(@as(usize, 3), variants.builds.items.len);
     try std.testing.expectEqual(@as(usize, 5), stats.variant_lookups);
@@ -2159,14 +2167,14 @@ test "tag case fusion routes exact constructor edges without materializing tags"
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{selector}),
         .iterator_fusion_scope = true,
-        .body = body,
+        .body = .some(body),
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, zero, one }),
         .ret_layout = .u64,
     }, .none);
 
     try run(&store, &layouts);
 
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.get().?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2271,7 +2279,7 @@ test "tag case fusion shares the suffix its arms converge on" {
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{selector}),
         .iterator_fusion_scope = true,
-        .body = body,
+        .body = .some(body),
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, zero, one_prefix, two_prefix, shared_default }),
         .ret_layout = .u64,
     }, .none);
@@ -2281,7 +2289,7 @@ test "tag case fusion shares the suffix its arms converge on" {
     // Neither arm reads the union, so both fused variants keep their arm and
     // the suffix it converges on, which still defines its local once.
     var default_count: usize = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.get().?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2370,7 +2378,7 @@ test "tag case fusion carries releases on a producer edge" {
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ selector, finished }),
-        .body = body,
+        .body = .some(body),
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, finished, zero, one }),
         .ret_layout = .u64,
     }, .none);
@@ -2378,7 +2386,7 @@ test "tag case fusion carries releases on a producer edge" {
     try run(&store, &layouts);
 
     var releases: u32 = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.get().?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2471,7 +2479,7 @@ test "tag case fusion releases the payload where an arm released the union" {
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ selector, text }),
-        .body = body,
+        .body = .some(body),
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, text, taken, zero, one }),
         .ret_layout = .u64,
     }, .none);
@@ -2479,7 +2487,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     try run(&store, &layouts);
 
     var payload_releases: u32 = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.get().?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2589,12 +2597,12 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
         .args = try store.addLocalSpan(&.{selector}),
         // Inlined control flow can retain the same continuation as the body
         // of an enclosing join as well as the tag consumer's wrapper.
-        .body = if (shared_continuation) try store.addCFStmt(.{ .join = .{
+        .body = .some(if (shared_continuation) try store.addCFStmt(.{ .join = .{
             .id = external_id,
             .params = .empty(),
             .body = cont,
             .remainder = body,
-        } }, .test_fixture) else body,
+        } }, .test_fixture) else body),
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, out, zero, one }),
         .ret_layout = .u64,
     }, .none);
@@ -2603,7 +2611,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
 
     // The continuation is now the outermost declaration, and every jump to it
     // sits inside its remainder.
-    const proc_body = store.getProcSpecImmediate(proc).body.?;
+    const proc_body = store.getProcSpecImmediate(proc).body.get().?;
     const root = store.getCFStmtImmediate(if (shared_continuation) store.getCFStmt(proc_body).join.remainder else proc_body);
     try testing.expect(root.* == .join);
     if (shared_continuation) {
@@ -2630,7 +2638,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
 
     var declarations = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(testing.allocator);
     defer declarations.deinit();
-    var all = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
+    var all = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.get().?);
     defer all.deinit();
     while (try all.next()) |stmt_id| {
         const stmt = store.getCFStmtImmediate(stmt_id);
@@ -2727,7 +2735,7 @@ test "tag case fusion keeps the join when a producer edge is shared with another
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{selector}),
-        .body = body,
+        .body = .some(body),
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, zero, one }),
         .ret_layout = .u64,
     }, .none);
@@ -2738,7 +2746,7 @@ test "tag case fusion keeps the join when a producer edge is shared with another
     // shared path, still matching the tag.
     var union_joins: u32 = 0;
     var tag_builds: u32 = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.get().?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);

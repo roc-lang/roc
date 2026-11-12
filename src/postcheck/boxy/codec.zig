@@ -381,7 +381,7 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
         const derivation = table.generated_codec_derivations[@backingInt(id)];
         for (derivation.callsSlice(table)) |call| {
             const method = try methodName(program, names.methodNameText(call.method));
-            const subject: ?TypeId = if (call.subject_ty) |subject_ty|
+            const subject: ?TypeId = if (call.subject_ty.get()) |subject_ty|
                 try subjectKey(program, method, try convertIn(program, env, subject_ty))
             else
                 null;
@@ -813,7 +813,7 @@ pub fn localValues(b: *Builder, family: u32, bound: []const TypeId, out: []Local
 /// A structural `parser_for`/`encoder_for` dispatch: the derivation's
 /// constructor applied to the encoding operand.
 pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, operands: []const static_dispatch.StaticDispatchOperand, operand_types: []const TypeId, result_ty: TypeId) Allocator.Error!void {
-    const id = call_plan.generated_codec_derivation orelse invariant("a structural codec dispatch names no generated derivation");
+    const id = call_plan.generated_codec_derivation.get() orelse invariant("a structural codec dispatch names no generated derivation");
     if (operands.len != 1) invariant("a structural codec dispatch does not take one encoding");
     const family = try familyFor(b.program, b.module, id);
     const fn_ty = try b.convert(call_plan.callable_ty);
@@ -837,7 +837,7 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
         .recorded => |recorded| return .{
             .module = b.program.moduleByKey(.{ .bytes = recorded.view.bytes }).index,
             .callable_ty = recorded.callable_ty,
-            .id = recorded.generated_codec_derivation,
+            .id = recorded.generated_codec_derivation.get(),
         },
         .codec => |codec| codec,
     };
@@ -928,10 +928,10 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     const plan = owner_view.view.static_dispatch_plans.plans[@backingInt(plan_id)];
     // A dispatch on a constrained variable reaches its derivation through
     // the evidence the stored value's procedure was instantiated with.
-    const derivation_module, const derivation = if (plan.generated_codec_derivation) |id| .{ owner_view.index, id } else switch (plan.resolution) {
+    const derivation_module, const derivation = if (plan.generated_codec_derivation.get()) |id| .{ owner_view.index, id } else switch (plan.resolution) {
         .evidence_dependent => |dependent| blk: {
             var frame_index = stored.evidence_frame_head orelse invariant("a stored generated codec runtime has no evidence");
-            for (0..dependent.index.depth) |_| frame_index = stored.evidence_frames[frame_index].parent orelse
+            for (0..dependent.index.depth) |_| frame_index = stored.evidence_frames[frame_index].parent.get() orelse
                 invariant("a stored generated codec runtime's evidence has fewer frames than its dispatch names");
             const frame = stored.evidence_frames[frame_index];
             if (dependent.index.index >= frame.roots_len) invariant("a stored generated codec runtime's evidence frame lacks its dispatch's parameter");
@@ -1562,7 +1562,7 @@ const Gen = struct {
         try proc_args.append(b.allocator, frame.start.capture_ptr);
         try b.finishProc(frame.start.entry, frame.body_start, proc_args.items, frame.ret_layout);
         const proc = b.store.getProcSpecPtr(b.currentWorker().proc);
-        proc.erased_capture_arg = frame.start.capture_ptr;
+        proc.erased_capture_arg = .of(frame.start.capture_ptr);
         proc.abi = .erased_record;
     }
 
@@ -2533,13 +2533,14 @@ const Gen = struct {
     ) Allocator.Error!void {
         const program_ = self.program();
         const err_ty = (try requireTry(program_, ret_ty)).err;
-        const optional = try self.b.allocator.alloc(?TypeId, fields.len);
+        // Whether each missing field parses as `Ok` of its `Try` type.
+        const optional = try self.b.allocator.alloc(bool, fields.len);
         defer self.b.allocator.free(optional);
         // A defaulted field never parsed takes its default (design.md
         // "Defaulted Fields").
         for (fields, slots, slot_types, names, optional) |field_info, slot, slot_ty, name_value, *missing_ok| {
-            missing_ok.* = if (field_info.kind == .inline_slot) try missingTryOk(program_, field_info.ty) else null;
-            if (field_info.kind == .presence_slot or missing_ok.* != null or field_info.default != null) continue;
+            missing_ok.* = field_info.kind == .inline_slot and try missingTryOk(program_, field_info.ty) != null;
+            if (field_info.kind == .presence_slot or missing_ok.* or field_info.default.get() != null) continue;
             const present_hole = try self.branchTag(slot, slot_ty, layouts_mod.missing_label);
             const missing = try self.callFormat("missing_field", null, &.{ self.encoding, name_value });
             try self.failWith(missing.value, err_ty, on_err);
@@ -2553,7 +2554,7 @@ const Gen = struct {
                 value.* = slot;
                 continue;
             }
-            if (field_info.default) |field_default| {
+            if (field_info.default.get()) |field_default| {
                 const merged = try self.merge(field_info.ty);
                 const missing_hole = try self.branchTag(slot, slot_ty, layouts_mod.present_label);
                 try self.jump(merged.id, &.{merged.param}, &.{(try self.payload(slot, slot_ty, layouts_mod.present_label, 0)).value});
@@ -2563,7 +2564,7 @@ const Gen = struct {
                 value.* = merged.param;
                 continue;
             }
-            if (missing_ok == null) {
+            if (!missing_ok) {
                 value.* = (try self.payload(slot, slot_ty, layouts_mod.present_label, 0)).value;
                 continue;
             }

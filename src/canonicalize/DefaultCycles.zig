@@ -614,7 +614,8 @@ const Pass = struct {
     /// drops every default in the SCC.
     fn findAndReportCycles(self: *Pass) Allocator.Error!void {
         const count = self.nodeCount();
-        const unvisited = std.math.maxInt(u32);
+        // Visit indices are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
 
         var state = TarjanState{
             .index_of = try self.gpa.alloc(u32, count),
@@ -698,7 +699,7 @@ const Pass = struct {
         index_of: []u32,
         lowlink_of: []u32,
         on_stack: []bool,
-        next_index: u32 = 0,
+        next_index: u32 = 1,
         stack: std.ArrayListUnmanaged(u32) = .empty,
         frames: std.ArrayListUnmanaged(Frame) = .empty,
 

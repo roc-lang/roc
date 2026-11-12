@@ -123,10 +123,10 @@ test "crash boundary retains its recovery frame across a tail-position callback"
         noinline fn crash(env: *Env) callconv(.c) void {
             // Overwrite a discarded caller frame so a return into it cannot
             // accidentally succeed because the bytes happened to survive.
-            // Volatile stores cannot be elided.
+            // Volatile stores keep the overwrite even though nothing reads it.
             var scratch: [64]u64 = undefined;
-            const frame: *volatile [64]u64 = &scratch;
-            frame.* = @splat(0xabababababababab);
+            const volatile_scratch: *volatile [64]u64 = &scratch;
+            for (0..scratch.len) |index| volatile_scratch[index] = 0xabababababababab;
             env.calls += 1;
             longjmp(env.active_jmp_buf.?, 7);
         }
