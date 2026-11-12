@@ -17,8 +17,7 @@ const Ident = base.Ident;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const LiteralKind = StaticDispatchConstraint.LiteralKind;
 
-/// The builtin type a defaulted literal lands on when no candidate probing
-/// applies (or when probing found no satisfier): numerals default to Dec,
+/// The builtin type a defaulted literal lands on: numerals default to Dec,
 /// quotes and interpolations to Str.
 pub const DefaultTarget = enum {
     dec,
@@ -70,8 +69,8 @@ pub fn constraintLiteralKind(
 ///
 /// A var can carry several kinds at once (a flex/flex merge like
 /// `if c 1 else "s"` unions the two literals' constraint sets). Such a var can
-/// never type-check, but the kind chosen here decides which head default is
-/// attempted (Dec vs Str) and hence which literal-kind diagnostic fires—so
+/// never type-check, but the kind chosen here decides which default is
+/// committed (Dec vs Str) and hence which literal-kind diagnostic fires—so
 /// it must not depend on constraint storage order (which unify side each
 /// literal arrived on), or mirror-image programs would get different keys and
 /// diagnostics.
@@ -99,11 +98,6 @@ pub fn defaultTargetForKind(kind: LiteralKind) DefaultTarget {
         .quote, .interpolation => .str,
     };
 }
-
-/// The types an open number literal can default to: `Dec` alone. A literal
-/// whose uses `Dec` cannot satisfy is an error asking for a suffix or an
-/// annotation; no other builtin number type is tried.
-pub const numeral_default_candidates = [_]numeral.Target{.dec};
 
 /// When a still-open literal-ish var's default is applied. A var that
 /// checking leaves open (a generalized literal no instantiation pinned) is
@@ -274,5 +268,4 @@ test "default targets are Dec for numerals and Str for string kinds" {
     try std.testing.expectEqual(@as(?DefaultTarget, .dec), defaultTargetForPhase(.mono_specialization));
     try std.testing.expectEqual(@as(?DefaultTarget, .str), defaultTargetForPhase(.mono_specialization_str));
     try std.testing.expectEqual(@as(?DefaultTarget, null), defaultTargetForPhase(.checking_finalized));
-    try std.testing.expectEqual(numeral.Target.dec, numeral_default_candidates[0]);
 }

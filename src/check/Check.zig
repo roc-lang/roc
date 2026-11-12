@@ -1522,21 +1522,6 @@ interpolation_part_numerals: std.ArrayListUnmanaged(InterpolationPartNumeral) = 
 /// constraint pass still need their exact source regions. This list grows only
 /// on error-recovery paths and is consulted only for diagnostic source data.
 retired_literal_dispatch_plans: std.ArrayListUnmanaged(LiteralDispatchPlan) = .empty,
-/// Literal receivers committed to their documented head default after
-/// validation failed—every numeric candidate rejected for numerals, the
-/// single Str candidate rejected for quotes. The dispatch pass reports each
-/// such receiver's conflicts against the default type, and its failure path
-/// consults this list to rewind the failed unify: the program never chose the
-/// default, so a rejected default target must not retype anything reachable
-/// through the relation's argument graph. Membership is checked by resolved
-/// root at query time (error path only, so the list stays tiny). Entries are
-/// scoped to the defaulting-rounds invocation that recorded them: its own
-/// step-4 cascade consumes their deferred dispatches (a conflicted head
-/// default is a builtin nominal, whose method tables are always resolvable,
-/// so those dispatches cannot out-wait the cascade), and the rounds' exit
-/// drops the entries so a var that merges into the same—by then concrete—
-/// equivalence class later keeps ordinary poison semantics.
-conflicted_default_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Every variable a defaulting decision was about to choose, with the
 /// content it had at that moment: the gathered open literals and the still
 /// flex variables their method signatures reach, and each receiver whose
@@ -1604,15 +1589,10 @@ boundary_leak_vars: collections.DenseMap(Var, void),
 // at the start of its step and never read across the step-4 cascade.
 literal_defaulting_open_roots: std.ArrayListUnmanaged(Var) = .empty,
 literal_defaulting_seen_roots: collections.DenseMap(Var, void),
-literal_defaulting_component_parent: std.ArrayListUnmanaged(usize) = .empty,
 literal_defaulting_is_driver: std.ArrayListUnmanaged(bool) = .empty,
-literal_defaulting_footprint_owner: collections.DenseMap(Var, usize),
+/// Every still-flex variable some gathered driver's method signatures reach.
+literal_defaulting_driven_vars: collections.DenseMap(Var, void),
 literal_defaulting_footprint: collections.DenseMap(Var, void),
-literal_defaulting_group_drivers: std.ArrayListUnmanaged(Var) = .empty,
-literal_defaulting_group_warnings: std.ArrayListUnmanaged(PendingBoundaryWarning) = .empty,
-literal_defaulting_constraint_ranges: std.ArrayListUnmanaged(StaticDispatchConstraint.SafeList.Range) = .empty,
-literal_defaulting_kinds: std.ArrayListUnmanaged(StaticDispatchConstraint.LiteralKind) = .empty,
-literal_defaulting_candidate_vars: std.ArrayListUnmanaged(Var) = .empty,
 // Match alternative-pattern binding scratch (front-loaded; cleared per call/branch).
 alt_pattern_baseline: std.AutoHashMap(u32, MatchAltBaselineEntry),
 alt_pattern_bindings: std.ArrayList(PatternBinding) = .empty,
@@ -1622,19 +1602,6 @@ collected_constructed_tags: std.ArrayList(Ident.Idx) = .empty,
 payload_vars_to_close: std.ArrayList(Var) = .empty,
 known_empty_payload_vars_destructure: std.ArrayList(Var) = .empty,
 known_empty_payload_vars_match: std.ArrayList(Var) = .empty,
-/// Debug-only literal-defaulting probe instrumentation, asserted by the
-/// refuted-count guard test. Only written under `comptime std.debug.runtime_safety`,
-/// so release builds compile the bookkeeping out entirely (no global state, no
-/// hot-path cost). Per-instance, so no cross-test synchronization concern.
-bench_probe_attempts: usize = 0,
-bench_probe_refuted: usize = 0,
-/// Debug-only count of conflicted-default recordings
-/// (`recordConflictedDefaultLiteral`), asserted by the recording-discipline
-/// tests: `conflicted_default_literal_vars` itself is scoped to one
-/// defaulting-rounds invocation, so a post-check test needs this monotone
-/// mirror to observe that a program recorded none (or exactly the expected
-/// conflicts). Same build discipline as the probe counters above.
-bench_conflicted_default_records: usize = 0,
 /// Param-pattern spans of every checked `e_lambda` / `e_hosted_lambda`; the
 /// pinnable collection consumes this instead of re-walking the NodeStore.
 /// Union-find roots resolve at consumption time (eager roots would go stale).
@@ -2079,7 +2046,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .row_extension_derivations = .keyed,
     .interpolation_part_numerals = .keyed,
     .retired_literal_dispatch_plans = .keyed,
-    .conflicted_default_literal_vars = .frame_partitioned,
     .default_decided_records = .keyed,
     .undetermined_type_reported = .keyed,
     .pending_tuple_accesses = .boundary,
@@ -2094,15 +2060,9 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .boundary_leak_vars = .scratch,
     .literal_defaulting_open_roots = .scratch,
     .literal_defaulting_seen_roots = .scratch,
-    .literal_defaulting_component_parent = .scratch,
     .literal_defaulting_is_driver = .scratch,
-    .literal_defaulting_footprint_owner = .scratch,
+    .literal_defaulting_driven_vars = .scratch,
     .literal_defaulting_footprint = .scratch,
-    .literal_defaulting_group_drivers = .scratch,
-    .literal_defaulting_group_warnings = .scratch,
-    .literal_defaulting_constraint_ranges = .scratch,
-    .literal_defaulting_kinds = .scratch,
-    .literal_defaulting_candidate_vars = .scratch,
     .alt_pattern_baseline = .scratch,
     .alt_pattern_bindings = .scratch,
     .alt_pattern_current = .scratch,
@@ -2110,9 +2070,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .payload_vars_to_close = .scratch,
     .known_empty_payload_vars_destructure = .scratch,
     .known_empty_payload_vars_match = .scratch,
-    .bench_probe_attempts = .keyed,
-    .bench_probe_refuted = .keyed,
-    .bench_conflicted_default_records = .keyed,
     .checked_lambda_params = .keyed,
     .effectful_lambda_bodies = .keyed,
     .pending_function_effect_dependencies = .frame_partitioned,
@@ -4800,7 +4757,7 @@ fn initAssumePrepared(
         .boundary_reachable_vars = collections.DenseMap(Var, void).init(gpa),
         .boundary_leak_vars = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_seen_roots = collections.DenseMap(Var, void).init(gpa),
-        .literal_defaulting_footprint_owner = collections.DenseMap(Var, usize).init(gpa),
+        .literal_defaulting_driven_vars = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_footprint = collections.DenseMap(Var, void).init(gpa),
         .alt_pattern_baseline = std.AutoHashMap(u32, MatchAltBaselineEntry).init(gpa),
         .alt_pattern_current = std.AutoHashMap(u32, CIR.Pattern.Idx).init(gpa),
@@ -13946,8 +13903,8 @@ fn exactNumeralInfoForLiteral(self: *const Self, literal: ModuleEnv.NumeralLiter
     const exact = self.cir.exactNumeral(literal);
     // A literal whose digits were never recorded (too huge to materialize as
     // a `Num.Numeral`, e.g. `3e6000000000`) fits no builtin type: its exact
-    // value is unknowable, so every concrete candidate must refute it rather
-    // than silently reading the empty digit buffers as zero.
+    // value is unknowable, so every builtin type must reject it rather than
+    // silently reading the empty digit buffers as zero.
     const fit_set = if (literal.isMaterialized())
         try exact_numeral.computeFitSet(self.gpa, exact)
     else
@@ -40383,8 +40340,8 @@ fn probeUnifyResultWithoutRecordingProblems(
 }
 
 /// Finalize still-open literal defaults at end of module checking, via the
-/// shared interference-component machinery (`runLiteralDefaultingRounds`) over a
-/// snapshot of the open-literal worklist.
+/// shared defaulting rounds (`runLiteralDefaultingRounds`) over a snapshot of
+/// the open-literal worklist.
 ///
 /// HARD REQUIREMENT: top-level def order must never affect whether a program
 /// type-checks or which types are inferred. The worklist (`open_literal_vars`) is
@@ -40393,8 +40350,8 @@ fn probeUnifyResultWithoutRecordingProblems(
 /// contract on `runLiteralDefaultingRounds`.
 ///
 /// Already-resolved and generalized (let-polymorphic) literals are skipped to
-/// preserve let-polymorphism; entries appended mid-finalize by in-probe
-/// instantiation are intentionally outside the snapshot, exactly as before.
+/// preserve let-polymorphism; entries appended mid-finalize by instantiation
+/// are intentionally outside the snapshot.
 fn finalizeLiteralDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     try self.runLiteralDefaultingRounds(env, .{ .finalize = .{
         .literal_count = self.open_literal_vars.items.len,
@@ -42250,7 +42207,7 @@ fn isNominalOverDistinctUnconstrainedVars(self: *Self, func: types_mod.Func) boo
 /// The candidate universe `runLiteralDefaultingRounds` gathers from—the only
 /// structural difference between module finalize and a def's generalization
 /// boundary. Both lengths are SNAPSHOTS taken before the first round: committing
-/// a default appends fresh vars (default candidates, in-probe instantiations) to
+/// a default appends fresh vars (the default itself, method instantiations) to
 /// the same worklist / pool entry, and those must never be rescanned by a later
 /// round.
 const LiteralDefaultUniverse = union(enum) {
@@ -42271,47 +42228,27 @@ const LiteralDefaultUniverse = union(enum) {
     boundary: struct { rank: Rank, pool_len: usize },
 };
 
-/// Default every still-open literal in `universe`—ORDER-INDEPENDENT BY
-/// CONSTRUCTION. Shared core of `finalizeLiteralDefaults` and
+/// Default every still-open literal in `universe`, independently of the order
+/// literals appear in. Shared core of `finalizeLiteralDefaults` and
 /// `defaultLiteralsAtGeneralizationBoundary`.
-///
-/// A commit-one-by-one implementation (in worklist or var-pool order) is unsound
-/// here: a literal's first-satisfier probe can "satisfy" a constraint by
-/// speculatively pinning a still-open PEER literal (or a flex var another open
-/// literal's constraints also reach) without consulting that peer's own
-/// constraints—so whichever literal came first won, and reordering defs (or
-/// statements within a def) flipped programs between accept and reject.
 ///
 /// Structure: rounds, each over the universe snapshot taken at entry.
 ///
 ///   1. GATHER the still-open literal roots from the universe (per-universe
 ///      filters documented on `LiteralDefaultUniverse`); deduped by union-find
 ///      root.
-///   2. PARTITION them into interference components. A literal with
-///      non-literal constraints (a DRIVER) owns a footprint: every
-///      still-flex root reachable from those constraints' fn signatures
-///      (`collectReachableVars`, which recurses through nested constraint
-///      signatures, so the footprint is transitively closed). A literal with only
-///      literal-conversion provenance (a PASSIVE) has footprint {itself}. Two
-///      literals share a component iff their footprints intersect. Only
-///      still-flex roots interfere: a commit pins exactly the flex vars its
-///      unifications reach, all inside the committing literal's footprint—so
-///      disjoint components cannot observe each other's commits, and
-///      concrete/rigid/err vars cannot be re-pinned by anyone.
-///   3. COMMIT each component:
-///        - lone passive: canonical head default (Dec), as before;
-///        - single driver: the existing first-satisfier probe
-///          (`commitLiteralDefault`). Its in-probe pinning of the component's
-///          passives is now sound: every var it can pin lies inside this
-///          component, so no OTHER pending literal's constraints are speculated
-///          away;
-///        - several drivers: `commitLiteralGroupDefault`—one shared candidate
-///          for the whole group, the first candidate satisfying ALL the drivers'
-///          constraints simultaneously.
-///      Passives inside a driver's component are NOT committed this round: their
-///      type is the drivers' business (the probe or the cascade pins them). If
-///      the resolved method signatures leave one open, it becomes a lone passive
-///      next round and defaults canonically then.
+///   2. CLASSIFY them. A literal with non-literal constraints (a DRIVER) owns a
+///      footprint: every still-flex root reachable from those constraints' fn
+///      signatures (`collectReachableVars`, which recurses through nested
+///      constraint signatures, so the footprint is transitively closed). A
+///      literal with only literal-conversion provenance is a PASSIVE.
+///   3. COMMIT every driver, and every passive no driver's footprint reaches,
+///      to its kind's default: `Dec` for a number, `Str` for a string. A
+///      passive a driver reaches is NOT committed this round: the driver's
+///      method signatures may determine its type (`5.foo(3)` where the method
+///      takes a `U8`), and a default must not pre-empt that. If the resolved
+///      signatures leave it open, no driver reaches it next round and it
+///      defaults then.
 ///   4. CASCADE the deferred dispatches the commits unblocked, to fixpoint, so
 ///      pins propagate across multi-hop dispatch chains before the next round
 ///      re-gathers. One pass can be too few—a constraint re-defers while its
@@ -42326,28 +42263,21 @@ const LiteralDefaultUniverse = union(enum) {
 ///      defaulted-from-a-literal.
 ///
 /// ORDER-INDEPENDENCE: the gathered SET of literal roots, each literal's
-/// constraint SET, and therefore the component partition depend only on the
-/// program's constraint graph, never on worklist/pool order. Commits of distinct
-/// components touch disjoint flex vars (their footprints), so component commit
-/// order is unobservable. A multi-driver group assigns the same candidate to
-/// every driver before checking anything, then verifies the conjunction of all
-/// the drivers' constraints; a conjunction of unifications succeeds iff the
-/// equation set is simultaneously unifiable, independent of equation order—so
-/// driver enumeration order is unobservable too. The single-driver probe consults
-/// only that driver's own constraint set, in canonical candidate order—no order
-/// input there either.
+/// constraint SET, and therefore which literals are drivers and which
+/// passives a driver reaches depend only on the program's constraint graph,
+/// never on worklist/pool order. A commit gives its literal the one default
+/// its kind has and consults nothing else, so the set of commits a round makes
+/// and the type each gets are independent of the order they are made in.
 ///
 /// TERMINATION: rounds iterate a universe snapshot of fixed length, and an open
-/// literal can only go flex -> resolved (probe rollbacks restore exactly the
-/// pre-probe state). Every round with a non-empty gather commits at least one
-/// literal: every component contains a lone passive or at least one driver, all
-/// committed, and a commit always resolves the var away from flex (candidate on
-/// success, the head default—possibly merging to `.err`—otherwise). Passives
-/// deferred behind drivers become lone passives once their drivers resolve, so
-/// rounds <= snapshot length + 1. The per-round cascade terminates by
-/// `checkStaticDispatchConstraints`' own consume-or-re-defer contract (see
-/// `anyDeferredDispatchReceiverResolved`) and its semantic dispatch-cycle
-/// detection.
+/// literal can only go flex -> resolved. Every round with a non-empty gather
+/// commits at least one literal: a round with no driver commits every passive,
+/// and a round with a driver commits it; a commit always resolves the var away
+/// from flex. Passives held back behind drivers are committed once no driver
+/// reaches them, so rounds <= snapshot length + 1. The per-round cascade
+/// terminates by `checkStaticDispatchConstraints`' own consume-or-re-defer
+/// contract (see `anyDeferredDispatchReceiverResolved`) and its semantic
+/// dispatch-cycle detection.
 fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUniverse) std.mem.Allocator.Error!void {
     // Round zero: semantic judgments immediately before this boundary can
     // ground a deferred receiver without adding an ordinary constraint. Let
@@ -42360,15 +42290,6 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
     // Round-scoped scratch. Front-loaded as Check fields; cleared at the start
     // of each step. Safe despite cascade reentrancy: every buffer is cleared
     // before use and never read across the step-4 cascade.
-
-    // Conflicted-default entries recorded by THIS invocation's commits are
-    // consumed by its own step-4 cascades (see the scoping contract on
-    // `conflicted_default_literal_vars`); drop exactly them on exit—a
-    // watermark rather than a clear, so an invocation reentered from a
-    // cascade (a delayed def's generalization boundary) cannot drop entries an
-    // enclosing invocation's cascade still owns.
-    const conflicted_defaults_watermark = self.conflicted_default_literal_vars.items.len;
-    defer self.conflicted_default_literal_vars.shrinkRetainingCapacity(conflicted_defaults_watermark);
 
     while (true) {
         // --- 1. Gather the still-open literal roots (deduped). ---
@@ -42413,24 +42334,21 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         if (self.literal_defaulting_open_roots.items.len == 0) return;
         try self.recordInterpolationPartNumerals();
 
-        // --- 1b. Default unambiguous quote literals before ambiguous numerals. ---
-        // A quote literal has exactly one possible type (Str), so committing it is
-        // never a guess. A numeral's first-satisfier probe IS a guess: when several
-        // candidate types satisfy its constraints it commits the head candidate
-        // (Dec). Resolving every open quote first—and letting step 4's cascade
-        // propagate the dispatches that unblocks—lets a producer dispatch whose
-        // receiver is a string (e.g. `s.count_utf8_bytes() : Str -> U64`) pin a
-        // numeral's type BEFORE the numeral would otherwise be guessed. Without
-        // this, `intermediate.count_utf8_bytes() > 0` commits `0` to Dec (the head
-        // `is_gt` candidate, since the `count_utf8_bytes` dispatch is still latent
-        // behind the receiver's own open quote literal) and then conflicts when the
-        // Str-keyed dispatch resolves to U64.
+        // --- 1b. Default quote literals before numerals. ---
+        // Resolving every open quote first—and letting step 4's cascade
+        // propagate the dispatches that unblocks—lets a dispatch whose
+        // receiver is a string (e.g. `s.count_utf8_bytes() : Str -> U64`)
+        // determine a numeral's type before the numeral is defaulted. Without
+        // this, `intermediate.count_utf8_bytes() > 0` commits `0` to Dec (the
+        // `count_utf8_bytes` dispatch is still latent behind the receiver's own
+        // open quote literal) and then conflicts when the Str-keyed dispatch
+        // resolves to U64.
         //
         // Numerals are only held back while a quote is actually open; once the
-        // quote round(s) have cascaded, numerals default through the unchanged
-        // component machinery below. The quote/numeral split is a pure function of
-        // the gathered kinds, so order-independence is preserved, and termination
-        // holds because every non-empty round still commits at least one literal (a
+        // quote round(s) have cascaded, numerals default through the steps
+        // below. The quote/numeral split is a pure function of the gathered
+        // kinds, so order-independence is preserved, and termination holds
+        // because every non-empty round still commits at least one literal (a
         // quote if any is open, else a numeral).
         {
             var any_quote = false;
@@ -42451,23 +42369,17 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             }
         }
 
-        // --- 2. Partition into interference components. ---
+        // --- 2. Find the literals a driver's method signatures reach. ---
         // Everything this round's commits can choose—each gathered literal and
         // each still-flex variable a driver's signatures reach—is recorded
         // with its pre-default content before anything commits.
         const round_records_start = self.default_decided_records.items.len;
-        self.literal_defaulting_component_parent.clearRetainingCapacity();
         self.literal_defaulting_is_driver.clearRetainingCapacity();
-        self.literal_defaulting_footprint_owner.clearRetainingCapacity();
-        for (self.literal_defaulting_open_roots.items, 0..) |root, idx| {
+        self.literal_defaulting_driven_vars.clearRetainingCapacity();
+        for (self.literal_defaulting_open_roots.items) |root| {
             try self.recordDefaultDecidedVar(root, .chosen);
-            try self.literal_defaulting_component_parent.append(self.gpa, idx);
-            // Seed each literal's own root so any driver whose footprint reaches
-            // it is merged into its component. Roots are deduped, so no collision
-            // is possible here.
-            try self.literal_defaulting_footprint_owner.putNoClobber(root, idx);
         }
-        for (self.literal_defaulting_open_roots.items, 0..) |root, idx| {
+        for (self.literal_defaulting_open_roots.items) |root| {
             const constraint_range = self.types.resolveVar(root).desc.content.flex.constraints;
             const drives = self.rangeHasNonLiteralConstraint(constraint_range);
             try self.literal_defaulting_is_driver.append(self.gpa, drives);
@@ -42476,83 +42388,23 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             try self.collectConstraintSignatureReachable(constraint_range, &self.literal_defaulting_footprint);
             var fp_iter = self.literal_defaulting_footprint.keyIterator();
             while (fp_iter.next()) |fp_var| {
-                // Only still-flex roots interfere; everything else is immune to
-                // pinning. (Union order is irrelevant: unions commute, so the
-                // partition is independent of hash-map iteration order.)
+                // Only a still-flex variable can be determined by a method
+                // signature.
                 if (self.types.resolveVar(fp_var.*).desc.content != .flex) continue;
                 try self.recordDefaultDecidedVar(fp_var.*, .reached);
-                const gop = try self.literal_defaulting_footprint_owner.getOrPut(fp_var.*);
-                if (gop.found_existing) {
-                    componentUnion(self.literal_defaulting_component_parent.items, idx, gop.value_ptr.*);
-                } else {
-                    gop.value_ptr.* = idx;
-                }
+                try self.literal_defaulting_driven_vars.put(fp_var.*, {});
             }
         }
 
-        // --- 3. Commit every component (disjoint, so order is unobservable). ---
-        // Thread each component's members, in index order, from its leader,
-        // so every component visits only its own members.
-        const literal_count = self.literal_defaulting_open_roots.items.len;
-        // A leader's head is read before its first member is threaded, so
-        // the heads start cleared to absent (zero); each member's link is
-        // written before it is read.
-        const component_head = try self.gpa.alloc(collections.OptionalU32, literal_count);
-        defer self.gpa.free(component_head);
-        @memset(component_head, .none);
-        var component_next = try collections.WriteFirstSlice(collections.OptionalU32).init(self.gpa, literal_count);
-        defer component_next.deinit(self.gpa);
-        var member_cursor = literal_count;
-        while (member_cursor > 0) {
-            member_cursor -= 1;
-            const leader = componentFind(self.literal_defaulting_component_parent.items, member_cursor);
-            component_next.set(member_cursor, component_head[leader]);
-            component_head[leader] = .some(@intCast(member_cursor));
-        }
-        for (0..literal_count) |leader| {
-            if (componentFind(self.literal_defaulting_component_parent.items, leader) != leader) continue;
-            self.literal_defaulting_group_drivers.clearRetainingCapacity();
-            var member_count: usize = 0;
-            // A candidate the component commits pins EVERY member literal, so
-            // the digit-fit precheck must consult every member's exact value
-            // facts—not just the driver's own. Intersecting the members'
-            // precomputed fit sets keeps the check O(1) per candidate and
-            // makes the outcome independent of which member carries the
-            // driving constraint (mirror-image programs commit identically).
-            var component_fits = exact_numeral.FitSet.full;
-            var member = component_head[leader];
-            while (member.get()) |member_idx| : (member = component_next.get(member_idx)) {
-                const member_root = self.literal_defaulting_open_roots.items[member_idx];
-                member_count += 1;
-                const member_range = self.types.resolveVar(member_root).desc.content.flex.constraints;
-                for (self.types.sliceStaticDispatchConstraints(member_range)) |constraint| {
-                    if (self.types.constraintNumeralInfo(constraint)) |info| {
-                        component_fits = component_fits.intersectWith(info.fits);
-                    }
-                }
-                if (self.literal_defaulting_is_driver.items[member_idx]) {
-                    try self.literal_defaulting_group_drivers.append(self.gpa, member_root);
-                }
-            }
-            // Within a round, every gathered root is still flex with its
-            // literal-conversion provenance when its component commits: commits
-            // of OTHER components only touch their own (disjoint) footprints, and
-            // this component commits exactly once. So the kind lookups below
-            // cannot fail—gather guaranteed them non-null.
-            if (self.literal_defaulting_group_drivers.items.len == 0) {
-                // A component without drivers is a lone passive (a passive's
-                // footprint is just itself, so only a driver can merge it).
-                std.debug.assert(member_count == 1);
-                const passive_root = self.literal_defaulting_open_roots.items[leader];
-                const kind = self.varLiteralKind(passive_root) orelse unreachable; // gather left this root flex with literal-conversion provenance
-                try self.commitGatheredLiteral(passive_root, kind, component_fits, universe, env);
-            } else if (self.literal_defaulting_group_drivers.items.len == 1) {
-                const driver_root = self.literal_defaulting_group_drivers.items[0];
-                const kind = self.varLiteralKind(driver_root) orelse unreachable; // gather left this root flex with literal-conversion provenance
-                try self.commitGatheredLiteral(driver_root, kind, component_fits, universe, env);
-            } else {
-                try self.commitGatheredGroup(self.literal_defaulting_group_drivers.items, component_fits, &self.literal_defaulting_group_warnings, universe, env);
-            }
+        // --- 3. Commit every driver and every passive no driver reaches. ---
+        // A commit unifies one gathered root with its default and nothing
+        // else, so every gathered root is still flex with its
+        // literal-conversion provenance when its turn comes, and the order of
+        // the commits is unobservable.
+        for (self.literal_defaulting_open_roots.items, self.literal_defaulting_is_driver.items) |root, drives| {
+            if (!drives and self.literal_defaulting_driven_vars.contains(root)) continue;
+            const kind = self.varLiteralKind(root) orelse unreachable; // gather left this root flex with literal-conversion provenance
+            try self.commitGatheredLiteral(root, kind, universe, env);
         }
 
         // --- 4. Cascade the constraints the commits unblocked. ---
@@ -42564,247 +42416,25 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
     }
 }
 
-/// Commit one gathered literal root (lone passive or single driver) via the
-/// single-literal first-satisfier probe—plus, at a generalization boundary, the
-/// per-literal LITERAL DEFAULTED leak warning. The leak check and warning region
-/// capture run while the literal is still flex (before the commit resolves it);
-/// the warning is emitted after, rendered from the committed default var.
+/// Commit one gathered literal root to its default—plus, at a generalization
+/// boundary, the per-literal LITERAL DEFAULTED leak warning. The leak check and
+/// warning region capture run while the literal is still flex (before the
+/// commit resolves it); the warning is emitted after, rendered from the
+/// committed default var.
 fn commitGatheredLiteral(
     self: *Self,
     root: Var,
     kind: StaticDispatchConstraint.LiteralKind,
-    component_fits: exact_numeral.FitSet,
     universe: LiteralDefaultUniverse,
     env: *Env,
 ) std.mem.Allocator.Error!void {
     switch (universe) {
-        .finalize => _ = try self.commitLiteralDefault(root, kind, component_fits, env),
+        .finalize => _ = try self.commitLiteralDefault(root, kind, env),
         .boundary => {
             const pending = try self.boundaryWarningBeforeCommit(root);
-            const default_var = try self.commitLiteralDefault(root, kind, component_fits, env);
+            const default_var = try self.commitLiteralDefault(root, kind, env);
             try self.emitBoundaryWarningAfterCommit(pending, root, default_var);
         },
-    }
-}
-
-/// Commit a multi-driver literal component via the shared group probe—plus, at
-/// a generalization boundary, a per-driver LITERAL DEFAULTED leak warning
-/// bracketing the commit, exactly as `commitGatheredLiteral` does for the single
-/// case. `warnings_scratch` is a caller-owned reused buffer (cleared here).
-///
-/// BOUNDARY WARNING SEMANTICS FOR GROUPS: the leak check is per literal (it walks
-/// one literal's constraint signatures), so it runs for EVERY group member
-/// pre-commit—while all drivers are still flex—and each leaking member gets
-/// its own LITERAL DEFAULTED warning post-commit, exactly as if it had committed
-/// alone. Non-leaking members default silently (def-local), and the component's
-/// passives are never committed here, matching the single-commit paths.
-fn commitGatheredGroup(
-    self: *Self,
-    drivers: []const Var,
-    component_fits: exact_numeral.FitSet,
-    warnings_scratch: *std.ArrayListUnmanaged(PendingBoundaryWarning),
-    universe: LiteralDefaultUniverse,
-    env: *Env,
-) std.mem.Allocator.Error!void {
-    switch (universe) {
-        .finalize => try self.commitLiteralGroupDefault(drivers, component_fits, env),
-        .boundary => {
-            warnings_scratch.clearRetainingCapacity();
-            for (drivers) |driver| {
-                try warnings_scratch.append(self.gpa, try self.boundaryWarningBeforeCommit(driver));
-            }
-            try self.commitLiteralGroupDefault(drivers, component_fits, env);
-            // The group commit unified each driver with its committed var, so the
-            // driver root itself renders the committed type for the snapshot.
-            for (drivers, warnings_scratch.items) |driver, pending| {
-                try self.emitBoundaryWarningAfterCommit(pending, driver, driver);
-            }
-        },
-    }
-}
-
-/// Union-find `find` with path compression over the per-round component index
-/// array in `runLiteralDefaultingRounds`.
-fn componentFind(parent: []usize, idx: usize) usize {
-    var root = idx;
-    while (parent[root] != root) root = parent[root];
-    var cur = idx;
-    while (parent[cur] != cur) {
-        const next = parent[cur];
-        parent[cur] = root;
-        cur = next;
-    }
-    return root;
-}
-
-/// Union-find `union` for `componentFind`. Commutative and associative, so the
-/// resulting partition does not depend on the order unions are performed.
-fn componentUnion(parent: []usize, a: usize, b: usize) void {
-    const root_a = componentFind(parent, a);
-    const root_b = componentFind(parent, b);
-    if (root_a != root_b) parent[root_b] = root_a;
-}
-
-/// GROUP DEFAULT POLICY for a component with SEVERAL drivers: mutually
-/// constrained open literals where no single literal's first-satisfier scan may
-/// run alone (it would speculatively pin its peers while ignoring their
-/// constraints—the order-dependence `runLiteralDefaultingRounds` exists to
-/// prevent). The group defaults TOGETHER against the canonical candidate list:
-/// the first candidate satisfying the WHOLE group's constraints wins.
-///
-/// MIXED KINDS: a group may contain quote drivers alongside numeral drivers (e.g.
-/// `"s".foo(y)` and `1.bar(y)` interfering through `y`). A quote driver's
-/// candidate list is the single entry Str, so it is assigned Str on every attempt
-/// while the numeral scan iterates its list; an all-quote group needs exactly one
-/// attempt.
-///
-/// Per candidate, inside one commit-probe:
-///   phase 1—assign: unify EVERY driver (all still flex; the round committed
-///     nothing else in this component) with its own fresh candidate var. All
-///     assignments happen before any constraint is consulted, so no driver's
-///     verification can observe a not-yet-assigned peer.
-///   phase 2—verify: check every driver's every non-literal constraint
-///     against the candidate (`staticDispatchConstraintAcceptsCandidate`, the
-///     same check the single-literal probe uses). Passives and other in-footprint
-///     vars are pinned here by the resolved method signatures—with every driver
-///     already concrete, the verification is a plain conjunction of unifications.
-/// Success commits the probe in place; failure rolls everything back and the next
-/// candidate is tried.
-///
-/// ORDER-INDEPENDENCE: phase 1's outcome is the same var-disjoint assignment
-/// regardless of driver enumeration order; phase 2 succeeds iff its equation set
-/// is simultaneously unifiable, which is order-independent. So the chosen
-/// candidate—and the types it pins—depend only on the group's constraint set
-/// and the canonical candidate order.
-///
-/// The structural refutation pre-filter (`numeralCandidateStructurallyRefuted`)
-/// is deliberately NOT consulted here: its safety-build witness guard is specified
-/// against the single-literal probe (`commitLiteralDefault`), and multi-driver
-/// groups are rare enough that probing every candidate directly costs nothing
-/// measurable. (The bench counters likewise stay singleton-only.)
-///
-/// When no candidate satisfies the group, each driver falls back to its kind's
-/// canonical head default (`commitLiteralDefaultHead` / Dec for numerals,
-/// `commitQuoteDefault` / Str for quotes), so the dispatch cascade reports the
-/// conflicts against the documented default type—the same failure shape as the
-/// single-literal path.
-fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: exact_numeral.FitSet, env: *Env) Allocator.Error!void {
-    std.debug.assert(drivers.len >= 2);
-
-    // Constraint ranges and literal kinds captured while the drivers are still
-    // flex; the ranges index the constraint store, whose entries outlive the
-    // unifications below.
-    self.literal_defaulting_constraint_ranges.clearRetainingCapacity();
-    self.literal_defaulting_kinds.clearRetainingCapacity();
-    var has_numeral_driver = false;
-    for (drivers) |driver| {
-        try self.literal_defaulting_constraint_ranges.append(self.gpa, self.types.resolveVar(driver).desc.content.flex.constraints);
-        // Every group driver is an open literal (the component gather keyed
-        // on `varLiteralKind`), so the kind always exists.
-        const kind = self.varLiteralKind(driver).?;
-        try self.literal_defaulting_kinds.append(self.gpa, kind);
-        if (kind == .numeral) has_numeral_driver = true;
-    }
-
-    // Quote drivers have exactly one candidate (Str) and are assigned it on
-    // every attempt; only numeral drivers consume the candidate scan, so an
-    // all-quote group needs exactly one attempt.
-    const candidate_scan: []const CIR.NumKind = if (has_numeral_driver)
-        numeral_default_candidates[0..]
-    else
-        numeral_default_candidates[0..1];
-
-    candidate: for (candidate_scan) |candidate_kind| {
-        // The component's passive literals get pinned by phase 1's assignments
-        // too, so their exact values must accept the candidate—the O(1) bit
-        // test on the precomputed intersection runs before the per-driver walk.
-        if (has_numeral_driver and !componentFitsAcceptNumKind(component_fits, candidate_kind)) continue :candidate;
-        // Digit-fit precheck for every numeral driver's literal payload—pure
-        // arithmetic on the constraint payloads, before any speculation. Not
-        // subsumed by the bit test above: a driver's range can carry
-        // from_literal QUOTE constraints (a numeral flex unified with a quote
-        // flex defers the conflict), which refute every numeric candidate but
-        // contribute nothing to the numeral fit-set intersection. Quote
-        // drivers are assigned Str, which their own literal-conversion
-        // provenance accepts by definition, so they have nothing to precheck.
-        for (self.literal_defaulting_constraint_ranges.items, self.literal_defaulting_kinds.items) |range, kind| {
-            if (kind != .numeral) continue;
-            if (!self.rangeNumeralDigitsFit(range, candidate_kind)) continue :candidate;
-        }
-
-        var commit_probe = try self.beginCommitProbe(env);
-        var committed = false;
-        // Runs on every exit from this loop body, `continue :candidate` included.
-        defer if (!committed) commit_probe.rollback();
-
-        // Phase 1: assign each driver its kind's candidate—the scanned numeric
-        // candidate for numeral drivers, Str for quote drivers. Driver roots are
-        // distinct and still flex, so these unifications are independent of each
-        // other; flex-vs-concrete cannot mismatch (the drivers' dispatch
-        // constraints defer onto the candidate as usual).
-        self.literal_defaulting_candidate_vars.clearRetainingCapacity();
-        for (drivers, self.literal_defaulting_kinds.items) |driver, kind| {
-            const candidate_var = switch (kind) {
-                .numeral => try self.freshFromContent(
-                    try self.mkBuiltinNumberTypeContentFromKind(candidate_kind),
-                    env,
-                    self.getRegionAt(driver),
-                ),
-                .quote, .interpolation => try self.freshStr(env, self.getRegionAt(driver)),
-            };
-            try self.literal_defaulting_candidate_vars.append(self.gpa, candidate_var);
-            const unify_result = try commit_probe.unify(driver, candidate_var);
-            if (!unify_result.isEstablished()) continue :candidate;
-        }
-
-        // Phase 2: verify every driver's every non-literal constraint.
-        for (0..drivers.len) |driver_idx| {
-            if (!try self.candidateSatisfiesRangeConstraints(
-                &commit_probe,
-                self.literal_defaulting_constraint_ranges.items[driver_idx],
-                self.literal_defaulting_candidate_vars.items[driver_idx],
-                env,
-            )) continue :candidate;
-        }
-
-        committed = true;
-        try commit_probe.commit();
-        for (drivers, self.literal_defaulting_kinds.items) |driver, kind| {
-            if (kind == .numeral) self.noteNumeralDefaulted(driver);
-        }
-        return;
-    }
-
-    // No candidate satisfies the group: commit each driver's documented head
-    // default (Dec for numerals, Str for quotes) so the dispatch pass reports the
-    // conflicts. (All drivers are flex again—every failed probe rolled back—
-    // but re-check defensively.) A driver is recorded as conflicted—so the
-    // dispatch pass's failure path rewinds its speculative merges (see
-    // `conflicted_default_literal_vars`)—only when its own head default is the
-    // rejected one: every shared candidate failed a numeral driver's scan, but
-    // a quote driver is assigned Str on every attempt, so the group's failure
-    // may be entirely its peers' doing; the per-driver predicate probe keeps a
-    // Str-satisfied quote driver off the list (its dispatches discharge
-    // normally against Str).
-    for (drivers, self.literal_defaulting_kinds.items, self.literal_defaulting_constraint_ranges.items) |driver, kind, range| {
-        if (self.types.resolveVar(driver).desc.content != .flex) continue;
-        switch (kind) {
-            .numeral => {
-                if (self.rangeHasNonLiteralConstraint(range)) {
-                    try self.recordConflictedDefaultLiteral(driver);
-                }
-                _ = try self.commitLiteralDefaultHead(driver, env);
-                self.noteNumeralDefaulted(driver);
-            },
-            .quote, .interpolation => {
-                if (self.rangeHasNonLiteralConstraint(range) and
-                    !try self.quoteDefaultSatisfiesConstraints(driver, range, env))
-                {
-                    try self.recordConflictedDefaultLiteral(driver);
-                }
-                _ = try self.commitQuoteDefault(driver, env);
-            },
-        }
     }
 }
 
@@ -42836,9 +42466,9 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
 /// `boundary_reachable_vars` is populated for the current boundary.
 /// Clear `out`, then collect every var reachable from the var's non-`from_literal`
 /// dispatch constraints into it. Single source of truth for the "signature
-/// footprint" used by both interference partitioning (runLiteralDefaultingRounds)
+/// footprint" used by both driver classification (runLiteralDefaultingRounds)
 /// and boundary-leak detection (boundaryDefaultLeaksIntoSignature)—they MUST
-/// agree, or a literal could be partitioned non-interfering yet warned.
+/// agree, or a literal could default as unreached by any driver yet be warned.
 /// collectReachableVars only reads the store, so holding the constraint slice
 /// across it is safe.
 fn collectConstraintSignatureReachable(
@@ -42866,6 +42496,9 @@ fn boundaryDefaultLeaksIntoSignature(self: *Self, literal_var: Var) std.mem.Allo
         // its own requirements. Only another type those requirements name
         // can be part of the definition's interface.
         if (leak_var.* == resolved.var_) continue;
+        // A default narrows the definition's type only by determining a
+        // variable in it: a type that is already settled stays as it is.
+        if (self.types.resolveVar(leak_var.*).desc.content != .flex) continue;
         for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
             if (self.types.resolveVar(constraint.fn_var).var_ == leak_var.*) continue :leak;
         }
@@ -42907,11 +42540,9 @@ fn boundaryWarningBeforeCommit(self: *Self, literal_root: Var) std.mem.Allocator
 }
 
 /// Emit the LITERAL DEFAULTED warning for a just-committed boundary default when
-/// it leaks into the def's interface. `snapshot_var` is any var in the committed
-/// equivalence class (the returned default var for single commits, the driver
-/// root itself for group commits): its union-find root carries the concrete
-/// committed content, so the snapshot renders the clean committed type either way—
-/// identical to a pre-commit snapshot of the fresh candidate.
+/// it leaks into the def's interface. `snapshot_var` is the var holding the
+/// committed default: its union-find root carries the concrete committed
+/// content, so the snapshot renders the committed type.
 fn emitBoundaryWarningAfterCommit(
     self: *Self,
     pending: PendingBoundaryWarning,
@@ -45302,89 +44933,19 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
 // until the new kind is handled: the exhaustiveness *is* the checklist for the
 // next literal kind (e.g. strings).
 
-/// Default a still-open literal var and COMMIT the result, returning the var the
-/// literal was resolved against (for the boundary warning's snapshot).
-/// Haskell-style: commit the FIRST candidate in the kind's canonical order that
-/// satisfies every dispatch constraint the var accumulated—and the successful
-/// probe IS the commit (no rollback-and-redo; see `tryCommitNumeralCandidate`). A
-/// literal whose only obligation is its own literal conversion takes the list head
-/// directly (the common case, no probing). If no candidate satisfies, the head is
-/// committed via the normal unify path anyway, so the post-finalize dispatch pass
-/// reports the conflict against the documented default type.
-fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConstraint.LiteralKind, component_fits: exact_numeral.FitSet, env: *Env) Allocator.Error!Var {
+/// Default a still-open literal var and commit the result, returning the var
+/// the literal was resolved against (for the boundary warning's snapshot). A
+/// number literal becomes `Dec` and a string literal `Str`, through the normal
+/// unify path, so the literal's method constraints defer as usual and the
+/// dispatch pass checks each against the default type.
+fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConstraint.LiteralKind, env: *Env) Allocator.Error!Var {
     switch (kind) {
         .numeral => {
-            const constraint_range = self.types.resolveVar(literal_var).desc.content.flex.constraints;
-            if (self.rangeHasNonLiteralConstraint(constraint_range)) {
-                for (numeral_default_candidates) |candidate_kind| {
-                    // Cheap structural pre-filter: skip the full probe when
-                    // read-only inspection PROVES it would fail. Skipping is
-                    // observably identical to probing-and-rolling-back, and the
-                    // candidate order (first-satisfier semantics) is untouched.
-                    if (self.numeralCandidateStructurallyRefuted(candidate_kind, constraint_range)) {
-                        // In safety-checked builds, prove the refutation: run the
-                        // skipped probe and assert it fails. A failed probe rolls
-                        // back completely (`CommitProbe`), so a passing assertion
-                        // leaves observable state—var numbering included—
-                        // identical to having skipped. A firing assertion means
-                        // the refutation logic has drifted from the unifier's
-                        // actual semantics (see the per-pair soundness fence on
-                        // `structurallyIncompatiblePair` in src/check/unify.zig and
-                        // the range-wide fence on
-                        // `numeralCandidateStructurallyRefuted`); the witness
-                        // commit it leaves behind is moot since we crash.
-                        //
-                        // This witness probe is deliberately NOT counted in
-                        // `bench_probe_attempts`: this candidate was refuted (and
-                        // counted as such below via `bench_probe_refuted`), so
-                        // counting the safety-only re-probe as an attempt would make
-                        // the refuted-count guard test's attempt/refuted bookkeeping
-                        // diverge between safety and release builds. Both counters are
-                        // per-instance debug-only fields, compiled out entirely in
-                        // release builds (no global state, no hot-path cost).
-                        if (comptime std.debug.runtime_safety) {
-                            const witness = try self.tryCommitNumeralCandidate(literal_var, candidate_kind, constraint_range, component_fits, env);
-                            std.debug.assert(witness == null);
-                            self.bench_probe_refuted += 1;
-                        }
-                        continue;
-                    }
-                    if (comptime std.debug.runtime_safety) self.bench_probe_attempts += 1;
-                    if (try self.tryCommitNumeralCandidate(literal_var, candidate_kind, constraint_range, component_fits, env)) |committed_var| {
-                        self.noteNumeralDefaulted(literal_var);
-                        return committed_var;
-                    }
-                }
-                // No candidate satisfied the constraints: the head commit
-                // below is a documented conflict. Record the receiver so the
-                // dispatch pass's failure path rewinds its speculative merges
-                // (see `conflicted_default_literal_vars`).
-                try self.recordConflictedDefaultLiteral(literal_var);
-            }
-            const default_var = try self.commitLiteralDefaultHead(literal_var, env);
+            const default_var = try self.commitNumeralDefault(literal_var, env);
             self.noteNumeralDefaulted(literal_var);
             return default_var;
         },
-        // Str is the single candidate for string literals—a one-element
-        // candidate list whose head is always committed (and no structural
-        // pre-filter: there is no scan to prune). The append-after-validation-
-        // failure discipline is the numeral branch's: only a receiver whose
-        // method constraints Str provably cannot satisfy is recorded, so the
-        // dispatch pass's failure path rewinds its speculative merges instead
-        // of retyping the constraint's argument graph against a type the
-        // program never chose (see `conflicted_default_literal_vars`). The
-        // dispatch pass still reports the conflict against Str. Satisfied
-        // constraints go entirely unrecorded; their dispatches discharge
-        // normally in the cascade.
-        .quote, .interpolation => {
-            const constraint_range = self.types.resolveVar(literal_var).desc.content.flex.constraints;
-            if (self.rangeHasNonLiteralConstraint(constraint_range) and
-                !try self.quoteDefaultSatisfiesConstraints(literal_var, constraint_range, env))
-            {
-                try self.recordConflictedDefaultLiteral(literal_var);
-            }
-            return try self.commitQuoteDefault(literal_var, env);
-        },
+        .quote, .interpolation => return try self.commitQuoteDefault(literal_var, env),
     }
 }
 
@@ -45426,40 +44987,8 @@ fn noteNumeralDefaulted(self: *Self, literal_var: Var) void {
     if (self.interpolationPartNumeral(literal_var)) |entry| entry.defaulted = true;
 }
 
-/// Record a literal receiver whose documented head default is about to commit
-/// even though validation rejected it (see `conflicted_default_literal_vars`).
-/// Sole append site, so the debug-only recording counter cannot drift from the
-/// list.
-fn recordConflictedDefaultLiteral(self: *Self, literal_var: Var) Allocator.Error!void {
-    if (comptime std.debug.runtime_safety) self.bench_conflicted_default_records += 1;
-    try self.conflicted_default_literal_vars.append(self.gpa, literal_var);
-}
-
-/// Pure validation probe for the quote default: whether committing Str to the
-/// still-flex quote literal satisfies every non-literal constraint in
-/// `constraint_range`—the same acceptance rule the numeral candidate scan
-/// applies (`candidateSatisfiesRangeConstraints`), asked as a predicate. The
-/// probe always rolls back, leaving observable state identical to never having
-/// run: Str is the single candidate, so the commit itself goes through the
-/// ordinary head-commit path either way, and the group failure path can ask
-/// the same question per quote driver without perturbing its peers.
-fn quoteDefaultSatisfiesConstraints(
-    self: *Self,
-    literal_var: Var,
-    constraint_range: StaticDispatchConstraint.SafeList.Range,
-    env: *Env,
-) Allocator.Error!bool {
-    var commit_probe = try self.beginCommitProbe(env);
-    defer commit_probe.rollback();
-
-    const candidate_var = try self.freshStr(env, self.getRegionAt(literal_var));
-    const unify_result = try commit_probe.unify(literal_var, candidate_var);
-    if (!unify_result.isEstablished()) return false;
-    return try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env);
-}
-
-/// Commit Str—the single (and therefore default) candidate for string literals—
-/// to `literal_var` through the normal unify path. The committed var reuses the
+/// Commit Str, the default for string literals, to `literal_var` through the
+/// normal unify path. The committed var reuses the
 /// literal's region so later diagnostics stay anchored to the source; the deferred
 /// from_quote dispatch fires against Str as usual.
 fn commitQuoteDefault(self: *Self, literal_var: Var, env: *Env) Allocator.Error!Var {
@@ -45468,17 +44997,16 @@ fn commitQuoteDefault(self: *Self, literal_var: Var, env: *Env) Allocator.Error!
     return default_var;
 }
 
-/// Commit the canonical default (the candidate list head, Dec) to `literal_var`
-/// through the normal unify path: the literal's dispatch constraints defer as
-/// usual, so when no candidate satisfied them the dispatch pass reports the
-/// conflict against the documented default type with problems recorded.
-fn commitLiteralDefaultHead(self: *Self, literal_var: Var, env: *Env) Allocator.Error!Var {
+/// Commit Dec, the default for number literals, to `literal_var` through the
+/// normal unify path: the literal's dispatch constraints defer as usual, so
+/// the dispatch pass checks them against Dec.
+fn commitNumeralDefault(self: *Self, literal_var: Var, env: *Env) Allocator.Error!Var {
     // The synthetic default var reuses the literal's region: if it ends up the
     // union-find root, a later diagnostic would otherwise anchor at Region.zero()—
     // the useless 1:1.
     const literal_region = self.getRegionAt(literal_var);
     const default_var = try self.freshFromContent(
-        try self.mkBuiltinNumberTypeContentFromKind(numeral_default_candidates[0]),
+        try self.mkBuiltinNumberTypeContentFromKind(.dec),
         env,
         literal_region,
     );
@@ -45539,6 +45067,12 @@ fn retractUndecidedDefaultRecords(self: *Self, start: usize) Allocator.Error!voi
 /// was default-decided, which happens on the diagnostic path.
 fn defaultDecidedRecordFor(self: *const Self, var_: Var) ?usize {
     if (!self.types.varDefaultDecided(var_)) return null;
+    return self.defaultDecidedRecordOfClass(var_);
+}
+
+/// The latest record of a defaulting decision whose variable is in `var_`'s
+/// class, which a default chose. Diagnostic path only.
+fn defaultDecidedRecordOfClass(self: *const Self, var_: Var) usize {
     const root = self.types.resolveVar(var_).var_;
     var idx = self.default_decided_records.items.len;
     while (idx > 0) {
@@ -45836,17 +45370,6 @@ const builtin_number_kinds = blk: {
     break :blk kinds;
 };
 
-/// The types an open number literal defaults to, owned by the defaulting
-/// oracle (src/types/literal_defaulting.zig) and mapped here into the
-/// `CIR.NumKind` values the probe machinery consumes.
-const numeral_default_candidates = blk: {
-    var kinds: [literal_defaulting.numeral_default_candidates.len]CIR.NumKind = undefined;
-    for (literal_defaulting.numeral_default_candidates, 0..) |target, index| {
-        kinds[index] = numKindFromNumeralTarget(target);
-    }
-    break :blk kinds;
-};
-
 /// The `CIR.NumKind` for a builtin numeral target type (exhaustive by tag
 /// name: a new target fails to compile until NumKind has a matching tag).
 fn numKindFromNumeralTarget(target: exact_numeral.Target) CIR.NumKind {
@@ -45855,30 +45378,10 @@ fn numKindFromNumeralTarget(target: exact_numeral.Target) CIR.NumKind {
     };
 }
 
-/// Whether `var_` resolves to a literal whose documented head default was
-/// committed after validation rejected it—every numeral candidate failed, or
-/// Str failed the quote predicate probe (see
-/// `conflicted_default_literal_vars`). Both sides re-resolve at query time:
-/// the class root can drift as later unifications merge into it—which is why
-/// the entries only live until the recording rounds' cascade has consumed
-/// them.
-fn varIsConflictedDefaultLiteral(self: *const Self, var_: Var) bool {
-    if (self.conflicted_default_literal_vars.items.len == 0) return false;
-    const root = self.types.resolveVar(var_).var_;
-    for (self.conflicted_default_literal_vars.items) |recorded| {
-        if (self.types.resolveVar(recorded).var_ == root) return true;
-    }
-    return false;
-}
-
-/// Whether the constraint range carries any obligation besides literal-conversion
-/// provenance—i.e. whether defaulting must consult the candidate probe at all.
-/// Whether a record or tag row's tail leaves a constraint unresolved. A flex
-/// tail is closed by its row default, and the empty row derives `is_eq` and
-/// `to_hash`, so the derived obligations an open row's tail carries (see
-/// design.md "Derived Equality And Hashing Over Open Rows") are discharged by
-/// that closing.
-/// Whether closing a row satisfies every constraint in `range` on its tail
+/// A flex row tail is closed by its row default, and the empty row derives
+/// `is_eq` and `to_hash`, so the derived obligations an open row's tail carries
+/// (see design.md "Derived Equality And Hashing Over Open Rows") are discharged
+/// by that closing. Whether closing a row satisfies every constraint in `range` on its tail
 /// (vacuously so when there are none).
 fn rowDefaultDischargesConstraints(self: *Self, range: StaticDispatchConstraint.SafeList.Range) bool {
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
@@ -45999,175 +45502,13 @@ fn rowDefaultDischargesConstraint(self: *Self, constraint: StaticDispatchConstra
     return constraint.fn_name.eql(self.cir.idents.is_eq) or constraint.fn_name.eql(self.cir.idents.to_hash);
 }
 
+/// Whether the constraint range carries any obligation besides
+/// literal-conversion provenance: a method the literal's type must have.
 fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.SafeList.Range) bool {
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
         if (constraint.origin != .from_literal) return true;
     }
     return false;
-}
-
-/// Structural pre-filter for `tryCommitNumeralCandidate`: returns true only when
-/// read-only inspection PROVES the full probe would fail, so the probe can be
-/// skipped without observable difference (a failed probe is fully rolled back, so
-/// skipping it leaves identical state). Resolves vars in the relevant stores but
-/// NEVER mutates them. Anything uncertain returns false (fall through to the
-/// probe)—refutation is exact logic, probing is the default.
-///
-/// This filter implements no language rule of its own: the acceptance rule is
-/// `staticDispatchConstraintAcceptsCandidate`'s (see its doc comment), and this
-/// function must refute exactly when that probe would fail. Safety-checked
-/// builds prove every refutation by running the skipped probe and asserting it
-/// fails (the witness in `commitLiteralDefault`), so a drift between this
-/// logic and the unifier's semantics crashes rather than changing which
-/// default a literal picks.
-///
-/// Two refutation facts, per non-literal constraint (the literal-conversion
-/// ones are pre-filtered by digit-fit inside `tryCommitNumeralCandidate` via
-/// `literalAcceptsBuiltinNumKind`):
-///
-/// 1. Method lookup miss: the candidate's owner env has no method for the
-///    constraint's `fn_name`. The probe performs the IDENTICAL lookup
-///    (`staticDispatchConstraintAcceptsCandidate` resolves the candidate nominal's
-///    origin/source-decl—the very values computed here without minting the
-///    candidate var—and calls `lookupMethodBindingFromEnvAndDeclConst`, a pure
-///    read of finalized tables) and returns false on a miss, failing the probe.
-///    This fact does not depend on any mutable type state, so it refutes
-///    unconditionally.
-///
-/// 2. Dispatcher-position mismatch: a `.refuting` pair from
-///    `unifier.structurallyIncompatiblePair`—a signature position where the
-///    method is the dispatcher type C itself while the constraint's corresponding
-///    position is already a CONCRETE builtin numeric nominal with a different
-///    source decl. Nominal unification requires identical identity
-///    (`sameNominalIdentity`: origin + source decl), so that position's unify must
-///    throw—the probe cannot succeed. (The dispatcher-position check is made per
-///    position, not assumed; the filter's EFFECTIVENESS comes from builtin numeric
-///    methods being homogeneous (`T, T -> T`, e.g. `Dec.plus : Dec, Dec -> Dec`),
-///    which puts the dispatcher type at every position.)
-///
-/// Fact 2's per-pair soundness fence—the unifier's err-backed-nominal
-/// short-circuit (a SUCCESSFUL err merge), flex-side constraint deferral, and
-/// never-written nominal backings—is documented on and encoded in
-/// `structurallyIncompatiblePair` in src/check/unify.zig, co-located with the
-/// unify internals it reasons about. This function supplies the RANGE-WIDE side of
-/// that fence: it classifies every argument/return position of EVERY constraint in
-/// the range, and abandons refutation for the whole candidate on any
-/// `.uninspectable` position. A callable-arity difference directly refutes the
-/// candidate (`unifyFunc` cannot establish it) before any position walk. Every
-/// other deviation—aliases, records, tag unions, tuples, err content,
-/// polymorphic method positions, non-fn shapes—makes the whole candidate fall
-/// through to the probe rather than weakening soundness.
-fn numeralCandidateStructurallyRefuted(
-    self: *Self,
-    candidate_kind: CIR.NumKind,
-    constraint_range: StaticDispatchConstraint.SafeList.Range,
-) bool {
-    // The candidate's identity, computed without creating its var: the same origin
-    // module + source decl `mkNumberTypeContent` embeds in the nominal the probe
-    // would mint.
-    const candidate_source_decl = self.sourceDeclForBuiltinNominal(.{ .num = candidate_kind });
-    const candidate_origin_module = self.builtinOriginModule();
-    const owner_env, _ = self.ownerEnvForOriginModule(
-        candidate_origin_module,
-        candidate_source_decl,
-        true,
-        "static dispatch candidate",
-    );
-
-    var found_refuting_pair = false;
-    for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
-        if (constraint.origin == .from_literal) continue;
-
-        // Method lookup short of instantiation—same env, owner decl, and method
-        // ident the probe's lookup uses, via the same const lookup.
-        const method_lookup = self.lookupStaticDispatchMethodBinding(
-            owner_env,
-            candidate_source_decl,
-            self.cir,
-            constraint.fn_name,
-        ) orelse return true;
-        const method_types: *const types_mod.Store = if (method_lookup.is_this_module) self.types else &method_lookup.env.types;
-        const def_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
-
-        // From here on, refutation needs the closed-world structural walk;
-        // any uncertainty falls through to the probe (return false).
-        const method_func = method_types.resolveVar(def_var).desc.content.unwrapFunc() orelse return false;
-        const constraint_func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
-        if (method_func.args.len() != constraint_func.args.len()) return true;
-
-        const method_args = method_types.sliceVars(method_func.args);
-        const constraint_args = self.types.sliceVars(constraint_func.args);
-        for (method_args, constraint_args) |method_pos, constraint_pos| {
-            switch (unifier.structurallyIncompatiblePair(method_types, self.types, candidate_source_decl, method_pos, constraint_pos)) {
-                .uninspectable => return false,
-                .refuting => found_refuting_pair = true,
-                .safe => {},
-            }
-        }
-        switch (unifier.structurallyIncompatiblePair(method_types, self.types, candidate_source_decl, method_func.ret, constraint_func.ret)) {
-            .uninspectable => return false,
-            .refuting => found_refuting_pair = true,
-            .safe => {},
-        }
-    }
-    return found_refuting_pair;
-}
-
-/// Probe whether committing builtin numeric `candidate_kind` to the open
-/// numeral `literal_var` satisfies every constraint in `constraint_range`—and
-/// if so, COMMIT the probe's work in place, returning the committed candidate var.
-/// The probe runs against the real stores through the normal `unify` wrapper, so
-/// success needs no rollback-and-redo: the literal var is already resolved to the
-/// candidate, with full bookkeeping (var pool, regions, deferred dispatch
-/// constraints—which the later dispatch pass fires exactly as it fires the
-/// redo-unify's today). Failure returns null after `CommitProbe.rollback` restores
-/// every store and buffer the attempt grew.
-fn tryCommitNumeralCandidate(
-    self: *Self,
-    literal_var: Var,
-    candidate_kind: CIR.NumKind,
-    constraint_range: StaticDispatchConstraint.SafeList.Range,
-    component_fits: exact_numeral.FitSet,
-    env: *Env,
-) Allocator.Error!?Var {
-    // The candidate must be able to represent every literal in this literal's
-    // interference component—the O(1) bit test on the precomputed
-    // intersection runs first—AND every from_literal payload in the
-    // driver's own range. The walk is NOT subsumed by the bit test: a range
-    // can carry from_literal QUOTE constraints (a numeral flex unified with a
-    // quote flex defers the conflict), which refute every numeric candidate
-    // but contribute nothing to the numeral fit-set intersection. Both are
-    // pure arithmetic, checked before any store mutation so refuting a
-    // candidate on digits alone costs no speculation at all.
-    if (!componentFitsAcceptNumKind(component_fits, candidate_kind)) return null;
-    if (!self.rangeNumeralDigitsFit(constraint_range, candidate_kind)) return null;
-
-    var commit_probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) commit_probe.rollback();
-
-    // The candidate (and every other var this attempt creates—the unify's fresh
-    // vars, instantiated method vars) registers in the CALLER's env pool: on
-    // success the work survives into generalization, so the generalizer must see
-    // these vars at their real ranks. (A probe-local pool—the previous design—
-    // would be released on success and leave the committed store vars invisible to
-    // rank adjustment; conversely, the dangling-entry hazard that design avoided
-    // is now closed by `CommitProbe.rollback` truncating the pool's rank lists on
-    // failure.) Region: the literal's own, so vars the probe stamps stay anchored
-    // to the real source span.
-    const candidate_var = try self.freshFromContent(
-        try self.mkBuiltinNumberTypeContentFromKind(candidate_kind),
-        env,
-        self.getRegionAt(literal_var),
-    );
-    const unify_result = try commit_probe.unify(literal_var, candidate_var);
-    if (!unify_result.isEstablished()) return null;
-
-    if (!try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env)) return null;
-
-    committed = true;
-    try commit_probe.commit();
-    return candidate_var;
 }
 
 /// Whether the concrete builtin numeric candidate of `num_kind` can represent
@@ -46235,59 +45576,6 @@ fn staticDispatchConstraintAcceptsCandidate(
     // poisoning while the store savepoint is active.
     const result = try probe.unify(method_var, constraint.fn_var);
     return result.isEstablished();
-}
-
-/// Whether every numeral literal in a defaulting component's combined fit set
-/// accepts the candidate. Unbound kinds impose no obligation.
-fn componentFitsAcceptNumKind(component_fits: exact_numeral.FitSet, candidate_kind: CIR.NumKind) bool {
-    const target = numeralTargetFromNumKind(candidate_kind) orelse return true;
-    return component_fits.contains(target);
-}
-
-/// Whether the builtin numeric candidate `candidate_kind` can represent every
-/// `from_literal` numeral payload in `range` (digit fit). Pure arithmetic on the
-/// constraint payloads—no speculation. Shared digit-fit precheck for the
-/// single-literal and group numeral probes.
-fn rangeNumeralDigitsFit(
-    self: *Self,
-    range: StaticDispatchConstraint.SafeList.Range,
-    candidate_kind: CIR.NumKind,
-) bool {
-    for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
-        switch (constraint.origin) {
-            .from_literal => |lit| {
-                if (!self.literalAcceptsBuiltinNumKind(constraint, lit, candidate_kind)) return false;
-            },
-            .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {},
-        }
-    }
-    return true;
-}
-
-/// Whether `candidate_var` satisfies every non-`from_literal` dispatch constraint
-/// in `range`, under the open `probe` scope. Uses the store-backed iterator (not a
-/// held slice) because verification appends to the constraint store, which can
-/// reallocate. Shared phase-2 verify for the single-literal and group numeral
-/// probes.
-fn candidateSatisfiesRangeConstraints(
-    self: *Self,
-    probe: *CommitProbe,
-    range: StaticDispatchConstraint.SafeList.Range,
-    candidate_var: Var,
-    env: *Env,
-) Allocator.Error!bool {
-    var constraints_iter = self.types.iterStaticDispatchConstraints(range);
-    while (constraints_iter.next()) |constraint| {
-        switch (constraint.origin) {
-            .from_literal => {},
-            .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {
-                if (!try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, candidate_var, env)) {
-                    return false;
-                }
-            },
-        }
-    }
-    return true;
 }
 
 fn pushReturnConstraintFrame(
@@ -49372,7 +48660,7 @@ noinline fn dispatchReplayEligible(
     else
         try self.importedMethodScheme(method_lookup);
     if (self.schemeHasExplicitRequirements(scheme_root)) return false;
-    if (self.varIsConflictedDefaultLiteral(dispatcher_var)) return false;
+    if (self.types.varDefaultDecided(dispatcher_var)) return false;
     return try self.varIsReplayGround(dispatcher_var);
 }
 
@@ -52425,6 +51713,14 @@ inline fn processDeferredDispatchEntry(
             // Get some data about the nominal type
             const region = self.getRegionAt(deferred_constraint.var_);
 
+            // Whether a default chose this receiver's type, read once for the
+            // entry: a requirement of the entry that the default satisfies
+            // can merge the receiver's class into one shared with other uses
+            // of the same type, which carries no such flag, and the entry's
+            // remaining requirements are still requirements of the default.
+            const receiver_default_decided = self.probe_depth == 0 and
+                self.types.varDefaultDecided(deferred_constraint.var_);
+
             // Iterate over the constraints
             const constraints_range = deferred_constraint.constraints;
             const constraints_len = constraints_range.len();
@@ -52626,13 +51922,6 @@ inline fn processDeferredDispatchEntry(
                         .owner_expr = failure_expr,
                     },
                 };
-                // A receiver whose type a default chose fails as an
-                // undetermined type: the default's own method signature
-                // is not a type the program wrote, so it is never shown.
-                const default_record: ?usize = if (self.probe_depth == 0)
-                    self.defaultDecidedRecordFor(deferred_constraint.var_)
-                else
-                    null;
                 const fn_result = fn_result: {
                     if (self.probe_depth != 0) {
                         break :fn_result try self.runUnify(
@@ -52642,60 +51931,29 @@ inline fn processDeferredDispatchEntry(
                             unifyOptionsForContext(fn_ctx, .write_no_report),
                         );
                     }
-                    if (!self.varIsConflictedDefaultLiteral(deferred_constraint.var_)) {
-                        if (default_record == null) {
-                            break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
-                        }
-                        // The same poisoning as an ordinary mismatch, with
-                        // the undetermined-type diagnostic reported below
-                        // in place of the default owner's signature.
-                        const result = try self.runUnify(
-                            method_var,
-                            constraint.fn_var,
-                            env,
-                            unifyOptionsForContext(fn_ctx, .write_no_report),
-                        );
-                        if (result == .mismatch) try self.types.poisonOnMismatch(method_var, constraint.fn_var);
-                        break :fn_result result;
+                    if (!receiver_default_decided) {
+                        break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
                     }
-                    // This receiver's type is the documented head default,
-                    // committed while its method constraints were still
-                    // unvalidated—a type the program never chose. The
-                    // failed validation must not retype anything the
-                    // relation's argument graph reaches: bracket the unify
-                    // in a probe and rewind the store, the deferred queue,
-                    // and the var-pool tails on mismatch. The undetermined
-                    // type is reported below, after the rollback, per the
-                    // store rule that occurrence-directed poisoning never
-                    // runs under an active savepoint. Success commits—a
-                    // default target that satisfies a constraint is real.
-                    // An enclosing probe takes the explicit non-poisoning
-                    // path above instead of nesting another savepoint.
-                    std.debug.assert(default_record != null);
-                    self.probe_var_pool_lens.clearRetainingCapacity();
-                    const rank_count = @backingInt(env.rank()) + 1;
-                    try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
-                    for (0..rank_count) |rank_idx| {
-                        const rank: Rank = @fromBackingInt(@intCast(rank_idx));
-                        self.probe_var_pool_lens.appendAssumeCapacity(env.var_pool.getVarsForRank(rank).len);
-                    }
-                    var probe = try self.beginProbe(env);
-                    var committed = false;
-                    defer if (!committed) {
-                        probe.rollback();
-                        for (self.probe_var_pool_lens.items, 0..) |pool_len, rank_idx| {
-                            env.var_pool.shrinkRank(@fromBackingInt(@intCast(rank_idx)), pool_len);
-                        }
-                    };
-                    const probed_result = try self.runUnify(method_var, constraint.fn_var, env, .{
-                        .context = fn_ctx,
-                        .on_mismatch = .write_no_report,
-                        .row_width_relation = .exact,
-                        .field_presence_relation = fieldPresenceRelationForContext(fn_ctx, .exact),
-                    });
+                    // This receiver's type is a default: a type the checker
+                    // chose and the program never wrote, with this
+                    // requirement not yet checked against it. A requirement
+                    // the default rejects must not retype anything the
+                    // relation's argument graph reaches, so the unify runs in
+                    // a commit-probe, which rewinds the store, the deferred
+                    // queue, and the var-pool tails on mismatch. The failure
+                    // is reported below, after the rollback, as an
+                    // undetermined type: the default's own method signature
+                    // is not a type the program wrote, so it is never shown.
+                    // Success commits—a default that satisfies a requirement
+                    // is real. An enclosing probe takes the explicit
+                    // non-poisoning path above instead of nesting another
+                    // savepoint.
+                    var probe = try self.beginCommitProbe(env);
+                    const probed_result = try probe.unifyInContext(method_var, constraint.fn_var, fn_ctx);
                     if (probed_result.isEstablished()) {
-                        committed = true;
                         try probe.commit();
+                    } else {
+                        probe.rollback();
                     }
                     break :fn_result probed_result;
                 };
@@ -52710,10 +51968,9 @@ inline fn processDeferredDispatchEntry(
                         if (self.dispatch_replay_candidates.count() != 0) try self.recordDispatchReplaySource(constraint.fn_var);
                     },
                     .suppressed_by_error, .problem, .mismatch => {
-                        if (fn_result == .mismatch) {
-                            if (default_record) |record_idx| {
-                                try self.reportUndeterminedType(record_idx, deferred_constraint.var_, constraint, failure_expr);
-                            }
+                        if (fn_result == .mismatch and receiver_default_decided) {
+                            const record_idx = self.defaultDecidedRecordOfClass(deferred_constraint.var_);
+                            try self.reportUndeterminedType(record_idx, deferred_constraint.var_, constraint, failure_expr);
                         }
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);

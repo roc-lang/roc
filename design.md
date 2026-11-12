@@ -7136,7 +7136,10 @@ constraints, and any other error that should be shown to the programmer.
 Checked diagnostics include warning severity: a literal (number or string)
 defaulted at a generalization boundary that narrows the definition's inferred
 type reports `LITERAL DEFAULTED` as a warning, not an error, worded per
-literal kind.
+literal kind. A default narrows that type when one of the literal's method
+requirements names a still-undetermined variable that the definition's type
+also reaches, since checking the requirement against the default then
+determines it. A requirement that names only settled types narrows nothing.
 
 Operators intentionally add type constraints beyond their corresponding method
 calls. `a == b` requires `a` and `b` to have the same type and `is_eq` to return
@@ -14354,17 +14357,19 @@ Other solved-graph mutations:
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
   Compatibility (above). One commit-probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
-- Literal defaulting (`commitLiteralDefault`, `commitLiteralGroupDefault`)
-—policy: literal defaulting as declared in Static Dispatch At The
-  Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
-  default, `Dec`; mutation happens only through
-  committed probes of ordinary unification. When `Dec` does not satisfy a
-  numeral's method constraints, it is still
-  committed so the dispatch pass reports the conflicts against it—but that
-  is a type the program never chose, so each failing validation against it
-  rewinds its own unification: the diagnostic is reported and the relation
-  rejected without retyping anything reachable through the relation's
-  argument graph.
+- Literal defaulting (`commitLiteralDefault`)—policy: literal defaulting as
+  declared in Static Dispatch At The Checked Boundary (the `LITERAL DEFAULTED`
+  warning). A number literal still open when its defaulting pass runs is
+  unified with `Dec` and a string literal with `Str`, through ordinary
+  unification; no other type is tried and nothing is validated first. A
+  literal whose own method requirements reach another open literal defaults
+  first, and the literal it reaches waits a round, since the selected method's
+  signature may determine it. The dispatch pass then checks each method
+  requirement of a default-decided receiver against the default. The default
+  is a type the program never chose, so that unification runs in a
+  commit-probe: a requirement the default satisfies is kept, and one it
+  rejects is rewound, reported as an undetermined type, and rejected without
+  retyping anything reachable through the relation's argument graph.
 - `captureSchemeDispatchRequirements` /
   `Instantiator.instantiateStaticDispatchConstraint(force_root_copy = true)`—policy: Pending Dispatch
   Requirements In Type Schemes (above). Capturing records no solved-graph
@@ -19555,8 +19560,8 @@ evaluates", with their rejected counterparts; and by the CLI tests named
 
 A default is a type the checker chose, not one the program wrote, so no
 diagnostic ever names it. When a requirement fails on a class that a
-defaulting decision chose—literal defaulting, including the shared-literal
-head default, or a specialization default materialization—the checker
+defaulting decision chose—literal defaulting or a specialization default
+materialization—the checker
 reports one `undetermined_type` problem for that class instead of a
 missing-method or mismatch report against the default owner. It is titled
 "missing method": the report says the type never resolved to a concrete type,
@@ -19589,7 +19594,13 @@ show it as the program wrote it. Unification and mismatch poisoning preserve the
 `static_dispatch_rejected`. A record whose class the decision left flex is
 withdrawn along with its flag, since a later relation can still determine it.
 The dispatch failure paths consult only the flag; the record list is read on
-the diagnostic path alone.
+the diagnostic path alone. The dispatch pass reads a receiver's flag once
+for each queued entry, before checking the entry's requirements: a
+requirement the default satisfies can merge the receiver's class into a
+frozen class shared with other uses of the same type (see "Concrete dispatch
+replay"), which carries no flag, and the entry's remaining requirements are
+still requirements of the default. A default-decided receiver's dispatch is
+never replayed.
 
 The report's type is the class as the program wrote it: every default-decided
 class reachable from the receiver is shown with the union of its recorded
