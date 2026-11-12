@@ -96,6 +96,11 @@ pub const inline_list_slow_arms_test = TestSpec{
 /// the compiled binary's IO behavior, not build-time features.
 pub const io_spec_tests = [_]TestSpec{
     .{
+        .roc_file = "test/fx/control_flow_iterator_join_host_round_trip.roc",
+        .io_spec = "1>match held first: 34 34 9 9|1>match produced first: 34 34 9 9|1>match as loop iterable: 34 34 9 9|1>match guard: 34 6 9 9|1>match tuple: 34 9 34 9|1>match try payload: 7 7 8 8|1>try default: 7 7 9 9|1>if held first: 34 9 34 9|1>if produced first: 34 9 34 9|1>nested held inside: 34 7 8 7|1>nested produced inside: 34 8 7 34|1>three tiers: 34 89 9 89|1>statement block branch: 34 6 9 9|1>adapter over join: 23 23 8 8|1>concat of joins: 734 78 98 98|1>join in list: 34 9 9 9|1>join in record: 341 92 92 92|1>reassigned in branch: 341 92 92 92|1>early return held: 34 34 9 9|1>early return produced: 34 9 7 9|1>early return two produced: 34 89 9 89|1>early return top level: 34 9 9 9|1>stream join: 12 9 34 9",
+        .description = "Control-flow joins and early returns of a host-held public iterator with a produced one iterate both sides",
+    },
+    .{
         .roc_file = "test/fx/record_literal_iterator_field_host_round_trip.roc",
         .io_spec = "1>list literal: 123|1>adapter chain: 34|1>bound record: 45|1>bound list: 67|1>through a function: 89|1>two fields: 12 tagged|1>nested: 34 2|1>tag payload: 56|1>list of records: 1204|1>stream: 78|1>custom: 123|1>long chain: 199|1>nested iterators: 1203",
         .description = "Record literals with unpinned field kinds keep their iterator fields through a hosted Box(a) round trip",

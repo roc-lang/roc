@@ -9219,6 +9219,36 @@ result is validated against the declared interface and carried to sealing.
 Representation selection never reconstructs branch evidence from finished
 output IR or reopens a durable Monotype.
 
+A branch can also yield a public value under a private selection. The selection
+capability rejects every class that contains a finished Monotype at any depth,
+so a public value whose type reaches one, or any public value once the
+selection itself reaches one, cannot merge into the selection. A `for` loop's
+iterable request reaches one, for example, so a `match` used as that iterable
+joins a pattern binder no producer made with a produced iterator this way. The
+selection stays private. The public branch relates to it through the same
+opaque interface relation that validates a private producer against a finished
+public request, and carries the selected cell like every other branch. The two
+types name one runtime value: every tier's backing has the public record's
+shape (Host Symbol ABI), and Lambda Solved joins a public iterator into a
+generated one by relating their backings, so the public value's step joins the
+selected representation's callable slot (Tier Unification And Callable Flow).
+Branch order does not matter: the public branch neither blocks nor weakens the
+selection whether it is lowered before or after the producers, and a nested
+join hands its own selection to the join around it. The selection never falls
+back to the public nominal because one branch is public, since that would
+discard the producer topology of every other branch.
+
+A lambda's early returns join its result the same way. Each returned value
+lowers against the lambda's request, and the final expression can select an
+output witness distinct from that request, which becomes the lambda's result. A
+return therefore names its lambda's result rather than a type cell of its own:
+`Return.target` is sealed from the one output cell the lambda settles when its
+body has lowered, so every return of a lambda and the lambda's result type are
+the same type by construction. Lambda Solved relates each returned value to
+that result, which joins a returned public value, or a returned producer's
+distinct representation, with the selected output exactly as it joins
+control-flow branches.
+
 A callee's completed result representation is immutable producer output even
 while the callee is still a live specialization in the caller's draft graph:
 every request with the same identity must seal to the same type. A caller

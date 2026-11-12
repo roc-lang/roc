@@ -1214,4 +1214,117 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "7" },
     },
+    .{
+        // Nothing produces the empty list's iterators, so the pattern binder
+        // is the ordinary public `Iter`, and the loop's iterable request keeps
+        // it from merging into the generated-private representation the other
+        // branch produces. The match joins a public view with a private
+        // selection.
+        .name = "match joins a public iterator pattern binder with a produced iterator",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    its : List(Iter(U8))
+        \\    its = []
+        \\    var $digits = seed
+        \\    for item in (match its { [first, ..] => first, _ => [9.U8].iter() }) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(1)
+        ,
+        .expected = .{ .inspect_str = "19" },
+    },
+    .{
+        // The same join with the produced iterator's branch first.
+        .name = "match joins a produced iterator with a public iterator pattern binder",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    its : List(Iter(U8))
+        \\    its = []
+        \\    var $digits = seed
+        \\    for item in (match its { [] => [9.U8].iter().map(|item| item - 1), [first, ..] => first }) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(2)
+        ,
+        .expected = .{ .inspect_str = "28" },
+    },
+    .{
+        .name = "Try default joins a public iterator payload with a produced iterator",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    held : Try(Iter(U8), Str)
+        \\    held = Err("none")
+        \\    var $digits = seed
+        \\    for item in (held ?? [7.U8, 8].iter()) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(3)
+        ,
+        .expected = .{ .inspect_str = "378" },
+    },
+    .{
+        // The inner match selects a private representation over its public
+        // branch, and the outer `if` joins that selection with another
+        // producer's.
+        .name = "nested join carries a public iterator branch into the outer selection",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    its : List(Iter(U8))
+        \\    its = []
+        \\    var $digits = seed
+        \\    for item in (if seed > 100 { [1.U8].iter() } else { match its { [first, ..] => first, _ => [9.U8].iter().map(|item| item - 3) } }) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(5)
+        ,
+        .expected = .{ .inspect_str = "56" },
+    },
+    .{
+        // The early return yields a public iterator and the body's final
+        // expression a generated-private one, which becomes the lambda's
+        // output witness; the return names that same result.
+        .name = "early return of a public iterator from a lambda whose body produces one",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    its : List(Iter(U8))
+        \\    its = []
+        \\    pick = |held| {
+        \\        for it in held {
+        \\            return it
+        \\        }
+        \\        [9.U8].iter()
+        \\    }
+        \\    var $digits = seed
+        \\    for item in pick(its) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(4)
+        ,
+        .expected = .{ .inspect_str = "49" },
+    },
 };
