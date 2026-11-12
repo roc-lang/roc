@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An associated value named like a top-level function resolves its RHS reference to the top-level function (the item being defined never satisfies its own lookup)
+description=An associated value named like a top-level function shadows it, and its RHS reference resolves to the top-level function (the item being defined never satisfies its own lookup)
 type=file:Shadow.roc
 ~~~
 # SOURCE
@@ -12,9 +12,32 @@ Shadow := [].{
 helper = |x| x
 ~~~
 # EXPECTED
-NIL
+DUPLICATE DEFINITION - assoc_value_shadows_top_level.md:2:5:2:11
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 2 5) (end 2 11))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "helper")
+			(reflow " is being redeclared here."))
+		(document
+			(source-region (file "assoc_value_shadows_top_level.md") (start 2 5) (end 2 11) (annotation error) (line-text "    helper = helper"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "helper")
+			(reflow " was already defined in ")
+			(source-location
+				(file "assoc_value_shadows_top_level.md")
+				(line 5)
+				(column 1))
+			(reflow ".")
+			(line-break)
+			(source-region (file "assoc_value_shadows_top_level.md") (start 5 1) (end 5 7) (annotation dim) (line-text "helper = |x| x")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

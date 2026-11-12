@@ -3717,7 +3717,7 @@ Builtin :: [].{
 
 		## Transform each item of this stream with an effectful function.
 		map! : Stream(a), (a => b) => Stream(b)
-		map! = |stream, transform!| Stream.map(stream, transform!)
+		map! = |source, transform!| Stream.map(source, transform!)
 
 		## Returns a stream that pairs each item with its position among the items
 		## this stream yields. The first yielded item gets index `0`, and the index
@@ -3932,12 +3932,12 @@ Builtin :: [].{
 		iter : List(item) -> Iter(item)
 		iter = |list| {
 			make = |index| {
-				len = List.len(list)
+				length = List.len(list)
 
 				iter_from_step(
-					Ok(len - index),
+					Ok(length - index),
 					||
-						if index == len {
+						if index == length {
 							Done
 						} else {
 							One({ item: list_get_unsafe(list, index), rest: make(index + 1) })
@@ -4071,14 +4071,14 @@ Builtin :: [].{
 		## ```
 		intersperse : List(a), a -> List(a)
 		intersperse = |list, separator| {
-			len = List.len(list)
+			length = List.len(list)
 
-			if len < 2 {
+			if length < 2 {
 				list
 			} else {
-				# `2 * len - 1` counts exactly the items appended below, so every
+				# `2 * length - 1` counts exactly the items appended below, so every
 				# unchecked append stays in bounds.
-				var $new_list = List.with_capacity(2 * len - 1)
+				var $new_list = List.with_capacity(2 * length - 1)
 				var $index = 0
 				for item in list {
 					if $index > 0 {
@@ -4337,13 +4337,13 @@ Builtin :: [].{
 		## ```
 		copy_range_within : List(a), U64, U64, U64 -> Try(List(a), [OutOfBounds])
 		copy_range_within = |list, dest_index, src_index, count| {
-			len = List.len(list)
+			length = List.len(list)
 			# Compare each start against a limit rather than subtracting from it;
 			# wrapping is safe because the first check has already ruled out
-			# `count > len`.
+			# `count > length`.
 			if count == 0 {
 				Ok(list)
-			} else if count > len or dest_index > len.minus_wrap(count) or src_index > len.minus_wrap(count) {
+			} else if count > length or dest_index > length.minus_wrap(count) or src_index > length.minus_wrap(count) {
 				Err(OutOfBounds)
 			} else {
 				Ok(list_copy_range_within(list, dest_index, src_index, count))
@@ -4468,11 +4468,11 @@ Builtin :: [].{
 		## ```
 		get_wrap : List(item), U64 -> Try(item, [ListWasEmpty])
 		get_wrap = |list, index| {
-			len = List.len(list)
-			if len == 0 {
+			length = List.len(list)
+			if length == 0 {
 				Try.Err(ListWasEmpty)
 			} else {
-				Try.Ok(list_get_unsafe(list, index % len))
+				Try.Ok(list_get_unsafe(list, index % length))
 			}
 		}
 
@@ -4534,8 +4534,8 @@ Builtin :: [].{
 		## ```
 		swap : List(a), U64, U64 -> Try(List(a), [OutOfBounds])
 		swap = |list, index_1, index_2| {
-			len = List.len(list)
-			if index_1 < len and index_2 < len {
+			length = List.len(list)
+			if index_1 < length and index_2 < length {
 				Ok(list_swap_unsafe(list, index_1, index_2))
 			} else {
 				Err(OutOfBounds)
@@ -4551,20 +4551,20 @@ Builtin :: [].{
 		## ```
 		insert : List(a), U64, a -> Try(List(a), [OutOfBounds])
 		insert = |list, index, item| {
-			len = List.len(list)
-			if index > len {
+			length = List.len(list)
+			if index > length {
 				Err(OutOfBounds)
 			} else {
-				# The two loops append exactly `index` then `len - index` items plus
-				# the inserted one, so every unchecked append stays within `len + 1`.
-				var $result = List.with_capacity(len + 1)
+				# The two loops append exactly `index` then `length - index` items plus
+				# the inserted one, so every unchecked append stays within `length + 1`.
+				var $result = List.with_capacity(length + 1)
 				var $i = 0
 				while $i < index {
 					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
 					$i = $i + 1
 				}
 				$result = list_append_unsafe($result, item)
-				while $i < len {
+				while $i < length {
 					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
 					$i = $i + 1
 				}
@@ -4601,10 +4601,10 @@ Builtin :: [].{
 			prepared_list = list_map_prepare_reuse(list)
 			match list_map_can_reuse(prepared_list, transform) {
 				1 => {
-					len = prepared_list.len()
+					length = prepared_list.len()
 					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
-					while $index < len {
+					while $index < length {
 						item = list_map_extract_unsafe($out, $index, transform)
 						$out = list_map_write_unsafe($out, $index, transform(item))
 						$index = $index + 1
@@ -4734,7 +4734,7 @@ Builtin :: [].{
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |list, predicate| {
 			prepared = list_map_prepare_reuse(list)
-			len = prepared.len()
+			length = prepared.len()
 			match list_owned_unique(prepared) {
 				1 => {
 					# Swap each kept item down to the end of the kept prefix, so the
@@ -4743,7 +4743,7 @@ Builtin :: [].{
 					var $out = prepared
 					var $kept = 0
 					var $index = 0
-					while $index < len {
+					while $index < length {
 						if predicate(list_get_unsafe($out, $index)) {
 							if $kept != $index {
 								$out = list_swap_unsafe($out, $kept, $index)
@@ -4752,22 +4752,22 @@ Builtin :: [].{
 						}
 						$index = $index + 1
 					}
-					List.drop_last($out, len - $kept)
+					List.drop_last($out, length - $kept)
 				}
 				_ => {
 					# A shared list is returned as it is when every item is kept.
 					var $first_dropped = 0
-					while $first_dropped < len and predicate(list_get_unsafe(prepared, $first_dropped)) {
+					while $first_dropped < length and predicate(list_get_unsafe(prepared, $first_dropped)) {
 						$first_dropped = $first_dropped + 1
 					}
-					if $first_dropped == len {
+					if $first_dropped == length {
 						prepared
 					} else {
 						# The items before $first_dropped were already tested and kept,
 						# so copy them in one step and test only the items after it.
-						var $new_list = list_append_sublist(List.with_capacity(len), prepared, 0, $first_dropped)
+						var $new_list = list_append_sublist(List.with_capacity(length), prepared, 0, $first_dropped)
 						var $index = $first_dropped + 1
-						while $index < len {
+						while $index < length {
 							item = list_get_unsafe(prepared, $index)
 							if predicate(item) {
 								$new_list = list_append_unsafe($new_list, item)
@@ -5243,9 +5243,9 @@ Builtin :: [].{
 		## ```
 		drop_swap : List(a), U64 -> List(a)
 		drop_swap = |list, index| {
-			len = List.len(list)
-			if index < len {
-				List.drop_last(list_swap_unsafe(list, index, len - 1), 1)
+			length = List.len(list)
+			if index < length {
+				List.drop_last(list_swap_unsafe(list, index, length - 1), 1)
 			} else {
 				list
 			}
@@ -5272,17 +5272,17 @@ Builtin :: [].{
 		## ```
 		chunks_of : List(a), U64 -> List(List(a))
 		chunks_of = |list, chunk_size| {
-			len = List.len(list)
+			length = List.len(list)
 
-			if chunk_size == 0 or len == 0 {
+			if chunk_size == 0 or length == 0 {
 				[]
 			} else {
-				# `(len - 1) / chunk_size + 1` is an overflow-safe ceil of `len / chunk_size`,
+				# `(length - 1) / chunk_size + 1` is an overflow-safe ceil of `length / chunk_size`,
 				# counting exactly the chunks appended below so every unchecked append stays
 				# in bounds.
-				var $chunks = List.with_capacity((len - 1) / chunk_size + 1)
+				var $chunks = List.with_capacity((length - 1) / chunk_size + 1)
 				var $start = 0
-				while ($start < len) {
+				while ($start < length) {
 					$chunks = list_append_unsafe($chunks, List.sublist(list, { start: $start, len: chunk_size }))
 					$start = $start + chunk_size
 				}
@@ -5325,9 +5325,9 @@ Builtin :: [].{
 		##
 		take_last : List(a), U64 -> List(a)
 		take_last = |list, n| {
-			len = List.len(list)
-			start = if (len <= n) 0 else len - n
-			List.sublist(list, { start: start, len: len })
+			length = List.len(list)
+			start = if (length <= n) 0 else length - n
+			List.sublist(list, { start: start, len: length })
 		}
 
 		## Drops n items from the beginning of the list. If `n` is larger than the
@@ -5339,8 +5339,8 @@ Builtin :: [].{
 		## ```
 		drop_first : List(a), U64 -> List(a)
 		drop_first = |list, n| {
-			len = List.len(list)
-			List.sublist(list, { start: n, len: len })
+			length = List.len(list)
+			List.sublist(list, { start: n, len: length })
 		}
 
 		## Drops n items from the end of the list. If `n` is larger than the
@@ -5352,8 +5352,8 @@ Builtin :: [].{
 		## ```
 		drop_last : List(a), U64 -> List(a)
 		drop_last = |list, n| {
-			len = List.len(list)
-			take_len = if (len <= n) 0 else len - n
+			length = List.len(list)
+			take_len = if (length <= n) 0 else length - n
 			List.sublist(list, { start: 0, len: take_len })
 		}
 
@@ -5422,11 +5422,11 @@ Builtin :: [].{
 		split_at : List(a), U64 -> { before : List(a), others : List(a) }
 		split_at = |list, idx| {
 			before = list.sublist({ start: 0, len: idx })
-			len = list.len()
-			others = if (idx > len)
+			length = list.len()
+			others = if (idx > length)
 				[]
 			else
-				list.sublist({ start: idx, len: len - idx })
+				list.sublist({ start: idx, len: length - idx })
 			{ before, others }
 		}
 
@@ -6146,8 +6146,8 @@ Builtin :: [].{
 			where [k.to_hash : k, Hasher -> Hasher]
 		reserve = |dict, additional| match dict {
 			HashMap(data) => {
-				len = List.len(data.entries)
-				desired = dict_add_capacity(len, additional)
+				length = List.len(data.entries)
+				desired = dict_add_capacity(length, additional)
 				prepared = dict_ensure_capacity(data, desired)
 				entries = List.reserve(prepared.entries, additional)
 				HashMap({ entries, buckets: prepared.buckets, max_entries_before_grow: prepared.max_entries_before_grow, shifts: prepared.shifts })
@@ -16263,8 +16263,8 @@ Builtin :: [].{
 			## expect !Dec.is_approx_eq(Dec.highest, Dec.lowest, { rel: 1.0, abs: 0.0 })
 			## ```
 			is_approx_eq : Dec, Dec, { rel : Dec, abs : Dec } -> Bool
-			is_approx_eq = |a, b, { rel, abs }| {
-				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0) {
+			is_approx_eq = |a, b, { rel, abs: abs_tolerance }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs_tolerance >= 0.0) {
 					crash "Dec.is_approx_eq: rel must be in [0, 1] and abs non-negative"
 				}
 
@@ -16279,7 +16279,7 @@ Builtin :: [].{
 							} else {
 								Dec.max(Dec.abs(a), Dec.abs(b))
 							}
-							diff <= Dec.max(abs, rel * magnitude)
+							diff <= Dec.max(abs_tolerance, rel * magnitude)
 						}
 						Err(Overflow) => False
 					}
@@ -17490,15 +17490,15 @@ Builtin :: [].{
 			## expect !F32.is_approx_eq(F32.nan, F32.nan, { rel: 1.0, abs: 1.0 })
 			## ```
 			is_approx_eq : F32, F32, { rel : F32, abs : F32 } -> Bool
-			is_approx_eq = |a, b, { rel, abs }| {
-				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0 and F32.is_finite(abs)) {
+			is_approx_eq = |a, b, { rel, abs: abs_tolerance }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs_tolerance >= 0.0 and F32.is_finite(abs_tolerance)) {
 					crash "F32.is_approx_eq: rel must be in [0, 1] and abs finite and non-negative"
 				}
 
 				if F32.is_float_eq(a, b) {
 					True
 				} else if F32.is_finite(a) and F32.is_finite(b) {
-					F32.abs(a - b) <= F32.max(abs, rel * F32.max(F32.abs(a), F32.abs(b)))
+					F32.abs(a - b) <= F32.max(abs_tolerance, rel * F32.max(F32.abs(a), F32.abs(b)))
 				} else {
 					False
 				}
@@ -18505,15 +18505,15 @@ Builtin :: [].{
 			## expect !F64.is_approx_eq(F64.nan, F64.nan, { rel: 1.0, abs: 1.0 })
 			## ```
 			is_approx_eq : F64, F64, { rel : F64, abs : F64 } -> Bool
-			is_approx_eq = |a, b, { rel, abs }| {
-				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0 and F64.is_finite(abs)) {
+			is_approx_eq = |a, b, { rel, abs: abs_tolerance }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs_tolerance >= 0.0 and F64.is_finite(abs_tolerance)) {
 					crash "F64.is_approx_eq: rel must be in [0, 1] and abs finite and non-negative"
 				}
 
 				if F64.is_float_eq(a, b) {
 					True
 				} else if F64.is_finite(a) and F64.is_finite(b) {
-					F64.abs(a - b) <= F64.max(abs, rel * F64.max(F64.abs(a), F64.abs(b)))
+					F64.abs(a - b) <= F64.max(abs_tolerance, rel * F64.max(F64.abs(a), F64.abs(b)))
 				} else {
 					False
 				}

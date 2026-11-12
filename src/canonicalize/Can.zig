@@ -3414,7 +3414,101 @@ fn enterAssociatedBlockState(
         work.owner_stmt_idx,
     );
 
+    // A redeclared owner's block canonicalizes no member, so its names name
+    // nothing.
+    if (!work.owner_is_redeclaration) {
+        const owner_path = associated_scope.owner_type_path orelse
+            base.invariant("canonicalization invariant violated: associated block scope {d} has no owner type path", .{@backingInt(work.scope)});
+        try self.bindAssociatedMemberNames(owner_path, current_scope_idx);
+    }
+
     return state;
+}
+
+/// Bind the bare name of every member of the associated block just entered in
+/// the block's scope, before any member body is canonicalized. An unqualified
+/// name inside the block therefore means the member wherever enclosing
+/// definitions of that name are written. Each binder is the member's
+/// forward-reference pattern, which the member's declaration adopts when it is
+/// canonicalized, so references written ahead of a member keep their place in
+/// statement order. A member whose name shadows an enclosing binding or
+/// declaration is reported once, here.
+fn bindAssociatedMemberNames(
+    self: *Self,
+    owner_path: AST.DeclIndex.TypePathIdx,
+    block_scope_idx: usize,
+) std.mem.Allocator.Error!void {
+    const active_scope = self.decl_scope_stack.items[self.decl_scope_stack.items.len - 1];
+    const globally_resolvable = self.associatedOwnerIsModuleVisible(owner_path);
+    const entries_end = self.active_decl_value_entries.items.len;
+    var entry_idx = active_scope.value_entry_start;
+    while (entry_idx < entries_end) : (entry_idx += 1) {
+        const entry = self.active_decl_value_entries.items[entry_idx];
+        const member_region = self.parserValueDeclNameRegion(entry.decl_idx);
+
+        if (self.associatedMemberShadowedRegion(entry, block_scope_idx)) |original_region| {
+            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                .ident = entry.ident,
+                .region = member_region,
+                .original_region = original_region,
+            } });
+        }
+
+        const pattern_idx = try self.getOrCreateAssocForwardPattern(
+            .{ .owner = owner_path, .item = entry.ident },
+            entry.ident,
+            member_region,
+            globally_resolvable,
+        );
+        try self.putScopeIdent(block_scope_idx, entry.ident, pattern_idx);
+    }
+}
+
+/// Where the nearest enclosing binding or declaration that the associated
+/// member `entry` shadows is written, if it shadows one. An enclosing
+/// declaration is preferred over a binding from an outer scope, since a
+/// binding of a not-yet-canonicalized declaration's name can be a forward
+/// reference whose region is the reference site.
+///
+/// A member of an enclosing type's associated block is not shadowed: each
+/// type's members are its own namespace, so a nested type commonly declares a
+/// member (such as `is_eq`) that its enclosing type also declares, and the
+/// enclosing one stays reachable by its qualified name.
+fn associatedMemberShadowedRegion(
+    self: *Self,
+    entry: ActiveDeclValueEntry,
+    block_scope_idx: usize,
+) ?Region {
+    const outer_binding = self.scopeBindings(.ident).innermostBinding(entry.ident);
+    if (outer_binding) |binding| std.debug.assert(binding.scope < block_scope_idx);
+
+    if (entry.previous) |previous_idx| {
+        const previous = self.active_decl_value_entries.items[previous_idx];
+        const decl_is_nearest = if (outer_binding) |binding|
+            previous.binding.canonical_scope >= binding.scope
+        else
+            true;
+        if (decl_is_nearest) {
+            const parser_scope = self.parse_ir.decl_index.scopes.items[@backingInt(previous.binding.parser_scope)];
+            if (parser_scope.kind == .associated) return null;
+            return self.parserValueDeclNameRegion(previous.decl_idx);
+        }
+    }
+
+    const binding = outer_binding orelse return null;
+    if (self.scopes.items[binding.scope].associated_type_name != null) return null;
+    return self.env.store.getPatternRegion(binding.value);
+}
+
+/// The region of the name a parser value declaration binds: its pattern when it
+/// has one, otherwise the whole declaration.
+fn parserValueDeclNameRegion(self: *Self, decl_idx: AST.DeclIndex.DeclIdx) Region {
+    const decl = self.parse_ir.decl_index.decls.items[@backingInt(decl_idx)];
+    if (decl.pattern) |ast_pattern| {
+        const pattern_idx: AST.Pattern.Idx = @fromBackingInt(ast_pattern);
+        return self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(pattern_idx).to_tokenized_region());
+    }
+    return self.parserDeclRegion(decl);
 }
 
 fn exitAssociatedBlockState(self: *Self, state: *AssociatedItemsState) void {
@@ -3835,7 +3929,6 @@ fn finishAssociatedDeclBody(
 
     const def_cir = self.env.store.getDef(associated_def.def_idx);
     const pattern_idx = def_cir.pattern;
-    try self.putScopeIdent(self.scopes.items.len - 1, work.decl_ident, pattern_idx);
     try self.putAssociatedPatternAliases(
         work.qualified_ident,
         state.work.relative_name_idx,
@@ -8699,13 +8792,22 @@ fn canonicalizeUnqualifiedIdentExpr(
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
     switch (self.scopeLookup(.ident, ident)) {
-        .found => |found_pattern_idx| {
-            if (self.isDefiningBoundVar(found_pattern_idx)) {
-                return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
-                    .ident = ident,
-                    .region = region,
-                } });
-            }
+        .found => |innermost_pattern_idx| {
+            const found_pattern_idx = if (self.isDefiningBoundVar(innermost_pattern_idx)) blk: {
+                // A non-lambda associated member is not a valid target for its
+                // own body, so its name there means whatever the member
+                // shadows.
+                const binding = self.scopeBindings(.ident).innermostBinding(ident) orelse unreachable; // the scope lookup just found it
+                if (self.scopes.items[binding.scope].associated_type_name == null) {
+                    return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
+                        .ident = ident,
+                        .region = region,
+                    } });
+                }
+                const outer = self.scopeBindings(.ident).shadowedBinding(binding) orelse
+                    return try self.canonicalizeUnboundUnqualifiedIdentExpr(ident, region);
+                break :blk outer.value;
+            } else innermost_pattern_idx;
 
             try self.checkUsedUnderscoreVariable(ident, region);
 
@@ -8718,137 +8820,131 @@ fn canonicalizeUnqualifiedIdentExpr(
 
             return try self.canonicalizedLocalLookup(found_pattern_idx, region);
         },
-        .not_found => {
-            if (self.scopeLookupExposedItem(ident)) |exposed_info| {
-                const import_idx = exposed_info.import_idx;
-                if (exposed_info.target) |target| {
-                    if (target.valueDefNode()) |target_node_idx| {
-                        return try self.canonicalizedExternalLookup(import_idx, target_node_idx, exposed_info.original_name, region);
-                    }
-                }
-
-                // What the imported module exposes under this name is not a
-                // source-local question.
-                return try self.deferredValueExpr(.{
-                    .import_idx = import_idx,
-                    .kind = .expr_value,
-                    .path = exposed_info.original_name,
-                    .module_name = exposed_info.module_name,
-                    .item_name = exposed_info.original_name,
-                    .parent_name = exposed_info.module_name,
-                    .qualified_name = ident,
-                    .missing_module_failure = .qualified_ident_does_not_exist,
-                    .not_found_failure = .qualified_ident_does_not_exist,
-                    .names_import_main_type = exposed_info.names_import_main_type,
-                }, region);
-            }
-
-            if (self.current_local_def_ident) |from_ident| {
-                if (self.blockLocalDefIndex(ident)) |idx| {
-                    const entry = &self.scratch_block_local_defs.items.items[idx];
-                    if (entry.fwd_ref_region == null) {
-                        entry.fwd_ref_region = region;
-                        entry.fwd_ref_from = from_ident;
-                    }
-                    return try self.canonicalizedRuntimeErrorExpr(Diagnostic{ .local_reference_before_definition = .{
-                        .ident = ident,
-                        .region = region,
-                    } });
-                }
-            }
-
-            const requires_items = self.env.requires_types.items.items;
-            for (requires_items, 0..) |req, idx| {
-                if (req.ident.eql(ident)) {
-                    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
-                        .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(@intCast(idx)),
-                    } }, region);
-                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty(), .diverges = false };
-                }
-            }
-
-            // Walk the active declaration scopes for this name, skipping the
-            // associated item whose body is currently being canonicalized: the
-            // item being defined never satisfies its own lookup, so the name
-            // resolves outward (e.g. to a shadowed top-level function). When
-            // the name resolves ONLY to the item being defined, that is a
-            // self-referential definition.
-            var skipped_defining_item = false;
-            const active_decl_entry = blk: {
-                var maybe_entry_idx = self.active_decl_values.get(ident);
-                while (maybe_entry_idx) |entry_idx| {
-                    const entry = self.active_decl_value_entries.items[entry_idx];
-                    if (self.activeDeclEntryIsDefiningItem(entry.binding, ident)) {
-                        skipped_defining_item = true;
-                        maybe_entry_idx = entry.previous;
-                        continue;
-                    }
-                    break :blk entry;
-                }
-                break :blk null;
-            } orelse {
-                if (skipped_defining_item) {
-                    return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
-                        .ident = ident,
-                        .region = region,
-                    } });
-                }
-                return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
-                    .ident = ident,
-                    .region = region,
-                } });
-            };
-
-            const active_decl_scope = active_decl_entry.binding;
-            const parser_decl_scope = self.parse_ir.decl_index.scopes.items[@backingInt(active_decl_scope.parser_scope)];
-            if (parser_decl_scope.kind == .associated) {
-                if (parser_decl_scope.owner_type_path) |owner_path| {
-                    const key = AST.DeclIndex.AssocValue{
-                        .owner = owner_path,
-                        .item = ident,
-                    };
-                    const pattern_idx = try self.getOrCreateAssocForwardPattern(
-                        key,
-                        ident,
-                        region,
-                        self.associatedOwnerIsModuleVisible(owner_path),
-                    );
-                    return try self.canonicalizedAssociatedForwardLookup(owner_path, pattern_idx, region);
-                }
-            }
-
-            const owner_scope_idx: usize = switch (parser_decl_scope.kind) {
-                .module => 0,
-                .associated => active_decl_scope.canonical_scope,
-                .block => {
-                    return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
-                        .ident = ident,
-                        .region = region,
-                    } });
-                },
-            };
-            std.debug.assert(owner_scope_idx < self.scopes.items.len);
-
-            const gop = try self.value_forward_references.getOrPut(self.env.gpa, .{
-                .decl_idx = active_decl_entry.decl_idx,
-                .ident = ident,
-            });
-            const ref_pattern_idx = if (gop.found_existing) gop.value_ptr.pattern_idx else blk: {
-                const forward_key = ValueForwardKey{ .decl_idx = active_decl_entry.decl_idx, .ident = ident };
-                errdefer _ = self.value_forward_references.remove(forward_key);
-                const new_pattern_idx = try self.env.addPattern(
-                    Pattern{ .assign = .{ .ident = ident } },
-                    region,
-                );
-                gop.value_ptr.* = .{ .pattern_idx = new_pattern_idx };
-                try self.putScopeIdent(owner_scope_idx, ident, new_pattern_idx);
-                break :blk new_pattern_idx;
-            };
-
-            try self.markGloballyResolvablePattern(ref_pattern_idx);
-            return try self.canonicalizedLocalLookup(ref_pattern_idx, region);
-        },
+        .not_found => return try self.canonicalizeUnboundUnqualifiedIdentExpr(ident, region),
     }
+}
+
+/// Canonicalize an unqualified name no open scope binds, or that names only the
+/// non-lambda associated member whose body is being canonicalized.
+fn canonicalizeUnboundUnqualifiedIdentExpr(
+    self: *Self,
+    ident: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    if (self.scopeLookupExposedItem(ident)) |exposed_info| {
+        const import_idx = exposed_info.import_idx;
+        if (exposed_info.target) |target| {
+            if (target.valueDefNode()) |target_node_idx| {
+                return try self.canonicalizedExternalLookup(import_idx, target_node_idx, exposed_info.original_name, region);
+            }
+        }
+
+        // What the imported module exposes under this name is not a
+        // source-local question.
+        return try self.deferredValueExpr(.{
+            .import_idx = import_idx,
+            .kind = .expr_value,
+            .path = exposed_info.original_name,
+            .module_name = exposed_info.module_name,
+            .item_name = exposed_info.original_name,
+            .parent_name = exposed_info.module_name,
+            .qualified_name = ident,
+            .missing_module_failure = .qualified_ident_does_not_exist,
+            .not_found_failure = .qualified_ident_does_not_exist,
+            .names_import_main_type = exposed_info.names_import_main_type,
+        }, region);
+    }
+
+    if (self.current_local_def_ident) |from_ident| {
+        if (self.blockLocalDefIndex(ident)) |idx| {
+            const entry = &self.scratch_block_local_defs.items.items[idx];
+            if (entry.fwd_ref_region == null) {
+                entry.fwd_ref_region = region;
+                entry.fwd_ref_from = from_ident;
+            }
+            return try self.canonicalizedRuntimeErrorExpr(Diagnostic{ .local_reference_before_definition = .{
+                .ident = ident,
+                .region = region,
+            } });
+        }
+    }
+
+    const requires_items = self.env.requires_types.items.items;
+    for (requires_items, 0..) |req, idx| {
+        if (req.ident.eql(ident)) {
+            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
+                .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(@intCast(idx)),
+            } }, region);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty(), .diverges = false };
+        }
+    }
+
+    // Walk the active declaration scopes for this name, skipping the
+    // associated item whose body is currently being canonicalized: the
+    // item being defined never satisfies its own lookup, so the name
+    // resolves outward (e.g. to a shadowed top-level function). When
+    // the name resolves ONLY to the item being defined, that is a
+    // self-referential definition.
+    var skipped_defining_item = false;
+    const active_decl_entry = blk: {
+        var maybe_entry_idx = self.active_decl_values.get(ident);
+        while (maybe_entry_idx) |entry_idx| {
+            const entry = self.active_decl_value_entries.items[entry_idx];
+            if (self.activeDeclEntryIsDefiningItem(entry.binding, ident)) {
+                skipped_defining_item = true;
+                maybe_entry_idx = entry.previous;
+                continue;
+            }
+            break :blk entry;
+        }
+        break :blk null;
+    } orelse {
+        if (skipped_defining_item) {
+            return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
+                .ident = ident,
+                .region = region,
+            } });
+        }
+        return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
+            .ident = ident,
+            .region = region,
+        } });
+    };
+
+    const active_decl_scope = active_decl_entry.binding;
+    const parser_decl_scope = self.parse_ir.decl_index.scopes.items[@backingInt(active_decl_scope.parser_scope)];
+    const owner_scope_idx: usize = switch (parser_decl_scope.kind) {
+        .module => 0,
+        // Entering an associated block binds every member's name in
+        // the block's scope, so the scope lookup finds it first.
+        .associated => base.invariant("canonicalization invariant violated: associated member name was not bound in its block's scope", .{}),
+        .block => {
+            return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
+                .ident = ident,
+                .region = region,
+            } });
+        },
+    };
+    std.debug.assert(owner_scope_idx < self.scopes.items.len);
+
+    const gop = try self.value_forward_references.getOrPut(self.env.gpa, .{
+        .decl_idx = active_decl_entry.decl_idx,
+        .ident = ident,
+    });
+    const ref_pattern_idx = if (gop.found_existing) gop.value_ptr.pattern_idx else blk: {
+        const forward_key = ValueForwardKey{ .decl_idx = active_decl_entry.decl_idx, .ident = ident };
+        errdefer _ = self.value_forward_references.remove(forward_key);
+        const new_pattern_idx = try self.env.addPattern(
+            Pattern{ .assign = .{ .ident = ident } },
+            region,
+        );
+        gop.value_ptr.* = .{ .pattern_idx = new_pattern_idx };
+        try self.putScopeIdent(owner_scope_idx, ident, new_pattern_idx);
+        break :blk new_pattern_idx;
+    };
+
+    try self.markGloballyResolvablePattern(ref_pattern_idx);
+    return try self.canonicalizedLocalLookup(ref_pattern_idx, region);
 }
 
 fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget {
