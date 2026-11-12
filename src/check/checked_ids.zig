@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const can = @import("can");
+const collections = @import("collections");
 
 /// Public `CheckedExhaustivenessSiteId` declaration.
 pub const CheckedExhaustivenessSiteId = enum(u32) { _ };
@@ -39,31 +40,9 @@ pub const CheckedVarNameId = enum(u32) { _ };
 /// and exactly 4 bytes, so it can sit inline in serialized POD rows (unlike a
 /// native `?Id`, whose layout is not fixed, or `SerializedOptional`, which
 /// stores its payload out of line behind a relocation fixup). All bias
-/// arithmetic lives here so individual stores cannot drift into bespoke
+/// arithmetic is shared with transient columns so stores cannot drift into bespoke
 /// `_plus_one` / sentinel encodings.
-pub fn OptionalId(comptime Id: type) type {
-    comptime std.debug.assert(@typeInfo(Id).@"enum".tag_type == u32);
-    return enum(u32) {
-        none = 0,
-        _,
-
-        const Self = @This();
-
-        /// Wrap a present id. `maxInt(u32)` is unrepresentable (it would bias
-        /// to the `none` sentinel), which no checked-artifact id space reaches.
-        pub fn some(id: Id) Self {
-            const raw = @backingInt(id);
-            std.debug.assert(raw != std.math.maxInt(u32));
-            return @fromBackingInt(@intCast(raw + 1));
-        }
-
-        /// The wrapped id, or null for `none`.
-        pub fn get(self: Self) ?Id {
-            if (self == .none) return null;
-            return @fromBackingInt(@intCast(@backingInt(self) - 1));
-        }
-    };
-}
+pub const OptionalId = collections.OptionalId;
 
 test "OptionalId round-trips none and some" {
     const Opt = OptionalId(CheckedVarNameId);

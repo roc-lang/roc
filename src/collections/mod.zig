@@ -58,6 +58,41 @@ pub const DisjointSets = @import("DisjointSets.zig");
 pub const scc = @import("scc.zig");
 /// Compressed adjacency lists.
 pub const csr = @import("csr.zig");
+/// Developer-diagnostic counters for table storage work.
+pub const storage_work = @import("storage_work.zig");
+/// Fresh zero pages and growing-column reservations for lifecycle-aware tables.
+pub const zeroed_pages = @import("zeroed_pages.zig");
+/// A table whose entries are each written before being read.
+pub const WriteFirstSlice = @import("WriteFirstSlice.zig").WriteFirstSlice;
+/// Optional typed indices in four bytes per entry.
+pub const OptionalIndexColumn = @import("OptionalIndexColumn.zig").OptionalIndexColumn;
+/// The same compact optional-ID encoding in a persisted POD value.
+pub const OptionalId = @import("optional_id.zig").OptionalId;
+/// Compact optional values for a private one-based ID domain.
+pub const ZeroSentinelId = @import("optional_id.zig").ZeroSentinelId;
+/// An optional raw `u32` in four bytes.
+pub const OptionalU32 = @import("optional_id.zig").OptionalU32;
+/// An optional small enum in one byte.
+pub const OptionalEnum = @import("optional_id.zig").OptionalEnum;
+/// An optional struct at the struct's own size, keyed by one biased field.
+pub const OptionalStruct = @import("optional_id.zig").OptionalStruct;
+/// The payload a compact optional form stores, for reflective walkers.
+pub const CompactOptionalPayload = @import("optional_id.zig").CompactOptionalPayload;
+/// Optional physical indices for stores that leave slot zero unused.
+pub const ZeroSentinelIndexColumn = @import("OptionalIndexColumn.zig").ZeroSentinelIndexColumn;
+/// Reset-many scratch keyed by epoch stamps.
+pub const epochs = @import("epochs.zig");
+pub const EpochSet = epochs.EpochSet;
+pub const EpochColumn = epochs.EpochColumn;
+/// Append-only columns that grow on virtual reservations without copying.
+pub const ReservedList = @import("ReservedList.zig").ReservedList;
+pub const ReservedColumns = @import("ReservedList.zig").ReservedColumns;
+/// A mark-and-reset bump allocator for per-pass tables.
+pub const ScratchArena = @import("ScratchArena.zig");
+/// Items grouped by key: CSR for dense keys, sorted pairs for sparse keys.
+pub const groups = @import("groups.zig");
+pub const CsrGroups = groups.CsrGroups;
+pub const SortedGroups = groups.SortedGroups;
 
 /// Any/all evaluation over nested groups of leaves on explicit stacks.
 pub const AnyAll = @import("any_all.zig");
@@ -129,4 +164,13 @@ test "collections tests" {
     std.testing.refAllDecls(@import("DisjointSets.zig"));
     std.testing.refAllDecls(@import("scc.zig"));
     std.testing.refAllDecls(@import("csr.zig"));
+    std.testing.refAllDecls(@import("storage_work.zig"));
+    std.testing.refAllDecls(@import("optional_id.zig"));
+    std.testing.refAllDecls(@import("zeroed_pages.zig"));
+    std.testing.refAllDecls(@import("WriteFirstSlice.zig"));
+    std.testing.refAllDecls(@import("OptionalIndexColumn.zig"));
+    std.testing.refAllDecls(@import("epochs.zig"));
+    std.testing.refAllDecls(@import("ReservedList.zig"));
+    std.testing.refAllDecls(@import("ScratchArena.zig"));
+    std.testing.refAllDecls(@import("groups.zig"));
 }

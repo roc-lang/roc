@@ -116,7 +116,7 @@ test "Solved-LIR runtime finite dispatch literals and patterns commit determinis
         \\        "" => 1.U64
         \\        _ => 2.U64
         \\    }
-        \\    bytes = Str.to_utf8(text)
+        \\    bytes = if count == 0 Str.to_utf8("serial${text}") else Str.to_utf8("parallel${text}")
         \\    first = match bytes {
         \\        [byte, ..] => byte.to_u64()
         \\        [] => 0.U64

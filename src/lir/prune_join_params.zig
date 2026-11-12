@@ -73,7 +73,7 @@ const Pass = struct {
     observed: LocalSet,
     /// Each defined local's defining statement when it has exactly one
     /// definition and that statement is pure, else null.
-    defs: collections.DenseMap(LocalId, ?CFStmtId),
+    defs: collections.DenseMap(LocalId, collections.OptionalId(CFStmtId)),
     /// Pure definitions whose targets nothing live reads.
     dead: std.ArrayList(CFStmtId) = .empty,
     /// Locals that lost a read to a deleted statement, one entry per read.
@@ -98,7 +98,7 @@ const Pass = struct {
             .params = LocalSet.init(allocator),
             .pinned = LocalSet.init(allocator),
             .observed = LocalSet.init(allocator),
-            .defs = collections.DenseMap(LocalId, ?CFStmtId).init(allocator),
+            .defs = collections.DenseMap(LocalId, collections.OptionalId(CFStmtId)).init(allocator),
             .pruned = LocalSet.init(allocator),
             .first_write = collections.DenseMap(LocalId, u32).init(allocator),
             .deleted = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
@@ -140,7 +140,7 @@ const Pass = struct {
 
         const store = self.store;
         const proc = store.getProcSpecImmediate(self.proc_id);
-        const body = proc.body orelse return false;
+        const body = proc.body.get() orelse return false;
 
         const args = store.getLocalSpan(proc.args);
         for (0..args.len) |index| try self.pinDefinition(GuardedList.at(args, index));
@@ -229,7 +229,7 @@ const Pass = struct {
             if (self.deleted.contains(stmt_id)) continue;
             BodyClone.redirectSuccessors(store, stmt_id, self, resolve);
         }
-        store.getProcSpecPtr(self.proc_id).body = resolve(self, body);
+        store.getProcSpecPtr(self.proc_id).body = .some(resolve(self, body));
         return true;
     }
 
@@ -249,7 +249,7 @@ const Pass = struct {
 
     fn markDead(self: *Pass, local: LocalId) Allocator.Error!void {
         if (self.observed.contains(local) or self.params.contains(local)) return;
-        const def_id = (self.defs.get(local) orelse return) orelse return;
+        const def_id = (self.defs.get(local) orelse return).get() orelse return;
         try self.dead.append(self.allocator, def_id);
         try BodyClone.tryForEachStmtRead(self.store, self.store.getCFStmt(def_id), self, Pass.noteOrphan);
     }
@@ -287,7 +287,7 @@ const Pass = struct {
                 continue;
             }
             if (self.observed.contains(local)) continue;
-            const def_id = (self.defs.get(local) orelse continue) orelse continue;
+            const def_id = (self.defs.get(local) orelse continue).get() orelse continue;
             const def = store.getCFStmt(def_id);
             try self.deleted.put(def_id, pureNext(def).?);
             try BodyClone.tryForEachStmtRead(store, def, self, Pass.noteOrphan);
@@ -341,9 +341,9 @@ const DefCollector = struct {
     fn note(self: *DefCollector, local: LocalId) Allocator.Error!void {
         const entry = try self.pass.defs.getOrPut(local);
         if (entry.found_existing) {
-            entry.value_ptr.* = null;
+            entry.value_ptr.* = .none;
         } else {
-            entry.value_ptr.* = if (pureNext(self.pass.store.getCFStmt(self.stmt)) != null) self.stmt else null;
+            entry.value_ptr.* = if (pureNext(self.pass.store.getCFStmt(self.stmt)) != null) .some(self.stmt) else .none;
         }
     }
 };

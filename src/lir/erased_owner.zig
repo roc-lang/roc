@@ -128,7 +128,7 @@ pub fn resolveProcReuseSources(
     proc_id: LIR.LirProcSpecId,
 ) Allocator.Error!void {
     const proc = store.getProcSpecImmediate(proc_id);
-    const body = proc.body orelse return;
+    const body = proc.body.get() orelse return;
 
     var owners = Owners.init(allocator);
     defer owners.deinit();
