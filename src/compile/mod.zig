@@ -193,6 +193,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11199_test.zig"));
     std.testing.refAllDecls(@import("test/structural_codec_worker_test.zig"));
     std.testing.refAllDecls(@import("test/boxy_list_int_worker_test.zig"));
+    std.testing.refAllDecls(@import("test/boxy_stored_constant_read_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11175_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11233_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11259_test.zig"));

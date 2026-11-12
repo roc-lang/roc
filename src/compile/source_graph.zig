@@ -218,8 +218,10 @@ pub const Graph = struct {
         defer gpa.free(source);
         const counts = count(source);
         source = try base.source_utils.normalizeLineEndingsRealloc(gpa, source);
-        const source_key = inventory.key(source);
-        const cached = if (self.manager) |manager| try inventory.load(a, manager, source_key) else null;
+        // The graph's one hash of this file's source; without a cache there
+        // is nothing to key and the source is not hashed at all.
+        const source_key: ?[32]u8 = if (self.manager != null) inventory.key(base.SourceDigest.of(source)) else null;
+        const cached = if (self.manager) |manager| try inventory.load(a, manager, source_key.?) else null;
         const imports = if (cached) |facts| facts else fresh: {
             var env = try base.CommonEnv.init(gpa, source);
             defer env.deinit(gpa);
@@ -228,7 +230,7 @@ pub const Graph = struct {
             self.parses += 1;
             if (ast.tokenize_diagnostics.items.len != 0 or ast.parse_diagnostics.items.len != 0) return error.InvalidSyntax;
             const facts = try inventory.fromAst(a, ast);
-            if (self.manager) |manager| try inventory.store(gpa, manager, source_key, facts);
+            if (self.manager) |manager| try inventory.store(gpa, manager, source_key.?, facts);
             break :fresh facts;
         };
         if (cached != null) self.cache_hits += 1;

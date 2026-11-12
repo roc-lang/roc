@@ -218,6 +218,12 @@ pub fn restoreTyping(context: *const Context, env: *ModuleEnv) Allocator.Error!?
     const cached = try serialized.deserializeOwned(@intFromPtr(serialized), env.gpa, env.common.source, env.module_name);
     defer env.gpa.destroy(cached);
     errdefer cached.deinit();
+    // The restored env replaces `env` over the same source, whose digest the
+    // entry's key hashed. An entry that records another digest is corrupt.
+    if (!cached.source_digest.eql(env.source_digest)) {
+        cached.deinit();
+        return null;
+    }
     metadata.bindReferences(cached, &context.scope) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.IncompatibleReferences => {

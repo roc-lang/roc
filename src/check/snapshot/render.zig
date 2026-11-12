@@ -109,7 +109,7 @@ fn content(self: *Self, snapshots: *const snapshot.Store, captured: snapshot.Sna
     return switch (captured) {
         .err => .err,
         .recursive => unreachable, // identities were allocated before contents
-        .flex => |flex| .{ .flex = .{ .name = flex.name, .constraints = try self.constraints(snapshots, flex.constraints) } },
+        .flex => |flex| .{ .flex = .{ .name = flex.name, .constraints = try self.constraints(snapshots, flex.constraints), .literal = flex.literal } },
         .rigid => |rigid| .{ .rigid = .{ .name = rigid.name, .constraints = try self.constraints(snapshots, rigid.constraints) } },
         .alias => |alias| blk: {
             const args = try self.vars(snapshots, alias.vars);

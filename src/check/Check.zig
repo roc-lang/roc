@@ -506,6 +506,10 @@ expect_dispatch_effect_watchers: std.ArrayListUnmanaged(ExpectDispatchWatcher) =
 /// exists. `finalizeExpectEffectSlots` normalizes them to roots once all roots
 /// have settled, so a watcher is matched against the final unification graph.
 successful_dispatch_fn_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Every imported method a closed operator resolution selected, once each:
+/// the callable var its nodes name, and the declaration it is this module's
+/// copy of.
+closed_operator_targets: std.AutoArrayHashMapUnmanaged(Var, ClosedOperatorTarget) = .empty,
 current_expect_effect_slot: ?ExpectEffectSlotId = null,
 /// Dense table of top-level patterns, and whether their defs have been processed.
 top_level_ptrns: std.ArrayListUnmanaged(?DefProcessed),
@@ -1474,6 +1478,15 @@ scratch_generated_codec_calls: std.ArrayListUnmanaged(ModuleEnv.GeneratedCodecCa
 /// whole type store. Append-only within a probe scope—`Probe.rollback`
 /// truncates it alongside the other Check-side buffers a probe grows.
 open_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Number literal expressions whose conversion is deferred (design.md
+/// "Deferred Literal Conversion"): each is decided, or given its ordinary
+/// constraint, by the first generalization boundary that finds its type
+/// settled or about to generalize, and by type finalization otherwise.
+pending_literals: std.ArrayListUnmanaged(PendingLiteral) = .empty,
+/// How many leading `pending_literals` a dispatch pass has already found
+/// still undetermined. The rest were introduced since, and it is zero once a
+/// unification has determined a deferred literal's type.
+pending_literals_scanned: usize = 0,
 /// The use that instantiated each literal-conversion constraint copied out of
 /// a generalized scheme, keyed by the copy's own callable var. A copy's
 /// provenance names the literal inside the reusable definition, so a failure
@@ -1790,6 +1803,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .expect_effect_slots = .settled,
     .expect_dispatch_effect_watchers = .settled,
     .successful_dispatch_fn_vars = .settled,
+    .closed_operator_targets = .settled,
     .current_expect_effect_slot = .lexical,
     .top_level_ptrns = .keyed,
     .platform_requirements = .input,
@@ -2052,6 +2066,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_evidence_pairs_sorted = .scratch,
     .scratch_generated_codec_calls = .scratch,
     .open_literal_vars = .settled,
+    .pending_literals = .settled,
+    .pending_literals_scanned = .settled,
     .instantiated_literal_conversion_uses = .keyed,
     .open_numeral_literals = .settled,
     .instantiated_interpolation_owners = .keyed,
@@ -8463,6 +8479,9 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     if (result.isAccepted()) {
         try self.recordAbsorbedDefaults(construction_var, a, b);
     }
+    // A deferred literal whose type was just determined is judged by the
+    // next dispatch pass, which therefore looks at every pending literal.
+    if (self.unify_scratch.determined_literal) self.pending_literals_scanned = 0;
     try self.adoptUnifyScratch(env, b, owner);
 
     // Ensure arrays are in sync
@@ -9253,7 +9272,7 @@ test "a default-decided class merged into a frozen class renders its pre-default
     defer store.thawFrozenClasses() catch unreachable; // no savepoint is active at scope exit, so thawing records no trail entries and allocates nothing
     try store.union_(defaulted, frozen, store.resolveVar(frozen).desc);
 
-    _ = try checker.snapshotPreDefaultType(defaulted);
+    _ = try checker.snapshotPreDefaultType(defaulted, null);
     const restored = store.resolveVar(frozen).desc;
     try std.testing.expect(restored.flags.frozen);
     try std.testing.expect(restored.content == .structure and restored.content.structure == .empty_record);
@@ -13967,6 +13986,149 @@ fn checkNumeralExpression(
     try self.checkNumeralLiteral(node_idx, occurrence_var, region, .expression, null, env);
 }
 
+/// A number literal expression whose conversion is deferred, and the
+/// `expect` whose body holds it, if any: a conversion created later is still
+/// that `expect`'s dispatch.
+const PendingLiteral = struct {
+    node: CIR.Node.Idx,
+    expect_slot: ?ExpectEffectSlotId,
+};
+
+/// Deferred Literal Conversion (design.md): introduce a number literal
+/// expression as an undetermined type marked as a numeral, with no
+/// conversion constraint. `settlePendingLiterals` decides it once its type
+/// has settled. Returns false for a literal that needs its constraint now.
+fn deferNumeralConversion(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    occurrence_var: Var,
+    is_int_unbound: bool,
+    env: *Env,
+) Allocator.Error!bool {
+    // A probe's rollback restores the type store, not this list.
+    if (self.probe_depth != 0) return false;
+    // A module that declares a conversion method in a function body records
+    // where each conversion is created (`noteLiteralDispatchSite`).
+    if (try self.moduleDeclaresLocalMethodNamed(self.cir.idents.from_numeral)) return false;
+
+    try self.unifyWith(occurrence_var, .{ .flex = .{
+        .name = null,
+        .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
+        .literal = .numeral,
+    } }, env);
+    try self.cir.store.recordLiteralDispatchPlan(node_idx, .numeral, occurrence_var, null, null);
+    try self.pending_literals.append(self.gpa, .{
+        .node = node_idx,
+        .expect_slot = self.current_expect_effect_slot,
+    });
+    try self.open_literal_vars.append(self.gpa, occurrence_var);
+    if (is_int_unbound) {
+        try self.int_unbound_vars.put(self.types.resolveVar(occurrence_var).var_, {});
+    }
+    return true;
+}
+
+const PendingLiteralScope = enum {
+    /// A dispatch pass: the literals whose type has settled, among those
+    /// introduced since the last pass, or among all of them when a
+    /// unification has determined a deferred literal's type since.
+    introduced,
+    /// A generalization boundary: a literal whose type is still undetermined
+    /// below the boundary's rank belongs to an enclosing scope and waits.
+    boundary,
+    /// Type finalization, and any judgment that reads every requirement:
+    /// nothing waits.
+    all,
+};
+
+/// Deferred Literal Conversion (design.md): decide the pending number
+/// literals in `scope`. One whose type has settled to a builtin number type
+/// that holds its exact value needs no conversion, exactly as under Concrete
+/// Builtin Numeral Introduction. Every other one that does not keep waiting
+/// gets its ordinary `from_numeral` constraint here, so defaulting,
+/// generalization, a custom conversion, and each diagnostic proceed as for a
+/// constraint created with the literal.
+fn settlePendingLiterals(self: *Self, env: *Env, scope: PendingLiteralScope) Allocator.Error!void {
+    const first: usize = switch (scope) {
+        .introduced => self.pending_literals_scanned,
+        .boundary, .all => 0,
+    };
+    if (first == self.pending_literals.items.len) return;
+    // A probe's rollback would discard a constraint created here while its
+    // literal had already left the list.
+    if (self.probe_depth != 0 or self.commit_probe_active) return;
+
+    // The conversions this pass creates, by the type they convert to.
+    // Literals of one type state one requirement, as literals that share a
+    // type variable do when each is created with its constraint.
+    var conversions: std.AutoArrayHashMapUnmanaged(Var, SettledConversion) = .empty;
+    defer conversions.deinit(self.gpa);
+
+    const rank = env.rank();
+    var kept: usize = first;
+    var index: usize = first;
+    while (index < self.pending_literals.items.len) : (index += 1) {
+        const pending = self.pending_literals.items[index];
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(@backingInt(pending.node)));
+        const occurrence_var: Var = ModuleEnv.varFrom(expr_idx);
+        const region = self.cir.store.getExprRegion(expr_idx);
+        const resolved = self.types.resolveThroughAliases(occurrence_var);
+        switch (resolved.desc.content) {
+            .flex => {
+                const waits = switch (scope) {
+                    .introduced => true,
+                    .boundary => @backingInt(resolved.desc.rank) < @backingInt(rank),
+                    .all => false,
+                };
+                if (waits) {
+                    self.pending_literals.items[kept] = pending;
+                    kept += 1;
+                    continue;
+                }
+            },
+            // The value is erroneous; finalization seals the literal as a
+            // checked error.
+            .err => continue,
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| if (self.builtinNumKindFromNominalType(nominal)) |kind| {
+                    const literal = self.recordedNumeralLiteralForNode(pending.node);
+                    const info = try self.exactNumeralInfoForLiteral(literal, region);
+                    if (validateBuiltinFromNumeralLiteral(kind, info) == null) continue;
+                },
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
+            },
+            .rigid, .alias, .field_presence => {},
+        }
+
+        const literal = self.recordedNumeralLiteralForNode(pending.node);
+        const info = try self.exactNumeralInfoForLiteral(literal, region);
+        const enclosing_slot = self.current_expect_effect_slot;
+        self.current_expect_effect_slot = pending.expect_slot;
+        defer self.current_expect_effect_slot = enclosing_slot;
+        const flex_var = try self.mkFlexWithFromNumeralConstraint(pending.node, expr_idx, null, info, env);
+        const conversion = try conversions.getOrPut(self.gpa, self.types.resolveVar(occurrence_var).var_);
+        if (conversion.found_existing) {
+            _ = try self.unify(conversion.value_ptr.constrained_var, flex_var, env);
+        } else {
+            conversion.value_ptr.* = .{ .occurrence_var = occurrence_var, .constrained_var = flex_var };
+        }
+    }
+    self.pending_literals.shrinkRetainingCapacity(kept);
+    self.pending_literals_scanned = kept;
+
+    for (conversions.values()) |conversion| {
+        _ = try self.unify(conversion.occurrence_var, conversion.constrained_var, env);
+    }
+}
+
+/// One type's conversion requirement created by `settlePendingLiterals`: a
+/// literal of that type, and the constrained variable every literal of that
+/// type in the pass relates to before it relates to the type.
+const SettledConversion = struct {
+    occurrence_var: Var,
+    constrained_var: Var,
+};
+
 /// Check one exact numeric source occurrence. Exact digits and the optional
 /// resolved suffix target are producer-owned node data shared by expressions
 /// and patterns; patterns add only the equality requirement needed for matching.
@@ -13998,6 +14160,12 @@ fn checkNumeralLiteral(
             break :blk pat == .num_literal and pat.num_literal.kind == .int_unbound;
         },
     };
+
+    if (occurrence == .expression and suffix_target == null and
+        try self.deferNumeralConversion(node_idx, occurrence_var, is_int_unbound, env))
+    {
+        return;
+    }
 
     num_literal_info.explicit_suffix = suffix_target != null;
     const flex_var = try self.mkFlexWithFromNumeralConstraint(
@@ -15065,6 +15233,15 @@ fn finalizeTopLevelDemandDependencies(self: *Self) Allocator.Error!void {
                 .{ .local = target.target_binding.def_idx }
             else
                 .{ .foreign = .{ .invokes = target.target_env.defInvokes(target.target_binding.def_idx) } },
+        });
+    }
+
+    for (self.closed_operator_targets.keys(), self.closed_operator_targets.values()) |scheme_var, target| {
+        try dispatch_targets.append(self.gpa, .{
+            .fn_var = scheme_var,
+            .parent_fn_var = .none,
+            .intro_expr = .none,
+            .target = .{ .foreign = .{ .invokes = target.env.defInvokes(target.def_idx) } },
         });
     }
 
@@ -33679,13 +33856,33 @@ fn resumeBinopCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *E
     const frame = &task.frame;
     const binop = frame.expr.e_binop;
     // Check operands first
-    const operands = [_]CIR.Expr.Idx{ binop.lhs, binop.rhs };
-    if (state.index < operands.len) {
-        state.index += 1;
-        return .{ .child = .{ .expr = operands[state.index - 1], .expected = frame.nested_expected.forStatement() } };
+    if (state.index == 0) {
+        state.index = 1;
+        return .{ .child = .{ .expr = binop.lhs, .expected = frame.nested_expected.forStatement() } };
+    }
+    if (state.index == 1) {
+        state.index = 2;
+        var expected = frame.nested_expected.forStatement();
+        // Both operands of these operators are one type (design.md "Static
+        // Dispatch At The Checked Boundary"), so a left operand that is
+        // already a nominal type is the right operand's checking context.
+        if (binopOperandsAreOneType(binop.op)) {
+            const lhs_var: Var = ModuleEnv.varFrom(binop.lhs);
+            if (self.types.resolveThroughAliases(lhs_var).desc.content.unwrapNominalType() != null) {
+                expected = expected.withContextualType(.{ .var_ = lhs_var, .context = .none });
+            }
+        }
+        return .{ .child = .{ .expr = binop.rhs, .expected = expected } };
     }
     try self.finishBinopExpr(frame.expr_idx, frame.expr_var, frame.expr_region, env, binop);
     return .done;
+}
+
+fn binopOperandsAreOneType(op: CIR.Expr.Binop.Op) bool {
+    return switch (op) {
+        .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq, .ne, .range_exclusive, .range_inclusive => true,
+        .@"and", .@"or" => false,
+    };
 }
 
 fn resumeUnaryMinusCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
@@ -36733,27 +36930,29 @@ fn finishBinopExpr(
                 return;
             }
 
-            // The operator's method: operand.method(operand) -> operand.
-            _ = try self.mkBinopConstraint(
-                lhs_var,
-                lhs_var,
-                lhs_var,
-                method_name,
-                false,
-                env,
-                expr_region,
-                expr_idx,
-            );
+            if (!try self.resolveClosedOperator(expr_idx, lhs_var, method_name, .operand, expr_region)) {
+                // The operator's method: operand.method(operand) -> operand.
+                _ = try self.mkBinopConstraint(
+                    lhs_var,
+                    lhs_var,
+                    lhs_var,
+                    method_name,
+                    false,
+                    env,
+                    expr_region,
+                    expr_idx,
+                );
+            }
 
             _ = try self.unify(expr_var, lhs_var, env);
         },
         .lt, .gt, .le, .ge => {
-            const method_name, const ret_var =
+            const method_name =
                 switch (binop.op) {
-                    .lt => .{ self.cir.idents.is_lt, try self.freshBool(env, expr_region) },
-                    .gt => .{ self.cir.idents.is_gt, try self.freshBool(env, expr_region) },
-                    .le => .{ self.cir.idents.is_lte, try self.freshBool(env, expr_region) },
-                    .ge => .{ self.cir.idents.is_gte, try self.freshBool(env, expr_region) },
+                    .lt => self.cir.idents.is_lt,
+                    .gt => self.cir.idents.is_gt,
+                    .le => self.cir.idents.is_lte,
+                    .ge => self.cir.idents.is_gte,
                     .add,
                     .sub,
                     .mul,
@@ -36783,7 +36982,13 @@ fn finishBinopExpr(
 
             const arg_var = rhs_var;
 
+            if (try self.resolveClosedOperator(expr_idx, arg_var, method_name, .bool, expr_region)) {
+                try self.unifyWith(expr_var, self.builtinBoolContent(), env);
+                return;
+            }
+
             // Create the binop constraint with unified arg type
+            const ret_var = try self.freshBool(env, expr_region);
             _ = try self.mkBinopConstraint(
                 arg_var,
                 arg_var,
@@ -36866,6 +37071,11 @@ fn finishBinopExpr(
                 return;
             }
 
+            if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region)) {
+                try self.unifyWith(expr_var, self.builtinBoolContent(), env);
+                return;
+            }
+
             const eq_ret_var = try self.freshBool(env, expr_region);
             _ = try self.mkBinopConstraint(
                 rhs_var,
@@ -36891,6 +37101,11 @@ fn finishBinopExpr(
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
             if (!arg_unify_result.isEstablished()) {
                 try self.markErroneous(expr_var);
+                return;
+            }
+
+            if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region)) {
+                try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
 
@@ -37009,6 +37224,82 @@ fn varIsDefinitelyNonNumericOperand(self: *Self, var_: Var) bool {
             .err, .flex, .rigid, .field_presence => false,
         };
     }
+}
+
+/// What an operator's method returns: its operands' type, or `Bool`.
+const OperatorResult = enum { operand, bool };
+
+const ClosedOperatorTarget = struct {
+    env: *const ModuleEnv,
+    def_idx: CIR.Def.Idx,
+};
+
+/// Closed Operator Resolution (design.md): resolve the operator at
+/// `expr_idx` here when its operands' type is a nominal type declared in
+/// another module whose `method_name` is declared with exactly the
+/// operator's signature and no type variables. The checked node then names
+/// the declaration's own callable, and the operator has no constraint.
+/// Returns whether it was resolved.
+fn resolveClosedOperator(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    operand_var: Var,
+    method_name: Ident.Idx,
+    result: OperatorResult,
+    region: Region,
+) Allocator.Error!bool {
+    const nominal = self.types.resolveVar(operand_var).desc.content.unwrapNominalType() orelse return false;
+    if (nominal.args.len() != 0) return false;
+    const method_lookup = self.lookupStaticDispatchMethodBinding(
+        self.getNominalOriginEnv(nominal),
+        nominal.sourceDeclOptional(),
+        self.cir,
+        method_name,
+    ) orelse return false;
+    if (method_lookup.is_this_module) return false;
+
+    const scheme_var = try self.importedMethodScheme(method_lookup);
+    const func = switch (self.types.resolveVar(scheme_var).desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure => |func| func,
+            .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return false,
+        },
+        .flex, .rigid, .alias, .field_presence, .err => return false,
+    };
+    const params = self.types.sliceVars(func.args);
+    if (params.len != 2) return false;
+    for (params) |param| {
+        if (!self.varIsClosedNominal(param, nominal)) return false;
+    }
+    switch (result) {
+        .operand => if (!self.varIsClosedNominal(func.ret, nominal)) return false,
+        .bool => {
+            const ret = self.types.resolveVar(func.ret).desc.content.unwrapNominalType() orelse return false;
+            if (!self.nominalIsBuiltinBoolType(ret)) return false;
+        },
+    }
+
+    try self.closed_operator_targets.put(self.gpa, scheme_var, .{
+        .env = method_lookup.env,
+        .def_idx = method_lookup.binding.def_idx,
+    });
+    try self.publishBinopDispatchExpr(expr_idx, method_name, region, scheme_var);
+    return true;
+}
+
+/// Whether `var_` is `nominal` itself: the same declaration, taking no
+/// arguments.
+fn varIsClosedNominal(self: *const Self, var_: Var, nominal: types_mod.NominalType) bool {
+    const candidate = self.types.resolveVar(var_).desc.content.unwrapNominalType() orelse return false;
+    return candidate.args.len() == 0 and unifier.sameNominalIdentity(candidate, nominal);
+}
+
+/// The builtin `Bool` type's content. `Bool` takes no arguments, so every
+/// variable holding this content is the same type.
+fn builtinBoolContent(self: *const Self) Content {
+    const nominal = self.types.resolveVar(self.bool_var).desc.content.unwrapNominalType() orelse
+        base.invariant("type checker invariant violated: the builtin Bool type is not a nominal type", .{});
+    return .{ .structure = .{ .nominal_type = nominal } };
 }
 
 fn reportMissingNominalMethodForBinop(
@@ -40414,6 +40705,9 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         // and that relation can pin a parameter copy. Resolve the accesses
         // whose receivers the default's check has now decided.
         try self.resolvePendingTupleAccesses(env, false);
+        // The judgment reads every requirement on a parameter copy, so each
+        // literal the default relates to one states its conversion first.
+        try self.settlePendingLiterals(env, .all);
         // Judged HERE, before the numeric-defaulting rounds could commit a
         // still-flex parameter copy: a default may constrain NO declaration
         // type parameter (design.md "Defaulted Fields").
@@ -41576,6 +41870,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     try self.judgeFieldKindsAtBoundary(env);
     try self.dischargeDeferredResultRelations(env);
 
+    try self.settlePendingLiterals(env, .all);
     try self.checkAllConstraints(env);
     try self.resolvePendingTupleAccesses(env, false);
     try self.checkAllConstraints(env);
@@ -42478,10 +42773,18 @@ fn boundaryDefaultLeaksIntoSignature(self: *Self, literal_var: Var) std.mem.Allo
     const resolved = self.types.resolveVar(literal_var);
     if (resolved.desc.content != .flex) return false;
 
-    try self.collectConstraintSignatureReachable(resolved.desc.content.flex.constraints, &self.boundary_leak_vars);
+    const constraints = resolved.desc.content.flex.constraints;
+    try self.collectConstraintSignatureReachable(constraints, &self.boundary_leak_vars);
 
     var leak_iter = self.boundary_leak_vars.keyIterator();
-    while (leak_iter.next()) |leak_var| {
+    leak: while (leak_iter.next()) |leak_var| {
+        // The default decides the literal's own type and discharges each of
+        // its own requirements. Only another type those requirements name
+        // can be part of the definition's interface.
+        if (leak_var.* == resolved.var_) continue;
+        for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
+            if (self.types.resolveVar(constraint.fn_var).var_ == leak_var.*) continue :leak;
+        }
         if (self.boundary_reachable_vars.contains(leak_var.*)) return true;
     }
     return false;
@@ -44432,6 +44735,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     var boundary_codecs = std.ArrayList(FinalCodecDispatchConstraint).empty;
     defer boundary_codecs.deinit(self.gpa);
 
+    try self.settlePendingLiterals(env, .boundary);
     try self.relateSameMethodRequirementsAtBoundary(roots, env);
     try self.relateUndischargedInterpolationParts(env);
 
@@ -44898,6 +45202,11 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
 fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
+    // A deferred number literal is a numeral, the dominant kind.
+    switch (resolved.desc.content.flex.literal) {
+        .numeral => return .numeral,
+        .none => {},
+    }
     const constraints = self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints);
     return literal_defaulting.dominantKind(self.literalMethodIdents(), constraints);
 }
@@ -45160,20 +45469,28 @@ fn defaultDecidedRecordFor(self: *const Self, var_: Var) ?usize {
 /// requirement anyone wrote on its type—are left out. The restoration is
 /// written under a store savepoint that is always rolled back, so no solved
 /// type changes.
-fn snapshotPreDefaultType(self: *Self, var_: Var) Allocator.Error!snapshot_mod.SnapshotContentIdx {
+fn snapshotPreDefaultType(self: *Self, var_: Var, stating_record: ?usize) Allocator.Error!snapshot_mod.SnapshotContentIdx {
     std.debug.assert(self.probe_depth == 0);
 
     // A class can hold several recorded variables (a footprint variable that
     // a later round gathered again, or two recorded classes the default
-    // merged); its pre-default requirements are the union of theirs.
+    // merged); its pre-default requirements are the union of theirs. The
+    // class of `stating_record` shows that record's requirements alone:
+    // whether a default has merged another recorded variable into it yet
+    // depends on the order dispatches were checked in.
+    const stating_root: ?Var = if (stating_record) |idx|
+        self.types.resolveVar(self.default_decided_records.items[idx].var_).var_
+    else
+        null;
     var groups: std.AutoArrayHashMapUnmanaged(Var, PreDefaultGroup) = .empty;
     defer {
         for (groups.values()) |*group| group.constraints.deinit(self.gpa);
         groups.deinit(self.gpa);
     }
-    for (self.default_decided_records.items) |record| {
+    for (self.default_decided_records.items, 0..) |record, record_idx| {
         const resolved = self.types.resolveVar(record.var_);
         if (resolved.desc.content == .flex) continue;
+        if (stating_root == resolved.var_ and stating_record.? != record_idx) continue;
         const entry = try groups.getOrPut(self.gpa, resolved.var_);
         const record_name: ?Ident.Idx = if (record.name.isNone()) null else record.name;
         if (!entry.found_existing) entry.value_ptr.* = .{ .name = record_name, .constraints = .empty };
@@ -45207,6 +45524,43 @@ const PreDefaultGroup = struct {
     constraints: std.ArrayListUnmanaged(StaticDispatchConstraint),
 };
 
+/// The record of the variable that stated `constraint` before its default,
+/// among the records of the class `class_record_idx` names: the latest whose
+/// recorded requirements hold it. `class_record_idx` itself when none does
+/// (a requirement the default's own method selection derived).
+fn defaultDecidedRecordStating(self: *const Self, class_record_idx: usize, constraint: StaticDispatchConstraint) usize {
+    const records = self.default_decided_records.items;
+    const class_root = self.types.resolveVar(records[class_record_idx].var_).var_;
+    const fn_root = self.types.resolveVar(constraint.fn_var).var_;
+    var idx = class_record_idx + 1;
+    while (idx > 0) {
+        idx -= 1;
+        if (self.types.resolveVar(records[idx].var_).var_ != class_root) continue;
+        for (self.types.sliceStaticDispatchConstraints(records[idx].constraints)) |recorded| {
+            if (recorded.fn_name.eql(constraint.fn_name) and self.types.resolveVar(recorded.fn_var).var_ == fn_root) return idx;
+        }
+    }
+    return class_record_idx;
+}
+
+/// The earliest source region among the number literals whose conversions
+/// are in `constraints`, when `kind` is a numeral: each conversion carries
+/// its literal's region.
+fn firstNumeralRegion(
+    self: *const Self,
+    kind: StaticDispatchConstraint.LiteralKind,
+    constraints: []const StaticDispatchConstraint,
+) ?Region {
+    if (kind != .numeral) return null;
+    var first: ?Region = null;
+    for (constraints) |constraint| {
+        if (constraint.origin.literalKind() != .numeral) continue;
+        const info = self.types.constraintNumeralInfo(constraint) orelse continue;
+        if (first == null or info.region.start.offset < first.?.start.offset) first = info.region;
+    }
+    return first;
+}
+
 /// Report that `constraint` failed on a class a defaulting decision chose.
 /// The diagnostic describes the type as the program wrote it and is reported
 /// once per defaulted type; the caller still poisons the failing use and
@@ -45218,7 +45572,12 @@ fn reportUndeterminedType(
     constraint: StaticDispatchConstraint,
     owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
-    const record = self.default_decided_records.items[record_idx];
+    // The report is about the recorded variable the program stated the
+    // failed requirement on. A default can merge two recorded variables'
+    // classes (two literals a selected method makes one type), and whether
+    // it has yet depends on the order dispatches were checked in.
+    const stating_idx = self.defaultDecidedRecordStating(record_idx, constraint);
+    const record = self.default_decided_records.items[stating_idx];
     const reported = try self.undetermined_type_reported.getOrPut(self.gpa, record.var_);
     if (reported.found_existing) return;
 
@@ -45250,14 +45609,24 @@ fn reportUndeterminedType(
         return;
     }
 
-    // A defaulted type that holds a literal is reported at its first literal
-    // in source order; any other defaulted type at the use that owns the
-    // failed requirement.
+    // A defaulted type that holds a literal is reported at a literal: the
+    // stating variable's own first one in source order when it holds one,
+    // and otherwise the class's. Any other defaulted type is reported at the
+    // use that owns the failed requirement.
     var subject: problem.UndeterminedType.Subject = .value;
     var region: Region = self.undeterminedTypeUseRegion(dispatcher_var, constraint, owner_expr);
     var builtin_candidates_lack_method = false;
     const root = self.types.resolveVar(record.var_).var_;
-    literal: for (self.default_decided_records.items[0 .. record_idx + 1]) |candidate| {
+    const stated_constraints = self.types.sliceStaticDispatchConstraints(record.constraints);
+    if (literal_defaulting.dominantKind(self.literalMethodIdents(), stated_constraints)) |kind| {
+        subject = switch (kind) {
+            .numeral => .number_literal,
+            .quote, .interpolation => .string_literal,
+        };
+        if (self.firstNumeralRegion(kind, stated_constraints) orelse
+            self.firstLiteralRegionInClass(kind, root, stated_constraints)) |literal_region| region = literal_region;
+        builtin_candidates_lack_method = try self.builtinLiteralCandidatesLackMethod(kind, constraint.fn_name);
+    } else literal: for (self.default_decided_records.items[0 .. record_idx + 1]) |candidate| {
         if (self.types.resolveVar(candidate.var_).var_ != root) continue;
         const recorded_constraints = self.types.sliceStaticDispatchConstraints(candidate.constraints);
         const kind = literal_defaulting.dominantKind(self.literalMethodIdents(), recorded_constraints) orelse continue;
@@ -45270,7 +45639,7 @@ fn reportUndeterminedType(
         break :literal;
     }
 
-    const requirements_snapshot = try self.snapshotPreDefaultType(dispatcher_var);
+    const requirements_snapshot = try self.snapshotPreDefaultType(dispatcher_var, stating_idx);
     _ = try self.problems.appendProblem(.{ .static_dispatch = .{ .undetermined_type = .{
         .region = region,
         .subject = subject,
@@ -51502,6 +51871,9 @@ fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!v
 }
 
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
+    // A literal whose type settled since the last pass is judged in this one,
+    // as a conversion constraint created with the literal would be.
+    try self.settlePendingLiterals(env, .introduced);
     try self.checkStaticDispatchConstraintsFrom(env, is_numeric_default_pass, 0);
 }
 
@@ -55138,7 +55510,9 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
 
 /// Seal every live literal record with the exact decision checking made. The
 /// method-instantiation table is positive evidence for a concrete custom
-/// target; an identity-bearing target remains a specialization obligation.
+/// target; a target that names a variable is recorded as one, and whether
+/// its conversion depends on an instance is the classification of its plan
+/// (design.md "Decided Variables").
 fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     const plans = self.cir.store.literalDispatchPlans();
     if (plans.len == 0) return;

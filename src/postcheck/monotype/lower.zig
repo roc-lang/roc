@@ -47243,11 +47243,12 @@ const BodyContext = struct {
     }
 
     /// Whether lowering `ty` takes no input from the enclosing specialization:
-    /// it is closed by digest, or every variable it reaches seals to its row
-    /// default (`CheckedTypePayload.variableSealsToRowDefault`, the same
-    /// variable decision the checked artifact's direct-dispatch classification
-    /// makes). This is the sealing half of the `direct_closed` rule (design.md
-    /// "Static Dispatch In Monotype").
+    /// it is closed by digest, or every variable it reaches seals without
+    /// specialization (`CheckedTypePayload.variableSealsWithoutSpecialization`,
+    /// the same variable decision the checked artifact's direct-dispatch
+    /// classification makes) and it reaches no undetermined field kind. This
+    /// is the sealing half of the `direct_closed` rule (design.md "Decided
+    /// Variables").
     ///
     /// Trust boundary: the quantification half is not checked here. It is
     /// guaranteed by the two sealed-cell producers—`beginPatternStatementValue`
@@ -47274,7 +47275,7 @@ const BodyContext = struct {
             switch (payload) {
                 .pending => Common.invariant("pending checked type reached Monotype sealing scan"),
                 .field_kind, .err, .empty_record, .empty_tag_union => {},
-                .flex, .rigid => if (!payload.variableSealsToRowDefault()) return false,
+                .flex, .rigid => if (!payload.variableSealsWithoutSpecialization()) return false,
                 .alias => |alias| {
                     try pending.appendSlice(self.allocator, alias.args);
                     try pending.append(self.allocator, alias.backing);
@@ -47283,7 +47284,10 @@ const BodyContext = struct {
                     for (0..record.fields.len()) |field_index| {
                         const field = record.fields.get(field_index);
                         try pending.append(self.allocator, field.ty);
-                        if (field.kind.undeterminedVariable()) |variable| try pending.append(self.allocator, variable);
+                        if (field.kind.undeterminedVariable()) |variable| {
+                            if (checkedPayload(self.view, variable).isFieldKindVariable()) return false;
+                            try pending.append(self.allocator, variable);
+                        }
                     }
                     try pending.append(self.allocator, record.ext);
                 },

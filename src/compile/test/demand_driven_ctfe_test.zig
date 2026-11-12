@@ -394,3 +394,117 @@ test "checking reports a recursive generic conversion's rejection reached throug
     defer checked.deinit();
     try checked.expectErrors(true);
 }
+
+/// A quote-converting type with a parameter its conversion never fixes,
+/// whose conversion rejects the literal `"bad"`.
+const sql_type =
+    \\Sql(a) := { text : Str }.{
+    \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+    \\    from_quote = |text| if text == "bad" Err(BadQuotedBytes("bad is not sql")) else Ok(Sql.{ text: text })
+    \\    show : Sql(a) -> Str
+    \\    show = |sql| sql.text
+    \\}
+;
+
+/// A helper whose literal is at `Sql(v)` for a `v` that no scheme quantifies
+/// and nothing constrains (design.md "Decided Variables").
+fn decidedLiteralApp(comptime literal: []const u8) []const u8 {
+    return
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+    ++ "\n" ++ sql_type ++ "\n" ++
+        \\describe : Sql(a) -> Str
+        \\describe = |sql| sql.show()
+        \\helper : U64 -> Str
+        \\helper = |_n| describe("
+    ++ literal ++
+        \\")
+        \\main! = |args| {
+        \\    Echo.line!(helper(List.len(args)))
+        \\    Ok({})
+        \\}
+    ;
+}
+
+test "a literal at a decided type is a conversion root checking evaluates" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, decidedLiteralApp("good"), &.{}, null);
+    defer checked.deinit();
+    try checked.expectErrors(false);
+    // The literal's variable is decided, so its conversion is closed: one
+    // root at the type the variable seals to, which names no variable and
+    // which evaluation completes and stores. No scheme carries the literal
+    // as a requirement, and no runtime body is specialized to find it.
+    const root = checked.coord.appRootCheckedArtifact();
+    var stored: usize = 0;
+    for (root.compile_time_roots.roots) |compile_time_root| {
+        if (compile_time_root.kind != .quote_conversion) continue;
+        try std.testing.expectEqual(.eligible, compile_time_root.request_eligibility);
+        try std.testing.expect(compile_time_root.payload == .const_node);
+        try std.testing.expect(!try root.checked_types.rootContainsIdentityVariables(compile_time_root.checked_type));
+        stored += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), stored);
+    for (root.checked_procedure_templates.templates.items) |*template| {
+        try std.testing.expectEqual(@as(usize, 0), root.checked_procedure_templates.templateLiteralRequirements(template).len);
+    }
+    const demand = checked.demand();
+    try std.testing.expectEqual(@as(u64, 0), demand.discovery_roots);
+    try std.testing.expectEqual(@as(u64, 0), demand.monotype.discovery_bodies);
+}
+
+test "checking reports a literal at a decided type that its conversion rejects" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, decidedLiteralApp("bad"), &.{}, null);
+    defer checked.deinit();
+    try checked.expectErrors(true);
+}
+
+/// A generic function whose literal converts at its own variable, called
+/// where nothing fixes that variable: the call instantiates the literal's
+/// requirement at a decided type.
+fn decidedLiteralArgumentApp(comptime literal: []const u8) []const u8 {
+    return
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+    ++ "\n" ++ sql_type ++ "\n" ++
+        \\make : U64 -> Sql(a)
+        \\make = |_n| "
+    ++ literal ++
+        \\"
+        \\main! = |args| {
+        \\    Echo.line!(make(List.len(args)).show())
+        \\    Ok({})
+        \\}
+    ;
+}
+
+test "a literal requirement instantiated at a decided type is a literal argument root checking evaluates" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, decidedLiteralArgumentApp("good"), &.{}, null);
+    defer checked.deinit();
+    try checked.expectErrors(false);
+    // `make`'s scheme carries the literal, and `main!`'s call instantiates
+    // its variable at a decided one: the instantiation is closed, so the
+    // call's argument is a root at the type that variable seals to.
+    const root = checked.coord.appRootCheckedArtifact();
+    var stored: usize = 0;
+    for (root.compile_time_roots.roots) |compile_time_root| {
+        if (compile_time_root.kind != .literal_argument) continue;
+        try std.testing.expectEqual(.eligible, compile_time_root.request_eligibility);
+        try std.testing.expect(compile_time_root.payload == .const_node);
+        try std.testing.expect(!try root.checked_types.rootContainsIdentityVariables(compile_time_root.checked_type));
+        stored += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), stored);
+    const demand = checked.demand();
+    try std.testing.expectEqual(@as(u64, 0), demand.discovery_roots);
+    try std.testing.expectEqual(@as(u64, 0), demand.monotype.discovery_bodies);
+}
+
+test "checking reports a literal requirement rejected at a decided instantiation" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, decidedLiteralArgumentApp("bad"), &.{}, null);
+    defer checked.deinit();
+    try checked.expectErrors(true);
+}

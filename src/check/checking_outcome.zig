@@ -107,9 +107,10 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: ?*const dependenci
     // Platform diagnostics can retain a platform-side source region. Pin that
     // declared provenance to the current platform source before replay.
     if (scope) |dependency_scope| if (checker.problems.problems.items.len != 0) if (checker.platform_requirements) |requirements| {
-        var hash: [32]u8 = undefined;
-        base.Sha256.hash(requirements.env.common.source, &hash, .{});
-        try sources.append(allocator, .{ .owner = dependency_scope.ordinal(requirements.env.contentIdentityHash().?.*), .digest = hash });
+        try sources.append(allocator, .{
+            .owner = dependency_scope.ordinal(requirements.env.contentIdentityHash().?.*),
+            .digest = requirements.env.source_digest.bytes,
+        });
     };
     return .{
         .status = if (checker.problems.problems.items.len != 0 or checker.cir.diagnosticCount() != 0) .with_diagnostics else .diagnostic_free,
@@ -137,9 +138,7 @@ pub fn sourcesMatch(self: Self, scope: *const dependencies.Scope) bool {
     for (self.sources) |source| {
         if (source.owner >= scope.owners.items.len) return false;
         const env = scope.environments.get(scope.owners.items[source.owner]) orelse return false;
-        var hash: [32]u8 = undefined;
-        base.Sha256.hash(env.common.source, &hash, .{});
-        if (!base.ModuleIdentity.eql(&source.digest, &hash)) return false;
+        if (!base.ModuleIdentity.eql(&source.digest, &env.source_digest.bytes)) return false;
     }
     return true;
 }

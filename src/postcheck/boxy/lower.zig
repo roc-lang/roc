@@ -3307,6 +3307,121 @@ pub const Program = struct {
         return result;
     }
 
+    /// The callable type `from` a dictionary's method has in the scope that
+    /// holds it, at the types the edge handing the dictionary to a consumer
+    /// that calls it at `to` fixes its row tails to.
+    ///
+    /// The checker relates the two methods' results as a row coercion from
+    /// `from`'s to `to`'s, and at every row in the coercion's reach (the
+    /// result's own row, a tag payload of a reached row, the backing of a
+    /// named type at a reached position) the destination lists every tag its
+    /// source carries (design.md "Row Coercion Primitive"). So where a
+    /// reached row of `to` is closed and names no tag its source row does
+    /// not name, the source's tail variable holds no tag at any
+    /// instantiation that reaches the edge: it is the empty row there. The
+    /// result is `from` with each such variable bound to the empty row,
+    /// which is `to` itself when the two differ in nothing else. A tail
+    /// whose destination row names further tags, or is open, stays a
+    /// variable: nothing fixes how many of those tags it holds.
+    pub fn dictionaryTypeAtEdge(self: *Program, allocator: Allocator, from: TypeId, to: TypeId) Allocator.Error!TypeId {
+        if (from == to) return from;
+        const store = &self.store;
+        const from_ret, const to_ret = switch (store.get(from)) {
+            .function => |from_fn| switch (store.get(to)) {
+                .function => |to_fn| .{ from_fn.ret, to_fn.ret },
+                .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a dictionary's consumer calls it at a type that is not a function type"),
+            },
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a dictionary's method has a type that is not a function type"),
+        };
+        var empty_tails: std.ArrayList(u32) = .empty;
+        defer empty_tails.deinit(allocator);
+        var pending: std.ArrayList([2]TypeId) = .empty;
+        defer pending.deinit(allocator);
+        // A named type can reach itself through its backing.
+        var seen: std.AutoHashMapUnmanaged(struct { source: TypeId, destination: TypeId }, void) = .empty;
+        defer seen.deinit(allocator);
+        try pending.append(allocator, .{ from_ret, to_ret });
+        while (pending.pop()) |pair| {
+            if (pair[0] == pair[1]) continue;
+            if ((try seen.getOrPut(allocator, .{ .source = pair[0], .destination = pair[1] })).found_existing) continue;
+            const source = store.get(pair[0]);
+            const destination = store.get(pair[1]);
+            if (source == .nominal and source.nominal.has_backing) {
+                try pending.append(allocator, .{ try self.converter().backing(pair[0]), pair[1] });
+                continue;
+            }
+            if (destination == .nominal and destination.nominal.has_backing) {
+                try pending.append(allocator, .{ pair[0], try self.converter().backing(pair[1]) });
+                continue;
+            }
+            // Every other position is outside the reach.
+            if (source != .tag_union or destination != .tag_union) continue;
+            const source_tags = store.tagSpan(source.tag_union.tags);
+            var names_further_tags = false;
+            for (store.tagSpan(destination.tag_union.tags)) |destination_tag| {
+                const source_tag = for (source_tags) |candidate| {
+                    if (candidate.name == destination_tag.name and candidate.payloads.len == destination_tag.payloads.len) break candidate;
+                } else {
+                    names_further_tags = true;
+                    continue;
+                };
+                for (store.span(source_tag.payloads), store.span(destination_tag.payloads)) |a, b| try pending.append(allocator, .{ a, b });
+            }
+            if (names_further_tags or destination.tag_union.ext != null) continue;
+            const tail = source.tag_union.ext orelse continue;
+            switch (store.get(tail)) {
+                .variable => |index| try empty_tails.append(allocator, index),
+                .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => {},
+            }
+        }
+        if (empty_tails.items.len == 0) return from;
+        const bound = try allocator.alloc(TypeId, try self.variableCount(allocator, from));
+        defer allocator.free(bound);
+        for (bound, 0..) |*slot, index| slot.* = try store.variable(@intCast(index));
+        const empty_row = try store.emptyTagUnion();
+        for (empty_tails.items) |index| bound[index] = empty_row;
+        return try self.substitute(allocator, from, bound);
+    }
+
+    /// One more than the greatest index of a variable `root` names, as a
+    /// type or as a record field's kind.
+    fn variableCount(self: *Program, allocator: Allocator, root: TypeId) Allocator.Error!usize {
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(allocator);
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        var count: usize = 0;
+        try pending.append(allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (self.store.get(ty)) {
+                .variable => |index| count = @max(count, @as(usize, index) + 1),
+                .record => |record| {
+                    for (self.store.fieldSpan(record.fields)) |field| {
+                        if (field.kind == .variable_slot) count = @max(count, @as(usize, field.slot_variable) + 1);
+                        try pending.append(allocator, field.ty);
+                    }
+                    if (record.ext.get()) |ext| try pending.append(allocator, ext);
+                    try pending.appendSlice(allocator, self.store.paddingTypes(record));
+                },
+                .tuple => |items| try pending.appendSlice(allocator, self.store.span(items)),
+                .tag_union => |tag_union| {
+                    for (self.store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(allocator, self.store.span(tag.payloads));
+                    if (tag_union.ext) |ext| try pending.append(allocator, ext);
+                },
+                .list => |elem| try pending.append(allocator, elem),
+                .box => |payload| try pending.append(allocator, payload),
+                .nominal => |nominal| try pending.appendSlice(allocator, self.store.nominalArgs(nominal)),
+                .function => |function| {
+                    try pending.appendSlice(allocator, self.store.span(function.args));
+                    try pending.append(allocator, function.ret);
+                },
+                .primitive, .empty_record => {},
+            }
+        }
+        return count;
+    }
+
     /// Whether one of two nodes is the backing of a padded nominal of no named
     /// fields and the other the empty record, which has no storage.
     pub fn paddedAgainstEmpty(a: types.Node, b: types.Node) bool {

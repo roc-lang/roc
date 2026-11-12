@@ -184,11 +184,27 @@ pub const Task = union(enum) {
     /// table at `inputs` (`stored_fn.zig`).
     finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, inputs: []const Word, capture_types: []const TypeId, capture_descs: []const Word },
     finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const Word, dicts: []const Word, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
+    /// Restore stored constant `node` at `ty` as static data alone: push
+    /// its slot on `Builder.static_parts` and read nothing. A stored value
+    /// built from parts is restored this way, so the body holds one read of
+    /// the whole value however many parts it has.
+    restore_part: struct { source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId },
+    /// Pop a restored value and push the static data slot it reads.
+    value_part,
+    /// Pop a static data slot and push a read of it.
+    read_static_part,
+    /// Pop the slots of a stored product's parts and push the product's.
     finish_restore_struct: struct { ty: TypeId, count: u32 },
+    /// Pop the slots of a stored tag's payloads and push the tag's.
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
+    /// Pop the slots of a stored list's items and push the list's.
     finish_static_list: struct { ty: TypeId, count: u32 },
+    /// Pop the slot of a stored box's payload and push the box's.
     finish_static_box: struct { ty: TypeId, sequence_step_offset: ?u32 = null },
     remember_static_value: lower.Program.StoredValueKey,
+    /// Record the slot on top of `Builder.static_parts` as the stored
+    /// value's, leaving it there.
+    remember_static_part: lower.Program.StoredValueKey,
     /// Push a value of `ty` for an expression whose evaluation diverged.
     unreachable_value: TypeId,
     /// Push the `{}` value of a construct whose value nothing reads.
@@ -599,6 +615,9 @@ pub const Builder = struct {
     loops: std.ArrayList(LoopExit) = .empty,
     next_join: u32 = 0,
     values: std.ArrayList(LocalId) = .empty,
+    /// The static data slots of the stored values being restored as parts
+    /// (`Task.restore_part`), which no statement of the body reads.
+    static_parts: std.ArrayList(LIR.StaticDataId) = .empty,
     tasks: std.ArrayList(Task) = .empty,
     region: base.Region = base.Region.zero(),
     result_local: ?LocalId = null,
@@ -687,6 +706,7 @@ pub const Builder = struct {
         self.type_descs.deinit(self.allocator);
         self.product_shapes.deinit(self.allocator);
         self.constant_slots.deinit(self.allocator);
+        self.static_parts.deinit(self.allocator);
         self.recipes.deinit();
         self.recipe_locals.deinit(self.allocator);
         self.static_word_locals.deinit(self.allocator);
@@ -2910,6 +2930,7 @@ pub const Builder = struct {
     pub fn run(self: *Builder) Allocator.Error!void {
         while (self.tasks.pop()) |task| try self.step(task);
         if (self.values.items.len != 0) invariant("body lowering left values on its value stack");
+        if (self.static_parts.items.len != 0) invariant("body lowering left static data slots on its parts stack");
     }
 
     pub fn push(self: *Builder, task: Task) Allocator.Error!void {
@@ -3169,20 +3190,17 @@ pub const Builder = struct {
                 const packed_closure = try self.staticClosure(closure.worker, values, closure.capture_types, inputs, !try self.allClosed(worker.capture_types), null);
                 try self.pushValue(try self.adaptValue(packed_closure, closure.worker_ty, closure.ty));
             },
-            .finish_restore_struct => |restore| {
-                const values = try self.popValues(restore.count);
-                defer self.allocator.free(values);
-                try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .product, values));
-            },
+            .restore_part => |restore| try self.restorePartStep(restore.source, restore.node, restore.ty),
+            .value_part => try self.static_parts.append(self.allocator, try self.constantSlot(self.popValue())),
+            .read_static_part => try self.pushValue(try self.staticRead(self.popStaticPart())),
+            .finish_restore_struct => |restore| try self.finishStaticParts(restore.ty, restore.count, .product),
             .finish_restore_tag => |restore| {
-                const values = try self.popValues(restore.count);
-                defer self.allocator.free(values);
                 const structural = try self.structuralType(restore.ty);
                 const tags = self.program.store.tagSpan(self.program.store.get(structural).tag_union.tags);
                 const variant = for (tags, 0..) |tag, index| {
                     if (tag.name == restore.name) break index;
                 } else invariant("a stored tag has no declared variant");
-                try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .{ .tag = @intCast(variant) }, values));
+                try self.finishStaticParts(restore.ty, restore.count, .{ .tag = @intCast(variant) });
             },
             .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .list),
             .finish_static_box => |value| try self.finishStaticParts(value.ty, 1, if (value.sequence_step_offset) |offset| .{ .boxed_sequence = offset } else .box),
@@ -3190,6 +3208,11 @@ pub const Builder = struct {
                 const value = self.popValue();
                 try self.program.stored_value_slots.put(self.allocator, key, try self.constantSlot(value));
                 try self.pushValue(value);
+            },
+            .remember_static_part => |key| {
+                const parts = self.static_parts.items;
+                if (parts.len == 0) invariant("a stored value's restore left no static data slot to remember");
+                try self.program.stored_value_slots.put(self.allocator, key, parts[parts.len - 1]);
             },
             .finish_field_access => |expr| try self.finishFieldAccess(expr),
             .finish_discriminant_eq => |eq| try self.finishDiscriminantEq(eq.value_ty, eq.tag, eq.negated),
@@ -3538,9 +3561,14 @@ pub const Builder = struct {
                 try self.push(.{ .expr = eq.rhs });
                 try self.push(.{ .expr = eq.lhs });
             },
-            .expect => |cond| {
-                try self.push(.{ .finish_expect = expr_id });
-                try self.push(.{ .expr = cond });
+            // An omitted inline expect evaluates nothing: its condition is
+            // never lowered, and the expression is `{}`.
+            .expect => |cond| switch (self.inlineExpectMode()) {
+                .run => {
+                    try self.push(.{ .finish_expect = expr_id });
+                    try self.push(.{ .expr = cond });
+                },
+                .omit => try self.pushValue(try self.unitValue()),
             },
             .crash => |literal| try self.crashValue(self.bodies().text(literal), try self.exprType(expr_id)),
             .runtime_error => |runtime_error| {
@@ -5701,7 +5729,13 @@ pub const Builder = struct {
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
         const data = const_store.get(node);
         if (data != .scalar) if (self.program.stored_value_slots.get(key)) |slot| return self.pushValue(try self.staticRead(slot));
-        if (data != .crash and data != .checked_error) try self.push(.{ .remember_static_value = key });
+        // A value built from parts is remembered where its parts are
+        // restored (`restorePartStep`), and a failed value has no slot.
+        const remembered_here = switch (data) {
+            .scalar, .zst, .str, .boxy_fn, .nominal, .fn_value => true,
+            .pending, .crash, .checked_error, .box, .tuple, .record, .tag, .list => false,
+        };
+        if (remembered_here) try self.push(.{ .remember_static_value = key });
         switch (data) {
             .pending => invariant("a stored constant was never filled"),
             .scalar => |scalar| {
@@ -5745,6 +5779,40 @@ pub const Builder = struct {
             },
             .boxy_fn => |function| try self.restoreStoredFn(source, const_store.strBytes(function.recipe), function.captures),
             .nominal => |nominal| try self.push(.{ .restore = .{ .source = source, .node = nominal.backing, .ty = ty } }),
+            // The body reads the whole value once: its parts are static
+            // data, never values of this body.
+            .box, .tuple, .record, .tag, .list => {
+                try self.push(.read_static_part);
+                try self.restorePartStep(source, node, raw_ty);
+            },
+            .fn_value => |fn_id| try self.restoreFn(source, fn_id, raw_ty),
+        }
+    }
+
+    /// Restore stored constant `node` of `source` at `raw_ty` as static data
+    /// alone (`Task.restore_part`): push its slot on `static_parts`, with
+    /// tasks for its parts first, and emit no statement for it.
+    fn restorePartStep(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, raw_ty: TypeId) Allocator.Error!void {
+        const const_store = self.program.constStore(source);
+        const store = &self.program.store;
+        if (!store.isClosed(raw_ty)) invariant("a stored value is restored at an open type");
+        const ty = try self.structuralType(raw_ty);
+        const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
+        if (self.program.stored_value_slots.get(key)) |slot| return try self.static_parts.append(self.allocator, slot);
+        switch (const_store.get(node)) {
+            .pending => invariant("a stored constant was never filled"),
+            .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
+            // A function value is built by its own restore, and a failed
+            // value fails where it is restored: each is restored as a value,
+            // whose slot is the part.
+            .crash, .checked_error, .boxy_fn, .fn_value => {
+                try self.push(.value_part);
+                try self.push(.{ .restore = .{ .source = source, .node = node, .ty = raw_ty } });
+            },
+            .nominal => |nominal| {
+                try self.push(.{ .remember_static_part = key });
+                try self.push(.{ .restore_part = .{ .source = source, .node = nominal.backing, .ty = ty } });
+            },
             .box => |child| {
                 const payload = switch (store.get(ty)) {
                     .box => |payload| payload,
@@ -5755,8 +5823,9 @@ pub const Builder = struct {
                     const layouts = &self.program.result.layouts;
                     break :blk layouts.getStructFieldOffsetByOriginalIndex(layouts.getLayout(payload_layout).getStruct().idx, 1);
                 } else null;
+                try self.push(.{ .remember_static_part = key });
                 try self.push(.{ .finish_static_box = .{ .ty = raw_ty, .sequence_step_offset = sequence_step_offset } });
-                try self.push(.{ .restore = .{ .source = source, .node = child, .ty = payload } });
+                try self.push(.{ .restore_part = .{ .source = source, .node = child, .ty = payload } });
             },
             .tuple, .record => |children| {
                 const component_types: []const TypeId = switch (store.get(ty)) {
@@ -5773,11 +5842,12 @@ pub const Builder = struct {
                     .primitive, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a stored product restored at a non-product type"),
                 };
                 if (component_types.len != children.len) invariant("a stored product's arity differs from its type");
+                try self.push(.{ .remember_static_part = key });
                 try self.push(.{ .finish_restore_struct = .{ .ty = raw_ty, .count = @intCast(children.len) } });
                 var index = children.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .restore = .{ .source = source, .node = children[index], .ty = component_types[index] } });
+                    try self.push(.{ .restore_part = .{ .source = source, .node = children[index], .ty = component_types[index] } });
                 }
             },
             .tag => |tag| {
@@ -5791,11 +5861,12 @@ pub const Builder = struct {
                     if (candidate.name == name and candidate.payloads.len == tag.payloads.len) break index;
                 } else invariant("a stored tag is absent from its type");
                 const payload_types = store.span(tags[variant].payloads);
+                try self.push(.{ .remember_static_part = key });
                 try self.push(.{ .finish_restore_tag = .{ .ty = raw_ty, .name = name, .count = @intCast(tag.payloads.len) } });
                 var index = tag.payloads.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .restore = .{ .source = source, .node = tag.payloads[index], .ty = payload_types[index] } });
+                    try self.push(.{ .restore_part = .{ .source = source, .node = tag.payloads[index], .ty = payload_types[index] } });
                 }
             },
             .list => |list| {
@@ -5805,18 +5876,27 @@ pub const Builder = struct {
                 };
                 switch (list) {
                     .nodes => |nodes| {
+                        try self.push(.{ .remember_static_part = key });
                         try self.push(.{ .finish_static_list = .{ .ty = raw_ty, .count = @intCast(nodes.len) } });
+                        try self.tasks.ensureUnusedCapacity(self.allocator, nodes.len);
                         var index = nodes.len;
                         while (index > 0) {
                             index -= 1;
-                            try self.push(.{ .restore = .{ .source = source, .node = nodes[index], .ty = elem } });
+                            self.tasks.appendAssumeCapacity(.{ .restore_part = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
-                    .empty, .packed_bytes => try self.pushValue(try self.storedDataLocal(source, node, raw_ty)),
+                    .empty, .packed_bytes => try self.pushStoredDataPart(source, node, raw_ty),
                 }
             },
-            .fn_value => |fn_id| try self.restoreFn(source, fn_id, raw_ty),
         }
+    }
+
+    /// Push the slot of stored constant `node`, which static data holds as
+    /// it is stored, and remember it as the value's.
+    fn pushStoredDataPart(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!void {
+        const slot = try self.storedDataSlot(source, node, ty);
+        try self.program.stored_value_slots.put(self.allocator, .{ .module = source.module, .node = node, .ty = ty }, slot);
+        try self.static_parts.append(self.allocator, slot);
     }
 
     /// Restore stored function value `fn_id` of `module`'s const store as
@@ -6377,30 +6457,40 @@ pub const Builder = struct {
         invariant("a completed compile-time value has no immutable data slot");
     }
 
-    pub fn staticPartsLocal(self: *Builder, value_layout: layout.Idx, kind: @FieldType(lir_core.Program.StaticDataParts, "kind"), values: []const LocalId) Allocator.Error!LocalId {
-        const children = try self.allocator.alloc(LIR.StaticDataId, values.len);
-        errdefer self.allocator.free(children);
-        for (values, children) |value, *child| child.* = try self.constantSlot(value);
+    /// The static data slot of a value of `value_layout` built from the
+    /// parts `children`. Nothing reads the slot until a statement does
+    /// (`staticRead`), so a part of a larger static value costs the body no
+    /// statement.
+    fn staticPartsSlot(self: *Builder, value_layout: layout.Idx, kind: @FieldType(lir_core.Program.StaticDataParts, "kind"), children: []const LIR.StaticDataId) Allocator.Error!LIR.StaticDataId {
+        const owned = try self.allocator.dupe(LIR.StaticDataId, children);
+        errdefer self.allocator.free(owned);
         const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.program.result.static_data_values.items.len));
         try self.program.result.static_data_values.append(self.allocator, .{
             .initializer = .none,
             .layout_idx = value_layout,
-            .parts = .{ .kind = kind, .children = children },
+            .parts = .{ .kind = kind, .children = owned },
         });
-        return self.staticRead(slot);
+        return slot;
     }
 
+    fn popStaticPart(self: *Builder) LIR.StaticDataId {
+        return self.static_parts.pop() orelse invariant("body lowering popped an empty static parts stack");
+    }
+
+    /// Pop the slots of the `count` restored parts of a stored value of
+    /// `ty` and push the value's own slot.
     fn finishStaticParts(self: *Builder, ty: TypeId, count: u32, kind: @FieldType(lir_core.Program.StaticDataParts, "kind")) Allocator.Error!void {
-        const values = try self.popValues(count);
-        defer self.allocator.free(values);
+        const parts = self.static_parts.items;
+        if (parts.len < count) invariant("a stored value's restore left fewer static data slots than the value has parts");
+        const first = parts.len - count;
         const value_layout = try self.program.layouts.layoutOf(ty);
         // Box(function) has the callable's own representation, with no
-        // second allocation or pointer around it.
-        if (kind == .box and self.program.result.layouts.getLayout(value_layout).tag == .erased_callable) {
-            try self.pushValue(values[0]);
-            return;
-        }
-        try self.pushValue(try self.staticPartsLocal(value_layout, kind, values));
+        // second allocation or pointer around it: the box's slot is its
+        // payload's.
+        if (kind == .box and self.program.result.layouts.getLayout(value_layout).tag == .erased_callable) return;
+        const slot = try self.staticPartsSlot(value_layout, kind, parts[first..]);
+        self.static_parts.shrinkRetainingCapacity(first);
+        try self.static_parts.append(self.allocator, slot);
     }
 
     /// What a procedure use calls: a template's worker, the worker an exact
@@ -6887,7 +6977,24 @@ pub const Builder = struct {
     pub fn dictionaryOfAt(self: *Builder, evidence: static_dispatch.CheckedEvidence, interface: ?TypeId) Allocator.Error!Word {
         const table = self.view.view.static_dispatch_plans;
         switch (evidence.resolution) {
-            .constraint => |constraint| return try self.scopeDictionary(constraint.index),
+            // A dictionary of this worker's scopes has the storage of the
+            // interface its own requirement names (`scopeInterface`), at
+            // the types this edge fixes its row tails to
+            // (`Program.dictionaryTypeAtEdge`). A consumer whose requirement
+            // names another storage of that signature (a result row the
+            // consumer's instantiation widens, a record whose fields it
+            // stores in presence slots) takes it adapted, as it takes any
+            // other method (design.md "Sealed Result Rows"); a consumer
+            // whose requirement names the same storage takes the dictionary
+            // itself, so forwarding one, to another worker or around a
+            // recursive call, builds nothing.
+            .constraint => |constraint| {
+                const dictionary = try self.scopeDictionary(constraint.index);
+                const expected = interface orelse return dictionary;
+                const declared = (try self.scopeInterface(constraint.index)) orelse return dictionary;
+                const own = try self.program.dictionaryTypeAtEdge(self.allocator, declared, expected);
+                return try self.adaptDictionary(dictionary, own, expected);
+            },
             .direct => |node_id| {
                 const node = table.evidenceNode(node_id);
                 if (node.target.kind == .local_proc) {
@@ -8814,11 +8921,14 @@ pub const Builder = struct {
                     break :value try self.foldWord(id);
                 },
             };
-            break :table try self.staticRead(try self.program.static_descs.wordSlot(static));
+            break :table try self.program.static_descs.wordSlot(static);
         };
         const table_count: usize = @intFromBool(table != null);
-        var fields: std.ArrayList(LocalId) = .empty;
+        // The callable's parts are static data slots: the body reads the
+        // callable alone.
+        var fields: std.ArrayList(LIR.StaticDataId) = .empty;
         defer fields.deinit(self.allocator);
+        try fields.ensureTotalCapacity(self.allocator, capture_record_leading_words + table_count + captured.len);
         var record_layout: layout.Idx = .zst;
         if (dynamic) {
             const count = capture_record_leading_words + table_count + captured.len;
@@ -8829,25 +8939,25 @@ pub const Builder = struct {
                 field.* = .{ .index = @intCast(i), .layout = if (i < words) .opaque_ptr else try self.program.layouts.layoutOf(capture_types[i - words]) };
             }
             record_layout = try self.program.result.layouts.putNominalStructFields(layouts);
-            const record_desc = try self.captureRecordDesc(@intCast(words), capture_descs orelse try self.descWords(capture_types));
-            const capacity = try self.staticPartsLocal(.opaque_ptr, .{ .word = self.program.result.layouts.layoutSize(self.program.result.layouts.getLayout(record_layout)) }, &.{});
-            try fields.appendSlice(self.allocator, &.{ record_desc, capacity });
-            if (table) |local| try fields.append(self.allocator, local);
-            try fields.appendSlice(self.allocator, captured);
+            const record_desc = try self.constantSlot(try self.captureRecordDesc(@intCast(words), capture_descs orelse try self.descWords(capture_types)));
+            const capacity = try self.staticPartsSlot(.opaque_ptr, .{ .word = self.program.result.layouts.layoutSize(self.program.result.layouts.getLayout(record_layout)) }, &.{});
+            fields.appendSliceAssumeCapacity(&.{ record_desc, capacity });
+            if (table) |slot| fields.appendAssumeCapacity(slot);
+            for (captured) |value| fields.appendAssumeCapacity(try self.constantSlot(value));
         } else {
             record_layout = try self.captureLayout(capture_types, table_count);
-            try fields.appendSlice(self.allocator, captured);
-            if (table) |local| try fields.append(self.allocator, local);
+            for (captured) |value| fields.appendAssumeCapacity(try self.constantSlot(value));
+            if (table) |slot| fields.appendAssumeCapacity(slot);
         }
         const proc = self.program.worker(worker).proc;
-        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc } }, &.{});
-        const record = try self.staticPartsLocal(record_layout, .product, fields.items);
+        if (fields.items.len == 0) return self.staticRead(try self.staticPartsSlot(try self.erasedLayout(), .{ .callable = .{ .proc = proc } }, &.{}));
+        const record = try self.staticPartsSlot(record_layout, .product, fields.items);
         const layouts = &self.program.result.layouts;
         const on_drop: LIR.ErasedCallableOnDrop = if (layouts.layoutContainsRefcounted(layouts.getLayout(record_layout)))
             .{ .rc_helper = .{ .op = .host_drop, .layout_idx = try layouts.putPrefixedCaptureLayout(record_layout, self.program.result.erased_capture_prefix) } }
         else
             .none;
-        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{record});
+        return self.staticRead(try self.staticPartsSlot(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{record}));
     }
 
     /// Pop a function value's arguments and the function value, and call it
@@ -9972,10 +10082,14 @@ pub const Builder = struct {
                 try self.push(.discard);
                 try self.push(.{ .expr = expr });
             },
-            .expect => |cond| {
-                try self.push(.discard);
-                try self.push(.{ .finish_expect = cond });
-                try self.push(.{ .expr = cond });
+            // An omitted inline expect evaluates nothing.
+            .expect => |cond| switch (self.inlineExpectMode()) {
+                .run => {
+                    try self.push(.discard);
+                    try self.push(.{ .finish_expect = cond });
+                    try self.push(.{ .expr = cond });
+                },
+                .omit => {},
             },
             .crash => |literal| {
                 const message = try self.store.insertString(self.bodies().text(literal));

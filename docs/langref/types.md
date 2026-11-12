@@ -391,6 +391,8 @@ directly on its own type's memory layout. This is called
 templates do too. The tradeoff is that using one function with many different types makes the
 compiled program larger, but it means you never pay for generic code being generic at runtime.
 
-> Note that `roc build --specialize=no` uses an experimental alternative to monomorphization,
-> which compiles each generalized function only once, and passes it values in heap-allocated
-> boxes. Programs compiled this way do extra work at runtime that monomorphized programs don't.
+> Note that monomorphization is the default only when you build with `--opt=speed`. At the other
+> optimization levels, the compiler compiles each generalized function only once, and passes it
+> values in heap-allocated boxes. That makes builds faster, but programs compiled this way do
+> extra work at runtime that monomorphized programs don't. You can choose either one explicitly
+> with `--specialize=yes` or `--specialize=no`.

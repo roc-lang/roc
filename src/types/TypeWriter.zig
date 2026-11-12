@@ -86,6 +86,10 @@ static_dispatch_constraints_tmp: std.array_list.Managed(StaticDispatchTmp),
 /// A receiver contributes its complete requirement list once per rendering,
 /// even when every method signature refers back to that receiver.
 collected_dispatchers: collections_mod.DenseMap(Var, void),
+/// The variables in this rendering that are the type of a number literal whose
+/// conversion requirement no constraint records yet (`Flex.literal`). Each
+/// prints the requirement its constraint will state.
+literal_dispatchers: std.array_list.Managed(Var),
 constraint_keys: std.HashMapUnmanaged(u64, void, ConstraintKeyContext, 80) = .empty,
 constraint_texts: std.StringHashMapUnmanaged(void) = .empty,
 buf_tmp: std.array_list.Managed(u8),
@@ -325,6 +329,7 @@ pub fn initFromParts(
         .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
         .static_dispatch_constraints_tmp = try std.array_list.Managed(StaticDispatchTmp).initCapacity(gpa, 32),
         .collected_dispatchers = .init(gpa),
+        .literal_dispatchers = std.array_list.Managed(Var).init(gpa),
         .buf_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .name_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
@@ -354,6 +359,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.static_dispatch_constraints.deinit();
     self.static_dispatch_constraints_tmp.deinit();
     self.collected_dispatchers.deinit();
+    self.literal_dispatchers.deinit();
     self.constraint_keys.deinit(self.gpa);
     self.constraint_texts.deinit(self.gpa);
     self.buf_tmp.deinit();
@@ -388,6 +394,7 @@ pub fn reset(self: *TypeWriter) void {
     self.static_dispatch_constraints.clearRetainingCapacity();
     self.static_dispatch_constraints_tmp.clearRetainingCapacity();
     self.collected_dispatchers.clearRetainingCapacity();
+    self.literal_dispatchers.clearRetainingCapacity();
     self.constraint_keys.clearRetainingCapacity();
     self.constraint_texts.clearRetainingCapacity();
     self.buf_tmp.clearRetainingCapacity();
@@ -447,7 +454,7 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) error{ OutOfMemory, W
     var aw = collections_mod.managedWriter(&self.buf);
     try self.writeVar(&aw.writer, var_, var_);
 
-    if (self.static_dispatch_constraints.items.len > 0) {
+    if (self.hasWhereClause()) {
         collections_mod.managedWriterFinish(&aw, &self.buf);
         aw = collections_mod.managedWriter(&self.buf);
         try self.writeWhereClause(&aw.writer, var_, self.buf.items.len, format);
@@ -469,7 +476,7 @@ pub fn writeIntoAtPolarity(self: *TypeWriter, into: *std.array_list.Managed(u8),
     collections_mod.managedWriterFinish(&aw, into);
     const into_end = into.items.len;
 
-    if (self.static_dispatch_constraints.items.len > 0) {
+    if (self.hasWhereClause()) {
         aw = collections_mod.managedWriter(into);
         try self.writeWhereClause(&aw.writer, var_, into_end - into_start, format);
         collections_mod.managedWriterFinish(&aw, into);
@@ -504,14 +511,14 @@ pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) error{ OutOfMemory,
 fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_len: usize, format: Format) error{ OutOfMemory, WriteFailed }!void {
     // Ensure we have enough temp storage to collect dispatch constraints
     try self.static_dispatch_constraints_tmp.ensureUnusedCapacity(
-        self.static_dispatch_constraints.items.len + 2,
+        self.static_dispatch_constraints.items.len + self.literal_dispatchers.items.len + 2,
     );
 
     // Pre-allocate buffer space for constraint strings BEFORE creating the
     // managedWriter, because ensureUnusedCapacity on buf_tmp can reallocate,
     // invalidating the writer's buffer pointer.
     try self.buf_tmp.ensureUnusedCapacity(
-        60 + (self.static_dispatch_constraints.items.len - 1) * 30,
+        60 + (self.static_dispatch_constraints.items.len + self.literal_dispatchers.items.len) * 30,
     );
 
     // Iterate over static dispatch constraints, generating their string representations
@@ -564,7 +571,34 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
                 .len = constraint_len,
             });
         }
+
+        // A number literal's type whose conversion is not a constraint yet
+        // prints the requirement that constraint states. One that also has
+        // the constraint prints the same text, which shows once.
+        if (self.idents.findByString("from_numeral")) |from_numeral| {
+            for (self.literal_dispatchers.items) |dispatcher_var| {
+                const start = tmp_aw.writer.end;
+                try self.writeVar(tmp_writer, dispatcher_var, root_var);
+                const type_name_end = tmp_aw.writer.end;
+
+                try tmp_writer.writeAll(".from_numeral : Numeral -> Try(");
+                try self.writeVar(tmp_writer, dispatcher_var, root_var);
+                try tmp_writer.writeAll(", [InvalidNumeral(Str)])");
+
+                const constraint_len = tmp_aw.writer.end - start;
+                total_constraint_len += constraint_len;
+
+                try self.static_dispatch_constraints_tmp.append(.{
+                    .fn_name = from_numeral,
+                    .type_name_start = start,
+                    .type_name_end = type_name_end,
+                    .start = start,
+                    .len = constraint_len,
+                });
+            }
+        }
     }
+    if (self.static_dispatch_constraints_tmp.items.len == 0) return;
 
     // Sort constraints alphabetically by type name first, then by function name
     std.mem.sort(
@@ -743,6 +777,7 @@ fn writeContentHead(
             }
 
             try self.collectDispatchConstraints(var_, resolved_var, constraints);
+            if (flex.literal == .numeral) try self.collectLiteralDispatcher(resolved_var);
             return false;
         },
         .rigid => |rigid| {
@@ -1388,6 +1423,21 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{ OutOfMemor
     return self.get();
 }
 
+/// Record a number literal's type whose conversion requirement is not a
+/// constraint yet, once per rendering.
+fn collectLiteralDispatcher(self: *TypeWriter, root: Var) error{OutOfMemory}!void {
+    if (self.omit_literal_conversion_constraints or self.omitted_dispatcher == root) return;
+    for (self.literal_dispatchers.items) |existing| {
+        if (existing == root) return;
+    }
+    try self.literal_dispatchers.append(root);
+}
+
+/// Whether this rendering has requirements to print after the type.
+fn hasWhereClause(self: *const TypeWriter) bool {
+    return self.static_dispatch_constraints.items.len > 0 or self.literal_dispatchers.items.len > 0;
+}
+
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
 fn collectDispatchConstraints(self: *TypeWriter, dispatcher_var: Var, root: Var, constraints: []const types_mod.StaticDispatchConstraint) error{ OutOfMemory, WriteFailed }!void {
     if (constraints.len == 0 or self.omitted_dispatcher == root) return;
@@ -1536,6 +1586,14 @@ fn countRequest(self: *TypeWriter, current_var: Var) std.mem.Allocator.Error!boo
 
     const occurrences = try self.occurrence_counts.getOrPut(resolved.var_);
     occurrences.value_ptr.* = if (occurrences.found_existing) occurrences.value_ptr.* + 1 else 1;
+    // A number literal's type also occurs in the conversion requirement it
+    // prints with, so it is named like any variable that occurs twice.
+    switch (resolved.desc.content) {
+        .flex => |flex| if (flex.literal == .numeral and !occurrences.found_existing) {
+            occurrences.value_ptr.* += 1;
+        },
+        .rigid, .alias, .structure, .field_presence, .err => {},
+    }
 
     // Check if we've already seen this var on the path we are on
     // This avoids infinite recursion

@@ -4051,61 +4051,7 @@ fn finalize(
             return;
         }
 
-        var state = try RootCompletionState.init(allocator, module, requests);
-        defer state.deinit();
-
-        var batch_requests = std.ArrayList(checked.RootRequest).empty;
-        defer batch_requests.deinit(allocator);
-
-        var batch_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
-        defer batch_root_ids.deinit(allocator);
-
-        for (requests, 0..) |request, request_index| {
-            const root_id = state.rootIdForRequestIndex(request_index);
-            const payload = module.compile_time_roots.root(root_id).payloadFor(.lss);
-            if (payload != .pending and payload != .unevaluated) {
-                state.markDone(root_id);
-                continue;
-            }
-            if (!try state.dependenciesComplete(request)) {
-                if (batch_requests.items.len == 0) {
-                    finalizationInvariantFmt("compile-time root request order placed root #{d} ({s}) before root #{?d} it depends on", .{ @backingInt(root_id), @tagName(module.compile_time_roots.root(root_id).kind), if (state.blocked_on) |blocked| @backingInt(blocked) else null });
-                }
-                _ = try lowerEvalAndFinishRoots(
-                    allocator,
-                    module,
-                    lowering_imports,
-                    relation_modules,
-                    batch_requests.items,
-                    batch_root_ids.items,
-                    &state,
-                    problem_store,
-                    options,
-                );
-                batch_requests.clearRetainingCapacity();
-                batch_root_ids.clearRetainingCapacity();
-
-                if (!try state.dependenciesComplete(request)) {
-                    finalizationInvariant("compile-time root request order referenced a later or cyclic dependency");
-                }
-            }
-            try batch_requests.append(allocator, request);
-            try batch_root_ids.append(allocator, root_id);
-        }
-
-        if (batch_requests.items.len != 0) {
-            _ = try lowerEvalAndFinishRoots(
-                allocator,
-                module,
-                lowering_imports,
-                relation_modules,
-                batch_requests.items,
-                batch_root_ids.items,
-                &state,
-                problem_store,
-                options,
-            );
-        }
+        try finalizeSolvedModule(allocator, module, lowering_imports, relation_modules, problem_store, options);
         // The baked Builtin is never reopened by a consumer. Its producer
         // must finish the Boxy capture graphs as well as the LSS payloads.
         if (options.complete_baked_module and module.hasUnevaluatedRequests(.boxy)) {
@@ -4124,6 +4070,26 @@ fn finalize(
     if (requests.len != 0) {
         if (options.timing) |timing| timing.finish(total_started_ns, .total);
     }
+}
+
+/// Complete one module's roots under `.lss` as a program of that module
+/// alone: the `.boxy` evaluator completes every root that neither holds a
+/// function value nor reads one, and the Solved program the rest (design.md
+/// "Compile-Time Evaluation Under `.lss`"). The module's imports are already
+/// complete.
+fn finalizeSolvedModule(
+    allocator: Allocator,
+    module: *checked.CheckedModuleArtifact,
+    imports: []const checked.ImportedModuleView,
+    relations: []const checked.ImportedModuleView,
+    problem_store: ?*check.problem.Store,
+    options: Options,
+) FinalizeError!void {
+    var session = try finalizeProgram(allocator, &.{.{ .module = module, .problem_store = problem_store }}, .{
+        .root = checked.loweringViewWithRelations(module, relations),
+        .imports = imports,
+    }, .{ .requests = &.{} }, .{ .requests = &.{} }, null, options);
+    defer session.deinit();
 }
 
 fn finalizeBoxyModule(

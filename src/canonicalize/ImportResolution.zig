@@ -166,12 +166,6 @@ pub fn resolveDeferredImports(
     try env.publishScratchDiagnosticsFrom(unpublished_before);
 }
 
-fn sha256Bytes(bytes: []const u8) [32]u8 {
-    var digest: [32]u8 = undefined;
-    base.Sha256.hash(bytes, &digest, .{});
-    return digest;
-}
-
 /// The name an import's exposed declarations carry as their prefix.
 const Prefix = struct {
     /// The prefix itself, or null when the import reaches the module's own
@@ -1018,7 +1012,9 @@ const Resolver = struct {
             },
         };
         defer self.env.gpa.free(file_contents);
-        self.env.setFileDependencyContentHash(dependency_idx, sha256Bytes(file_contents));
+        // The file's one digest: the checked-module key and watch mode both
+        // read it from the dependency record.
+        self.env.setFileDependencyContentHash(dependency_idx, base.SourceDigest.of(file_contents).bytes);
 
         if (entry.has(DeferredImportRef.Flags.file_import_is_bytes)) {
             const literal = try self.env.insertString(file_contents);

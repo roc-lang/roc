@@ -1168,6 +1168,14 @@ const Unifier = struct {
         return error.TypeMismatch;
     }
 
+    /// The deferred-literal marker of `content`, which only a flex carries.
+    fn flexLiteral(content: Content) Flex.Literal {
+        return switch (content) {
+            .flex => |flex| flex.literal,
+            .rigid, .alias, .structure, .field_presence, .err => .none,
+        };
+    }
+
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -1183,6 +1191,12 @@ const Unifier = struct {
 
         try self.refuseTagsIntoBoundedExt(vars.a, vars.b.var_);
         try self.refuseTagsIntoBoundedExt(vars.b, vars.a.var_);
+
+        if (flexLiteral(vars.a.desc.content) != flexLiteral(vars.b.desc.content) and
+            (vars.a.desc.content != .flex or vars.b.desc.content != .flex))
+        {
+            self.scratch.determined_literal = true;
+        }
 
         switch (vars.a.desc.content) {
             .flex => |flex| {
@@ -1288,6 +1302,7 @@ const Unifier = struct {
                 try self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
+                    .literal = a_flex.literal.merged(b_flex.literal),
                 } });
             },
             .rigid => |b_rigid| {
@@ -4430,6 +4445,9 @@ pub const Scratch = struct {
 
     // constraints
     deferred_constraints: DeferredConstraintCheck.SafeList,
+    /// Whether this unification determined a type that was a deferred
+    /// literal's (`Flex.literal`): the literal can now be decided.
+    determined_literal: bool = false,
     only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
@@ -4685,6 +4703,7 @@ pub const Scratch = struct {
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();
         self.deferred_constraints.items.clearRetainingCapacity();
+        self.determined_literal = false;
         self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
@@ -4826,7 +4845,10 @@ fn sameAliasIdentity(a: Alias, b: Alias) bool {
     return a.ident.ident_idx.eql(b.ident.ident_idx);
 }
 
-fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
+/// Whether two nominal types name one declaration: the same origin module
+/// and the same declaring statement, or the same name when neither records a
+/// statement.
+pub fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
     if (a.origin_module != b.origin_module) return false;
     const a_source_decl = a.sourceDecl();
     const b_source_decl = b.sourceDecl();

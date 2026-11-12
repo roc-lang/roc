@@ -899,6 +899,8 @@ pub const SyntaxChecker = struct {
         env.compiler_version = build_options.compiler_compatibility_id;
         env.source_pin_version = @import("compiler_version").compiler_version;
         env.setFinalizeExecutableArtifacts(false);
+        // A check has no runtime consumer.
+        env.setSpecializationStrategy(.boxy);
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);

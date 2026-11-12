@@ -1569,7 +1569,6 @@ pub const BuildEnv = struct {
     fn headerInfo(self: *BuildEnv, parsed: DiscoveredParse) BuildError!HeaderInfo {
         errdefer parsed.deinit();
         const file_abs = parsed.path;
-        const src = parsed.module_env.common.source;
         const ast = parsed.ast;
 
         if (ast.hasErrors() and !try parse.fileHeaderIsUsable(self.gpa, ast)) {
@@ -1600,7 +1599,7 @@ pub const BuildEnv = struct {
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
 
-        const resolver_root = try package_resolution.scanParsedHeader(self.gpa, file_abs, src, ast, header);
+        const resolver_root = try package_resolution.scanParsedHeader(self.gpa, file_abs, ast, header);
         var info = HeaderInfo{
             .kind = .package,
             .source_file_state = parsed.source_file_state,
@@ -1686,7 +1685,7 @@ pub const BuildEnv = struct {
         errdefer allocator.free(path);
         const env = try allocator.create(ModuleEnv);
         errdefer allocator.destroy(env);
-        env.* = try ModuleEnv.init(allocator, source_read.source);
+        env.* = try ModuleEnv.initWithSourceDigest(allocator, source_read.source, source_read.digest);
         errdefer env.deinit();
         try env.initCIRFields(base.module_path.getModuleName(path));
         try env.common.calcLineStarts(allocator);
@@ -1705,12 +1704,18 @@ pub const BuildEnv = struct {
     }
 
     const SourceRead = struct {
+        /// The file's bytes with line endings normalized.
         source: []u8,
+        /// The digest of `source`. The env parsed from this read carries it,
+        /// so the coordinator's parse task and package resolution never hash
+        /// the text again.
+        digest: base.SourceDigest,
         file_state: ?watch_inputs.State,
     };
 
     /// Read a source file with the allocator the coordinator's workers use for
-    /// module sources, so its parse can be handed to the coordinator.
+    /// module sources, so its parse can be handed to the coordinator. The
+    /// source is digested here, once.
     fn readSourceFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
         const allocator = Coordinator.workerAllocatorFor(self.gpa, self.mode);
         const data = self.filesystem.readFile(path, allocator) catch |err| switch (err) {
@@ -1720,17 +1725,16 @@ pub const BuildEnv = struct {
             error.IoError => return error.IoError,
             error.OutOfMemory => return error.OutOfMemory,
         };
-        const file_state: ?watch_inputs.State = if (self.track_watch_inputs) .{ .hash = watch_inputs.hashBytes(data) } else null;
-
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
-        const source = base.source_utils.normalizeLineEndingsRealloc(allocator, data) catch |err| {
+        const digested = base.source_utils.normalizeAndDigest(allocator, data, self.track_watch_inputs) catch |err| {
             allocator.free(data);
             return err;
         };
 
         return .{
-            .source = source,
-            .file_state = file_state,
+            .source = digested.source,
+            .digest = digested.digest,
+            .file_state = if (digested.file_digest) |file_digest| watch_inputs.fileState(file_digest) else null,
         };
     }
 
@@ -1742,7 +1746,7 @@ pub const BuildEnv = struct {
         };
         defer self.gpa.free(data);
 
-        return .{ .hash = watch_inputs.hashBytes(data) };
+        return watch_inputs.fileState(base.SourceDigest.of(data));
     }
 
     /// Cross-platform environment variable lookup.
@@ -1950,7 +1954,8 @@ pub const BuildEnv = struct {
                 if (url_view == null)
                     try self.currentFileWatchState(package.root_file)
                 else
-                    .{ .hash = package.root_source_hash }
+                    // Resolution records the root digest of every URL package.
+                    .{ .hash = package.root_source_hash.? }
             else
                 null;
             try self.ensurePackage(package_keys.identity(i), kind, package.root_file, root_file_state, url_view);
@@ -4036,7 +4041,7 @@ test "BuildEnv header watch state hashes raw CRLF source bytes" {
     var header_info = try env.parseHeaderDeps(main_path);
     defer header_info.deinit(allocator);
 
-    const expected_hash = watch_inputs.hashBytes(source);
+    const expected_hash = base.SourceDigest.of(source).bytes;
     switch (header_info.source_file_state orelse return error.ExpectedWatchInputState) {
         .hash => |hash| try testing.expectEqualSlices(u8, &expected_hash, &hash),
         .missing, .unreadable => try testing.expect(false),
