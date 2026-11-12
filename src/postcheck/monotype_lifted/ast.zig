@@ -114,7 +114,7 @@ pub const Fn = struct {
     /// Exact producer-authored Monotype signature graph. This is present only
     /// while the lifted function still has that signature; transformations
     /// that synthesize a different ABI clear it explicitly.
-    signature: ?Type.TypeId = null,
+    signature: collections.OptionalId(Type.TypeId) = .none,
     /// The iterator-fusion pass normalized this function from explicit
     /// checker-stamped iterator producers. Later structural LIR passes consume
     /// this provenance directly instead of rediscovering iterator intent from
@@ -136,6 +136,10 @@ pub const Fn = struct {
     /// What the body contains, for SpecConstr phase admission.
     shapes: FnShapes = .{},
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Fn) == 572);
+}
 
 /// What a lifted function body contains, recorded by whoever emitted its
 /// expressions: the lifter as it rewrites each expression of a body, and the
@@ -205,11 +209,24 @@ pub const LayoutRequest = struct {
 pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
 /// Request to make a lifted value available as static data.
 pub const StaticDataValue = Mono.StaticDataValue;
-/// A virtual source frame introduced by post-check inlining.
+/// A virtual source frame introduced by post-check inlining, or `none`. A
+/// frame's id is its row in `inline_scopes` plus one, so a zeroed column
+/// holds `none`.
 pub const InlineScopeId = enum(u32) {
+    none = 0,
     _,
 
-    pub const none: InlineScopeId = @fromBackingInt(@intCast(std.math.maxInt(u32)));
+    /// The id of the frame at `inline_scopes` row `row_index`.
+    pub fn fromRow(row_index: u32) InlineScopeId {
+        std.debug.assert(row_index < std.math.maxInt(u32));
+        return @fromBackingInt(row_index + 1);
+    }
+
+    /// The `inline_scopes` row of a frame.
+    pub fn row(self: InlineScopeId) u32 {
+        std.debug.assert(self != .none);
+        return @backingInt(self) - 1;
+    }
 };
 
 /// One source-level procedure frame retained across post-check inlining.
@@ -1147,11 +1164,11 @@ pub const Program = struct {
     }
 
     pub fn inlineScope(self: *const Program, id: InlineScopeId) InlineScope {
-        return self.row("inline_scopes", @backingInt(id));
+        return self.row("inline_scopes", id.row());
     }
 
     pub fn addInlineScope(self: *Program, scope: InlineScope) std.mem.Allocator.Error!InlineScopeId {
-        const id: InlineScopeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.rowCount("inline_scopes")))));
+        const id: InlineScopeId = .fromRow(@intCast(self.rowCount("inline_scopes")));
         try self.inline_scopes.append(self.allocator, scope);
         return id;
     }
@@ -1973,7 +1990,7 @@ fn layoutResolvedMatchIn(
     const branches = program.branchSpan(branches_span);
     for (0..GuardedList.borrowLen(branches)) |index| {
         const branch = GuardedList.at(branches, index);
-        if (branch.guard != null or branch.bindings.len != 0) return null;
+        if (branch.guard != .none or branch.bindings.len != 0) return null;
         const tag = std.meta.activeTag(program.getPat(branch.pat).data);
         if (tag != .wildcard and tag != .int_lit) return null;
     }
@@ -2041,7 +2058,7 @@ pub fn forEachBoundLocal(allocator: std.mem.Allocator, program: *const Program, 
                 .str_pattern => |str| {
                     const steps = program.strPatternStepSpan(str.steps);
                     for (0..steps.len) |index| {
-                        if (GuardedList.at(steps, index).capture) |capture| {
+                        if (GuardedList.at(steps, index).capture.get()) |capture| {
                             try work.append(allocator, .{ .pat = capture });
                         }
                     }
@@ -2063,7 +2080,7 @@ pub fn forEachBoundLocal(allocator: std.mem.Allocator, program: *const Program, 
                 .list => |list| {
                     const children = program.patSpan(list.patterns);
                     for (0..children.len) |index| try work.append(allocator, .{ .pat = GuardedList.at(children, index) });
-                    if (list.rest) |rest| if (rest.pattern) |rest_pattern| {
+                    if (list.rest.get()) |rest| if (rest.pattern.get()) |rest_pattern| {
                         try work.append(allocator, .{ .pat = rest_pattern });
                     };
                 },
@@ -2188,7 +2205,7 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
                 try sink.stmts(branch.bindings);
-                if (branch.guard) |guard| try sink.one(guard);
+                if (branch.guard.get()) |guard| try sink.one(guard);
                 try sink.one(branch.body);
             }
         },
@@ -2376,7 +2393,7 @@ fn testSourceDigestTemplate(name_store: *names.NameStore, template_id: u32) std.
         .artifact = .{},
         .proc_base = try name_store.internProcBase(.{
             .module_name = try name_store.internModuleName("SourceDigest"),
-            .export_name = null,
+            .export_name = .none,
             .kind = .checked_source,
             .ordinal = 0,
         }),

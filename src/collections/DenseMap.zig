@@ -24,7 +24,9 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         const chunk_len = 1 << chunk_shift;
         const chunk_mask = chunk_len - 1;
 
-        const empty_position = std.math.maxInt(u32);
+        /// A sparse slot stores its key's dense position plus one, so zero
+        /// means absent and a fresh chunk is all zeros.
+        const empty_position: u32 = 0;
         const SparseChunk = [chunk_len]u32;
 
         /// Entry returned by map iterators.
@@ -126,7 +128,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             const position: u32 = @intCast(self.active_keys.items.len);
             self.active_keys.appendAssumeCapacity(key);
             self.values.appendAssumeCapacity(undefined);
-            slot.* = position;
+            slot.* = position + 1;
             return .{
                 .value_ptr = &self.values.items[position],
                 .found_existing = false,
@@ -151,7 +153,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             const position: u32 = @intCast(self.active_keys.items.len);
             self.active_keys.appendAssumeCapacity(key);
             self.values.appendAssumeCapacity(undefined);
-            slot.* = position;
+            slot.* = position + 1;
             return .{
                 .value_ptr = &self.values.items[position],
                 .found_existing = false,
@@ -350,7 +352,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             const slot_index = chunk_index - self.chunk_base;
             if (self.sparse_chunks.items[slot_index] == null) {
                 const chunk = try self.allocator.create(SparseChunk);
-                @memset(chunk, empty_position);
+                chunk.* = @splat(empty_position);
                 self.sparse_chunks.items[slot_index] = chunk;
             }
 
@@ -369,7 +371,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         fn densePosition(self: *const Self, index: usize) ?usize {
             const raw_position = (self.sparseSlotPtr(index) orelse return null).*;
             if (raw_position == empty_position) return null;
-            const dense_position: usize = raw_position;
+            const dense_position: usize = raw_position - 1;
             std.debug.assert(dense_position < self.active_keys.items.len);
             std.debug.assert(keyIndex(self.active_keys.items[dense_position]) == index);
             return dense_position;
@@ -381,7 +383,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
                 const last_key = self.active_keys.items[last_position];
                 self.active_keys.items[position] = last_key;
                 self.values.items[position] = self.values.items[last_position];
-                self.sparseSlotPtr(keyIndex(last_key)).?.* = @intCast(position);
+                self.sparseSlotPtr(keyIndex(last_key)).?.* = @intCast(position + 1);
             }
             _ = self.active_keys.pop().?;
             _ = self.values.pop().?;
@@ -662,6 +664,29 @@ test "DenseMap directly indexes integer and enum IDs" {
     // one slot, not a slot per chunk below it.
     try std.testing.expectEqual(@as(usize, 1), sparse_map.sparse_chunks.items.len);
     try std.testing.expectEqual(@as(usize, 1), sparse_map.values.items.len);
+}
+
+test "DenseMap sparse slots are zero when absent and position plus one when present" {
+    var map = DenseMap(u32, u32).init(std.testing.allocator);
+    defer map.deinit();
+    try map.put(0, 10);
+    try map.put(5, 15);
+    const chunk = map.sparse_chunks.items[0].?;
+    for (chunk, 0..) |slot, index| {
+        const expected: u32 = switch (index) {
+            0 => 1,
+            5 => 2,
+            else => 0,
+        };
+        try std.testing.expectEqual(expected, slot);
+    }
+    try std.testing.expectEqual(@as(?u32, 10), map.get(0));
+    try std.testing.expect(map.remove(0));
+    try std.testing.expectEqual(@as(u32, 0), chunk[0]);
+    try std.testing.expectEqual(@as(u32, 1), chunk[5]);
+    try std.testing.expectEqual(@as(?u32, 15), map.get(5));
+    map.clearRetainingCapacity();
+    for (chunk) |slot| try std.testing.expectEqual(@as(u32, 0), slot);
 }
 
 test "DenseMap chunk window grows toward low and high IDs" {

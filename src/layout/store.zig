@@ -17,6 +17,9 @@ const field_order = layout_shape.field_order;
 const digest_mod = @import("./digest.zig");
 
 const target = base.target;
+/// A strongly connected component of one layout graph commit.
+const LayoutComponentId = enum(u32) { _ };
+const LayoutComponentColumn = collections.OptionalIndexColumn(LayoutComponentId);
 const Layout = layout_mod.Layout;
 const LayoutTag = layout_mod.LayoutTag;
 const Idx = layout_mod.Idx;
@@ -1455,11 +1458,10 @@ pub const Store = struct {
         const value_layouts = try scratch.alloc(Idx, node_count);
         const resolved = try scratch.alloc(bool, node_count);
         const recursive_nodes = try scratch.alloc(bool, node_count);
-        const component_ids = try scratch.alloc(u32, node_count);
+        var component_ids = try LayoutComponentColumn.initFilled(scratch, node_count);
         const reaches_cycle = try scratch.alloc(bool, node_count);
         @memset(resolved, false);
         @memset(recursive_nodes, false);
-        @memset(component_ids, std.math.maxInt(u32));
         @memset(reaches_cycle, false);
 
         const visit_index = try scratch.alloc(i32, graph.nodes.items.len);
@@ -1480,7 +1482,7 @@ pub const Store = struct {
             on_stack: []bool,
             stack: *std.ArrayList(GraphNodeId),
             recursive_nodes: []bool,
-            component_ids: []u32,
+            component_ids: *LayoutComponentColumn,
             reaches_cycle: []bool,
             next_index: i32 = 0,
             next_component_id: u32 = 0,
@@ -1516,7 +1518,7 @@ pub const Store = struct {
                 for (component) |member| {
                     const index = @backingInt(member);
                     self_finder.recursive_nodes[index] = true;
-                    self_finder.component_ids[index] = component_id;
+                    self_finder.component_ids.set(index, @fromBackingInt(component_id));
                 }
 
                 var has_boxable_slot_edge = false;
@@ -1527,7 +1529,7 @@ pub const Store = struct {
                                 switch (field.child) {
                                     .canonical => {},
                                     .local => |child_id| {
-                                        if (self_finder.component_ids[@backingInt(child_id)] == component_id) {
+                                        if (self_finder.component_ids.get(@backingInt(child_id)) == @as(LayoutComponentId, @fromBackingInt(component_id))) {
                                             has_boxable_slot_edge = true;
                                             break;
                                         }
@@ -1540,7 +1542,7 @@ pub const Store = struct {
                                 switch (child) {
                                     .canonical => {},
                                     .local => |child_id| {
-                                        if (self_finder.component_ids[@backingInt(child_id)] != component_id) continue;
+                                        if (self_finder.component_ids.get(@backingInt(child_id)) != @as(LayoutComponentId, @fromBackingInt(component_id))) continue;
                                         switch (self_finder.graph.getNode(child_id)) {
                                             .struct_ => {},
                                             .pending, .committed, .nominal, .box, .list, .closure, .erased_callable, .tag_union => {
@@ -1721,7 +1723,7 @@ pub const Store = struct {
             .on_stack = on_stack,
             .stack = &tarjan_stack,
             .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
+            .component_ids = &component_ids,
             .reaches_cycle = reaches_cycle,
         };
 
@@ -1761,7 +1763,7 @@ pub const Store = struct {
             finalize_state: []FinalizeState,
             raw_used: []bool,
             recursive_nodes: []bool,
-            component_ids: []u32,
+            component_ids: LayoutComponentColumn.View,
 
             /// The layout of child `ref`, or the node that must be finalized
             /// first to produce it.
@@ -1813,7 +1815,7 @@ pub const Store = struct {
                 if (!self_finalizer.recursive_nodes[parent_index] or !self_finalizer.recursive_nodes[child_index]) {
                     return false;
                 }
-                if (self_finalizer.component_ids[parent_index] != self_finalizer.component_ids[child_index]) {
+                if (self_finalizer.component_ids.get(parent_index) != self_finalizer.component_ids.get(child_index)) {
                     return false;
                 }
 
@@ -1990,7 +1992,7 @@ pub const Store = struct {
             .finalize_state = finalize_state,
             .raw_used = raw_used,
             .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
+            .component_ids = component_ids.view(),
         };
 
         // A node that reaches no cycle reads no raw slot, and neither does
@@ -2027,7 +2029,7 @@ pub const Store = struct {
             value_layouts: []Idx,
             resolved: []bool,
             recursive_nodes: []bool,
-            component_ids: []u32,
+            component_ids: LayoutComponentColumn.View,
 
             fn valueIdx(self_resolver: *@This(), ref: GraphRef) Idx {
                 return switch (ref) {
@@ -2100,7 +2102,7 @@ pub const Store = struct {
                 if (!self_resolver.recursive_nodes[parent_index] or !self_resolver.recursive_nodes[child_index]) {
                     return false;
                 }
-                if (self_resolver.component_ids[parent_index] != self_resolver.component_ids[child_index]) {
+                if (self_resolver.component_ids.get(parent_index) != self_resolver.component_ids.get(child_index)) {
                     return false;
                 }
 
@@ -2240,7 +2242,7 @@ pub const Store = struct {
             .value_layouts = value_layouts,
             .resolved = resolved,
             .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
+            .component_ids = component_ids.view(),
         };
 
         // A node resolves once the children it waits on have, so each node is

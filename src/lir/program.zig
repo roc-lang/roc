@@ -7,6 +7,7 @@ const check = @import("check");
 const layout = @import("layout");
 
 const LIR = @import("LIR.zig");
+const collections = @import("collections");
 const LirStore = @import("LirStore.zig");
 const root = @import("root_metadata.zig");
 
@@ -63,12 +64,12 @@ pub const StaticDataRelocation = struct {
     kind: Kind = .address,
     /// For an erased-callable function pointer, the byte distance from this
     /// pointer field to the callable's capture bytes.
-    callable_capture_offset: ?u32 = null,
+    callable_capture_offset: collections.OptionalU32 = .none,
     /// Exact LIR procedure named by an erased-callable function relocation.
     ///
     /// In-process consumers use this identity directly; object backends use
     /// `target_symbol_name` as its linker representation.
-    procedure: ?LIR.LirProcSpecId = null,
+    procedure: collections.OptionalId(LIR.LirProcSpecId) = .none,
     /// Exact generated RC helper required by this function-pointer relocation.
     ///
     /// Static erased-callable `on_drop` slots are always atomic: their
@@ -78,6 +79,10 @@ pub const StaticDataRelocation = struct {
     /// Whether `target_symbol_name` is owned by this relocation.
     owns_target_symbol_name: bool = false,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(StaticDataRelocation) == 64);
+}
 
 /// Owned frozen bytes retained with a lowered compilation.
 pub const FrozenStaticData = struct {
@@ -107,8 +112,12 @@ pub const RequestedLayout = struct {
     plan: ConstPlanId,
     /// Closed LIR procedure that constructs the exact target representation for
     /// a provided static data export. Plain layout-only requests leave this null.
-    initializer: ?LIR.LirProcSpecId = null,
+    initializer: collections.OptionalId(LIR.LirProcSpecId) = .none,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(RequestedLayout) == 104);
+}
 
 /// Identifier for a finite callable set in the LIR program.
 pub const FnSetId = enum(u32) { _ };
@@ -132,7 +141,7 @@ pub const FrozenCallableContext = struct {
 /// Checked function template and source type used to emit callable code.
 pub const FnTemplate = struct {
     /// Original function slot in the shared frozen Monotype owner.
-    frozen_fn: ?u32 = null,
+    frozen_fn: collections.OptionalU32 = .none,
     /// Exact callable worker specialization key, emitted by SpecConstr:
     /// SHA-256 template, callable-ABI, and capture-ABI digests in that order.
     frozen_worker: ?[96]u8 = null,
@@ -141,11 +150,15 @@ pub const FnTemplate = struct {
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
-    owner_fn_ty: ?const_store.ConstTypeId = null,
+    owner_fn_ty: collections.OptionalId(const_store.ConstTypeId) = .none,
     evidence: const_store.ConstFnEvidenceVector = .{},
     evidence_frames: []const const_store.ConstFnEvidenceFrame = &.{},
-    evidence_frame_head: ?u32 = null,
+    evidence_frame_head: collections.OptionalU32 = .none,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnTemplate) == 392);
+}
 
 /// Capture field copied from a checked binding into a callable payload. `id`
 /// is checked-stage provenance for storing a compile-time result in
@@ -177,6 +190,10 @@ pub const FnVariant = struct {
     captures: []const CaptureSlot = &.{},
 };
 
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnVariant) == 424);
+}
+
 /// Runtime tag-union encoding for a finite callable set.
 pub const FnSet = struct {
     layout: layout.Idx,
@@ -191,6 +208,10 @@ pub const ErasedFn = struct {
     template: ?FnTemplate = null,
     captures: []const CaptureSlot = &.{},
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ErasedFn) == 440);
+}
 
 /// Runtime encoding for an erased callable value type.
 pub const ErasedFns = struct {
@@ -333,10 +354,10 @@ pub const LiteralRootPlan = struct {
 /// One exact LIR value construction that is frozen as readonly target data.
 pub const StaticDataValue = struct {
     /// Post-ARC guards reading this slot; threaded through ComptimeValueGuard.
-    first_comptime_guard: ?u32 = null,
+    first_comptime_guard: collections.OptionalU32 = .none,
     /// Null when completed frozen data, a stored node, or a capture-free
     /// callable supplies this slot directly.
-    initializer: ?LIR.LirProcSpecId,
+    initializer: collections.OptionalId(LIR.LirProcSpecId),
     layout_idx: layout.Idx,
     /// The completed ConstStore node frozen directly at its explicit layout
     /// and storage plan, without an initializer procedure.
@@ -344,7 +365,7 @@ pub const StaticDataValue = struct {
     /// The capture-free erased callable of this procedure, which needs no
     /// initializer: its value is the callable's payload (the function
     /// pointer, no `on_drop`, no capture bytes) with the static refcount.
-    callable: ?LIR.LirProcSpecId = null,
+    callable: collections.OptionalId(LIR.LirProcSpecId) = .none,
     /// Final constant data assembled by the compiler, never runtime LIR.
     parts: ?StaticDataParts = null,
     /// Another physical representation of this canonical completed root.
@@ -368,6 +389,10 @@ pub const StaticDataValue = struct {
         },
     } = null,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(StaticDataValue) == 240);
+}
 
 /// Explicit edges and representation of a completed constant. Children name
 /// immutable data slots; the target-data writer connects their bytes and
@@ -410,7 +435,7 @@ pub const ComptimeFailureKind = enum(u8) {
 
 /// Exact post-ARC guard identity consumed by successful-root completion.
 pub const ComptimeValueGuard = struct {
-    next_for_slot: ?u32 = null,
+    next_for_slot: collections.OptionalU32 = .none,
     /// Shared statements have one record per owning procedure.
     owner: LIR.LirProcSpecId,
     completed: bool = false,
@@ -422,6 +447,10 @@ pub const ComptimeValueGuard = struct {
     success: LIR.CFStmtId,
     value_slot: LIR.StaticDataId,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ComptimeValueGuard) == 32);
+}
 
 /// The namespace of every symbol the compiler invents for generated code or
 /// data. Platforms and hosts share the `roc_` interface (one underscore) with
@@ -539,7 +568,7 @@ pub const Result = struct {
             .kind = kind,
             .owner = owner,
             .region = region,
-            .checked_site = checked_site,
+            .checked_site = .of(checked_site),
             .proc = proc,
         });
         return id;
@@ -678,7 +707,7 @@ test "lowering module table resolves checked module provenance both ways" {
     const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @fromBackingInt(@intCast(41)), .first);
     const stored = result.comptime_sites.items[@backingInt(site)];
     try std.testing.expectEqual(owner, stored.owner);
-    try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @fromBackingInt(@intCast(41))), stored.checked_site);
+    try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @fromBackingInt(@intCast(41))), stored.checked_site.get());
     try std.testing.expectEqualSlices(u8, &keys[2].bytes, &result.lowering_modules.items[@backingInt(stored.owner)].bytes);
 }
 

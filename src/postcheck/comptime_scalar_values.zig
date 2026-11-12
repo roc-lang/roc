@@ -290,7 +290,7 @@ test "completed successful scalar roots decode to literals; failed and aggregate
     const roles = [_]enum { failure, value, string }{ .failure, .value, .failure, .value, .failure, .value, .string };
     for (roles, 0..) |role, index| {
         try program.static_data_values.append(allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = switch (role) {
                 .failure => record_layout,
                 .value => if (index == 5) .i16 else .u32,

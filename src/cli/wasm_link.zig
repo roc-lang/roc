@@ -1024,8 +1024,9 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
             .globals = try arena.alloc(u32, view.globals().len),
             .imports = try arena.alloc(u32, view.imports().len),
         };
-        @memset(plan.placements[image].functions, none);
-        @memset(plan.placements[image].segments, none);
+        // Numbering functions and laying out memory each write every entry
+        // of their column; an import's entry is read before any pass writes
+        // it, so only that column starts at `none`.
         @memset(plan.placements[image].imports, none);
         if (view.stackChecks()) plan.stack_checks = true;
     }
@@ -1080,7 +1081,10 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
     // function nothing defines, by name in placement order.
     for (program.order) |image| {
         for (plan.placements[image].functions, 0..) |*slot, local| {
-            if (!program.reached(image, @intCast(local))) continue;
+            if (!program.reached(image, @intCast(local))) {
+                slot.* = none;
+                continue;
+            }
             slot.* = plan.functionCount();
             try plan.defined.append(arena, .{ .image = .{ .image = image, .local = @intCast(local) } });
         }
@@ -1226,8 +1230,11 @@ fn planMemory(plan: *Layout, config: ModuleConfig, outcome: *Outcome) LinkError!
             const view = program.items[image].view;
             const function_count: u32 = @intCast(view.functions().len);
             for (view.segments(), plan.placements[image].segments, 0..) |segment, *slot, index| {
+                if (!program.reached(image, function_count + @as(u32, @intCast(index)))) {
+                    slot.* = none;
+                    continue;
+                }
                 if ((segment.flags & WasmUnitImage.segment_zero_fill != 0) != zero_fill_pass) continue;
-                if (!program.reached(image, function_count + @as(u32, @intCast(index)))) continue;
                 at = std.mem.alignForward(u64, at, @as(u64, 1) << @intCast(segment.alignment_log2));
                 if (!zero_fill_pass and first_initialized == null) first_initialized = at;
                 if (at + segment.size > memory_limit) {
@@ -1301,7 +1308,10 @@ fn planObjectMemory(plan: *Layout) void {
         const view = program.items[image].view;
         const function_count: u32 = @intCast(view.functions().len);
         for (view.segments(), plan.placements[image].segments, 0..) |segment, *slot, index| {
-            if (!program.reached(image, function_count + @as(u32, @intCast(index)))) continue;
+            if (!program.reached(image, function_count + @as(u32, @intCast(index)))) {
+                slot.* = none;
+                continue;
+            }
             at = std.mem.alignForward(u64, at, @as(u64, 1) << @intCast(segment.alignment_log2));
             slot.* = @intCast(at);
             at += segment.size;

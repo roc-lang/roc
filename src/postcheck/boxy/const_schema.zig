@@ -72,7 +72,7 @@ pub fn constPlanOf(program: *Program, ty: TypeId) Allocator.Error!LirProgram.Con
             break :blk .{ .tuple = plans };
         },
         .record => |record| blk: {
-            if (record.ext != null) invariant("an open record reached a constant plan");
+            if (record.ext != .none) invariant("an open record reached a constant plan");
             const fields = try allocator.dupe(types.Field, store.fieldSpan(record.fields));
             defer allocator.free(fields);
             const plans = try allocator.alloc(LirProgram.ConstPlanId, fields.len);
@@ -152,7 +152,7 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
             break :blk .{ .tuple = try const_types.appendTypeSpan(ids) };
         },
         .record => |record| blk: {
-            if (record.ext != null) invariant("an open record reached a stored type");
+            if (record.ext != .none) invariant("an open record reached a stored type");
             const fields = try allocator.dupe(types.Field, store.fieldSpan(record.fields));
             defer allocator.free(fields);
             const out = try allocator.alloc(const_store.TypeField, fields.len);
@@ -166,11 +166,11 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
                     .name = try names.internRecordFieldLabel(store.nameText(field.name)),
                     .ty = try constTypeOf(program, storage),
                     .value_ty = switch (field.kind) {
-                        .inline_slot => null,
-                        .presence_slot => try constTypeOf(program, field.ty),
+                        .inline_slot => .none,
+                        .presence_slot => .some(try constTypeOf(program, field.ty)),
                         .variable_slot => unreachable, // a compile-time value's type is closed
                     },
-                    .default = null,
+                    .default = .none,
                 };
             }
             break :blk .{ .record = try const_types.appendFieldSpan(out) };
@@ -215,12 +215,12 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
                 .def = .{
                     .module = try names.internModuleIdentity(view.nameStore().moduleIdentityBytes(declaration.nominal.module)),
                     .type_name = try names.internTypeName(store.nameText(nominal.name)),
-                    .source_decl = declaration.nominal.source_decl,
+                    .source_decl = .some(declaration.nominal.source_decl),
                 },
                 .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
-                .builtin_owner = builtinOwner(nominal.builtin),
+                .builtin_owner = .of(builtinOwner(nominal.builtin)),
                 .args = try const_types.appendTypeSpan(ids),
-                .backing = .{ .ty = backing, .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable, .authority = .checked_public },
+                .backing = .some(.{ .ty = backing, .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable, .authority = .checked_public }),
                 .declared_order = declared_order,
             } };
         },
@@ -247,7 +247,7 @@ fn declaredOrderOf(program: *Program, backing_ty: TypeId) Allocator.Error!const_
         .record => |record| record,
         .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => return .{},
     };
-    const declared = record.declared orelse return .{};
+    const declared = record.declared.get() orelse return .{};
     const fields = store.fieldSpan(record.fields);
     const padding = store.span(declared.padding);
     const slots = store.declaredSlots(declared);
@@ -333,7 +333,7 @@ pub fn holdsFunction(program: *Program, ty: TypeId) Allocator.Error!bool {
                 const fields = try allocator.dupe(types.Field, store.fieldSpan(record.fields));
                 defer allocator.free(fields);
                 for (fields) |field| try pending.append(allocator, field.ty);
-                if (record.ext) |ext| try pending.append(allocator, ext);
+                if (record.ext.get()) |ext| try pending.append(allocator, ext);
                 try pending.appendSlice(allocator, store.paddingTypes(record));
             },
             .tag_union => |tag_union| {
