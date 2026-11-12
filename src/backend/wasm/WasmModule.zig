@@ -2688,17 +2688,17 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
     defer live_import_fns.deinit(gpa);
     try live_import_fns.ensureTotalCapacity(gpa, import_count);
 
-    const dead_import = std.math.maxInt(u32);
-    const import_remap = try gpa.alloc(u32, import_count);
+    // Each import's new index, absent for a dead import.
+    const import_remap = try gpa.alloc(collections.OptionalU32, import_count);
     defer gpa.free(import_remap);
-    @memset(import_remap, dead_import);
+    @memset(import_remap, .none);
 
     var fn_index: u32 = 0;
     var eliminated_import_count: u32 = 0;
     var write_idx: usize = 0;
     for (self.imports.items) |imp| {
         if (fn_index < import_count and live_flags[fn_index]) {
-            import_remap[fn_index] = @intCast(write_idx);
+            import_remap[fn_index] = .some(@intCast(write_idx));
             live_import_fns.appendAssumeCapacity(fn_index);
             self.imports.items[write_idx] = imp;
             write_idx += 1;
@@ -2732,17 +2732,13 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
     // their indices still change when earlier dead imports are removed.
     for (self.table_func_indices.items) |*table_func_idx| {
         if (table_func_idx.* >= import_count) continue;
-        const remapped = import_remap[table_func_idx.*];
-        std.debug.assert(remapped != dead_import);
-        table_func_idx.* = remapped;
+        table_func_idx.* = import_remap[table_func_idx.*].get().?;
     }
 
     // Function exports also store direct function indices.
     for (self.exports.items) |*exp| {
         if (exp.kind != .func or exp.idx >= import_count) continue;
-        const remapped = import_remap[exp.idx];
-        std.debug.assert(remapped != dead_import);
-        exp.idx = remapped;
+        exp.idx = import_remap[exp.idx].get().?;
     }
 
     try self.eliminateDeadData(live_flags, fn_index_min, fn_count);

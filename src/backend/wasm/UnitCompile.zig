@@ -548,7 +548,7 @@ test "a switch on a 32-bit value compares against the branch value's bits" {
         .branches = try store.addCFSwitchBranches(&.{.{ .value = 0x8000_0000, .body = hit }}),
         .default_branch = miss,
     } }, .test_fixture);
-    const exported = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(44), .args = try store.addLocalSpan(&.{cond}), .body = body, .ret_layout = .u64, .exported = true }, .none);
+    const exported = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(44), .args = try store.addLocalSpan(&.{cond}), .body = .some(body), .ret_layout = .u64, .exported = true }, .none);
     const entries = [_]Entry{.{ .symbol_name = "roc__main_for_host", .proc = exported, .arg_layouts = &.{.u32}, .ret_layout = .u64 }};
 
     const image = try compileUnitImage(allocator, &store, &layouts, &entries, &.{}, .{ .cpu_level = .default, .stack_checks = false });
@@ -583,7 +583,7 @@ test "constants with one content name are one weak definition the unit names as 
     const ret = try store.addCFStmt(.{ .ret = .{ .value = second } }, .test_fixture);
     const read_second = try store.addCFStmt(.{ .assign_literal = .{ .target = second, .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(8)) } }, .next = ret } }, .test_fixture);
     const read_first = try store.addCFStmt(.{ .assign_literal = .{ .target = first, .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(7)) } }, .next = read_second } }, .test_fixture);
-    const exported = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(43), .args = .empty(), .body = read_first, .ret_layout = .str, .exported = true }, .none);
+    const exported = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(43), .args = .empty(), .body = .some(read_first), .ret_layout = .str, .exported = true }, .none);
 
     const contents = "one string two values share";
     const descriptor = try arena.alloc(u8, 12);
@@ -665,7 +665,7 @@ test "a unit compiled alone imports what it calls and names its data through sit
     const ret = try store.addCFStmt(.{ .ret = .{ .value = text } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_literal = .{ .target = text, .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(7)) } }, .next = ret } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{ .target = called, .proc = linked, .args = .empty(), .next = read } }, .test_fixture);
-    const exported = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = exported_identity, .args = .empty(), .body = call, .ret_layout = .str, .exported = true }, .none);
+    const exported = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = exported_identity, .args = .empty(), .body = .some(call), .ret_layout = .str, .exported = true }, .none);
 
     const contents = "a string that lives in static data";
     const descriptor = try arena.alloc(u8, 12);

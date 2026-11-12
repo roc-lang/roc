@@ -71,7 +71,12 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v66: `inspect` reads its type's names block.
 /// v67: dynamic product locals carry their checked ownership shape.
 /// v68: combined immutable constants and type-table capture representation.
-pub const FORMAT_VERSION: u32 = 68;
+/// v69: procedure specs store optional locals, plans, tail calls and tail
+///      groups in four-byte zero-absent forms.
+/// v70: procedure specs store their body and hosted ABI in zero-absent forms.
+/// v71: statement row ids, inline scope ids and dynamic local descriptors
+///      encode absence as zero.
+pub const FORMAT_VERSION: u32 = 71;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -824,7 +829,7 @@ test "persisted image bytes do not depend on what store memory held before" {
             .name = name,
             .identity = LIR.ProcIdentity.forTest(1),
             .args = .empty(),
-            .body = ret,
+            .body = .some(ret),
             .ret_layout = .u64,
         }, .none);
         const proc_slot = store.getProcSpecPtr(proc);
@@ -833,7 +838,7 @@ test "persisted image bytes do not depend on what store memory held before" {
             .name = name,
             .identity = LIR.ProcIdentity.forTest(1),
             .args = .empty(),
-            .body = ret,
+            .body = .some(ret),
             .ret_layout = .u64,
         };
         try lowered.root_procs.append(gpa, proc);
@@ -858,7 +863,7 @@ test "persisted image bytes do not depend on what store memory held before" {
         defer view.deinit();
         try std.testing.expectEqual(local, view.store.getCFStmtImmediate(ret).ret.value);
         try std.testing.expectEqual(layout_mod.Idx.u64, view.store.getLocal(local).layout_idx);
-        try std.testing.expectEqual(@as(?LIR.CFStmtId, ret), view.store.getProcSpecImmediate(proc).body);
+        try std.testing.expectEqual(@as(?LIR.CFStmtId, ret), view.store.getProcSpecImmediate(proc).body.get());
         try std.testing.expectEqual(name, view.store.getProcSpecImmediate(proc).name);
         try std.testing.expectEqual(proc, view.root_procs[0]);
 
@@ -921,7 +926,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = .empty(),
-            .body = root.*,
+            .body = .some(root.*),
             .ret_layout = pointer_layout,
         }, .none);
     }
@@ -1218,8 +1223,8 @@ test "mapped frozen graph preserves explicit data callable and helper relocation
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
     const value_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
-    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u64 });
-    const worker = try program.store.addProcSpec(.{ .name = program.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .body = null, .ret_layout = .zst }, .none);
+    try program.static_data_values.append(allocator, .{ .initializer = .none, .layout_idx = .u64 });
+    const worker = try program.store.addProcSpec(.{ .name = program.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .body = .none, .ret_layout = .zst }, .none);
     const memory = try allocator.alignedAlloc(u8, .@"16", 16384);
     defer allocator.free(memory);
     var fixed = std.heap.FixedBufferAllocator.init(memory);
@@ -1227,7 +1232,7 @@ test "mapped frozen graph preserves explicit data callable and helper relocation
     const graph = [_]Program.StaticDataExport{
         .{ .symbol_name = "value", .value_id = value_slot, .bytes = &bytes, .alignment = 8, .relocations = &.{
             .{ .offset = 0, .target_symbol_name = "backing", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 2 },
-            .{ .offset = 8, .target_symbol_name = "worker", .kind = .function_pointer, .procedure = worker, .callable_capture_offset = 24 },
+            .{ .offset = 8, .target_symbol_name = "worker", .kind = .function_pointer, .procedure = .some(worker), .callable_capture_offset = .some(24) },
             .{ .offset = 16, .target_symbol_name = "drop", .kind = .function_pointer, .rc_helper = .{ .op = .decref, .layout_idx = .str } },
         } },
         .{ .symbol_name = "backing", .bytes = "frozen data", .alignment = 1 },
@@ -1240,8 +1245,8 @@ test "mapped frozen graph preserves explicit data callable and helper relocation
     try std.testing.expectEqualStrings("frozen data", viewed[1].bytes);
     try std.testing.expectEqual(@as(Program.StaticDataSymbolId, @fromBackingInt(@intCast(1))), viewed[0].relocations[0].target.data_symbol);
     try std.testing.expectEqual(@as(i64, 2), viewed[0].relocations[0].addend);
-    try std.testing.expectEqual(@as(?LIR.LirProcSpecId, worker), viewed[0].relocations[1].procedure);
-    try std.testing.expectEqual(@as(?u32, 24), viewed[0].relocations[1].callable_capture_offset);
+    try std.testing.expectEqual(@as(?LIR.LirProcSpecId, worker), viewed[0].relocations[1].procedure.get());
+    try std.testing.expectEqual(@as(?u32, 24), viewed[0].relocations[1].callable_capture_offset.get());
     try std.testing.expectEqual(layout_mod.RcOp.decref, viewed[0].relocations[2].rc_helper.?.op);
     try std.testing.expectEqual(layout_mod.Idx.str, viewed[0].relocations[2].rc_helper.?.layout_idx);
     const rows = try sliceFromRef(StaticDataImage.Export, memory.ptr, fixed.end_index, copied);
@@ -1258,7 +1263,7 @@ test "mapped frozen graph rejects a consumer pointer width mismatch" {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
     const value_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
-    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u8 });
+    try program.static_data_values.append(allocator, .{ .initializer = .none, .layout_idx = .u8 });
     const memory = try allocator.alignedAlloc(u8, .@"16", 65536);
     defer allocator.free(memory);
     var fixed = std.heap.FixedBufferAllocator.init(memory);
@@ -1282,11 +1287,11 @@ test "in-place frozen image retains existing LIR arrays" {
     var program = try Program.Result.init(image_allocator, .native);
     defer program.deinit();
     const value_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
-    try program.static_data_values.append(image_allocator, .{ .initializer = null, .layout_idx = .u64 });
+    try program.static_data_values.append(image_allocator, .{ .initializer = .none, .layout_idx = .u64 });
     const local = try program.store.addLocal(.{ .layout_idx = .u64 });
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = value_slot } }, .next = ret } }, .test_fixture);
-    const proc = try program.store.addProcSpec(.{ .name = .fromRaw(1), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{local}), .body = body, .ret_layout = .u64 }, .none);
+    const proc = try program.store.addProcSpec(.{ .name = .fromRaw(1), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{local}), .body = .some(body), .ret_layout = .u64 }, .none);
     try program.root_procs.append(image_allocator, proc);
     var value: [8]u8 = undefined;
     std.mem.writeInt(u64, &value, 42, .little);

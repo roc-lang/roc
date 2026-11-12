@@ -109,7 +109,7 @@ pub fn resolveFunction(_: ?*anyopaque, relocation: backend.StaticDataRelocation)
         Interpreter.staticErasedCallableOnCopyAddress()
     else
         Interpreter.staticErasedCallableOnDropAddress();
-    if (relocation.callable_capture_offset == null or relocation.procedure == null) return null;
+    if (relocation.callable_capture_offset == .none or relocation.procedure == .none) return null;
     return Interpreter.staticErasedCallableTrampolineAddress();
 }
 
@@ -120,7 +120,7 @@ pub fn writeCallableHeaders(exports: []const backend.StaticDataExport, image: *c
         const symbol = image.symbolAddress(export_.symbol_name) orelse invariant("interpreter image omitted a committed export");
         const allocation = std.math.sub(usize, symbol, export_.symbol_offset) catch invariant("interpreter symbol offset underflow");
         for (export_.relocations) |relocation| {
-            const capture_offset = relocation.callable_capture_offset orelse continue;
+            const capture_offset = relocation.callable_capture_offset.get() orelse continue;
             if (relocation.kind != .function_pointer or relocation.rc_helper != null) invariant("interpreter callable metadata named a non-callable relocation");
             if (relocation.offset != Interpreter.static_callable_payload_offset or capture_offset != builtins.erased_callable.capture_offset) {
                 invariant("static callable payload was not at its allocation's payload offset");
@@ -129,7 +129,7 @@ pub fn writeCallableHeaders(exports: []const backend.StaticDataExport, image: *c
             const header: *Interpreter.StaticCallableHeader = @ptrFromInt(allocation + tail.header_offset);
             header.* = .{
                 .owner = owner,
-                .proc_id = @backingInt(relocation.procedure orelse invariant("interpreter callable omitted its procedure")),
+                .proc_id = @backingInt(relocation.procedure.get() orelse invariant("interpreter callable omitted its procedure")),
             };
             const data: [*]u8 = @ptrFromInt(allocation);
             builtins.erased_callable.payloadPtr(data + Interpreter.static_callable_payload_offset).capture_size = tail.capture_size;

@@ -15,3 +15,11 @@ This module serves as the backbone for:
 - **Built-in Types**: Implementing the core Roc type system (numbers, strings, lists, etc.)
 
 The types module is used extensively by the canonicalize, check, and eval stages of the compiler to ensure type safety and provide the necessary type information for compilation and execution.
+
+
+The solved store's growing columns are independent reservations so adding
+variables does not repeatedly copy descriptor metadata. Logical indices
+remain stable across relocation; no consumer may retain a column address
+across an append. Sealing trims spare pages, while serialized columns contain
+only their logical rows in declared field order. Rollback and descriptor
+recycling always write reused entries explicitly.

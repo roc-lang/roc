@@ -432,7 +432,7 @@ fn testProc(store: *lir.LirStore, value: i64) Allocator.Error!ProcId {
         .name = store.freshSyntheticSymbol(),
         .identity = lir.ProcIdentity.forTest(@intCast(store.getProcSpecs().len + 1)),
         .args = lir.LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .i64,
     }, .none);
 }
@@ -758,7 +758,7 @@ test "native driver shared literal data outlives source and reused fragment owne
         .name = store.freshSyntheticSymbol(),
         .identity = lir.ProcIdentity.forTest(@intCast(i + 1)),
         .args = .empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .str,
     }, .none);
     const CG = Emitter.HostLirCodeGen;
