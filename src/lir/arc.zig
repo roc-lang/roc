@@ -18571,9 +18571,11 @@ test "ARC erased argument products take fields and preserve prefix and scalar re
             index -= 1;
             body = try d.op(descriptors[index], .{ .table_entry = .{ .table = table, .index = @intCast(index) } }, body);
         }
-        const proc = try d.proc(&.{ table, param }, body, d.dynamic, if (keep_record) param else result);
+        const reuse = try d.f.local(try d.f.layouts.insertErasedCallable());
+        const proc = try d.proc(&.{ param, table, reuse }, body, d.dynamic, if (keep_record) param else result);
         d.f.store.getProcSpecPtr(proc).abi = .erased_record;
         d.f.store.getProcSpecPtr(proc).erased_capture_arg = table;
+        d.f.store.getProcSpecPtr(proc).erased_reuse_arg = reuse;
         try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
         try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
         try d.f.expectRc(param, 0, 0, 0);

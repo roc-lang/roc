@@ -323,7 +323,26 @@ fn certifyProcAbiMetadata(
         if (proc.abi == .erased_record) {
             // A `.boxy` erased worker receives the packed argument record as
             // its one explicit argument, besides its capture pointer and the
-            // reuse input its ownership marker names.
+            // reuse input its ownership marker names, which come last. A
+            // procedure another emission unit supplies has no parameters
+            // here; that unit certifies them.
+            if (!proc.external) {
+                const capture_marker = proc.erased_capture_arg orelse {
+                    diag.context_proc = proc_id;
+                    diag.set("proc={d}: erased-record capture argument must carry its marker", .{proc_index});
+                    return error.Certification;
+                };
+                if (proc.erased_reuse_arg == null) {
+                    diag.context_proc = proc_id;
+                    diag.set("proc={d}: erased-record reuse argument must carry its ownership marker", .{proc_index});
+                    return error.Certification;
+                }
+                if (GuardedList.borrowLen(args) < 2 or GuardedList.at(args, GuardedList.borrowLen(args) - 2) != capture_marker) {
+                    diag.context_proc = proc_id;
+                    diag.set("proc={d}: erased-record capture argument must precede the reuse argument", .{proc_index});
+                    return error.Certification;
+                }
+            }
             var explicit_args: usize = 0;
             for (0..GuardedList.borrowLen(args)) |index| {
                 const arg = GuardedList.at(args, index);

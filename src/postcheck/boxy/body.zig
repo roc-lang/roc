@@ -2444,11 +2444,13 @@ pub const Builder = struct {
         ret_layout: layout.Idx,
     };
 
-    pub fn beginErasedWorker(self: *Builder, field_layouts: []const layout.Idx) Allocator.Error!ErasedStart {
+    /// The worker's reuse argument holds an allocation of kind `reuse`
+    /// (`beginReuseArg`).
+    pub fn beginErasedWorker(self: *Builder, field_layouts: []const layout.Idx, reuse: ReuseKind) Allocator.Error!ErasedStart {
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const capture_ptr = try self.closedLocal(.opaque_ptr);
-        _ = try self.beginReuseArg(.none);
+        _ = try self.beginReuseArg(reuse);
         const captures = if (field_layouts.len == 0) try self.allocator.alloc(LocalId, 0) else try self.loadCaptures(capture_ptr, field_layouts);
         return .{
             .entry = entry,
@@ -2643,7 +2645,7 @@ pub const Builder = struct {
         // its descriptors, then its dictionaries, then its literal
         // arguments.
         const has_table = self.program.inputCount(self.worker_id) != 0;
-        var start = try self.beginErasedWorker(if (has_table) &.{.opaque_ptr} else &.{});
+        var start = try self.beginErasedWorker(if (has_table) &.{.opaque_ptr} else &.{}, .none);
         defer self.allocator.free(start.captures);
         if (has_table) try self.beginTable(start.captures[0], target_worker.dictionary_params.len);
         const inputs = try self.allInputWords();
@@ -2653,7 +2655,7 @@ pub const Builder = struct {
     /// A structural method over the one descriptor its dictionary captures.
     pub fn lowerStructuralMethod(self: *Builder, method: lower.StructuralMethod) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        var start = try self.beginErasedWorker(&.{.opaque_ptr});
+        var start = try self.beginErasedWorker(&.{.opaque_ptr}, .none);
         defer self.allocator.free(start.captures);
         try self.beginTable(start.captures[0], 0);
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural = method });
@@ -2666,7 +2668,7 @@ pub const Builder = struct {
     /// payloads unchanged.
     pub fn lowerStructuralMap(self: *Builder, map: lower.StructuralMap) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        var start = try self.beginErasedWorker(&.{.opaque_ptr});
+        var start = try self.beginErasedWorker(&.{.opaque_ptr}, .none);
         defer self.allocator.free(start.captures);
         try self.beginTable(start.captures[0], 0);
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural_map = map });
@@ -2718,7 +2720,7 @@ pub const Builder = struct {
     /// A crashing dictionary method: it crashes as the dispatch it stands
     /// for would.
     pub fn lowerCrashDictionary(self: *Builder, kind: lower.CrashDictionary) Allocator.Error!void {
-        const start = try self.beginErasedWorker(&.{});
+        const start = try self.beginErasedWorker(&.{}, .none);
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         const body_start = try self.newHole();
@@ -2755,7 +2757,7 @@ pub const Builder = struct {
     /// arguments (`WorkerKey.callable_eval_entry`).
     pub fn lowerCallableEvalEntry(self: *Builder, binding: lower.CallableEvalBinding) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        var start = try self.beginErasedWorker(&.{});
+        var start = try self.beginErasedWorker(&.{}, .none);
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .callable_eval = binding });
@@ -4304,7 +4306,7 @@ pub const Builder = struct {
     /// literal converted there.
     pub fn lowerLiteralThunkBody(self: *Builder, key: @FieldType(lower.WorkerKey, "literal_thunk")) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        const start = try self.beginErasedWorker(&.{});
+        const start = try self.beginErasedWorker(&.{}, .none);
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         self.dict_locals = &.{};
@@ -4346,7 +4348,7 @@ pub const Builder = struct {
     /// the root's compile-time value slot (`pendingValueRead`).
     pub fn lowerRootSlotThunkBody(self: *Builder, key: @FieldType(lower.WorkerKey, "root_slot")) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        const start = try self.beginErasedWorker(&.{});
+        const start = try self.beginErasedWorker(&.{}, .none);
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         self.dict_locals = &.{};
