@@ -3,7 +3,7 @@
 const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
 
-fn accumulatorSource(gpa: std.mem.Allocator, count: usize) !std.ArrayList(u8) {
+fn accumulatorSource(gpa: std.mem.Allocator, count: usize) std.mem.Allocator.Error!std.ArrayList(u8) {
     var source: std.ArrayList(u8) = .empty;
     errdefer source.deinit(gpa);
     try source.appendSlice(gpa, "sum : U64 -> U64\nsum = |n| {\n");

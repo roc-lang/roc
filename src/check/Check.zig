@@ -46205,25 +46205,6 @@ fn candidateSatisfiesRangeConstraints(
     return true;
 }
 
-fn isBuiltinNumericNominal(self: *Self, var_: Var) bool {
-    const resolved = self.types.resolveVar(var_);
-    const nominal = resolved.desc.content.unwrapNominalType() orelse return false;
-    const ident = nominal.ident.ident_idx;
-    return ident.eql(self.cir.idents.u8_type) or
-        ident.eql(self.cir.idents.i8_type) or
-        ident.eql(self.cir.idents.u16_type) or
-        ident.eql(self.cir.idents.i16_type) or
-        ident.eql(self.cir.idents.u32_type) or
-        ident.eql(self.cir.idents.i32_type) or
-        ident.eql(self.cir.idents.u64_type) or
-        ident.eql(self.cir.idents.i64_type) or
-        ident.eql(self.cir.idents.u128_type) or
-        ident.eql(self.cir.idents.i128_type) or
-        ident.eql(self.cir.idents.f32_type) or
-        ident.eql(self.cir.idents.f64_type) or
-        ident.eql(self.cir.idents.dec_type);
-}
-
 fn pushReturnConstraintFrame(
     self: *Self,
     lambda_idx: CIR.Expr.Idx,

@@ -48,7 +48,6 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const can = @import("can");
 const CoreCtx = @import("ctx").CoreCtx;
 const threading = @import("threading.zig");
 const compiler_platforms = @import("compiler_platforms.zig");

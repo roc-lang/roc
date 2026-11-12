@@ -6,7 +6,7 @@ const TestEnv = @import("TestEnv.zig");
 
 const Counts = struct { constraints: usize, descriptors: usize };
 
-fn countsFor(comptime header: []const u8, comptime item: []const u8, comptime footer: []const u8, count: usize) !Counts {
+fn countsFor(comptime header: []const u8, comptime item: []const u8, comptime footer: []const u8, count: usize) TestEnv.TestEnvError!Counts {
     const gpa = std.testing.allocator;
     var source: std.ArrayList(u8) = .empty;
     defer source.deinit(gpa);
@@ -27,7 +27,7 @@ fn countsFor(comptime header: []const u8, comptime item: []const u8, comptime fo
 }
 
 /// The type slots and constraints each repetition of `item` adds.
-fn growthPerItem(comptime header: []const u8, comptime item: []const u8, comptime footer: []const u8) !Counts {
+fn growthPerItem(comptime header: []const u8, comptime item: []const u8, comptime footer: []const u8) TestEnv.TestEnvError!Counts {
     const small = try countsFor(header, item, footer, 8);
     const large = try countsFor(header, item, footer, 512);
     const added = 512 - 8;

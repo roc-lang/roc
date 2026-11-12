@@ -36941,10 +36941,10 @@ test "module identity and keys read the source through the stored digest, never 
     // Same text, different digest: every identity and key moves, so each of
     // them reads the digest.
     const same_text = try Probe.of(gpa, "a = 1", other_digest);
-    try std.testing.expect(!std.mem.eql(u8, &baseline.source_inputs, &same_text.source_inputs));
-    try std.testing.expect(!std.mem.eql(u8, &baseline.source_inputs_with_file, &same_text.source_inputs_with_file));
-    try std.testing.expect(!std.mem.eql(u8, &baseline.identity, &same_text.identity));
-    try std.testing.expect(!std.mem.eql(u8, &baseline.typing_key, &same_text.typing_key));
+    try std.testing.expect(!std.meta.eql(baseline.source_inputs, same_text.source_inputs));
+    try std.testing.expect(!std.meta.eql(baseline.source_inputs_with_file, same_text.source_inputs_with_file));
+    try std.testing.expect(!std.meta.eql(baseline.identity, same_text.identity));
+    try std.testing.expect(!std.meta.eql(baseline.typing_key, same_text.typing_key));
 }
 
 test "compile-time root read table keeps earlier rows beside newly evaluated roots" {

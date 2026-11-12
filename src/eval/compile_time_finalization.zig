@@ -4116,17 +4116,10 @@ const RootCompletionState = struct {
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     statuses: []RootStatus,
-    requested_roots: []bool,
     request_root_ids: []checked.ComptimeRootId,
     /// Position in `request_root_ids` per compile-time root id, or
     /// absent when this module requests no evaluation of that root.
     request_index_by_root: RequestPositionColumn,
-    visited_templates: collections.EpochSet(u32, .stamps, .internal),
-    /// Procedure templates whose dependencies are still to be checked.
-    pending_templates: std.ArrayList(canonical.ProcedureTemplateRef) = .empty,
-    current_root_id: ?checked.ComptimeRootId = null,
-    /// The incomplete root the last `dependenciesComplete` stopped at.
-    blocked_on: ?checked.ComptimeRootId = null,
 
     fn init(
         allocator: Allocator,
@@ -4137,10 +4130,6 @@ const RootCompletionState = struct {
         errdefer allocator.free(statuses);
         @memset(statuses, .pending);
 
-        const requested_roots = try allocator.alloc(bool, module.compile_time_roots.roots.len);
-        errdefer allocator.free(requested_roots);
-        @memset(requested_roots, false);
-
         const request_root_ids = try allocator.alloc(checked.ComptimeRootId, requests.len);
         errdefer allocator.free(request_root_ids);
         var request_index_by_root = try RequestPositionColumn.initFilled(allocator, module.compile_time_roots.roots.len);
@@ -4148,25 +4137,19 @@ const RootCompletionState = struct {
         for (requests, 0..) |request, i| {
             const root_id = compileTimeRootForRequest(module, request);
             const raw = @backingInt(root_id);
-            if (requested_roots[raw]) {
+            if (request_index_by_root.get(raw) != null) {
                 finalizationInvariant("compile-time root was requested more than once");
             }
-            requested_roots[raw] = true;
             request_root_ids[i] = root_id;
             request_index_by_root.set(raw, @fromBackingInt(@as(u32, @intCast(i))));
         }
-
-        var visited_templates = try collections.EpochSet(u32, .stamps, .internal).init(allocator, module.checked_procedure_templates.templates.items.len);
-        errdefer visited_templates.deinit(allocator);
 
         return .{
             .allocator = allocator,
             .module = module,
             .statuses = statuses,
-            .requested_roots = requested_roots,
             .request_root_ids = request_root_ids,
             .request_index_by_root = request_index_by_root,
-            .visited_templates = visited_templates,
         };
     }
 
@@ -4186,11 +4169,8 @@ const RootCompletionState = struct {
 
     fn deinit(self: *RootCompletionState) void {
         const allocator = self.allocator;
-        self.pending_templates.deinit(allocator);
-        self.visited_templates.deinit(allocator);
         self.request_index_by_root.deinit(allocator);
         allocator.free(self.request_root_ids);
-        allocator.free(self.requested_roots);
         allocator.free(self.statuses);
         self.* = undefined;
     }
@@ -4202,327 +4182,7 @@ const RootCompletionState = struct {
     fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootId) void {
         self.statuses[@backingInt(root_id)] = .done;
     }
-
-    fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootId {
-        if (request_index >= self.request_root_ids.len) {
-            finalizationInvariant("compile-time request index was out of range");
-        }
-        return self.request_root_ids[request_index];
-    }
-
-    fn dependenciesComplete(
-        self: *RootCompletionState,
-        request: checked.RootRequest,
-    ) Allocator.Error!bool {
-        const request_root_id = compileTimeRootForRequest(self.module, request);
-        const saved_current_root_id = self.current_root_id;
-        defer self.current_root_id = saved_current_root_id;
-        self.current_root_id = request_root_id;
-
-        self.visited_templates.reset();
-        const template_ref = request.procedure_template orelse
-            finalizationInvariant("compile-time root had no checked wrapper template");
-
-        // Every template reachable through the checked references must be
-        // complete, so templates are checked from a worklist in any order.
-        self.pending_templates.clearRetainingCapacity();
-        try self.pending_templates.append(self.allocator, template_ref);
-        // A literal argument root converts in the scheme its edge
-        // instantiates (design.md "Literal Arguments").
-        if (self.module.compile_time_roots.root(request_root_id).literal_argument) |argument| switch (argument.edge) {
-            .literal => {},
-            .node => |id| switch (self.module.static_dispatch_plans.evidenceNode(id).target.kind) {
-                .procedure => |procedure| try self.pending_templates.append(self.allocator, procedure.template),
-                .callable_binding => |binding| if (artifactMatches(binding.module, self.module.key)) {
-                    if (!self.rootDependencyComplete(self.module.callable_eval_templates.get(binding.template).root)) return false;
-                },
-                .local_proc, .structural => {},
-            },
-            .use => |expr| {
-                if (self.module.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
-                    switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[@backingInt(ref_id)].ref)) {
-                        .complete => |complete| if (!complete) return false,
-                        .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
-                    }
-                }
-            },
-        };
-        while (self.pending_templates.pop()) |next| {
-            if (!try self.templateDependenciesComplete(next)) return false;
-        }
-        return true;
-    }
-
-    /// Whether the template's own references are complete, queueing the
-    /// local templates they reach.
-    fn templateDependenciesComplete(
-        self: *RootCompletionState,
-        template_ref: canonical.ProcedureTemplateRef,
-    ) Allocator.Error!bool {
-        if (!artifactMatches(template_ref.artifact, self.module.key)) return true;
-        const index = @backingInt(template_ref.template);
-        if (index >= self.visited_templates.len()) {
-            finalizationInvariant("compile-time dependency referenced an unknown local procedure template");
-        }
-        if (self.visited_templates.testAndInsert(index)) return true;
-
-        const template = self.module.checked_procedure_templates.get(template_ref.template);
-        const refs = template.resolved_value_refs;
-        const start = refs.start;
-        const end = refs.start + refs.len;
-        if (end > self.module.resolved_value_refs.template_refs.len) {
-            finalizationInvariant("compile-time dependency template-ref span was outside the checked table");
-        }
-        for (self.module.resolved_value_refs.template_refs[start..end]) |ref_id| {
-            const raw = @backingInt(ref_id);
-            if (raw >= self.module.resolved_value_refs.records.len) {
-                finalizationInvariant("compile-time dependency ref id was outside the checked table");
-            }
-            switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[raw].ref)) {
-                .complete => |complete| if (!complete) return false,
-                .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
-            }
-        }
-        // The literal argument roots the template's edges read (design.md
-        // "Literal Arguments").
-        for (self.module.checked_procedure_templates.templateLiteralArgumentDemand(&template)) |root| {
-            if (!self.rootDependencyComplete(root)) return false;
-        }
-        return true;
-    }
-
-    /// What a reference depends on: an answer known at once, or a checked
-    /// procedure template whose own references decide it.
-    const Dependency = union(enum) {
-        complete: bool,
-        template: canonical.ProcedureTemplateRef,
-    };
-
-    fn resolvedRefDependency(
-        self: *RootCompletionState,
-        ref: checked.ResolvedValueRef,
-    ) Dependency {
-        return switch (ref) {
-            .top_level_const => |const_use| .{ .complete = self.constUseComplete(const_use) },
-            .selected_hoisted_const => |selected| .{ .complete = self.constUseComplete(selected.const_use) },
-            .top_level_proc,
-            .promoted_top_level_proc,
-            => |proc_use| self.procedureUseDependency(proc_use),
-            .platform_required_const => |required| .{ .complete = self.constUseComplete(required.const_use) },
-            .platform_required_proc => |required| self.procedureUseDependency(required.procedure),
-            .local_param,
-            .local_value,
-            .local_mutable_version,
-            .pattern_binder,
-            .local_proc,
-            .imported_const,
-            .imported_proc,
-            .hosted_proc,
-            .platform_required_declaration,
-            .platform_required_checked_error,
-            => .{ .complete = true },
-        };
-    }
-
-    fn constUseComplete(
-        self: *RootCompletionState,
-        const_use: checked.ConstUseTemplate,
-    ) bool {
-        // A declaration with no implementation evaluates nothing, so it
-        // publishes no compile-time root and there is nothing to wait on.
-        if (self.constUseIsUnimplemented(const_use.const_ref)) return true;
-        const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
-        return self.rootDependencyComplete(root_id);
-    }
-
-    fn constUseIsUnimplemented(self: *RootCompletionState, const_ref: checked.ConstRef) bool {
-        if (!artifactMatches(const_ref.artifact, self.module.key)) return false;
-        return self.module.const_templates.get(const_ref).state == .unimplemented;
-    }
-
-    fn rootDependencyComplete(
-        self: *RootCompletionState,
-        dependency_root_id: checked.ComptimeRootId,
-    ) bool {
-        const dependent_root_id = self.current_root_id orelse
-            finalizationInvariant("compile-time dependency checked outside a root request");
-        if (dependency_root_id == dependent_root_id) return true;
-
-        const dependent = self.module.compile_time_roots.root(dependent_root_id);
-        const dependency = self.module.compile_time_roots.root(dependency_root_id);
-        const is_strict = switch (dependent.source) {
-            .def => |dependent_def| switch (dependency.source) {
-                .def => |dependency_def| self.module.moduleEnvConst().hasTopLevelDemandDependency(
-                    dependent_def,
-                    dependency_def,
-                ),
-                .expr, .statement, .required_binding, .hoisted, .literal => true,
-            },
-            .expr, .statement, .required_binding, .hoisted, .literal => true,
-        };
-        if (!is_strict) return true;
-
-        const complete = !self.requested_roots[@backingInt(dependency_root_id)] or self.isDone(dependency_root_id);
-        if (!complete) self.blocked_on = dependency_root_id;
-        return complete;
-    }
-
-    fn rootForConstRef(
-        self: *RootCompletionState,
-        const_ref: checked.ConstRef,
-    ) ?checked.ComptimeRootId {
-        if (!artifactMatches(const_ref.artifact, self.module.key)) return null;
-        return switch (const_ref.owner) {
-            .top_level_binding => |top_level| {
-                return self.module.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse
-                    finalizationInvariant("local const dependency had no compile-time root");
-            },
-            .hoisted_root => |hoisted| {
-                if (hoisted.module_idx != self.module.module_identity.module_idx) {
-                    finalizationInvariant("local hoisted const dependency had mismatched module index");
-                }
-                const entry = self.module.hoisted_constants.lookupByRoot(hoisted.root) orelse
-                    finalizationInvariant("local hoisted const dependency had no hoisted const entry");
-                return entry.root;
-            },
-        };
-    }
-
-    fn procedureUseDependency(
-        self: *RootCompletionState,
-        proc_use: checked.ProcedureUseTemplate,
-    ) Dependency {
-        var binding = proc_use.binding;
-        while (true) switch (binding) {
-            .top_level => |top_level| {
-                if (!artifactMatches(top_level.artifact, self.module.key)) return .{ .complete = true };
-                return switch (self.module.top_level_procedure_bindings.get(top_level.binding).body) {
-                    .direct_template => |direct| switch (direct.template) {
-                        .checked => |checked_template| .{ .template = checked_template },
-                        .lifted, .synthetic => finalizationInvariant("checked procedure dependency referenced a post-check template"),
-                    },
-                    .checked_error => .{ .complete = true },
-                    .callable_eval_template => |template_id| .{
-                        .complete = self.rootDependencyComplete(self.module.callable_eval_templates.get(template_id).root),
-                    },
-                };
-            },
-            .imported, .hosted => return .{ .complete = true },
-            .platform_required => |required| {
-                if (!artifactMatches(required.artifact, self.module.key)) return .{ .complete = true };
-                const required_binding = self.module.platform_required_bindings.lookupByBindingId(@backingInt(required.procedure_binding)) orelse
-                    finalizationInvariant("platform-required procedure dependency referenced a missing binding");
-                switch (required_binding.value_use) {
-                    .procedure_value => |procedure_use| binding = procedure_use.procedure.binding,
-                    .const_value => |const_use| return .{ .complete = self.constUseComplete(const_use.const_use) },
-                }
-            },
-        };
-    }
 };
-
-fn lowerEvalAndFinishRoots(
-    allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
-    lowering_imports: []const checked.ImportedModuleView,
-    relation_modules: []const checked.ImportedModuleView,
-    requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
-    state: *RootCompletionState,
-    problem_store: ?*check.problem.Store,
-    options: Options,
-) FinalizeError!bool {
-    if (requests.len != root_ids.len) {
-        finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
-    }
-    // A literal argument root is the `.boxy` evaluator's under either
-    // strategy: a module's artifact serves both strategies' programs (design.md
-    // "Literal Arguments"). The `.boxy` evaluator specializes the roots whose
-    // values hold function values and lowers the rest as one `.boxy` program
-    // (see `finalizeProgramBoxy`); a batch's roots depend on none of each
-    // other.
-    var specialized_requests = std.ArrayList(checked.RootRequest).empty;
-    defer specialized_requests.deinit(allocator);
-    var specialized_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
-    defer specialized_root_ids.deinit(allocator);
-    var boxy_requests = std.ArrayList(checked.RootRequest).empty;
-    defer boxy_requests.deinit(allocator);
-    var boxy_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
-    defer boxy_root_ids.deinit(allocator);
-    for (requests, root_ids) |request, root_id| {
-        const boxy = module.compile_time_roots.root(root_id).kind == .literal_argument or
-            (options.strategy == .boxy and !try checked_root_graph.rootHoldsFunction(allocator, &.{module}, .{ .root = checked.loweringViewWithRelations(module, relation_modules), .imports = lowering_imports }, .{ .module = 0, .root = root_id, .request = request }));
-        if (boxy) {
-            try boxy_requests.append(allocator, request);
-            try boxy_root_ids.append(allocator, root_id);
-        } else {
-            try specialized_requests.append(allocator, request);
-            try specialized_root_ids.append(allocator, root_id);
-        }
-    }
-    var had_problem = false;
-    if (specialized_requests.items.len != 0) {
-        if (try lowerEvalAndFinishBatch(.lss, allocator, module, lowering_imports, relation_modules, specialized_requests.items, specialized_root_ids.items, state, problem_store, options)) had_problem = true;
-    }
-    if (boxy_requests.items.len != 0) {
-        if (try lowerEvalAndFinishBatch(.boxy, allocator, module, lowering_imports, relation_modules, boxy_requests.items, boxy_root_ids.items, state, problem_store, options)) had_problem = true;
-    }
-    return had_problem;
-}
-
-/// Lower one batch of a module's roots under `strategy`'s evaluator and
-/// evaluate it.
-fn lowerEvalAndFinishBatch(
-    strategy: base.SpecializationStrategy,
-    allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
-    lowering_imports: []const checked.ImportedModuleView,
-    relation_modules: []const checked.ImportedModuleView,
-    requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
-    state: *RootCompletionState,
-    problem_store: ?*check.problem.Store,
-    options: Options,
-) FinalizeError!bool {
-    const use_interpreter = comptime compilerHostMustUseInterpreterForCtfe();
-
-    const lowering_modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = checked.loweringViewWithRelations(module, relation_modules),
-        .imports = lowering_imports,
-    };
-    var lowered = try lowerFinalizationModulesToLir(
-        allocator,
-        lowering_modules,
-        .{ .requests = requests },
-        switch (strategy) {
-            .lss => .{
-                .target_usize = base.target.TargetUsize.native,
-                .specialization_strategy = .lss,
-                .checked_module_state = .checking_finalization,
-                .post_check_executor = options.post_check_executor,
-                .timing = if (options.timing) |timing| &timing.lowering else null,
-            },
-            .boxy => boxyCompileTimeTarget(options),
-        },
-    );
-    defer lowered.deinit();
-
-    var owners = try ModuleOwners.init(allocator, lowered.lir_result.lowering_modules.items, &.{.{ .module = module, .problem_store = problem_store }});
-    defer owners.deinit(allocator);
-    const const_roots = lowered.lir_result.const_roots.items;
-    if (comptime use_interpreter) {
-        const program = try InterpreterProgram.init(allocator, lowering_modules, &lowered, options);
-        defer program.deinit();
-        return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, &owners, options, &lowered, const_roots, program);
-    }
-    if (const_roots.len != requests.len) {
-        finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
-    }
-    var native = try DevProgram.init(allocator, lowering_modules, &lowered, options);
-    defer native.deinit();
-    native.codegen.static_strings = native.static_strings.view();
-    return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, &owners, options, &lowered, const_roots, &native);
-}
 
 fn evalInterpreterProgramRoots(
     allocator: Allocator,
