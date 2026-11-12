@@ -4311,6 +4311,9 @@ pub const DeferredConstraintCheck = struct {
     /// Set on the copy a drain retains because the obligation still waits
     /// exactly as on its last pass.
     retained_unchanged: bool = false,
+    /// Set on an obligation waiting for the boundary of the definition that
+    /// built the plain record or tag union it calls a method on.
+    waiting_on_plain_decision: bool = false,
     /// The checker relation that queued this obligation; the problems its
     /// resolution records belong to that relation (`problem.RelationOwner`).
     relation_owner: problem_mod.RelationOwner = .none,
