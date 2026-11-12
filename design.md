@@ -14006,10 +14006,10 @@ labels = |prefix, keys| {
 ```
 
 `labelled` generalizes while `keys` is still unknown, so its `map` relation
-holds `labelled`'s quantified element variable next to the enclosing `keys`.
+holds `labelled`'s quantified item variable next to the enclosing `keys`.
 When `distinct(keys)` later gives `keys` the type `List(k)`, the relation
 resolves, and relating `List.map`'s signature to it unifies `labelled`'s
-quantified element variable with the enclosing `k`. Rank-minimum unification
+quantified item variable with the enclosing `k`. Rank-minimum unification
 would leave that class generalized, and the next use of `labelled` would copy
 the enclosing function's own `k` as a fresh variable that nothing relates to
 `keys` again.
@@ -14042,10 +14042,10 @@ boundary has captured.
 
 The accepted side is pinned by `issue 12970: returned callback preserves
 captured method requirements across a where use` and `issue 12970: an
-unannotated enclosing function stays generic in its receiver's element` in
+unannotated enclosing function stays generic in its receiver's item` in
 `type_checking_integration.zig`. The rejected side is pinned by `issue 12970:
 a local function's variable fixed by its enclosing receiver is monomorphic`
-and `issue 12970: a relation on an enclosing element fixes the local
+and `issue 12970: a relation on an enclosing item fixes the local
 function's other variables`.
 
 ### Rewrite Inventory

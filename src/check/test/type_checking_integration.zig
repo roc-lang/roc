@@ -12264,7 +12264,7 @@ test "issue 12970: returned callback preserves captured method requirements acro
     try env.assertNoErrors();
 }
 
-test "issue 12970: an unannotated enclosing function stays generic in its receiver's element" {
+test "issue 12970: an unannotated enclosing function stays generic in its receiver's item" {
     var env = try TestEnv.init("NoAnno",
         \\NoAnno := [].{
         \\    distinct : List(k) -> U64
@@ -12299,7 +12299,7 @@ test "issue 12970: a local function's variable fixed by its enclosing receiver i
     try env.assertTypeErrorTitles(&.{"Type Mismatch"});
 }
 
-test "issue 12970: a relation on an enclosing element fixes the local function's other variables" {
+test "issue 12970: a relation on an enclosing item fixes the local function's other variables" {
     var env = try TestEnv.init("Poly",
         \\Poly := [].{
         \\    Thing :: U64.{
