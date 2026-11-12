@@ -10044,12 +10044,14 @@ fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
             const quantified = self.types.resolveVar(@fromBackingInt(pair.old_var));
             if (!canonical_type_keys.isIdentityVariable(quantified.desc)) continue;
             const to = variable_nodes.get(quantified.var_).?;
-            const given: Var = @fromBackingInt(pair.fresh_var);
-            const given_root = self.types.resolveVar(given).var_;
+            // Aliases are transparent: a use at `Same(a)`, where `Same(x) : x`,
+            // is a use at `a`, and one at `Phantom(a)`, where
+            // `Phantom(x) : U64`, mentions no variable at all.
+            const given_root = self.types.resolveThroughAliases(@fromBackingInt(pair.fresh_var)).var_;
             const mentions = try mentions_by_type.getOrPut(given_root);
             if (!mentions.found_existing) {
                 mentioned.clearRetainingCapacity();
-                try self.canonical_key_writer.appendIdentityVarsFromVarIgnoringConstraints(given, &mentioned);
+                try self.appendRuntimeTypeVars(given_root, &mentioned);
                 const start: u32 = @intCast(mention_nodes.items.len);
                 for (mentioned.items) |mentioned_var| {
                     const node = variable_nodes.get(self.types.resolveVar(mentioned_var).var_) orelse continue;
@@ -10174,6 +10176,51 @@ fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
         try reported_regions.append(self.gpa, region);
         _ = try self.problems.appendProblem(.{ .polymorphic_recursion = .{ .region = region } });
         try self.markErroneousValueExpr(expr_idx);
+    }
+}
+
+/// Append every variable `root` reaches as a runtime type: through
+/// structure, nominal arguments, and alias backings, but not through an
+/// alias's arguments, which only spell the alias (design.md "Type Alias
+/// Invariant"). Type variables are leaves: their method requirements are not
+/// followed.
+fn appendRuntimeTypeVars(self: *Self, root: Var, out: *std.ArrayListUnmanaged(Var)) std.mem.Allocator.Error!void {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    self.var_set.clearRetainingCapacity();
+    try stack.append(self.gpa, root);
+    while (stack.items.len > stack_base) {
+        const resolved = self.types.resolveVar(stack.pop().?);
+        if ((try self.var_set.getOrPut(resolved.var_)).found_existing) continue;
+        try out.append(self.gpa, resolved.var_);
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| try stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
     }
 }
 

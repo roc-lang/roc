@@ -4976,7 +4976,11 @@ quantified variables (the scheme-use pairs). Inside another generic
 definition those types are written over that definition's own variables, so
 the records are a graph over type variables: variable `u` flows into variable
 `v` when some use gave `v` a type that mentions `u`. The flow *grows* when
-that type is more than `u` itself. A body-local type's application lists its
+that type is more than `u` itself. A type is read as its runtime type, with
+aliases transparent (Type Alias Invariant): it mentions what its alias
+backings reach, never an alias's arguments as such, so given `Same(x) : x`
+and `Phantom(x) : U64`, a use at `Same(a)` is a use at `a` and one at
+`Phantom(a)` mentions nothing. A body-local type's application lists its
 context variables as trailing arguments (Body-Local Type Context), so a type
 mentions them like any other argument: a recursive use at a local type whose
 methods read the recursion's `a` grows exactly as a use at `Local(a)` would.
