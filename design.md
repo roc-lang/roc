@@ -1778,7 +1778,12 @@ rewrite above, this replacement resolves a reference; it mutates no solved
 type and stamps no dispatch plan, so it adds no Rewrite Inventory entry
 (Solver-Mutating Rewrites). Omitted defaulted fields of a construction through
 an alias are found by checking, as for any construction whose nominal type
-canonicalization does not know (Defaulted Fields).
+canonicalization does not know (Defaulted Fields). The default-cycle pass is
+the one place canonicalization looks through an alias, and only along names it
+resolved itself: an alias whose annotation is a reference to a local type
+declaration names that declaration, so a construction through it contributes
+the same omission edges as one written through the nominal type's own name
+(Defaulted Fields).
 
 ### Builtin Declarations Published Through Aliases
 
@@ -13441,7 +13446,11 @@ Restrictions:
     (lookups resolving to same-module defs, walked into their bodies—
     except lambda bodies, per the function-value rule below) and
     OMISSION edges (a LOCAL nominal construction whose literal omits a
-    declared defaulted field through an explicit constructor). Value references
+    declared defaulted field through an explicit constructor, written
+    through the nominal type's name or through a local alias whose
+    annotation is a resolved reference to a local type declaration,
+    followed through any chain of such aliases to the nominal declaration;
+    each hop is a name canonicalization resolved, not a solved type). Value references
     only point down the import DAG, so a
     name-resolvable cycle can never leave the declaring module; the pass
     is module-local without loss. Each cyclic SCC containing a default
@@ -13478,8 +13487,11 @@ Restrictions:
     may legitimately be referenced both ways, each def carries TWO
     graph nodes, value-flavored and invoked-flavored (the invoked
     flavor's edges strictly superset the value flavor's), so an invoked
-    use never leaks body edges into a value use. Dispatch-call TARGETS
-    and foreign lookups terminate edges here by principle and are the
+    use never leaks body edges into a value use. Dispatch-call TARGETS,
+    foreign lookups, and constructions through an alias that does not
+    name a local nominal declaration that way (an alias of another
+    module's type, or one reaching its nominal type through a type
+    argument) terminate edges here by principle and are the
     checker's residue; a plain call through a function PARAMETER needs
     no edge of its own—the function value reached the parameter as an
     argument of some walked call, where the argument rule already
