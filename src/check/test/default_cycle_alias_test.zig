@@ -5,8 +5,9 @@
 //! name canonicalization resolved, so a construction through it omits the
 //! same defaults as one written through the nominal type's own name and the
 //! cycle is reported the same way: one "Default Value Cycle" per cycle, from
-//! canonicalization. An alias that names its nominal type any other way is
-//! resolved only by checking, which reports the cycle itself.
+//! canonicalization. An alias of another module's type is handled as that
+//! type's own name is. An alias that reaches its nominal type through a type
+//! argument is resolved only by checking, which reports the cycle itself.
 
 const TestEnv = @import("./TestEnv.zig");
 
@@ -122,7 +123,7 @@ test "a default cycle through an alias that names its type by a type argument is
     try env.assertTypeErrorTitles(&.{"Recursive Default Value"});
 }
 
-test "a construction through an alias of another module's type gets its defaults from checking" {
+test "a construction of another module's type gets its defaults from checking through its name or an alias" {
     var settings = try TestEnv.init("Settings",
         \\Settings :: [].{
         \\    Cfg := { name : Str, depth : U64 ?? 3 }
@@ -130,6 +131,20 @@ test "a construction through an alias of another module's type gets its defaults
     );
     defer settings.deinit();
     try settings.assertNoErrors();
+
+    var direct = try TestEnv.initWithImport("Direct",
+        \\import Settings
+        \\
+        \\Direct :: [].{}
+        \\
+        \\base = Settings.Cfg.{ name: "x" }
+        \\
+        \\depth = base.depth
+    , "Settings", &settings);
+    defer direct.deinit();
+
+    try direct.assertNoErrors();
+    try direct.assertDefType("depth", "U64");
 
     var cross = try TestEnv.initWithImport("Cross",
         \\import Settings

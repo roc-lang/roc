@@ -28,7 +28,7 @@ test "Builtin docs present a declaration published through an alias under the al
     var builtin_module = try can.BuiltinStatic.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
     defer builtin_module.deinit();
 
-    var docs = try extract.extractModuleDocsWithOptions(gpa, builtin_module.env, "module", "Builtin.roc", .{});
+    var docs = try extract.extractBuiltinDocs(gpa, builtin_module.env, "module", "Builtin.roc");
     defer docs.deinit(gpa);
 
     const str = childNamed(docs.entries, "Str") orelse return error.TestUnexpectedResult;

@@ -1834,10 +1834,22 @@ names.
   other modules use Associated Item Lookup Through Aliases.
 - Construction and patterns through the alias are ordinary Nominal
   Construction Through Aliases.
-- Documentation. Builtin docs give the alias the declaration's entry (its
-  kind, backing type and members, under the alias's header), give the
-  declaration no entry of its own, and render every reference to the
-  declaration as a reference to the alias.
+- Documentation. The docs generator has one rule for a nominal type that
+  only an alias names, and the Builtin module follows it like any package
+  (`adoptRenamedNominals` in src/docs/extract.zig): a public alias that
+  applies a nominal type with no public name of its own to exactly the
+  alias's parameters is that type's public name. The alias's entry is the
+  nominal type's (its kind, parameters, backing type and members, under
+  the alias's name), the nominal type has no entry of its own, and every
+  reference to it renders as a reference to the alias. The nominal type
+  may be declared in the alias's module or in a module the package does
+  not expose, and a renamed type can rename further types through aliases
+  nested in it. `roc bump` applies the same rule to a package's public API
+  (`adoptRenamedNominals` in src/bump/extract.zig). The registry's only
+  part in the Builtin docs is to say that a published declaration has no
+  public name of its own, since it is declared inside the `Builtin` block.
+  Another package's docs show a published builtin declaration under the
+  alias's name, read from the registry as printed types read it.
 
 ### Compile-Time Evaluation And Static Storage
 
@@ -13517,7 +13529,17 @@ Restrictions:
     each hop is a name canonicalization resolved, not a solved type). Value references
     only point down the import DAG, so a
     name-resolvable cycle can never leave the declaring module; the pass
-    is module-local without loss. Each cyclic SCC containing a default
+    is module-local without loss. An alias never changes which stage owns
+    a construction: a construction through an alias is handled exactly as
+    the same construction written through the name of the type the alias
+    stands for, whichever module declares that type. A construction of
+    another module's nominal type, by its name or through an alias of it,
+    contributes no edge, because that type's defaults live in a module
+    that cannot reference this one; checking fills in its omitted
+    defaults. The one alias canonicalization does not follow is one that
+    reaches its nominal type through a type argument (`C : Same(Cfg)` with
+    `Same(a) : a`): it names its type only once the argument is
+    substituted, so a cycle through it is the checker's residue below. Each cyclic SCC containing a default
     reports `record_default_reference_cycle` ("Default Value Cycle")
     ONCE—on its first default in source order—and EVERY default in the
     SCC is dropped (fields degrade to required), so check and lowering
