@@ -7272,23 +7272,6 @@ definition dependencies and instantiation records), a signature of any other
 shape, and an effectful method. Accepted and rejected sides are pinned in
 `closed_operator_test.zig`.
 
-Closed structural equality is the same mechanism for `==` and `!=` over a
-record, tuple, or tag union (`resolveClosedStructuralEquality`). When the
-operands' type is closed all the way down (no type variable, no open row, no
-function) and every nominal type in it takes no arguments and compares by an
-`is_eq` that closed operator resolution selects and whose call invokes no
-function value, the operator's node becomes the structural comparison where
-it is checked, with no constraint. Deriving `is_eq` for such a type would
-state one requirement per nominal component, each of them a closed method
-that relating could neither establish nor reject, and then rewrite the node
-the same way; a component method of another module that invokes no function
-value adds nothing to the module's strict-demand relation. Every other
-operand type keeps its ordinary constraint and the derivation that
-discharges it: a type variable or an open row anywhere in the type, a
-nominal type with arguments (`List(U8)`), one of this module, one whose
-`is_eq` is derived or has another signature, and one whose `is_eq` invokes a
-function value. Both sides are pinned in `closed_operator_test.zig`.
-
 A where alias (`a.Sortable : where [...]`) is a source-level abbreviation for a
 set of method constraints, not a type. Its declaration solves to its receiver: a
 rigid variable carrying the constraints it names. A signature that references

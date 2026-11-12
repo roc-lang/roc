@@ -37348,9 +37348,7 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region) or
-                try self.resolveClosedStructuralEquality(expr_idx, binop, rhs_var))
-            {
+            if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region)) {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
@@ -37383,9 +37381,7 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region) or
-                try self.resolveClosedStructuralEquality(expr_idx, binop, rhs_var))
-            {
+            if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region)) {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
@@ -37530,129 +37526,41 @@ fn resolveClosedOperator(
     region: Region,
 ) Allocator.Error!bool {
     const nominal = self.types.resolveVar(operand_var).desc.content.unwrapNominalType() orelse return false;
-    const method = (try self.closedOperatorMethod(nominal, method_name, result)) orelse return false;
-    try self.closed_operator_targets.put(self.gpa, method.scheme_var, .{
-        .env = method.env,
-        .def_idx = method.def_idx,
-    });
-    try self.publishBinopDispatchExpr(expr_idx, method_name, region, method.scheme_var);
-    return true;
-}
-
-const ClosedOperatorMethod = struct {
-    /// This module's copy of the declaration's own callable.
-    scheme_var: Var,
-    env: *const ModuleEnv,
-    def_idx: CIR.Def.Idx,
-};
-
-/// The method Closed Operator Resolution (design.md) selects for an operator
-/// over `nominal`: `method_name` of a nominal type that takes no arguments and
-/// is declared in another module, declared as a pure function of exactly the
-/// operator's signature over that type. Null for every other type and method.
-fn closedOperatorMethod(
-    self: *Self,
-    nominal: types_mod.NominalType,
-    method_name: Ident.Idx,
-    result: OperatorResult,
-) Allocator.Error!?ClosedOperatorMethod {
-    if (nominal.args.len() != 0) return null;
+    if (nominal.args.len() != 0) return false;
     const method_lookup = self.lookupStaticDispatchMethodBinding(
         self.getNominalOriginEnv(nominal),
         nominal.sourceDeclOptional(),
         self.cir,
         method_name,
-    ) orelse return null;
-    if (method_lookup.is_this_module) return null;
+    ) orelse return false;
+    if (method_lookup.is_this_module) return false;
 
     const scheme_var = try self.importedMethodScheme(method_lookup);
     const func = switch (self.types.resolveVar(scheme_var).desc.content) {
         .structure => |flat| switch (flat) {
             .fn_pure => |func| func,
-            .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
-        },
-        .flex, .rigid, .alias, .field_presence, .err => return null,
-    };
-    const params = self.types.sliceVars(func.args);
-    if (params.len != 2) return null;
-    for (params) |param| {
-        if (!self.varIsClosedNominal(param, nominal)) return null;
-    }
-    switch (result) {
-        .operand => if (!self.varIsClosedNominal(func.ret, nominal)) return null,
-        .bool => {
-            const ret = self.types.resolveVar(func.ret).desc.content.unwrapNominalType() orelse return null;
-            if (!self.nominalIsBuiltinBoolType(ret)) return null;
-        },
-    }
-    return .{ .scheme_var = scheme_var, .env = method_lookup.env, .def_idx = method_lookup.binding.def_idx };
-}
-
-/// Closed Structural Equality (design.md): resolve the `==` or `!=` at
-/// `expr_idx` here when its operands' type is a record, tuple, or tag union
-/// that is closed all the way down and whose every nominal component
-/// compares by a closed operator method that invokes no function value. The
-/// node becomes the structural comparison the derivation would make it, and
-/// the operator has no constraint. Returns whether it was resolved.
-fn resolveClosedStructuralEquality(
-    self: *Self,
-    expr_idx: CIR.Expr.Idx,
-    binop: CIR.Expr.Binop,
-    operand_var: Var,
-) Allocator.Error!bool {
-    switch (self.types.resolveThroughAliases(operand_var).desc.content) {
-        .structure => |flat| switch (flat) {
-            .record, .tuple, .tag_union, .empty_record, .empty_tag_union => {},
-            .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return false,
+            .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return false,
         },
         .flex, .rigid, .alias, .field_presence, .err => return false,
+    };
+    const params = self.types.sliceVars(func.args);
+    if (params.len != 2) return false;
+    for (params) |param| {
+        if (!self.varIsClosedNominal(param, nominal)) return false;
     }
-    if (!try self.typeComparesByClosedStructure(operand_var)) return false;
-    self.cir.store.replaceExprWithStructuralEq(expr_idx, binop.lhs, binop.rhs, binop.op == .ne);
-    return true;
-}
+    switch (result) {
+        .operand => if (!self.varIsClosedNominal(func.ret, nominal)) return false,
+        .bool => {
+            const ret = self.types.resolveVar(func.ret).desc.content.unwrapNominalType() orelse return false;
+            if (!self.nominalIsBuiltinBoolType(ret)) return false;
+        },
+    }
 
-/// Whether deriving `is_eq` for `root` would state no requirement: every
-/// component is a record, tuple, or tag union with a closed row, or a
-/// nominal type whose `is_eq` Closed Operator Resolution selects and whose
-/// call invokes no function value. A type variable, an open row, a function,
-/// a nominal type with arguments, and a nominal type that compares any other
-/// way each leave the derivation something to check.
-fn typeComparesByClosedStructure(self: *Self, root: Var) Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    var pending: std.ArrayList(Var) = .empty;
-    defer pending.deinit(self.gpa);
-    try pending.append(self.gpa, root);
-    while (pending.pop()) |var_| {
-        const resolved = self.types.resolveVar(var_);
-        if (self.var_set.contains(resolved.var_)) continue;
-        try self.var_set.put(resolved.var_, {});
-        switch (resolved.desc.content) {
-            .flex, .rigid, .err, .field_presence => return false,
-            .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
-            .structure => |flat| switch (flat) {
-                .fn_pure, .fn_effectful, .fn_unbound => return false,
-                .empty_record, .empty_tag_union => {},
-                .record => |record| {
-                    for (0..record.fields.count) |offset| {
-                        try pending.append(self.gpa, self.types.getRecordFieldAt(record.fields, @intCast(offset)).presence.typeVar());
-                    }
-                    try pending.append(self.gpa, record.ext);
-                },
-                .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
-                .tag_union => |tag_union| {
-                    for (0..tag_union.tags.count) |tag_offset| {
-                        try pending.appendSlice(self.gpa, self.types.sliceVars(self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args));
-                    }
-                    try pending.append(self.gpa, tag_union.ext);
-                },
-                .nominal_type => |nominal| {
-                    const method = (try self.closedOperatorMethod(nominal, self.cir.idents.is_eq, .bool)) orelse return false;
-                    if (method.env.defInvokes(method.def_idx)) return false;
-                },
-            },
-        }
-    }
+    try self.closed_operator_targets.put(self.gpa, scheme_var, .{
+        .env = method_lookup.env,
+        .def_idx = method_lookup.binding.def_idx,
+    });
+    try self.publishBinopDispatchExpr(expr_idx, method_name, region, scheme_var);
     return true;
 }
 
