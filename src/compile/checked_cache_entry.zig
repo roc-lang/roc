@@ -9,6 +9,7 @@ const CheckedArtifact = check.CheckedArtifact;
 const CompactWriter = collections.CompactWriter;
 const Allocator = std.mem.Allocator;
 pub const CacheData = @import("cache_module.zig").CacheModule.CacheData;
+const CacheManager = @import("cache_manager.zig").CacheManager;
 
 /// Serialized metadata owns an allocation or borrows the checked mapping.
 pub const Metadata = struct {
@@ -26,6 +27,9 @@ pub const Context = struct {
     scope: check.CheckingDependencies.Scope,
     owner_envs: []const *const ModuleEnv,
     cached: ?CacheData = null,
+    /// Where `cached` was loaded from, so a corrupt entry can be discarded.
+    manager: ?*CacheManager = null,
+    entries_dir: []const u8 = "",
     pub fn deinit(self: *Context) void {
         if (self.cached) |data| data.deinit(self.allocator);
         self.scope.deinit();
@@ -39,9 +43,12 @@ pub const checked_module_cache_magic = "roc-mod-cache-v14";
 
 // The envelope identifies the typing-addressed entry and its full finalized
 // snapshot independently. Aligned bodies hold the environment once, publication
-// metadata, the finalized artifact, then its reports. Admission checks version, identities,
-// and expected lengths against loaded bytes; never hash or recursively scan the
-// payload for integrity. Atomic replacement leaves readers' mappings intact.
+// metadata, the finalized artifact, then its reports. Admission checks version and
+// identities and bounds-checks each body against the loaded payload; the lengths
+// the file records at both ends, checked before this envelope is read, are its
+// length check. Never
+// hash or recursively scan the payload for integrity. Atomic replacement leaves
+// readers' mappings intact.
 const checked_module_cache_header_fields_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32 + 32 + 8 + 8;
 
 /// Header size including padding that aligns the first serialized body.
@@ -129,9 +136,13 @@ pub fn writeTypedHeader(
     @memset(dest[offset..checked_module_cache_header_len], 0);
 }
 
-/// Validate the envelope version, storage key and body lengths, returning slices
-/// borrowed from `bytes`. Returns null for an incompatible or malformed envelope
-/// without inspecting body contents.
+/// Validate the envelope version and storage key and bounds-check the bodies,
+/// returning slices borrowed from `bytes`. Returns null for an incompatible or
+/// malformed envelope without inspecting body contents. Each body must lie
+/// inside `bytes`, which is a bounds check for slicing: whether the file is as
+/// long as it was written is the check of the lengths the file records at both
+/// ends, so bytes after
+/// the last body are not rejected here.
 pub fn decodeCheckedCacheEnvelope(
     comptime entry: CheckedEnvelopeEntry,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
@@ -176,7 +187,7 @@ pub fn decodeCheckedCacheEnvelope(
     if (artifact_len > after_metadata) return null;
     const artifact_padding = if (reports_len == 0) 0 else checkedModuleCacheEnvPadding(artifact_len);
     if (artifact_padding > after_metadata - artifact_len) return null;
-    if (reports_len != after_metadata - artifact_len - artifact_padding) return null;
+    if (reports_len > after_metadata - artifact_len - artifact_padding) return null;
 
     const env_body = bytes[offset..][0..env_len];
     offset += env_len + env_padding;
@@ -217,7 +228,10 @@ pub fn restoreTyping(context: *Context, env: *ModuleEnv) Allocator.Error!?check.
     const metadata = encoded.deserialize(@intFromPtr(encoded));
     if (!metadata.outcome.sourcesMatch(&context.scope)) return null;
     const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(bodies.env_body.ptr));
-    serialized.validate(bodies.env_body.len) catch return null;
+    serialized.validate(bodies.env_body.len) catch {
+        if (context.manager) |manager| manager.rejectEntry(.checked, .checked, context.key.bytes, context.entries_dir, data.stamp, "its module environment fails validation", .{});
+        return null;
+    };
     var cached = try serialized.deserializeInPlace(@intFromPtr(serialized), env.gpa, env.common.source, env.module_name, .writable);
     errdefer cached.deinit();
     metadata.bindReferences(&cached, &context.scope) catch |err| switch (err) {

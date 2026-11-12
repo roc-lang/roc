@@ -323,10 +323,13 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     std.mem.writeInt(u64, oversize_artifact[artifact_len_offset..][0..8], artifact_len + 1, .little);
     try std.testing.expect(decodeCheckedModuleCacheEntry(key, &oversize_artifact) == null);
 
+    // Bytes past the bodies are not the envelope's concern: the lengths the
+    // file records at both ends are what reject a file longer than it was
+    // written.
     var extra_byte: [total_len + 1]u8 = undefined;
     @memcpy(extra_byte[0..total_len], &entry);
     extra_byte[total_len] = 0;
-    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &extra_byte) == null);
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &extra_byte) != null);
 
     var pairing_entry = entry;
     writeCheckedModuleCacheHeader(.platform_pairing, pairing_entry[0..checked_module_cache_header_len], key, env_len, artifact_len, 0, @splat(0));
@@ -423,10 +426,11 @@ fn decodeCanonicalizedModuleCacheEntry(
     const parse_record_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
     offset += 8;
 
+    // Bounds for slicing the bodies, not a length check: the lengths the file
+    // records at both ends are the one check that it is as long as written.
     const remaining = bytes.len - offset;
     if (env_len > remaining) return null;
     if (parse_record_len > remaining - env_len) return null;
-    if (env_len + parse_record_len != remaining) return null;
 
     const env_body = bytes[offset..][0..env_len];
     offset += env_len;
@@ -486,9 +490,12 @@ test "canonicalized module cache header decodes bodies and rejects corrupt envel
     std.mem.writeInt(u64, scratch[record_len_offset..][0..8], record_len + 1, .little);
     try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0..total_len]) == null);
 
+    // Bytes past the bodies are not the envelope's concern: the lengths the
+    // file records at both ends are what reject a file longer than it was
+    // written.
     @memcpy(scratch[0..total_len], entry);
     scratch[total_len] = 0;
-    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0 .. total_len + 1]) == null);
+    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0 .. total_len + 1]) != null);
 }
 
 /// Allocators for a worker thread. Each worker has its own instance.
@@ -4906,14 +4913,14 @@ pub const Coordinator = struct {
         const data = manager.loadFamilyMapped(manager.allocator, .checked, .pairing, key.bytes, directory) orelse return null;
         defer data.deinit(manager.allocator);
         const bodies = decodeCheckedCacheEnvelope(.platform_pairing, key, data.data()) orelse {
-            manager.stats.recordInvalidation();
+            manager.rejectEntry(.checked, .pairing, key.bytes, directory, data.stamp, "its envelope does not decode", .{});
             return null;
         };
         if (bodies.env_body.len != 0 or bodies.metadata_body.len != 0 or
             !std.mem.eql(u8, &bodies.complete_key.bytes, &key.bytes) or
             bodies.artifact_body.len < @sizeOf(CheckedArtifact.PlatformPairing.Serialized))
         {
-            manager.stats.recordInvalidation();
+            manager.rejectEntry(.checked, .pairing, key.bytes, directory, data.stamp, "its bodies are not a platform pairing's", .{});
             return null;
         }
         const arena = self.gpa.create(base.SingleThreadArena) catch return null;
@@ -4929,7 +4936,7 @@ pub const Coordinator = struct {
         const reports = loadCachedReports(arena.allocator(), bodies.reports_body) catch |err| switch (err) {
             error.OutOfMemory => return null,
             error.CorruptArtifact => {
-                manager.stats.recordInvalidation();
+                manager.rejectEntry(.checked, .pairing, key.bytes, directory, data.stamp, "its reports body does not decode", .{});
                 return null;
             },
         };
@@ -5130,7 +5137,7 @@ pub const Coordinator = struct {
         const entry = cache_data.data();
 
         const bodies = decodeCheckedModuleCacheEntry(typing_context.key, entry) orelse {
-            manager.stats.recordInvalidation();
+            manager.rejectEntry(.checked, .checked, typing_context.key.bytes, entries_dir, cache_data.stamp, "its envelope does not decode", .{});
             return false;
         };
         const expected_pin_validation = canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version);
@@ -5139,7 +5146,7 @@ pub const Coordinator = struct {
             return false;
         }
         if (bodies.metadata_body.len < @sizeOf(check.CheckingReuse.Serialized)) {
-            manager.stats.recordInvalidation();
+            manager.rejectEntry(.checked, .checked, typing_context.key.bytes, entries_dir, cache_data.stamp, "its typing metadata body is too short", .{});
             return false;
         }
         if (!std.mem.eql(u8, &bodies.complete_key.bytes, &cache_key.bytes)) {
@@ -5165,7 +5172,7 @@ pub const Coordinator = struct {
 
         const serialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(env_buffer.ptr));
         serialized_ptr.validate(env_buffer.len) catch {
-            manager.stats.recordInvalidation();
+            manager.rejectEntry(.checked, .checked, typing_context.key.bytes, entries_dir, cache_data.stamp, "its module environment fails validation", .{});
             return false;
         };
         const cached_env = module_alloc.create(ModuleEnv) catch {
@@ -5203,12 +5210,18 @@ pub const Coordinator = struct {
         // The envelope establishes completeness and layout compatibility.
         // Payloads are trusted producer output; do not recursively validate them.
         if (!std.mem.eql(u8, &artifact_serialized.key.bytes, &cache_key.bytes)) {
-            manager.stats.recordInvalidation();
+            manager.rejectEntry(.checked, .checked, typing_context.key.bytes, entries_dir, cache_data.stamp, "its artifact names another key", .{});
             return false;
         }
-        const cached_reports = loadCachedReports(null, bodies.reports_body) catch {
-            manager.stats.recordInvalidation();
-            return false;
+        const cached_reports = loadCachedReports(null, bodies.reports_body) catch |err| switch (err) {
+            error.OutOfMemory => {
+                manager.stats.recordInvalidation();
+                return false;
+            },
+            error.CorruptArtifact => {
+                manager.rejectEntry(.checked, .checked, typing_context.key.bytes, entries_dir, cache_data.stamp, "its reports body does not decode", .{});
+                return false;
+            },
         };
 
         // Reserve everything publication needs, so nothing after the artifact
@@ -6234,7 +6247,7 @@ pub const Coordinator = struct {
             const context = try task_payload_alloc.create(checked_cache_entry.Context);
             const requirement_owner = if (platform_surface) |surface| scope.ordinal(surface.env.contentIdentityHash().?.*) else null;
             const key: CheckedArtifact.CheckedModuleArtifactKey = .{ .bytes = CheckedArtifact.typingCacheKeyFromModuleEnv(mod.moduleEnv().?, scope.digest(), requirement_owner, explicit_roots, mod.validation, canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version), missing_public_types) };
-            context.* = .{ .allocator = task_payload_alloc, .key = key, .scope = scope, .owner_envs = owner_envs };
+            context.* = .{ .allocator = task_payload_alloc, .key = key, .scope = scope, .owner_envs = owner_envs, .manager = manager, .entries_dir = self.cache_entry_dirs.checked orelse "" };
             typing_context = context;
             mod.typing_storage_key = key;
         };
@@ -7249,7 +7262,7 @@ pub const Coordinator = struct {
         defer if (entry_owned) cache_data.deinit(module_alloc);
 
         const bodies = decodeCanonicalizedModuleCacheEntry(cache_key, cache_data.data()) orelse {
-            manager.recordInvalidationFor(.canonicalized);
+            manager.rejectEntry(.canonicalized, .canonicalized, cache_key, entries_dir, cache_data.stamp, "its envelope does not decode", .{});
             return .miss;
         };
 
@@ -7263,7 +7276,7 @@ pub const Coordinator = struct {
                 return .miss;
             },
             error.CorruptParseStageRecord => {
-                manager.recordInvalidationFor(.canonicalized);
+                manager.rejectEntry(.canonicalized, .canonicalized, cache_key, entries_dir, cache_data.stamp, "its parse-stage record does not decode", .{});
                 return .miss;
             },
         };
@@ -7283,7 +7296,7 @@ pub const Coordinator = struct {
 
         const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(bodies.env_body.ptr));
         serialized.validate(bodies.env_body.len) catch {
-            manager.recordInvalidationFor(.canonicalized);
+            manager.rejectEntry(.canonicalized, .canonicalized, cache_key, entries_dir, cache_data.stamp, "its module environment fails validation", .{});
             return .{ .delivered_then_missed = delivered };
         };
 
@@ -11644,7 +11657,7 @@ fn corruptCanonicalizedEnvironmentsUnderDir(allocator: Allocator, root: []const 
         for (paths) |path| allocator.free(path);
         allocator.free(paths);
     }
-    const len_offset = canonicalized_module_cache_header_len +
+    const len_offset = @import("artifact_store.zig").length_prefix_len + canonicalized_module_cache_header_len +
         @offsetOf(ModuleEnv.Serialized, "diagnostic_hosted_returns") +
         @offsetOf(collections.SafeList(base.Ident.Idx).Serialized, "len");
     var corrupted: usize = 0;

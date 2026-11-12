@@ -685,6 +685,48 @@ Writers stage complete files beside their destination and install them by atomic
 rename. Readers own an open file or mapping; no writer truncates an installed
 file. Missing, corrupt, or incompatible entries are ordinary cache misses.
 
+Every cache file the compiler reads back as data records its own total length
+in bytes at both ends: a 16-byte prefix holding the length (prefix and trailer
+included) as a little-endian `u64`, then zeros, and an 8-byte trailer holding
+the same length, read unaligned. The cache manager writes this framing around
+every entry of the checked, canonicalized (including source import
+inventories), pairing, Boxy object and test outcome families
+(`artifact_store.length_prefix_len`, `length_trailer_len`). Sixteen prefix
+bytes keep every payload at the 16-byte alignment in-place loads need, and the
+trailer follows the payload, so it disturbs nothing positioned from the start;
+a format that needs a larger alignment inside its file, such as a Boxy object's
+page-aligned image, aligns relative to the file. Once a file is mapped or read,
+both recorded lengths are compared with its actual length before any other
+byte is trusted, and a file too short to hold both is a mismatch. This is the
+one check that a file is as long as it was written, the same for every format;
+it computes no checksum. It catches truncation and appended bytes, and, because
+entries are renamed into place without being synced, a power loss that leaves
+a file at its full length with never-flushed blocks reading as zeros: flushing
+usually proceeds from the front, so such a file's trailer is what is lost. Loss
+confined to the middle of a file is not detected. A format's header lengths
+only locate its bodies: each body is bounds-checked against the payload (the
+file without its prefix and trailer) before it is sliced, so a header with a
+correct file length and garbage body lengths is still memory-safe, but bodies
+need not cover the payload exactly.
+
+The two prelinked-host families are not framed. A prelinked host record is
+copied into outputs by file range from block-aligned offsets, and each of its
+formats (ELF, Mach-O and COFF records, wasm unit images) already records its
+total size in its own header and checks it on load; a run host is an
+executable copied whole and launched, with no header of ours to carry a
+length.
+
+A loaded entry that fails the length check, or that its format then rejects as
+corrupt (an envelope that does not decode, a body that does not fit, an
+environment that fails validation, a parse-stage record or Boxy object that
+does not decode, a prelinked host record that is not one), is a miss: it is
+counted as an invalidation, named in one line under `--verbose`, and its file
+is deleted so no later build reads it again. The delete removes the path only
+while it still names the file that was loaded (same inode and size); a file
+another writer has renamed into place since is left alone. A failed delete is
+not an error. A test outcome file that does not parse records no outcomes and
+is replaced when the run files its outcomes.
+
 There is no cache catalog, index, lease, or background maintenance protocol.
 Each invocation owns a unique scratch directory and removes it on completion
 unless `--keep-temp` was requested.
@@ -4289,8 +4331,9 @@ no field that could express one, so an entry stays valid when any other module
 changes and is shared by identical modules in different packages, directories,
 or workspaces.
 
-An entry holds two bodies behind one header (magic, entry-version hash, the
-key, and both body lengths):
+Inside the file's length framing, an entry holds two bodies behind one header
+(magic, entry-version hash, the key, and both body lengths, which locate the
+bodies and are bounds-checked):
 
 - the serialized `ModuleEnv` exactly as canonicalization left it, which carries
   its diagnostics, import store, deferred import worklist, file-dependency
@@ -4441,11 +4484,12 @@ The canonicalized module cache is a separate, non-checked boundary; the rules
 below bind the checked module and pairing caches.
 Checked module cache entries are trusted compiler-produced data, not adversarial
 inputs. Payload-integrity checksums and recursive payload-validation scans are
-forbidden. File completeness is checked by comparing the lengths recorded in the
-header against the loaded byte slice's length, without an additional file-length
-syscall. Do not scan payloads to defend against malicious input, arbitrary
-malformed data or bit flips. Header identity, version and lengths establish which
-producer data to consume. Cache writers stage complete files and atomically
+forbidden. File completeness is the file's recorded lengths compared with the
+loaded byte slice's length ("Cache storage"), without an additional file-length
+syscall; header body lengths are bounds-checked to slice the bodies safely, not
+summed against the file. Do not scan payloads to defend against malicious input,
+arbitrary malformed data or bit flips. Header identity, version and lengths
+establish which producer data to consume. Cache writers stage complete files and atomically
 renames them. Content hashes identifying compilation inputs are separate from
 integrity verification. A cache hit never reruns checked validation, reselects
 hoisted roots, reconstructs checked data or walks expressions to prove cached

@@ -135,13 +135,16 @@ fn decode(allocator: Allocator, bytes: []const u8) (Allocator.Error || codec.Dec
 
 /// Load an inventory into the caller arena; stale or corrupt records miss.
 pub fn load(allocator: Allocator, manager: *CacheManager, source_key: [32]u8) Allocator.Error!?Inventory {
-    const stored = manager.loadFamilyBytes(.canonicalized, source_key, scope) orelse return null;
-    defer manager.allocator.free(stored);
-    const bytes = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, stored.len);
-    @memcpy(bytes, stored);
+    const loaded = manager.loadFamilyBytes(.canonicalized, source_key, scope) orelse return null;
+    defer manager.allocator.free(loaded.bytes);
+    const bytes = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, loaded.bytes.len);
+    @memcpy(bytes, loaded.bytes);
     return decode(allocator, bytes) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        error.CorruptParseStageRecord => null,
+        error.CorruptParseStageRecord => {
+            manager.rejectEntry(.canonicalized, .canonicalized, source_key, scope, loaded.stamp, "it does not decode as a source import inventory", .{});
+            return null;
+        },
     };
 }
 
