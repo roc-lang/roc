@@ -22013,25 +22013,19 @@ test "refreshWatchState reports stale snapshot for newly discovered input" {
 
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "old" });
 
-    const inputs = try allocator.alloc([]const u8, 1);
-    errdefer allocator.free(inputs);
-    inputs[0] = try allocator.dupe(u8, watched_path);
-    errdefer allocator.free(inputs[0]);
-
-    const snapshot = try allocator.alloc(WatchSnapshotEntry, 1);
-    errdefer allocator.free(snapshot);
-    snapshot[0] = .{ .state = try readWatchFileState(&ctx, watched_path) };
-
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
+    const inputs = blk: {
+        var owned = try collectWatchInputSet(&ctx, null, &.{watched_path});
+        errdefer owned.deinit(&ctx);
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
+        break :blk owned;
+    };
 
     var signal = WatchEventSignal{};
     var state = WatchState{};
     defer state.deinit(&ctx);
 
-    const changed = try refreshWatchState(&ctx, &state, &signal, .{
-        .inputs = inputs,
-        .snapshot = snapshot,
-    });
+    // refreshWatchState consumes the input set on both success and failure.
+    const changed = try refreshWatchState(&ctx, &state, &signal, inputs);
 
     try testing.expect(changed);
 }
