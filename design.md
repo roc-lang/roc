@@ -10451,8 +10451,9 @@ may be followed; nominal wrappers, custom suffixes, borrowed record-field contex
 unresolved and generalized targets do not qualify. An invalid literal keeps its
 ordinary conversion constraint and occurrence-specific diagnostics. No arbitrary
 candidate is selected, no shared mutable signature is introduced, and no checked
-dispatch plan is restamped. Expression literals only are covered; pattern equality
-requirements retain their existing introduction path. Tests in
+dispatch plan is restamped. Expression literals only are covered: a literal
+pattern is checked with no context, and Deferred Literal Conversion decides
+it. Tests in
 `issue_11960_test.zig` pin concrete, inferred, custom, and rejected cases, and the
 absence of per-literal signature graphs for concrete builtin lists.
 
@@ -10472,8 +10473,8 @@ checked error.
 Only the builtin `Str` declaration qualifies. Transparent aliases may be
 followed; nominal wrappers, suffixed literals, borrowed record-field context,
 and unresolved or generalized targets keep the ordinary constraint. Expression
-literals only are covered; pattern equality requirements retain their existing
-introduction path.
+literals only are covered: a literal pattern is checked with no context, and
+Deferred Literal Conversion decides it.
 
 ### Deferred Literal Conversion
 
@@ -10531,11 +10532,36 @@ state, and a copy of a variable never carries the marker. A class a number
 literal's type and a string literal's type merged into carries both markers;
 each literal then gets its constraint, and the ordinary conflict is reported.
 
-A literal pattern, a suffixed literal, an interpolation, a literal checked
-inside a probe, and any literal in a module that declares its conversion
-method in a function body (whose conversions record where they are created)
-keep their constraint from the start. Accepted and rejected sides are pinned
-in `deferred_literal_test.zig`.
+A literal pattern in a `match` branch waits the same way, for less time. A
+pattern's literal needs two requirements: its conversion, and `is_eq`, since
+matching compares the value against the converted constant. The pattern is
+checked with no context, then related to the matched value, and
+`settlePendingPatternLiterals` runs right after that relation (or before the
+report of a rejected one, which renders the pattern's type), in the context
+the pattern was checked in:
+
+- a number literal whose type is now a builtin number type that holds its
+  exact value, and a string literal whose type is now the builtin `Str`, are
+  done with neither requirement: every builtin number type and `Str` compare
+  by value, finalization seals the pattern `builtin_direct`, and lowering
+  compares the value directly (Builtin-direct patterns get no binder, guard,
+  or equality plan);
+- every other one gets both ordinary constraints there: one whose type is
+  still undetermined, a custom literal type, a rigid variable, a builtin
+  number type that cannot hold the value, or a type of the other kind.
+
+No pattern literal waits past its own pattern's relation, so an `is_eq`
+requirement, which records the scheme and the dispatch context it is created
+in, is always created in the context its pattern was checked in. This is the
+same mechanism: neither requirement relates the literal's type to any other
+type, and a builtin target discharges both without a method call.
+
+A literal pattern outside a `match` branch, a suffixed literal, an
+interpolation, a literal checked inside a probe, any literal in a module that
+declares its conversion method in a function body (whose conversions record
+where they are created), and any literal pattern in a module that declares a
+method in a function body keep their constraints from the start. Accepted and
+rejected sides are pinned in `deferred_literal_test.zig`.
 
 ### Expected Shape Context
 

@@ -1483,6 +1483,10 @@ open_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// constraint, by the first generalization boundary that finds its type
 /// settled or about to generalize, and by type finalization otherwise.
 pending_literals: std.ArrayListUnmanaged(PendingLiteral) = .empty,
+/// The literal patterns of the pattern being checked whose conversion is
+/// deferred (`deferPatternLiteralConversion`), until that pattern has been
+/// related to the value it matches (`settlePendingPatternLiterals`).
+pending_pattern_literals: std.ArrayListUnmanaged(PendingPatternLiteral) = .empty,
 /// The variables the unifications now settling literals determined them
 /// against (`Scratch.determined_literals`), one run per unification in
 /// progress.
@@ -2040,6 +2044,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_generated_codec_calls = .scratch,
     .open_literal_vars = .settled,
     .pending_literals = .settled,
+    .pending_pattern_literals = .scratch,
     .pending_literals_scanned = .settled,
     .determined_literal_vars = .settled,
     .instantiated_literal_conversion_uses = .keyed,
@@ -14043,6 +14048,131 @@ fn deferQuoteConversion(
     return true;
 }
 
+/// A literal pattern whose conversion is deferred, in
+/// `pending_pattern_literals`.
+const PendingPatternLiteral = struct {
+    node: CIR.Node.Idx,
+    kind: PendingLiteral.Kind,
+    failure_owner: CIR.Node.Idx,
+};
+
+/// Deferred Literal Conversion (design.md) for a literal pattern whose owner
+/// settles its literals: an undetermined type marked as that kind of literal,
+/// with neither a conversion constraint nor an equality constraint.
+/// `settlePendingPatternLiterals` decides it once the owner has related the
+/// pattern to the value it matches. Returns false for a literal that needs
+/// its constraints now.
+fn deferPatternLiteralConversion(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    pattern_var: Var,
+    kind: PendingLiteral.Kind,
+    is_int_unbound: bool,
+    ctx: PatternCtx,
+    env: *Env,
+) Allocator.Error!bool {
+    if (ctx.literals != .settled_by_owner) return false;
+    // A probe's rollback restores the type store, not this list.
+    if (self.probe_depth != 0) return false;
+    // A module that declares methods in a function body records where each
+    // conversion and each equality requirement is created
+    // (`noteLiteralDispatchSite`, `noteHoistDispatchDependency`).
+    if (try self.moduleDeclaresLocalMethods()) return false;
+
+    try self.unifyWith(pattern_var, .{ .flex = .{
+        .name = null,
+        .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
+        .literal = switch (kind) {
+            .numeral => .numeral,
+            .quote => .quote,
+        },
+    } }, env);
+    try self.cir.store.recordLiteralDispatchPlan(node_idx, switch (kind) {
+        .numeral => .numeral,
+        .quote => .quote,
+    }, pattern_var, null, @backingInt(ctx.failure_owner));
+    try self.pending_pattern_literals.append(self.gpa, .{
+        .node = node_idx,
+        .kind = kind,
+        .failure_owner = ctx.failure_owner,
+    });
+    try self.open_literal_vars.append(self.gpa, pattern_var);
+    if (is_int_unbound) {
+        try self.int_unbound_vars.put(self.types.resolveVar(pattern_var).var_, {});
+    }
+    return true;
+}
+
+/// A string literal pattern's ordinary introduction: it converts through
+/// `from_quote` and compares the matched value against the converted
+/// constant, so its type also needs equality.
+fn introducePatternQuote(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    pattern_var: Var,
+    region: Region,
+    failure_owner: CIR.Node.Idx,
+    env: *Env,
+) Allocator.Error!void {
+    const flex_var = try self.mkFlexWithFromQuoteConstraint(node_idx, region, failure_owner, env);
+    _ = try self.unify(pattern_var, flex_var, env);
+    try self.mkPatternLiteralEqConstraint(node_idx, pattern_var, env, region);
+}
+
+/// Deferred Literal Conversion (design.md): decide the literal patterns of
+/// the pattern its owner just related to the value it matches. A number
+/// literal whose type is now a builtin number type that holds its exact
+/// value, and a string literal whose type is now the builtin `Str`, need
+/// neither a conversion nor an equality requirement: finalization seals the
+/// pattern `builtin_direct`, which compares the value directly. Every other
+/// one gets both ordinary constraints here, in the context its pattern was
+/// checked in, so defaulting, generalization, a custom conversion, and each
+/// diagnostic proceed as for constraints created with the pattern.
+fn settlePendingPatternLiterals(self: *Self, env: *Env) Allocator.Error!void {
+    if (self.pending_pattern_literals.items.len == 0) return;
+    // Creating a constraint relates types, which checks no pattern, so the
+    // list does not grow while it is read.
+    defer self.pending_pattern_literals.clearRetainingCapacity();
+    for (self.pending_pattern_literals.items) |pending| {
+        const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(@backingInt(pending.node)));
+        const pattern_var: Var = ModuleEnv.varFrom(pattern_idx);
+        const region = self.cir.store.getPatternRegion(pattern_idx);
+        switch (self.types.resolveThroughAliases(pattern_var).desc.content) {
+            // The pattern is erroneous; finalization seals the literal as a
+            // checked error.
+            .err => continue,
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| switch (pending.kind) {
+                    .numeral => if (self.builtinNumKindFromNominalType(nominal)) |kind| {
+                        const literal = self.recordedNumeralLiteralForNode(pending.node);
+                        const info = try self.exactNumeralInfoForLiteral(literal, region);
+                        if (validateBuiltinFromNumeralLiteral(kind, info) == null) continue;
+                    },
+                    .quote => if (self.nominalIsBuiltinStrType(nominal)) continue,
+                },
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
+            },
+            .flex, .rigid, .alias, .field_presence => {},
+        }
+        switch (pending.kind) {
+            .numeral => {
+                const literal = self.recordedNumeralLiteralForNode(pending.node);
+                const info = try self.exactNumeralInfoForLiteral(literal, region);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(
+                    pending.node,
+                    self.literalFailureOwnerExpr(pending.failure_owner),
+                    pending.failure_owner,
+                    info,
+                    env,
+                );
+                _ = try self.unify(pattern_var, flex_var, env);
+                try self.mkPatternLiteralEqConstraint(pending.node, pattern_var, env, region);
+            },
+            .quote => try self.introducePatternQuote(pending.node, pattern_var, region, pending.failure_owner, env),
+        }
+    }
+}
+
 const PendingLiteralScope = enum {
     /// A unification that determined a deferred literal's type, or a
     /// dispatch pass: the literals whose type has settled, among those not
@@ -14186,9 +14316,10 @@ fn checkNumeralLiteral(
     occurrence_var: Var,
     region: Region,
     comptime occurrence: NumeralOccurrence,
-    pattern_failure_owner: ?CIR.Node.Idx,
+    pattern_ctx: ?PatternCtx,
     env: *Env,
 ) Allocator.Error!void {
+    const pattern_failure_owner: ?CIR.Node.Idx = if (pattern_ctx) |ctx| ctx.failure_owner else null;
     const suffix_target = self.cir.numericSuffixTargetForNode(node_idx);
     const literal = self.recordedNumeralLiteralForNode(node_idx);
     var num_literal_info = try self.exactNumeralInfoForLiteral(literal, region);
@@ -14213,6 +14344,11 @@ fn checkNumeralLiteral(
         try self.deferNumeralConversion(node_idx, occurrence_var, is_int_unbound, env))
     {
         return;
+    }
+    if (occurrence == .pattern and suffix_target == null) {
+        if (pattern_ctx) |ctx| {
+            if (try self.deferPatternLiteralConversion(node_idx, occurrence_var, .numeral, is_int_unbound, ctx, env)) return;
+        }
     }
 
     num_literal_info.explicit_suffix = suffix_target != null;
@@ -28602,6 +28738,10 @@ const RowOpenness = enum { open, closed };
 const PatternCtx = struct {
     row_openness: RowOpenness,
     failure_owner: CIR.Node.Idx,
+    /// Whether the pattern's owner relates it to the value it matches and
+    /// then calls `settlePendingPatternLiterals`, so its literals may wait
+    /// for that relation (`deferPatternLiteralConversion`).
+    literals: enum { immediate, settled_by_owner } = .immediate,
 };
 
 /// A pattern rejected while it was checked binds nothing, so every name it
@@ -28742,15 +28882,10 @@ fn stepPatternCheck(
             // A literal pattern converts through from_quote and compares the
             // matched value against the converted constant, so the type also
             // needs equality.
-            const failure_expr = ctx.failure_owner;
-            const flex_var = try self.mkFlexWithFromQuoteConstraint(
-                ModuleEnv.nodeIdxFrom(pattern_idx),
-                pattern_region,
-                failure_expr,
-                env,
-            );
-            _ = try self.unify(pattern_var, flex_var, env);
-            try self.mkPatternLiteralEqConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, env, pattern_region);
+            const node_idx = ModuleEnv.nodeIdxFrom(pattern_idx);
+            if (!try self.deferPatternLiteralConversion(node_idx, pattern_var, .quote, false, ctx, env)) {
+                try self.introducePatternQuote(node_idx, pattern_var, pattern_region, ctx.failure_owner, env);
+            }
         },
         .str_interpolation => |str| {
             if (entering) {
@@ -29005,12 +29140,12 @@ fn stepPatternCheck(
         },
         // nums //
         .num_from_numeral_literal => {
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failure_owner, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx, env);
         },
         .num_literal => |num| {
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
-                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failure_owner, env),
+                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx, env),
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(num.kind), env),
             }
@@ -29028,7 +29163,7 @@ fn stepPatternCheck(
                 // Explicit suffix like `3.14dec` - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failure_owner, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx, env);
             }
         },
         .small_dec_literal => |dec| {
@@ -29036,7 +29171,7 @@ fn stepPatternCheck(
                 // Explicit suffix - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx.failure_owner, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, ctx, env);
             }
         },
         .runtime_error => {
@@ -35362,7 +35497,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         for (branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
             // Check the pattern's sub types
             const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-            const valid_pattern = try self.checkPattern(other_branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env);
+            const valid_pattern = try self.checkPattern(other_branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx), .literals = .settled_by_owner }, env);
             if (!valid_pattern) state.had_type_error = true;
             if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(other_branch_ptrn.pattern);
 
@@ -35377,6 +35512,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
                     .match_expr = expr_idx,
                 } });
             }
+            try self.settlePendingPatternLiterals(env);
         }
         try self.recordHoistMatchBranchContextualBindings(branch_ptrn_idxs, state.match_hoist_owner);
 
@@ -35388,7 +35524,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
     // type.
     for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        const valid_pattern = try self.checkPattern(branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env);
+        const valid_pattern = try self.checkPattern(branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx), .literals = .settled_by_owner }, env);
         if (!valid_pattern) state.had_type_error = true;
         // Matching an erroneous value binds nothing.
         if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(branch_ptrn.pattern);
@@ -35405,6 +35541,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
                 .match_expr = expr_idx,
             } });
         }
+        try self.settlePendingPatternLiterals(env);
     }
 
     if (try self.unifyMatchAltPatternBindings(branch_ptrn_idxs, @intCast(branch_cur_index), @intCast(match.branches.span.len), expr_idx, env)) {
@@ -35443,6 +35580,9 @@ fn relateBranchPatternToScrutinee(
     state.had_type_error = true;
     if (result.isAccepted()) return;
     state.pattern_relation_rejected = true;
+    // The report renders the pattern's type, which states each literal's
+    // requirements once the literal has them.
+    try self.settlePendingPatternLiterals(env);
     _ = try self.appendTypeMismatch(state.ptrn_target_var, pattern_var, self.mismatchContext(ctx, pattern_var));
 }
 

@@ -1440,7 +1440,7 @@ pub fn recordLiteralDispatchPlan(
     fn_var: ?types.Var,
     pattern_failure_owner: ?u32,
 ) Allocator.Error!void {
-    std.debug.assert(fn_var != null or ((kind == .numeral or kind == .quote) and pattern_failure_owner == null));
+    std.debug.assert(fn_var != null or kind == .numeral or kind == .quote);
     const node = store.nodes.get(node_idx);
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
     std.debug.assert(narrowNodeTag(PatternNodeTag, node.tag) == null or pattern_failure_owner != null);
