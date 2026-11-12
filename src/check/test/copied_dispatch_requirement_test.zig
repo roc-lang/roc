@@ -234,3 +234,66 @@ test "copied method requirements - an escaping local definition keeps its requir
     try test_env.assertNoErrors();
     try test_env.assertDefType("a", "b -> (U8 -> List(_item)) where [b.wrap : b, U8 -> List(_item)]");
 }
+
+const closure_record_prelude =
+    \\Repro := [].{}
+    \\
+    \\task : { run : (() -> result), resolve : (result -> Str) } -> Str
+    \\task = |config| (config.resolve)((config.run)())
+    \\
+    \\limit : U64
+    \\limit = 96
+    \\
+    \\read_file = |directory, name| task({
+    \\    run: || directory.read(),
+    \\    resolve: |result| Str.concat(name, result.take_first(limit)),
+    \\})
+    \\
+    \\Text := [Text].{
+    \\    take_first : Text, U64 -> Str
+    \\    take_first = |_, _| "text"
+    \\}
+    \\
+    \\TextDir := [TextDir].{
+    \\    read : TextDir -> Text
+    \\    read = |_| Text.Text
+    \\}
+    \\
+    \\BytesDir := [BytesDir].{
+    \\    read : BytesDir -> List(U8)
+    \\    read = |_| [1, 2]
+    \\}
+    \\
+;
+
+test "copied method requirements - a closure's call on another closure's method result is the enclosing definition's requirement" {
+    var test_env = try TestEnv.init("Repro", closure_record_prelude);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("read_file",
+        \\a, Str -> Str
+        \\  where [a.read : a -> result
+        \\     , result.take_first : result, U64 -> Str]
+    );
+}
+
+test "copied method requirements - a use satisfying a closure's requirement on a method result checks" {
+    var test_env = try TestEnv.init("Repro", closure_record_prelude ++
+        \\used : Str
+        \\used = read_file(TextDir.TextDir, "name")
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "copied method requirements - a use violating a closure's requirement on a method result is rejected" {
+    var test_env = try TestEnv.init("Repro", closure_record_prelude ++
+        \\used : Str
+        \\used = read_file(BytesDir.BytesDir, "name")
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "`take_first` method on `List` has an incompatible type");
+}

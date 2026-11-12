@@ -12654,10 +12654,16 @@ exact callable relation; a concrete, aliased, rigid, generalized, or erroneous
 receiver is not evidence of discharge. A creation relation whose generalized
 receiver is structurally reachable through the scheme root is represented
 durably by that receiver's own constraint list and no longer needs a duplicate
-side-table entry. A copied relation qualifies only when its explicit origin is
+side-table entry. A copied relation qualifies when its explicit origin is
 still an exact constraint on the same generalized receiver reachable through
 the enclosing scheme; the checked scheme-use substitution is then the durable
-link from the structural relation to that copy. A nested scheme whose root is
+link from the structural relation to that copy. It also qualifies when its own
+callable is an exact constraint on that receiver: a copy made on a fresh
+receiver that then unified with a variable the enclosing definition
+generalizes (a closure's call on the result of another closure's method
+call, both passed in one record), or a copy the boundary attached in place
+of its template (Evidence params), is itself the relation the scheme
+publishes, and every use of the scheme instantiates and checks it. A nested scheme whose root is
 absent from the enclosing boundary's output interface is out of scope; its
 recorded capture identity—the binding group whose checking captured it plus the
 capture rank—rather than a reachability guess about ownership, proves that the
@@ -14132,7 +14138,10 @@ Other solved-graph mutations:
   committed probe before the copy retires, so the use's copies of the
   callable's argument and result variables stay bound to the relation that
   every later use instantiates; a probe that cannot establish the pair keeps
-  the copy as an explicit requirement.
+  the copy as an explicit requirement. A copied requirement whose own
+  callable is attached to its interface-reachable receiver
+  (`requirementCallableIsAttached`) retires with no unification, being the
+  attached relation already.
 - `replayDispatchTarget`—mechanism: concrete dispatch replay (Pending
   Dispatch Requirements In Type Schemes, above). A root edge with a ground
   receiver and a final method without explicit requirements relates each
