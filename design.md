@@ -14133,7 +14133,14 @@ Other solved-graph mutations:
   at the boundary's rank once literals have defaulted—attached to its
   descriptor or copied by the boundary's uses of nested definitions, but never
   a nested scheme's generalized template—is related through an ordinary
-  committed probe; a
+  committed probe. `replaceNestedTemplatesAtBoundary` (`setVarContent` of the
+  receiver's constraint list) then replaces each non-escaping nested
+  template whose uses' copies are among the live requirements with that live
+  requirement, as declared in the same section; the template itself is not
+  unified there. `identifyReplacedTemplates` (committed probe, after
+  `rejectPolymorphicRecursion`) identifies each replaced template with its
+  live requirement once no use can instantiate it; the relation always
+  establishes, which Debug builds assert. A
   probe that cannot establish the pair, or that makes the related callable's
   type infinite, rolls back, reports the method conflict, poisons the
   receiver, and retires every definition the boundary generalizes. A relation
@@ -18864,7 +18871,7 @@ when a receiver is still a type variable at its definition's generalization
 boundary, its requirements of one method become one requirement: once the
 boundary has defaulted literals, and before it generalizes, it relates their
 callables, and an inferred scheme never holds two requirements of one method
-on one type that its definition made. Defaulting comes first because a
+on one type, other than a template no use copied (below). Defaulting comes first because a
 receiver it settles, such as an unannotated `weak = "a,b,c"` inside the
 definition, is not a type variable at all: each requirement on it is
 discharged against its default type on its own, exactly as when it is
@@ -18879,10 +18886,29 @@ and the definition's own calls are related alike. A use of
 of `outer.wrap` at the use: when `outer` resolves first, each use
 instantiates its method on its own, and when `outer` is still a type
 variable, `helper(helper(1.U8))` requires two `wrap` methods. The nested
-definition's own relation stays attached to the receiver, but its callable is
+definition's own relation is attached to the receiver too, but its callable is
 that scheme's generalized template, which no boundary relation may change:
 relating it would turn the live variables of every later use into the
-template's, so it is never one of the related requirements.
+template's (so the next use's instantiation reaches the previous use's
+copy), and an enclosing variable related to it would be generalized with it.
+It is never one of the related requirements. Once the live requirements of a
+method are one, the boundary replaces each template whose uses' copies are
+among them with that live requirement on the receiver, attaching the copy
+when no attached call carries it, so the receiver's where clause holds the
+method once and the copies retire into it after generalization without
+touching the template. The template remains its nested scheme's requirement
+while checking can still instantiate that scheme or read its uses' records.
+Once module checking has decided polymorphic recursion, nothing reads the
+template as a scheme any more, and each replaced template is identified with
+the live requirement that replaced it (`identifyReplacedTemplates`): the
+live requirement holds an instance of the template, so the identification
+always establishes, and every dispatch in the nested body then names the
+receiver's one published requirement, as evidence lookup by callable class
+requires. A nested definition whose type escapes through the boundary's
+interface is part of what the boundary publishes, so its template stays on
+the receiver and its copies retire into it after generalization, as any
+published scheme's do. A template no use copied (a nested definition never
+used) stays too, as a requirement of its own beside the method's live one.
 Requirements that cannot be one are a type mismatch. That includes a relation
 that would make the method's type infinite, which no type can be (two uses of
 `row.i32()` whose results must be both `a` and `{ id: a }`); unification

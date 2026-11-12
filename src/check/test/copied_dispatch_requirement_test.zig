@@ -183,3 +183,54 @@ test "copied method requirements - an unused local definition's call keeps the e
 
     try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "Str");
 }
+
+test "copied method requirements - a local definition using another is not polymorphic recursion" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer, x| {
+        \\    helper = |v| {
+        \\        p = hole({})
+        \\        _s = same(p, outer)
+        \\        p.id(v)
+        \\    }
+        \\    other = |w| helper(w)
+        \\    other(helper(x))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "a, b -> b where [a.id : a, b -> b]");
+}
+
+test "copied method requirements - a nested call's template is not a second requirement" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\func = |a, b| {
+        \\    add_ab = |x| a + b + x
+        \\    add_ab(10)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("func",
+        \\c, d -> c
+        \\  where [
+        \\    c.plus : c, d -> c,
+        \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        \\  ]
+    );
+}
+
+test "copied method requirements - an escaping local definition keeps its requirement on the receiver" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    _x = List.len(helper(1.U8))
+        \\    helper
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "b -> (U8 -> List(_item)) where [b.wrap : b, U8 -> List(_item)]");
+}

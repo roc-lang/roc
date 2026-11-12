@@ -1337,6 +1337,11 @@ merged_method_obligations: std.AutoHashMapUnmanaged(Var, MergedMethodObligation)
 /// The definitions each merged method obligation's boundary generalized
 /// (`MergedMethodObligation.definitions`), retired when the obligation fails.
 merged_method_definitions: std.ArrayListUnmanaged(BoundaryDefinition) = .empty,
+/// Nested-scheme templates a generalization boundary replaced on their
+/// receiver with the live requirement their uses' copies were related into
+/// (`replaceNestedTemplatesAtBoundary`), identified with it once checking has
+/// no further use for the template (`identifyReplacedTemplates`).
+replaced_templates: std.ArrayListUnmanaged(ReplacedTemplate) = .empty,
 /// Explicit derivation edges for constraints copied while instantiating a
 /// selected method target. This distinguishes target-owned recursive
 /// obligations from unrelated caller constraints merely grounded by the same
@@ -2004,6 +2009,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .where_method_use_record_by_fn_var = .keyed,
     .merged_method_obligations = .keyed,
     .merged_method_definitions = .keyed,
+    .replaced_templates = .keyed,
     .dispatch_derivations = .keyed,
     .dispatch_derivation_by_child_fn_var = .keyed,
     .method_name_mints = .keyed,
@@ -14668,6 +14674,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.recheckNominalConstructorBackings(&env);
     try self.rejectEscapingLocalTypes();
     try self.rejectPolymorphicRecursion();
+    try self.identifyReplacedTemplates(&env);
 
     try self.rejectEffectfulCompileTimeExecutableRoots();
     // Publish diagnostic origins while the producer still owns its private
@@ -20567,6 +20574,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     }
     try self.recheckNominalConstructorBackings(&env);
     try self.rejectPolymorphicRecursion();
+    try self.identifyReplacedTemplates(&env);
 
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
@@ -43131,6 +43139,15 @@ const SameMethodRequirement = struct {
 const SameMethodCopy = struct {
     receiver_var: Var,
     requirement: SameMethodRequirement,
+    /// The attached creation relation the copy descends from.
+    origin_fn_var: Var,
+};
+
+/// A template replaced on its receiver, and the live requirement that replaced
+/// it.
+const ReplacedTemplate = struct {
+    template_fn_var: Var,
+    live_fn_var: Var,
 };
 
 /// A type has one method of each name, so a type about to be generalized
@@ -43215,7 +43232,114 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
             }
         }
     }
+    try self.replaceNestedTemplatesAtBoundary(roots, env, &copies);
     return related_ever;
+}
+
+/// A receiver about to be generalized holds, attached to its descriptor, the
+/// relation each nested definition's own call on it created, whose callable
+/// that definition's scheme quantified: a template, which only that scheme's
+/// uses copy. Once the boundary has related the receiver's live requirements
+/// of a method, a template whose uses' copies are among them is replaced on
+/// the receiver by the live requirement rather than related to it, which
+/// would make every later use's variables the template's. A nested definition
+/// whose type escapes through this boundary's interface is part of what the
+/// boundary publishes, so its template stays and its copies retire into it
+/// after generalization; so does a template no use copied.
+fn replaceNestedTemplatesAtBoundary(
+    self: *Self,
+    roots: []const BoundaryRoot,
+    env: *Env,
+    copies: *std.ArrayListUnmanaged(SameMethodCopy),
+) Allocator.Error!void {
+    const rank = env.rank();
+    try self.collectSameMethodCopies(roots, rank, copies);
+    if (copies.items.len == 0) return;
+    var interface_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer interface_vars.deinit();
+    var interface_collected = false;
+    var rewritten: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
+    defer rewritten.deinit(self.gpa);
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+
+    for (copies.items) |first_copy| {
+        const resolved = self.types.resolveVar(first_copy.receiver_var);
+        const flex = switch (resolved.desc.content) {
+            .flex => |flex| flex,
+            .rigid, .alias, .structure, .field_presence, .err => continue,
+        };
+        if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
+        const attached = self.types.sliceStaticDispatchConstraints(flex.constraints);
+
+        rewritten.clearRetainingCapacity();
+        var replaced = false;
+        for (attached) |constraint| {
+            const template_root = self.types.resolveVar(constraint.fn_var);
+            if (template_root.desc.rank != .generalized) {
+                try rewritten.append(self.gpa, constraint);
+                continue;
+            }
+            const copy = for (copies.items) |candidate| {
+                if (self.types.resolveVar(candidate.receiver_var).var_ != resolved.var_) continue;
+                if (self.types.resolveVar(candidate.origin_fn_var).var_ == template_root.var_) break candidate;
+            } else {
+                try rewritten.append(self.gpa, constraint);
+                continue;
+            };
+            const scheme_root = self.nestedSchemeRootOfTemplate(constraint.fn_var) orelse {
+                try rewritten.append(self.gpa, constraint);
+                continue;
+            };
+            if (!interface_collected) {
+                for (roots) |root| try self.collectReachableVars(root.interface, &interface_vars);
+                interface_collected = true;
+            }
+            if (interface_vars.contains(self.types.resolveVar(scheme_root).var_)) {
+                try rewritten.append(self.gpa, constraint);
+                continue;
+            }
+            replaced = true;
+            const live = copy.requirement.constraint;
+            try self.replaced_templates.append(self.gpa, .{ .template_fn_var = constraint.fn_var, .live_fn_var = live.fn_var });
+            const live_root = self.types.resolveVar(live.fn_var).var_;
+            const already = for (rewritten.items) |kept| {
+                if (self.types.resolveVar(kept.fn_var).var_ == live_root) break true;
+            } else for (attached) |other| {
+                if (self.types.resolveVar(other.fn_var).var_ == live_root) break true;
+            } else false;
+            if (!already) try rewritten.append(self.gpa, live);
+        }
+        if (!replaced) continue;
+        const range = try self.types.appendStaticDispatchConstraints(rewritten.items);
+        try self.types.setVarContent(resolved.var_, .{ .flex = flex.withConstraints(range) });
+    }
+}
+
+/// The root of the nested scheme whose requirement a template is.
+fn nestedSchemeRootOfTemplate(self: *Self, template_fn_var: Var) ?Var {
+    const template_root = self.types.resolveVar(template_fn_var).var_;
+    for (self.type_schemes.items) |scheme| {
+        for (scheme.dispatch_requirements.items) |requirement| {
+            if (self.types.resolveVar(requirement.constraint.fn_var).var_ == template_root) return scheme.root_var;
+        }
+    }
+    return null;
+}
+
+/// Identify each replaced template with the live requirement that replaced it,
+/// once no use can instantiate the template again and polymorphic recursion
+/// has been decided from the uses' records. Every dispatch the nested body
+/// makes through the template then names the receiver's one published
+/// requirement of that method. The live requirement holds an instance of the
+/// template, so the identification always establishes.
+fn identifyReplacedTemplates(self: *Self, env: *Env) Allocator.Error!void {
+    for (self.replaced_templates.items) |replaced| {
+        if (self.types.resolveVar(replaced.template_fn_var).var_ == self.types.resolveVar(replaced.live_fn_var).var_) continue;
+        const identified = try self.unifyEquivalentGeneralizedCallables(replaced.live_fn_var, replaced.template_fn_var, env);
+        std.debug.assert(identified);
+    }
+    self.replaced_templates.clearRetainingCapacity();
 }
 
 /// The still-open copies this boundary's roots own, which their uses of
@@ -43233,29 +43357,28 @@ fn collectSameMethodCopies(
     for (roots) |root| {
         const scheme_idx = self.typeSchemeIndexForRoot(root.owner) orelse continue;
         for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
-            try self.appendSameMethodCopy(requirement.receiver_var, requirement.constraint, requirement.failure_expr, requirement.deferred_generated_codec, rank, out);
+            try self.appendSameMethodCopy(requirement, rank, out);
         }
     }
 }
 
 fn appendSameMethodCopy(
     self: *Self,
-    receiver_var: Var,
-    constraint: StaticDispatchConstraint,
-    use_expr: ?CIR.Expr.Idx,
-    deferred_generated_codec: bool,
+    requirement: SchemeDispatchRequirement,
     rank: Rank,
     out: *std.ArrayListUnmanaged(SameMethodCopy),
 ) Allocator.Error!void {
-    if (deferred_generated_codec) return;
+    const constraint = requirement.constraint;
+    if (requirement.deferred_generated_codec) return;
     if (self.final_codec_dispatch_constraint_fns.contains(constraint.fn_var)) return;
     if (self.staticDispatchConstraintIsInactive(constraint)) return;
     if (self.settled_static_dispatch_constraint_fns.contains(constraint.fn_var)) return;
-    const receiver = self.types.resolveVar(receiver_var);
+    const receiver = self.types.resolveVar(requirement.receiver_var);
     if (receiver.desc.content != .flex or receiver.desc.rank != rank) return;
     try out.append(self.gpa, .{
-        .receiver_var = receiver_var,
-        .requirement = .{ .constraint = constraint, .use_expr = use_expr },
+        .receiver_var = requirement.receiver_var,
+        .requirement = .{ .constraint = constraint, .use_expr = requirement.failure_expr },
+        .origin_fn_var = requirement.structural_origin.constraint_fn_var,
     });
 }
 
@@ -43501,6 +43624,24 @@ fn retireResolvedTypeSchemeRequirements(self: *Self) void {
     }
 }
 
+/// Whether a requirement's own callable is attached to its published,
+/// generalized receiver, as a copy that replaced its nested template is.
+fn requirementCallableIsAttached(
+    self: *Self,
+    requirement: SchemeDispatchRequirement,
+    published_vars: *const collections.DenseMap(Var, void),
+) bool {
+    const receiver = self.types.resolveVar(requirement.receiver_var);
+    if (receiver.desc.rank != .generalized) return false;
+    if (!published_vars.contains(receiver.var_)) return false;
+    const constraints_range = contentConstraintRange(receiver.desc.content) orelse return false;
+    const fn_root = self.types.resolveVar(requirement.constraint.fn_var).var_;
+    for (self.types.sliceStaticDispatchConstraints(constraints_range)) |constraint| {
+        if (self.types.resolveVar(constraint.fn_var).var_ == fn_root) return true;
+    }
+    return false;
+}
+
 fn requirementHasPublishedStructuralOrigin(
     self: *Self,
     requirement: SchemeDispatchRequirement,
@@ -43603,6 +43744,9 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
                 write += 1;
                 continue;
             }
+            // A copy the boundary attached to its receiver in place of the
+            // template it was copied from is the published relation itself.
+            if (self.requirementCallableIsAttached(requirement, &published_vars)) continue;
             const structurally_published = self.requirementHasPublishedStructuralOrigin(
                 requirement,
                 &published_vars,

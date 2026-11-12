@@ -937,4 +937,206 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(11, 20)" },
     },
+    .{
+        .name = "copied method requirements (lss): closure over two receivers whose nested call's requirement is replaced",
+        .source_kind = .module,
+        .source =
+        \\func = |a, b| {
+        \\    add_ab = |x| a + b + x
+        \\    add_ab(10)
+        \\}
+        \\
+        \\main = func(1.U64, 2)
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
+        .name = "copied method requirements (boxy): closure over two receivers whose nested call's requirement is replaced",
+        .source_kind = .module,
+        .source =
+        \\func = |a, b| {
+        \\    add_ab = |x| a + b + x
+        \\    add_ab(10)
+        \\}
+        \\
+        \\main = func(1.U64, 2)
+        ,
+        .expected = .{ .inspect_str = "13" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested definition called twice through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> U64
+        \\    read = |s| s.n
+        \\}
+        \\
+        \\poly = |s, t| {
+        \\    helper = |x| s.read() + x
+        \\    (helper(t), helper(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = poly(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(7, 8)" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested definition called twice through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> U64
+        \\    read = |s| s.n
+        \\}
+        \\
+        \\poly = |s, t| {
+        \\    helper = |x| s.read() + x
+        \\    (helper(t), helper(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = poly(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(7, 8)" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested definition with ? called twice through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> Try(U64, [Other])
+        \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+        \\}
+        \\
+        \\poly = |s, t| {
+        \\    helper = |x| {
+        \\        m = s.read()?
+        \\        Ok(m + x)
+        \\    }
+        \\    (helper(t), helper(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = poly(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(Ok(7), Ok(8))" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested definition with ? called twice through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> Try(U64, [Other])
+        \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+        \\}
+        \\
+        \\poly = |s, t| {
+        \\    helper = |x| {
+        \\        m = s.read()?
+        \\        Ok(m + x)
+        \\    }
+        \\    (helper(t), helper(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = poly(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(Ok(7), Ok(8))" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): escaping nested definition keeps its method requirement",
+        .source_kind = .module,
+        .source =
+        \\W := [W].{
+        \\    wrap : W, x -> List(x)
+        \\    wrap = |_, x| [x, x]
+        \\}
+        \\
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    _x = List.len(helper(1.U8))
+        \\    helper
+        \\}
+        \\
+        \\main = List.len(a(W.W)(3.U8))
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "copied method requirements (boxy): escaping nested definition keeps its method requirement",
+        .source_kind = .module,
+        .source =
+        \\W := [W].{
+        \\    wrap : W, x -> List(x)
+        \\    wrap = |_, x| [x, x]
+        \\}
+        \\
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    _x = List.len(helper(1.U8))
+        \\    helper
+        \\}
+        \\
+        \\main = List.len(a(W.W)(3.U8))
+        ,
+        .expected = .{ .inspect_str = "2" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested definitions sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    helper = |v| outer.id(v)
+        \\    other = |w| helper(w)
+        \\    other(helper(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested definitions sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    helper = |v| outer.id(v)
+        \\    other = |w| helper(w)
+        \\    other(helper(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
 };
