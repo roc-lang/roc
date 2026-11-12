@@ -358,11 +358,11 @@ pub const Constants = struct {
     ///      columns with body-local type context arguments, per-use anonymous
     ///      structure and generated-codec recurrences.
     /// 179: selected hoisted roots store their optional ids in four bytes.
-    /// 180: a serialized module env records the BLAKE3 digest of its source,
+    /// 182: a serialized module env records the BLAKE3 digest of its source,
     ///      and module identities, cache keys and file-dependency content
     ///      hashes are computed from source digests; a flex variable records
     ///      whether it is a deferred literal's type.
-    pub const CACHE_VERSION = 180;
+    pub const CACHE_VERSION = 182;
 };
 
 /// Configuration for the Roc cache system.
