@@ -1344,7 +1344,7 @@ const Unifier = struct {
                 // unify that against the rigid. This mirrors the `.rigid` branch
                 // of `unifyAlias`, keeping unification commutative.
                 const backing_var = self.types_store.getAliasBackingVar(b_alias);
-                try self.unifyGuarded(backing_var, vars.a.var_);
+                try self.unifyGuarded(vars.a.var_, backing_var);
             },
             .structure => return error.TypeMismatch,
             .field_presence => return error.TypeMismatch,
@@ -1385,7 +1385,7 @@ const Unifier = struct {
                 // Structural aliases are transparent. The concrete structure
                 // constrains the alias backing; alias spelling is checked
                 // presentation data, not union-find representative shape.
-                try self.unifyGuarded(vars.b.var_, backing_var);
+                try self.unifyGuarded(backing_var, vars.b.var_);
             },
             // A presence fact is not a type: it can never unify with an alias
             // (two-axes invariant). Reaching here is a structural mismatch.
@@ -2239,7 +2239,10 @@ const Unifier = struct {
                     .vars = vars.*,
                     .direction = direction,
                 } });
-                try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var);
+                switch (direction) {
+                    .a_is_nominal => try self.unifyGuarded(nominal_backing_var, anon_tag_union.ext),
+                    .b_is_nominal => try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var),
+                }
                 return;
             } else {
                 // Anon has tags but nominal is empty
@@ -2290,8 +2293,12 @@ const Unifier = struct {
             .direction = direction,
         } });
 
-        // Now safe to proceed with full unification.
-        try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
+        // Now safe to proceed with full unification, each side keeping the
+        // role it has in `vars`.
+        switch (direction) {
+            .a_is_nominal => try self.unifyTwoTagUnions(vars, nominal_backing_tag_union, anon_tag_union),
+            .b_is_nominal => try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union),
+        }
     }
 
     fn unifyRecordWithNominal(
@@ -2364,13 +2371,23 @@ const Unifier = struct {
         // Unify the record fields
         try self.retainOuterRecordMismatch(vars, opened_backing, direction);
 
-        try self.unifyTwoRecords(
-            vars,
-            anon_record_fields,
-            anon_record_ext,
-            nominal_backing_record.fields,
-            nominal_backing_record.ext,
-        );
+        // Each side keeps the role it has in `vars`.
+        switch (direction) {
+            .a_is_nominal => try self.unifyTwoRecords(
+                vars,
+                nominal_backing_record.fields,
+                nominal_backing_record.ext,
+                anon_record_fields,
+                anon_record_ext,
+            ),
+            .b_is_nominal => try self.unifyTwoRecords(
+                vars,
+                anon_record_fields,
+                anon_record_ext,
+                nominal_backing_record.fields,
+                nominal_backing_record.ext,
+            ),
+        }
     }
 
     /// Retain only the outer record relation owned by the active diagnostic.

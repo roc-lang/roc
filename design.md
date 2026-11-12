@@ -4765,8 +4765,31 @@ checking argument expressions. A known function already supplies that arity
 shape; an unresolved callable is related once to a fresh arity-shaped function.
 Arguments are checked with those formal shapes, then the ordinary formal/actual
 relations are committed in one linear fold. Shared formal variables therefore
-flow through one graph relation; the checker never performs a pairwise
-argument scan.
+flow through one graph relation; checking never performs a pairwise argument
+scan.
+
+The fold relates arguments in order, so the parameter type a rejected argument
+met already carries what earlier operands gave the function's shared
+variables. Only once a relation has been rejected, and only when the callee's
+type is an instance of a scheme, the checker asks whether the argument is
+wrong by itself: in a commit-probe it relates the argument to its parameter in
+a fresh copy of that scheme, then relates one earlier operand (an earlier
+argument, or a method call's receiver) to the same copy. The first earlier
+operand whose relation fails there is reported with the argument as a
+conflict between the two, showing both types and the function's declared
+type (`refineCallArgsConflict`, `fn_call_args_conflict`). Every probe rolls
+back, so the solved graph and the call's recovery are those of any rejected
+argument. The trial sees the argument as the rejected relation left it, which
+keeps the child writes that completed before the rejection, exactly as the
+ordinary report's argument type does; when those writes alone stop the
+argument fitting the fresh copy, or no single earlier operand conflicts with
+it, the ordinary argument report stands. A direct call's scheme is the one its
+callee's value use instantiated (`direct_callee_scheme`), and a method call's
+is the one its dispatch target instantiated
+(`DispatchTargetInstantiation.scheme_var`); a callee with neither has no
+conflict report. Pinned by
+test/snapshots/call_args_conflict_shared_type_var.md and
+test/snapshots/call_args_conflict_method_receiver.md.
 
 Expected aggregate structure is recursive checking context, not a second owner
 of the expression's root relation. A record update passes a borrowed base-row
@@ -4788,6 +4811,18 @@ ordinary full-shape relation owns the diagnostic. This preserves the explicit
 stored-value scheme-use edge, gives nested constructions their declared field
 kinds before siblings meet, and keeps the shared expected graph pristine for
 the owning relation and its error report.
+
+The owning relation's root types often differ only somewhere inside, where a
+comparison of the roots' own shapes finds nothing to say. The unifier keeps
+the pair whose relation failed first in its operands' roles: every child
+relation, through aliases and opened nominal backings alike, relates the
+expected side's part first. A report that shows the roots in those roles
+compares that pair when the roots' own shapes agree
+(`ReportBuilder.mismatchLeafFor`), so a list of records missing a field names
+the field whether an annotation, a call, a record update, or an enclosing
+aggregate owns the relation. Pinned by
+test/snapshots/list_first_element_mismatch_owner_reports.md and
+test/snapshots/repro_issue_12968_record_update_list_field.md.
 
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
@@ -12023,16 +12058,25 @@ target is known: `describe = |person| "${person.name} is ${person.age}"` is
 `age : U64` record fails to relate to it. The unifier keeps the pair whose
 relation failed first (a child mismatch a record or alias relation flags counts,
 an ignored one does not) and snapshots it before poisoning. When that pair
-reaches the item type of a copy the checker instantiated, the mismatch is
+reaches the item type of a copy the checker instantiated, and the rejected
+relation relates the value the instantiating use produced, the mismatch is
 reported as the use giving the interpolation's values different types: at the
 interpolation, with the use and both types, rather than as the call's or
 dispatch's own mismatch, whose types the failed relation has partly merged. The
-copy is then rejected, so discharging it reports nothing further. A mismatch
+copy is then rejected, so discharging it reports nothing further. A relation
+relates the use's value when it is the use's own relation, reads the use as an
+operand, or relates a call's arguments to the use as its callee
+(`currentRelationRelatesUse`). Reaching the item type is not enough by itself:
+unification gives every type it has related one variable, so an unrelated
+later mismatch involving, say, `Str` reaches the item type of every
+interpolation whose values became `Str`, and that mismatch is its own report. A mismatch
 found while relating a part to its item type is that part's own report. Pinned
 by test/snapshots/repro_issue_12213_method_interpolates_mixed_field_types.md
 (a method call) and
 test/snapshots/static_dispatch/interpolation_use_conflicting_values.md (a
-function call).
+function call), and by
+test/snapshots/static_dispatch/interpolation_tie_unrelated_mismatch.md (an
+unrelated mismatch after the use).
 
 Interpolation metadata records whether its regions are this module's source.
 Cross-module copying marks them imported, since a module renders only its own

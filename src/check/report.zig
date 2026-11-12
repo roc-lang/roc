@@ -183,6 +183,10 @@ pub const ReportBuilder = struct {
     /// explains that conflict at the context's region instead of comparing the
     /// operands, whose difference it would not show.
     method_conflict: ?MethodConflict = null,
+    /// The current mismatch's root types and the pair inside them whose
+    /// relation failed, so `makeMismatchReport` can describe that pair when
+    /// the root types differ only somewhere inside.
+    mismatch_leaf: ?struct { root: TypePair, leaf: TypePair } = null,
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -246,6 +250,7 @@ pub const ReportBuilder = struct {
         self.typo_suggestions.clearRetainingCapacity();
         self.record_pattern_hint = null;
         self.method_conflict = null;
+        self.mismatch_leaf = null;
     }
 
     // Helpers
@@ -721,8 +726,9 @@ pub const ReportBuilder = struct {
             }
         }
 
-        // Generate and print type comparison hints
-        const diff_hints = try diff.compareTypes(
+        // Generate and print type comparison hints. Types that differ only
+        // somewhere inside are described by the pair whose relation failed.
+        var diff_hints = try diff.compareTypes(
             self.snapshots.?,
             self.module_env.getIdentStoreConst(),
             expected_snapshot,
@@ -731,9 +737,41 @@ pub const ReportBuilder = struct {
             &self.diff_fields,
             &self.diff_tags,
         );
+        if (diff_hints.len == 0) {
+            if (self.mismatchLeafFor(expected_snapshot, actual_snapshot)) |leaf| {
+                diff_hints = try diff.compareTypes(
+                    self.snapshots.?,
+                    self.module_env.getIdentStoreConst(),
+                    leaf.expected,
+                    leaf.actual,
+                    self.gpa,
+                    &self.diff_fields,
+                    &self.diff_tags,
+                );
+            }
+        }
         try self.renderDiffHints(&report, diff_hints, hints.len > 0);
 
         return report;
+    }
+
+    /// The pair whose relation failed inside the current mismatch, in the
+    /// roles a report gives the mismatch's root types: `expected` and `actual`
+    /// are the root snapshots the report shows as expected and as actual. A
+    /// report showing other types has no such pair.
+    fn mismatchLeafFor(
+        self: *const Self,
+        expected: SnapshotContentIdx,
+        actual: SnapshotContentIdx,
+    ) ?struct { expected: SnapshotContentIdx, actual: SnapshotContentIdx } {
+        const mismatch = self.mismatch_leaf orelse return null;
+        if (mismatch.root.expected_snapshot == expected and mismatch.root.actual_snapshot == actual) {
+            return .{ .expected = mismatch.leaf.expected_snapshot, .actual = mismatch.leaf.actual_snapshot };
+        }
+        if (mismatch.root.expected_snapshot == actual and mismatch.root.actual_snapshot == expected) {
+            return .{ .expected = mismatch.leaf.actual_snapshot, .actual = mismatch.leaf.expected_snapshot };
+        }
+        return null;
     }
 
     /// Helper to create a "bad type" report, where only the actual type needs
@@ -1009,6 +1047,7 @@ pub const ReportBuilder = struct {
                     if (mismatch.leaf) |leaf| return self.buildInterpolationTieReport(tie, leaf);
                 }
                 self.method_conflict = mismatch.method_conflict;
+                if (mismatch.leaf) |leaf| self.mismatch_leaf = .{ .root = mismatch.types, .leaf = leaf };
                 var report = try self.buildTypeMismatchForContext(mismatch);
                 errdefer report.deinit();
                 try self.addStrConversionHint(&report, mismatch.str_conversion, false);
@@ -1189,6 +1228,7 @@ pub const ReportBuilder = struct {
             .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
             .fn_call_non_function => |ctx| self.buildFnCallNonFunction(mismatch.types, ctx),
             .fn_call_arg => |ctx| self.buildIncompatibleFnCallArg(mismatch.types, ctx),
+            .fn_call_args_conflict => |ctx| self.buildFnCallArgsConflict(mismatch.types, ctx),
             .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .lhs),
             .binop_rhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .rhs),
             .try_operator_expr => |ctx| self.buildTryOperatorExprReport(mismatch.types, ctx),
@@ -2147,6 +2187,95 @@ pub const ReportBuilder = struct {
                 &.{},
             );
         }
+    }
+
+    /// Build a report for two operands of one call whose types conflict with
+    /// each other under the called function's declared type.
+    fn buildFnCallArgsConflict(
+        self: *Self,
+        types: TypePair,
+        ctx: Context.FnCallArgsConflictContext,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
+        errdefer report.deinit();
+
+        // Each operand is named by at most two fragments.
+        var first_buf: [2]Doc = undefined;
+        const first: []const Doc = switch (ctx.first) {
+            .receiver => blk: {
+                first_buf[0] = D.bytes("value this method is called on");
+                break :blk first_buf[0..1];
+            },
+            .arg => |index| blk: {
+                first_buf = .{ D.num_ord(index + 1), D.bytes("argument") };
+                break :blk first_buf[0..2];
+            },
+        };
+        const second = [_]Doc{ D.num_ord(ctx.second_arg_index + 1), D.bytes("argument") };
+
+        var docs = Doc.ArrayList.init(self.gpa);
+        defer docs.deinit();
+
+        try docs.append(D.bytes("The"));
+        switch (ctx.first) {
+            .receiver => {
+                try docs.appendSlice(first);
+                try docs.append(D.bytes("and the"));
+                try docs.appendSlice(&second);
+            },
+            .arg => |index| try docs.appendSlice(&.{
+                D.num_ord(index + 1),
+                D.bytes("and"),
+                D.num_ord(ctx.second_arg_index + 1),
+                D.bytes("arguments"),
+            }),
+        }
+        if (ctx.fn_name) |fn_name| {
+            try docs.appendSlice(&.{
+                D.bytes("of this call to"),
+                D.ident(fn_name).withAnnotation(.inline_code),
+            });
+        } else {
+            try docs.append(D.bytes("of this call"));
+        }
+        try docs.append(D.bytes("have types that conflict with each other."));
+        try D.renderSliceInto(docs.items, self, &report, &report.headline);
+
+        try self.addSourceHighlight(&report, regionIdxFrom(ctx.first_var));
+        try report.document.addLineBreak();
+        docs.clearRetainingCapacity();
+        try docs.append(D.bytes("The"));
+        try docs.appendSlice(first);
+        try docs.append(D.bytes("has the type:"));
+        try D.renderSlice(docs.items, self, &report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(types.expected_snapshot)));
+        try report.document.addLineBreaks(2);
+
+        try self.addSourceHighlight(&report, regionIdxFrom(ctx.second_var));
+        try report.document.addLineBreak();
+        docs.clearRetainingCapacity();
+        try docs.append(D.bytes("But the"));
+        try docs.appendSlice(&second);
+        try docs.append(D.bytes("has the type:"));
+        try D.renderSlice(docs.items, self, &report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(types.actual_snapshot)));
+        try report.document.addLineBreaks(2);
+
+        if (ctx.fn_name) |fn_name| {
+            try D.renderSlice(&.{
+                D.bytes("Each fits the type of"),
+                D.ident(fn_name).withAnnotation(.inline_code),
+                D.bytes("by itself, but that type needs them to agree with each other:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{D.bytes("Each fits the function's type by itself, but that type needs them to agree with each other:")}, self, &report);
+        }
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(ctx.fn_type)));
+
+        return report;
     }
 
     /// Build a report for incompatible match branches
@@ -4529,6 +4658,13 @@ pub const ReportBuilder = struct {
                     // job (`judgeOptionalFieldAccesses`), reported as Unset
                     // Of Required/Defaulted Field (design.md "Field Kinds",
                     // "In Progress: Unsetting an Optional Field").
+                    //
+                    // The report shows the field's two types in the roles
+                    // the records have, so the failed pair lies inside them.
+                    if (self.mismatch_leaf) |*mismatch| {
+                        mismatch.root.expected_snapshot = expected_field.content;
+                        mismatch.root.actual_snapshot = actual_field.content;
+                    }
                     return try self.makeMismatchReport(
                         ProblemRegion{ .simple = ctx.field_region_idx },
                         &.{

@@ -761,6 +761,8 @@ checking_immediate_callee: bool = false,
 checking_forwarded_result: bool = false,
 /// The callee expression of the call whose callee is being checked.
 direct_callee_expr: ?CIR.Expr.Idx = null,
+/// The scheme that callee's own value use instantiated, when it is such a use.
+direct_callee_scheme: ?Var = null,
 /// Set when that callee names a compiler-derived associated method; the call
 /// then dispatches the method on the method's owner type.
 derived_method_callee: ?DerivedMethodCallee = null,
@@ -1843,6 +1845,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .checking_immediate_callee = .lexical,
     .checking_forwarded_result = .lexical,
     .direct_callee_expr = .lexical,
+    .direct_callee_scheme = .lexical,
     .derived_method_callee = .lexical,
     .delayed_dependency_depth = .lexical,
     .checking_executable_root = .lexical,
@@ -2589,6 +2592,8 @@ const DispatchTargetInstantiation = struct {
     target_binding: ModuleEnv.MethodBinding,
     method_name: Ident.Idx,
     method_var: Var,
+    /// The scheme `method_var` is an instance of, when it is one.
+    scheme_var: ?Var = null,
     /// The edge's own nested requirements: the `dispatch_derivations` its
     /// target instantiation recorded.
     derivations_start: u32 = 0,
@@ -8186,6 +8191,8 @@ fn openNumeralConstraint(self: *const Self, entry: OpenNumeralLiteral) StaticDis
 const InstantiatedInterpolationOwner = struct {
     fn_var: Var,
     owner: CIR.Expr.Idx,
+    /// The expression whose checking instantiated the copy.
+    use_expr: CIR.Expr.Idx,
     /// The copy's own metadata, whose item type the use's relations reach.
     interpolation: StaticDispatchConstraint.InterpolationMetadata,
 };
@@ -8498,9 +8505,33 @@ fn interpolationTieFor(self: *Self, mismatch: problem.TypeMismatch) ?Instantiate
         const entry = self.instantiated_interpolation_owners.items[index];
         if (entry.interpolation.interpolated_parts.len() < 2) continue;
         const item_root = self.types.resolveVar(entry.interpolation.item_var).var_;
-        if (item_root == expected_root or item_root == actual_root) return entry;
+        if (item_root != expected_root and item_root != actual_root) continue;
+        if (!self.currentRelationRelatesUse(entry.use_expr)) continue;
+        return entry;
     }
     return null;
+}
+
+/// Whether the relation being checked relates the value `use_expr` produced:
+/// it is `use_expr`'s own relation, it reads `use_expr` as an operand, or it
+/// relates a call's arguments to `use_expr` as the callee.
+fn currentRelationRelatesUse(self: *const Self, use_expr: CIR.Expr.Idx) bool {
+    const owner = self.relation_owner;
+    if (owner.kind == .none) return false;
+    const owner_expr = owner.exprIdx();
+    if (owner_expr == use_expr) return true;
+    switch (self.cir.store.getExpr(owner_expr)) {
+        .e_call => |call| if (call.func == use_expr) return true,
+        else => {},
+    }
+    const operands = self.relation_operands.get(owner_expr) orelse return false;
+    const values = self.relationOperandValues(operands);
+    const len = switch (owner.kind) {
+        .list_prefix => owner.index + 1,
+        .branch => owner.index + 1,
+        .none, .operands, .value => values.len,
+    };
+    return std.mem.indexOfScalar(CIR.Expr.Idx, values[0..@min(len, values.len)], use_expr) != null;
 }
 
 /// Unify two types where `a` is the expected type and `b` is the actual type.
@@ -8576,6 +8607,26 @@ fn unifyOwnedRecordRelation(
     return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, .actual);
 }
 
+/// How an owned relation unifies: a rejection leaves the operands unpoisoned
+/// and is left to the caller to report.
+fn ownedRelationOptions(
+    ctx: problem.Context,
+    actual: Var,
+    row_width_relation: unifier.RowWidthRelation,
+    root_relation: unifier.RootRelation,
+    nominal_record_mismatch_role: unifier.NominalRecordMismatchRole,
+) unifier.Options {
+    return .{
+        .context = ctx,
+        .on_mismatch = .write_no_report,
+        .root_relation = root_relation,
+        .row_width_relation = row_width_relation,
+        .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
+        .record_construction_var = if (row_width_relation == .construction) actual else null,
+        .nominal_record_mismatch_role = nominal_record_mismatch_role,
+    };
+}
+
 /// `unifyOwnedRelation` for a relation whose initial pair carries a root
 /// relation beyond ordinary unification.
 fn unifyOwnedRootRelation(
@@ -8588,15 +8639,13 @@ fn unifyOwnedRootRelation(
     root_relation: unifier.RootRelation,
     nominal_record_mismatch_role: unifier.NominalRecordMismatchRole,
 ) std.mem.Allocator.Error!unifier.Result {
-    const result = try self.runUnify(expected, actual, env, .{
-        .context = ctx,
-        .on_mismatch = .write_no_report,
-        .root_relation = root_relation,
-        .row_width_relation = row_width_relation,
-        .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
-        .record_construction_var = if (row_width_relation == .construction) actual else null,
-        .nominal_record_mismatch_role = nominal_record_mismatch_role,
-    });
+    const result = try self.runUnify(expected, actual, env, ownedRelationOptions(
+        ctx,
+        actual,
+        row_width_relation,
+        root_relation,
+        nominal_record_mismatch_role,
+    ));
     if (result.isAccepted()) return result;
     return .{ .problem = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual)) };
 }
@@ -8732,6 +8781,7 @@ fn contextShowsValueAsStr(context: problem.Context) bool {
         .none,
         .fn_call_arity,
         .fn_call_non_function,
+        .fn_call_args_conflict,
         .if_condition,
         .if_branch,
         .match_pattern,
@@ -11917,9 +11967,11 @@ fn instantiateBindingVar(
     evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
     if (self.isBindingSchemeVar(binding_var)) {
+        self.noteDirectCalleeScheme(binding_var, evidence);
         return self.instantiateTypeScheme(binding_var, env, region_behavior, evidence);
     }
     if (self.types.resolveVar(binding_var).desc.rank == .generalized) {
+        self.noteDirectCalleeScheme(binding_var, evidence);
         return self.instantiateVar(binding_var, env, region_behavior, evidence);
     }
     if (self.per_use_copy_bindings.contains(binding_var)) {
@@ -11955,10 +12007,22 @@ fn instantiateImportedBindingVar(
     region_behavior: InstantiateRegionBehavior,
     evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
+    self.noteDirectCalleeScheme(imported_var, evidence);
     if (self.isBindingSchemeVar(imported_var)) {
         return self.instantiateTypeScheme(imported_var, env, region_behavior, evidence);
     }
     return self.instantiateVar(imported_var, env, region_behavior, evidence);
+}
+
+/// Record `scheme_var` as the scheme the call being checked calls, when
+/// `evidence` is the value use of that call's callee expression.
+fn noteDirectCalleeScheme(self: *Self, scheme_var: Var, evidence: InstantiationEvidence) void {
+    switch (evidence) {
+        .value_use => |expr| if (self.direct_callee_expr == expr) {
+            self.direct_callee_scheme = scheme_var;
+        },
+        .none, .nested_function_use, .dispatch_target => {},
+    }
 }
 
 /// You probably are looking for `instantiateVar`.
@@ -13635,6 +13699,7 @@ fn recordOpenLiteralVar(
                     try self.instantiated_interpolation_owners.append(self.gpa, .{
                         .fn_var = constraint.fn_var,
                         .owner = owner,
+                        .use_expr = self.instantiation_source_expr.?,
                         .interpolation = self.types.getInterpolationMetadata(constraint.interpolation),
                     });
                 },
@@ -31083,28 +31148,18 @@ fn resumeListCheck(self: *Self, task: *ExprTask, state: *ListCheck, env: *Env, c
             // Fold the first element into the seeded accumulator: one real
             // unify merges the seed and the element into the same var, so
             // element-to-element consistency below still flows through one
-            // shared accumulator. A mismatch here is the element failing the
-            // annotation, so it is reported in the expected type's own
-            // context, at the element's region.
-            var first_elem_ok = true;
+            // shared accumulator. A first element the seed rejects becomes
+            // the accumulator itself and records nothing here: the expected
+            // type's context describes this whole list, so the relation that
+            // owns the list's expected type reports the mismatch.
             state.elem_var = if (state.seed_elem_var) |seed_elem_var| acc: {
-                const previous_relation = try self.enterRelation(.of(.list_prefix, frame.expr_idx, 0));
-                const result = try self.unifyInContext(seed_elem_var, first_elem_var, env, nested_expected.aggregateType().?.context);
-                try self.leaveRelation(previous_relation);
-                first_elem_ok = result.isEstablished();
-                break :acc seed_elem_var;
+                if (try self.commitProjectedStoredValue(seed_elem_var, first_elem_var, env)) break :acc seed_elem_var;
+                break :acc first_elem_var;
             } else first_elem_var;
 
             state.index = 1;
-            if (first_elem_ok) {
-                state.phase = .fold;
-                state.last_elem_expr_idx = elems[0];
-            } else {
-                // The first element failed the seeded expectation: check the
-                // remaining elements without comparing to the elem_var to
-                // catch their individual errors.
-                state.phase = .remaining;
-            }
+            state.phase = .fold;
+            state.last_elem_expr_idx = elems[0];
         },
         .fold => {
             const elem_expr_idx = elems[state.index];
@@ -33227,6 +33282,8 @@ fn resumeClosureCheck(self: *Self, task: *ExprTask, state: *ClosureCheck, env: *
 const CallCheck = struct {
     phase: enum { start, func, args, derived_args } = .start,
     saved_direct_callee_expr: ?CIR.Expr.Idx = null,
+    /// The scheme the callee's type is an instance of, when it is one.
+    callee_scheme: ?Var = null,
     derived: DerivedMethodCallee = undefined,
     func_var: Var = undefined,
     func_name: ?Ident.Idx = null,
@@ -33265,12 +33322,15 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
             self.checking_immediate_callee = true;
             state.saved_direct_callee_expr = self.direct_callee_expr;
             self.direct_callee_expr = call.func;
+            self.direct_callee_scheme = null;
             state.phase = .func;
             return .{ .child = .{ .expr = call.func, .expected = child_expected } };
         },
         .func => {
             std.debug.assert(child_done);
             self.direct_callee_expr = state.saved_direct_callee_expr;
+            state.callee_scheme = self.direct_callee_scheme;
+            self.direct_callee_scheme = null;
             if (self.derived_method_callee) |callee| {
                 self.derived_method_callee = null;
                 state.derived = callee;
@@ -33290,6 +33350,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
                     const saved_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
                     self.instantiation_is_immediate_callee = true;
                     defer self.instantiation_is_immediate_callee = saved_instantiation_is_immediate_callee;
+                    state.callee_scheme = call_func_expr_var;
                     break :blk_instantiate try self.instantiateBindingVar(
                         call_func_expr_var,
                         env,
@@ -33308,27 +33369,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
             // to select the arity diagnostic for the call-shape relation
             // below. The relation itself is uniform for known functions,
             // aliases, and still-flex callables.
-            const mb_known_func: ?types_mod.Func = known: {
-                var var_ = func_var;
-                var guard = types_mod.debug.IterationGuard.init("checkExpr.call.knownFunc");
-                while (true) {
-                    guard.tick();
-                    switch (self.types.resolveVar(var_).desc.content) {
-                        .structure => |flat_type| switch (flat_type) {
-                            .fn_pure, .fn_unbound, .fn_effectful => |func| break :known func,
-                            .record,
-                            .tuple,
-                            .nominal_type,
-                            .empty_record,
-                            .tag_union,
-                            .empty_tag_union,
-                            => break :known null,
-                        },
-                        .alias => |alias| var_ = self.types.getAliasBackingVar(alias),
-                        .flex, .rigid, .field_presence, .err => break :known null,
-                    }
-                }
-            };
+            const mb_known_func: ?types_mod.Func = self.funcThroughAliases(func_var);
 
             // A known function already is the arity-shaped constraint for
             // this call, so use its formal slots directly. A flex or
@@ -33447,7 +33488,19 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
                 if (self.exprIsFreshRecordConstruction(call_arg_idx)) .construction else .exact,
             );
             arg_relation_failed = arg_result.isProblem();
-            if (arg_relation_failed) break;
+            if (arg_relation_failed) {
+                if (state.callee_scheme) |scheme_var| {
+                    try self.refineCallArgsConflict(arg_result.problem, .{
+                        .scheme_var = scheme_var,
+                        .fn_name = func_name,
+                        .receiver = null,
+                        .args = call_arg_expr_idxs,
+                        .failed_arg = arg_index,
+                        .region = expr_region,
+                    }, env);
+                }
+                break;
+            }
         }
     }
 
@@ -33904,6 +33957,16 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
                     if (self.exprIsFreshRecordConstruction(arg_expr_idx)) .construction else .exact,
                 );
                 if (arg_result.isProblem()) {
+                    if (self.dispatchTargetScheme(state.eager_constraint_fn_var.?)) |scheme_var| {
+                        try self.refineCallArgsConflict(arg_result.problem, .{
+                            .scheme_var = scheme_var,
+                            .fn_name = method_call.method_name,
+                            .receiver = method_call.receiver,
+                            .args = arg_expr_idxs,
+                            .failed_arg = i,
+                            .region = frame.expr_region,
+                        }, env);
+                    }
                     did_err = true;
                     break;
                 }
@@ -37208,6 +37271,121 @@ fn varResolvesToKnownType(self: *const Self, var_: Var) bool {
             .structure => return true,
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .flex, .rigid, .field_presence, .err => return false,
+        }
+    }
+}
+
+/// The scheme the method selected for the dispatch `constraint_fn_var` is an
+/// instance of, when a method was selected and its type is such an instance.
+fn dispatchTargetScheme(self: *const Self, constraint_fn_var: Var) ?Var {
+    const index = self.dispatch_target_instantiation_by_fn_var.get(constraint_fn_var) orelse return null;
+    return self.dispatch_target_instantiations.items[index].scheme_var;
+}
+
+/// A call whose relation of one argument to its parameter was rejected.
+const RejectedCallArg = struct {
+    /// The scheme the called function's type is an instance of.
+    scheme_var: Var,
+    fn_name: ?Ident.Idx,
+    /// The value a method call is made on, which fills the function's first
+    /// parameter.
+    receiver: ?CIR.Expr.Idx,
+    args: []const CIR.Expr.Idx,
+    /// Index into `args` of the rejected argument.
+    failed_arg: usize,
+    /// The call's region.
+    region: Region,
+};
+
+/// Report a rejected call argument as conflicting with an earlier operand of
+/// the same call when that is what rejected it: the argument fits its
+/// parameter in a fresh copy of the function's declared type, and stops
+/// fitting once one earlier operand has been related to that same copy. Every
+/// trial runs in a probe that is rolled back, so only the report changes. The
+/// argument is tried as the rejected relation left it (design.md, call
+/// checking).
+fn refineCallArgsConflict(
+    self: *Self,
+    problem_idx: problem.Problem.Idx,
+    call: RejectedCallArg,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const receiver_count: usize = if (call.receiver != null) 1 else 0;
+    const failed_param = call.failed_arg + receiver_count;
+    const first_param: usize = for (0..failed_param) |earlier_param| {
+        var probe = try self.beginCommitProbe(env);
+        defer probe.rollback();
+        const copy = try self.instantiateVarOrphanFlexed(call.scheme_var, env, .{ .explicit = call.region });
+        const func = self.funcThroughAliases(copy) orelse return;
+        if (func.args.len() != call.args.len + receiver_count) return;
+        if (!try self.callOperandFitsParam(&probe, func, call, failed_param)) return;
+        if (!try self.callOperandFitsParam(&probe, func, call, earlier_param)) break earlier_param;
+    } else return;
+
+    const first: problem.Context.FnCallArgsConflictContext.Operand, const first_expr: CIR.Expr.Idx = if (first_param < receiver_count)
+        .{ .receiver, call.receiver.? }
+    else
+        .{ .{ .arg = @intCast(first_param - receiver_count) }, call.args[first_param - receiver_count] };
+    const first_var = ModuleEnv.varFrom(first_expr);
+    const first_snapshot = try self.snapshotVarForError(first_var);
+    const fn_type = try self.snapshotVarForError(call.scheme_var);
+    const mismatch = &self.problems.problems.items[@backingInt(problem_idx)].type_mismatch;
+    mismatch.types.expected_var = first_var;
+    mismatch.types.expected_snapshot = first_snapshot;
+    mismatch.context = .{ .fn_call_args_conflict = .{
+        .fn_name = call.fn_name,
+        .first = first,
+        .first_var = first_var,
+        .second_arg_index = @intCast(call.failed_arg),
+        .second_var = ModuleEnv.varFrom(call.args[call.failed_arg]),
+        .fn_type = fn_type,
+    } };
+}
+
+/// Relate the operand a call passes for parameter `param` of `func` to that
+/// parameter, as the call's own relation of it does.
+fn callOperandFitsParam(
+    self: *Self,
+    probe: *CommitProbe,
+    func: types_mod.Func,
+    call: RejectedCallArg,
+    param: usize,
+) std.mem.Allocator.Error!bool {
+    const param_var = self.types.getVarAt(func.args, @intCast(param));
+    if (call.receiver) |receiver| {
+        if (param == 0) return (try probe.unify(param_var, ModuleEnv.varFrom(receiver))).isEstablished();
+    }
+    const arg = call.args[param - @intFromBool(call.receiver != null)];
+    const arg_var = ModuleEnv.varFrom(arg);
+    const row_width_relation: unifier.RowWidthRelation = if (self.exprIsFreshRecordConstruction(arg)) .construction else .exact;
+    return (try self.runUnify(param_var, arg_var, probe.env, ownedRelationOptions(
+        .none,
+        arg_var,
+        row_width_relation,
+        .ordinary,
+        .none,
+    ))).isEstablished();
+}
+
+/// The function type `var_` resolves to through aliases, if it is one.
+fn funcThroughAliases(self: *const Self, var_: Var) ?types_mod.Func {
+    var current = var_;
+    var guard = types_mod.debug.IterationGuard.init("funcThroughAliases");
+    while (true) {
+        guard.tick();
+        switch (self.types.resolveVar(current).desc.content) {
+            .structure => |flat_type| switch (flat_type) {
+                .fn_pure, .fn_unbound, .fn_effectful => |func| return func,
+                .record,
+                .tuple,
+                .nominal_type,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return null,
+            },
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .flex, .rigid, .field_presence, .err => return null,
         }
     }
 }
@@ -48689,6 +48867,7 @@ fn instantiateDispatchTargetMethodVar(
 
     const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
     const records_before = self.cir.scheme_uses.items.items.len;
+    var method_scheme_var: ?Var = null;
     const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
         break :blk expr_var_for_method;
     } else blk: {
@@ -48698,10 +48877,12 @@ fn instantiateDispatchTargetMethodVar(
         defer self.method_receiver_context = context_before;
         if (method_lookup.is_this_module) {
             const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
+            method_scheme_var = local_method_type_var;
             self.method_receiver_context = receiver_context.subs();
             break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
         }
         const imported_scheme = try self.importedMethodScheme(method_lookup);
+        method_scheme_var = imported_scheme;
         self.method_receiver_context = receiver_context.subs();
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
     };
@@ -48756,6 +48937,7 @@ fn instantiateDispatchTargetMethodVar(
         .target_binding = method_lookup.binding,
         .method_name = constraint.fn_name,
         .method_var = method_var,
+        .scheme_var = method_scheme_var,
         .derivations_start = derivations_start,
         .derivations_end = derivations_end,
         .intro_expr = constraintIntroExpr(constraint),
