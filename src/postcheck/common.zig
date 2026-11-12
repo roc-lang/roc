@@ -66,7 +66,7 @@ pub const unimplemented_declaration_crash = "declaration has no implementation";
 pub const CheckedModules = struct {
     root: checked.LoweringModuleView,
     imports: []const checked.ImportedModuleView = &.{},
-    /// The module in this set whose key is `key`: the root, one of the
+
     /// The module in this set whose key is `key`: the root, one of the
     /// root's relation modules, or an import. Null when the set does not
     /// hold it.
@@ -76,7 +76,7 @@ pub const CheckedModules = struct {
         for (self.imports) |view| if (view.key.digest().eql(key)) return view;
         return null;
     }
-    /// does before it reads any of their bodies.
+
     /// Demand the body index of every module of the set, which a consumer
     /// does before it reads any of their bodies.
     pub fn demandBodyIndexes(self: CheckedModules) std.mem.Allocator.Error!void {

@@ -643,6 +643,17 @@ synthetic_binding_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// scheme-use evidence, codec requirements, or dispatch scope of its own
 /// (design.md "Anonymous Structure Is Copied Per Use").
 per_use_copy_bindings: collections.DenseMapUnmanaged(Var, void) = .empty,
+/// What this module's checking can change an anonymous record or tag union
+/// into, collected before any binding generalizes: anonymous structure
+/// nothing in it can change is shared by every use rather than copied
+/// (design.md "Anonymous Structure Is Copied Per Use").
+use_absorbers: types_mod.use_absorbers.UseAbsorbers = .{},
+/// Whether `use_absorbers` is collected. Until it is, every liftable class
+/// is copied per use.
+use_absorbers_collected: bool = false,
+/// The module envs whose types `use_absorbers` holds: every env this check
+/// copies types from.
+use_absorber_sources: std.ArrayListUnmanaged(*const ModuleEnv) = .empty,
 /// Reused exact graph walk for classifying a freshly generalized binding.
 /// Classification happens once at the producer boundary, never on lookup.
 binding_scheme_classification_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
@@ -1809,6 +1820,9 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .binding_scheme_nodes = .keyed,
     .synthetic_binding_schemes = .keyed,
     .per_use_copy_bindings = .keyed,
+    .use_absorbers = .keyed,
+    .use_absorbers_collected = .input,
+    .use_absorber_sources = .input,
     .binding_scheme_classification_seen = .scratch,
     .binding_scheme_classification_stack = .scratch,
     .settled_static_dispatch_constraint_fns = .keyed,
@@ -11832,7 +11846,7 @@ fn walkGroundMarks(
             .any => continue,
             .copied => if (copy != .none) continue,
         };
-        if (liftable == .refinable and resolved.desc.liftsIntoNominal()) marks.ground.items[index] = false;
+        if (liftable == .refinable and try self.copiedPerUse(resolved.desc)) marks.ground.items[index] = false;
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => marks.ground.items[index] = false,
             .alias => |alias| {
@@ -14762,6 +14776,7 @@ const PendingRecordDestruct = struct {
 /// and seal the solved type store: every later stage only reads it.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try self.checkFileInternal(false);
+    try self.debugAssertLocalUseAbsorbersCovered();
     try self.types.canonicalizeAndSeal(self.cir.getIdentStoreConst());
 }
 
@@ -14771,6 +14786,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 pub fn checkFileLeavingStoreOpen(self: *Self) std.mem.Allocator.Error!void {
     if (comptime !builtin.is_test) @compileError("checkFileLeavingStoreOpen is test scaffolding");
     try self.checkFileInternal(false);
+    try self.debugAssertLocalUseAbsorbersCovered();
 }
 
 fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
@@ -14779,6 +14795,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // Fill in types store up to the size of CIR nodes
     try ensureTypeStoreIsFilled(self);
+
+    try self.collectUseAbsorbers();
 
     // Record which annotations type host-boundary values before any
     // annotation is generated (their rows are kept as written rather than
@@ -14882,6 +14900,36 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
             => {
                 // All other stmt types are invalid at the top level
             },
+        }
+    }
+
+    // A type nested in a block-local type's associated block is in
+    // `type_decls` but not `all_statements`, and its body is generated here
+    // like every other declaration's, whether or not anything references it.
+    // A module-level declaration is in both lists and is generated once.
+    for (self.cir.store.sliceStatements(self.cir.type_decls)) |stmt_idx| {
+        switch (self.cir.store.getStatement(stmt_idx)) {
+            .s_alias_decl, .s_nominal_decl => _ = try self.ensureTypeDeclGenerated(stmt_idx, &env),
+            .s_where_alias_decl,
+            .s_runtime_error,
+            .s_type_anno,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_type_var_alias,
+            => {},
         }
     }
 
@@ -37850,6 +37898,143 @@ fn methodCallArgContext(
     } };
 }
 
+/// Collect `use_absorbers`: everything in the store of each module this
+/// check copies types from, and everything this module writes that a use
+/// can change anonymous structure into, read from its syntax because
+/// checking registers it only as it reaches it: each nominal declaration's
+/// backing, and the name of each field written as optional or defaulted in
+/// an annotation, accessed with `.?`, or unset.
+fn collectUseAbsorbers(self: *Self) Allocator.Error!void {
+    std.debug.assert(!self.use_absorbers_collected);
+    if (self.builtin_ctx.builtin_module) |builtin_env| try self.addUseAbsorberSource(builtin_env);
+    for (self.imported_modules) |env| try self.addUseAbsorberSource(env);
+    for (self.owner_modules) |env| try self.addUseAbsorberSource(env);
+    if (self.platform_requirements) |input| {
+        try self.addUseAbsorberSource(input.env);
+        for (input.owner_modules) |env| try self.addUseAbsorberSource(env);
+    }
+
+    const absorbers = &self.use_absorbers;
+    const node_count: usize = @intCast(self.cir.store.nodes.len());
+    for (0..node_count) |index| {
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(index));
+        // Only these four node kinds name a nominal backing or a widening
+        // field; every other kind contributes nothing.
+        const tag = self.cir.store.nodes.get(node_idx).tag;
+        if (tag == .statement_nominal_decl) {
+            const nominal = self.cir.store.getStatement(@fromBackingInt(@intCast(index))).s_nominal_decl;
+            try self.addLocalUseAbsorber(nominal.anno);
+        } else if (tag == .ty_record_field or tag == .ty_record_field_defaulted) {
+            const field = self.cir.store.getAnnoRecordField(@fromBackingInt(@intCast(index)));
+            if (field.is_optional or field.default_value != null) try absorbers.addWideningField(self.gpa, self.cir.getIdentText(field.name));
+        } else if (tag == .field_access_segment) {
+            const segment = self.cir.store.getFieldAccessSegment(@fromBackingInt(@intCast(index)));
+            if (segment.mode == .optional) try absorbers.addWideningField(self.gpa, self.cir.getIdentText(segment.name));
+        } else if (tag == .record_unset_field) {
+            const field = self.cir.store.getUnsetField(@fromBackingInt(@intCast(index)));
+            try absorbers.addWideningField(self.gpa, self.cir.getIdentText(field.name));
+        }
+    }
+
+    self.use_absorbers_collected = true;
+    self.generalizer.use_absorbers = .{
+        .absorbers = &self.use_absorbers,
+        .idents = self.cir.getIdentStoreConst(),
+    };
+}
+
+/// Assert that `use_absorbers` allows every change this module's own types
+/// can make, now that checking has generated them: every lift into a
+/// declaration the module registered, and every widening by a field its
+/// records hold as optional or defaulted.
+fn debugAssertLocalUseAbsorbersCovered(self: *Self) Allocator.Error!void {
+    if (!std.debug.runtime_safety or !self.use_absorbers_collected) return;
+    const idents = self.cir.getIdentStoreConst();
+    const self_module = self.cir.selfModuleIdentity();
+    for (self.types.nominal_decls.items.items) |decl| {
+        if (decl.origin_module != self_module or !decl.isValid()) continue;
+        if (!try self.use_absorbers.coversBacking(self.gpa, self.types, idents, decl.backing)) {
+            base.invariant("a nominal declaration's backing admits a lift its syntax did not record", .{});
+        }
+    }
+    const var_count: usize = @intCast(self.types.len());
+    for (0..var_count) |index| {
+        const var_: Var = @fromBackingInt(@intCast(index));
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.var_ != var_) continue;
+        const record = resolved.desc.content.unwrapRecord() orelse continue;
+        if (!self.use_absorbers.coversRecordFields(self.types, idents, record)) {
+            base.invariant("a record holds an optional or defaulted field no collected source names", .{});
+        }
+    }
+}
+
+fn addUseAbsorberSource(self: *Self, env: *const ModuleEnv) Allocator.Error!void {
+    if (env == self.cir) return;
+    for (self.use_absorber_sources.items) |known| if (known == env) return;
+    try self.use_absorber_sources.append(self.gpa, env);
+    // Another module cannot lift into an opaque declaration.
+    try self.use_absorbers.addStore(self.gpa, &env.types, env.getIdentStoreConst(), false);
+}
+
+/// Record the backing annotation of a nominal declaration this module
+/// writes. Only a tag union or record written directly as the backing is
+/// checked as one; an application or a lookup is checked as the alias or
+/// nominal type it names, into which no anonymous structure lifts.
+fn addLocalUseAbsorber(self: *Self, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!void {
+    const absorbers = &self.use_absorbers;
+    const hash = types_mod.use_absorbers.nameHash;
+    switch (self.cir.store.getTypeAnno(anno_idx)) {
+        .parens => |parens| try self.addLocalUseAbsorber(parens.anno),
+        .tag_union => |tag_union| {
+            if (tag_union.ext != null) {
+                absorbers.tags.every = true;
+                return;
+            }
+            absorbers.scratch.clearRetainingCapacity();
+            for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_anno| switch (self.cir.store.getTypeAnno(tag_anno)) {
+                .tag => |tag| try absorbers.scratch.append(self.gpa, hash(self.cir.getIdentText(tag.name))),
+                .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {
+                    absorbers.tags.every = true;
+                    return;
+                },
+            };
+            try absorbers.tags.addClosed(self.gpa, absorbers.scratch.items);
+        },
+        .record => |record| {
+            if (record.ext != null) {
+                absorbers.records.every = true;
+                return;
+            }
+            absorbers.scratch.clearRetainingCapacity();
+            for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                const field = self.cir.store.getAnnoRecordField(field_idx);
+                if (field.is_unnamed) continue;
+                try absorbers.scratch.append(self.gpa, hash(self.cir.getIdentText(field.name)));
+            }
+            try absorbers.records.addClosed(self.gpa, absorbers.scratch.items);
+        },
+        .rigid_var, .rigid_var_lookup, .underscore, .malformed => absorbers.addInvalidDecl(),
+        .apply, .lookup, .tag, .tuple, .@"fn" => {},
+    }
+}
+
+/// Whether the class `desc` is per-use structure: anonymous structure a use
+/// of a binding holding it can change (`UseAbsorbers.copiedPerUse`).
+fn copiedPerUse(self: *Self, desc: types_mod.Descriptor) Allocator.Error!bool {
+    if (!self.use_absorbers_collected) return desc.liftsIntoNominal();
+    return self.use_absorbers.copiedPerUse(self.gpa, self.types, self.cir.getIdentStoreConst(), desc);
+}
+
+/// Assert that `env` is a module whose types `use_absorbers` holds,
+/// since this check is about to copy types from it.
+fn debugAssertUseAbsorberSource(self: *const Self, env: *const ModuleEnv) void {
+    if (!std.debug.runtime_safety or !self.use_absorbers_collected) return;
+    if (env == self.cir) return;
+    for (self.use_absorber_sources.items) |known| if (known == env) return;
+    base.invariant("a check copied types from a module whose declarations it did not collect", .{});
+}
+
 /// Whether a type contains no type variables at all: no flex, rigid, or
 /// presence vars, and no error content.
 fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
@@ -37881,7 +38066,7 @@ fn varIsGroundAs(self: *Self, root_var: Var, liftable: LiftableStructure) std.me
         const resolved = self.types.resolveVar(var_);
         if (visited.contains(resolved.var_)) continue;
         try visited.put(resolved.var_, {});
-        if (liftable == .refinable and resolved.desc.liftsIntoNominal()) return false;
+        if (liftable == .refinable and try self.copiedPerUse(resolved.desc)) return false;
 
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
@@ -38354,6 +38539,7 @@ fn copyImportedBindingSchemeCodecRequirements(
     source_node: CIR.Node.Idx,
     copied_scheme_root: Var,
 ) Allocator.Error!void {
+    self.debugAssertUseAbsorberSource(source_env);
     const source_requirements = source_env.bindingSchemeCodecRequirementsForNode(source_node);
     if (source_requirements.len == 0) return;
 
@@ -38795,6 +38981,8 @@ fn copyVarWithSourceSubstitutions(
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    self.debugAssertUseAbsorberSource(other_module_env);
 
     // First, reset state
     self.var_map.clearRetainingCapacity();
@@ -47237,6 +47425,7 @@ fn importedOwnerContextSubstitutions(
     const source_decl_idx = source_env.types.lookupNominalDeclByKey(source_origin, owner_statement) orelse return;
     const source_decl = source_env.types.getNominalDecl(source_decl_idx);
     if (source_decl.flags.context_len == 0) return;
+    self.debugAssertUseAbsorberSource(source_env);
 
     self.var_map.clearRetainingCapacity();
     const first_new_var: usize = @intCast(self.types.len());

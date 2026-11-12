@@ -86,6 +86,8 @@ pub const StaticDescs = struct {
     captured_callables: std.AutoHashMapUnmanaged(ExportIndex, CapturedCallable) = .empty,
     captured_tables: std.AutoHashMapUnmanaged(ExportIndex, u32) = .empty,
     captured_records: std.ArrayList(CapturedRecord) = .empty,
+    /// The procedure each static callable enters, from its reservation on.
+    callable_procs: std.AutoHashMapUnmanaged(ExportIndex, LIR.LirProcSpecId) = .empty,
     next_unfilled: usize = 0,
     /// The root callable of each static dictionary tree, by its root.
     dictionary_trees: std.StringHashMapUnmanaged(ExportIndex) = .empty,
@@ -174,6 +176,7 @@ pub const StaticDescs = struct {
         var captured = self.captured_callables.valueIterator();
         while (captured.next()) |callable| self.allocator.free(callable.words);
         self.captured_callables.deinit(self.allocator);
+        self.callable_procs.deinit(self.allocator);
         self.captured_tables.deinit(self.allocator);
         for (self.captured_records.items) |record| self.allocator.free(record.elems);
         self.captured_records.deinit(self.allocator);
@@ -246,9 +249,16 @@ pub const StaticDescs = struct {
     /// An immortal callable of `proc` with `word_count` capture words,
     /// reserved: `fillCallable` gives its words once the callables it
     /// captures, which may capture it, are reserved too.
-    pub fn reserveCallable(self: *StaticDescs, word_count: u32) Allocator.Error!ExportIndex {
+    pub fn reserveCallable(self: *StaticDescs, proc: LIR.LirProcSpecId, word_count: u32) Allocator.Error!ExportIndex {
         self.extra_nodes += 1;
-        return try self.reserveStaticCallable(0, 16 + self.extra_nodes, word_count);
+        const node = try self.reserveStaticCallable(0, 16 + self.extra_nodes, word_count);
+        try self.callable_procs.put(self.allocator, node, proc);
+        return node;
+    }
+
+    /// The procedure the static callable `node` enters.
+    pub fn callableProc(self: *const StaticDescs, node: ExportIndex) LIR.LirProcSpecId {
+        return self.callable_procs.get(node) orelse types.invariant("a static callable has no procedure");
     }
 
     /// Fill the callable `reserveCallable` reserved.
@@ -930,6 +940,9 @@ pub const StaticDescs = struct {
     }
 
     fn fillStaticCallable(self: *StaticDescs, node: ExportIndex, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!void {
+        const known = try self.callable_procs.getOrPut(self.allocator, node);
+        if (known.found_existing and known.value_ptr.* != proc) types.invariant("a static callable was reserved for another procedure");
+        known.value_ptr.* = proc;
         if (self.table_identities) {
             const owned = try self.allocator.dupe(CaptureWord, words);
             errdefer self.allocator.free(owned);
