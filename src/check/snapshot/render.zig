@@ -100,7 +100,7 @@ fn constraints(self: *Self, snapshots: *const snapshot.Store, range: anytype) Al
         // independent requirements. Redirects preserve both facts.
         const entry = try self.raw_callables.getOrPut(self.gpa, constraint.source_fn_var);
         if (!entry.found_existing) entry.value_ptr.* = try self.store.freshRedirect(self.nodeVar(constraint.fn_content));
-        out.* = .{ .fn_name = constraint.fn_name, .fn_var = entry.value_ptr.*, .origin = constraint.origin };
+        out.* = .{ .fn_name = constraint.fn_name, .fn_var = entry.value_ptr.*, .origin = constraint.origin, .receiver = constraint.receiver };
     }
     return self.store.appendStaticDispatchConstraints(result);
 }

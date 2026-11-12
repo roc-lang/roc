@@ -146,6 +146,7 @@ pub const SnapshotStaticDispatchConstraint = struct {
     fn_content: SnapshotContentIdx,
     source_fn_var: Var,
     origin: @FieldType(types.StaticDispatchConstraint, "origin"),
+    receiver: types.StaticDispatchConstraint.Receiver = .holder,
 };
 
 const Var = types.Var;
@@ -853,6 +854,7 @@ pub const Store = struct {
                         .fn_content = self.pending_values.pop().?,
                         .source_fn_var = frame.constraints[frame.idx].fn_var,
                         .origin = frame.constraints[frame.idx].origin,
+                        .receiver = frame.constraints[frame.idx].receiver,
                     });
                     frame.idx += 1;
                     frame.stage = .head;

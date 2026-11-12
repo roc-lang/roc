@@ -52191,7 +52191,9 @@ inline fn processDeferredDispatchEntry(
     // names carries exactly the requirements that variable's `where` clause
     // states, so the relation is checked against them as for any annotated
     // type variable.
-    if (self.annotatedOpenRowOf(deferred_constraint.var_)) |rigid_row| deferred_constraint.var_ = rigid_row;
+    if (self.annotatedOpenRowOf(deferred_constraint.var_)) |rigid_row| {
+        if (self.relationsCallMethodsOn(deferred_constraint.constraints, deferred_constraint.var_)) deferred_constraint.var_ = rigid_row;
+    }
     const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
     const dispatcher_content = dispatcher_resolved.desc.content;
     if (try self.waitsForPlainDecision(deferred_constraint.constraints, dispatcher_resolved.var_)) {
@@ -52852,8 +52854,10 @@ inline fn processDeferredDispatchEntry(
             // row variable holds the requirement until then (design.md
             // "Methods On Open Rows").
             if (self.openRowOf(dispatcher_resolved.var_)) |row| {
-                try self.holdOnOpenRow(env, deferred_constraint, row);
-                break :dispatch_resolution;
+                if (self.relationsCallMethodsOn(deferred_constraint.constraints, dispatcher_resolved.var_)) {
+                    try self.holdOnOpenRow(env, deferred_constraint, row);
+                    break :dispatch_resolution;
+                }
             }
             // Anonymous structural types (records, tuples, tag unions) have
             // derived methods only when all their components support them.
@@ -54752,13 +54756,14 @@ fn closeOpenRowHoldingRequirements(self: *Self, row: Var, env: *Env) Allocator.E
     const held = for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
         if (constraint.receiver == .open_row_value) break constraint;
     } else return false;
+    // A receiver a type error replaced leaves nothing to decide.
     const empty_row: Content = switch (self.types.resolveThroughAliases(self.openRowValueReceiver(held)).desc.content) {
         .structure => |flat| switch (flat) {
             .record => .{ .structure = .empty_record },
             .tag_union => .{ .structure = .empty_tag_union },
-            .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => unreachable,
+            .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return false,
         },
-        .flex, .rigid, .alias, .err, .field_presence => unreachable,
+        .flex, .rigid, .alias, .err, .field_presence => return false,
     };
     const empty = try self.freshFromContent(empty_row, env, self.getRegionAt(resolved.var_));
     _ = try self.unify(resolved.var_, empty, env);
@@ -54847,6 +54852,21 @@ fn decidePlainMethodsAtBoundary(self: *Self, env: *Env) Allocator.Error!void {
     defer self.deciding_plain_rank = previous;
     try self.checkStaticDispatchConstraints(env, false);
     try self.checkAllConstraints(env);
+}
+
+/// Whether every relation in `range` calls a method on `receiver`: its
+/// method takes the receiver as its first argument. A literal's conversion
+/// (`from_quote : Str -> a`) asks the type to be built from a literal, which
+/// a record or tag union never is.
+fn relationsCallMethodsOn(self: *Self, range: StaticDispatchConstraint.SafeList.Range, receiver: Var) bool {
+    const receiver_root = self.types.resolveVar(receiver).var_;
+    for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
+        if (constraint.origin.literalKind() != null) return false;
+        const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
+        const args = self.types.sliceVars(func.args);
+        if (args.len == 0 or self.types.resolveVar(args[0]).var_ != receiver_root) return false;
+    }
+    return true;
 }
 
 /// The row variable an annotation names that a record or tag union ends

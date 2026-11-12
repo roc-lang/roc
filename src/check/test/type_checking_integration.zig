@@ -13077,11 +13077,32 @@ test "check type - dispatch - inferred recursive nominal equality closes a concr
         \\reversed = make({}) == Leaf("a")
         \\different = Expr.Leaf("b") != make({})
         \\method = Expr.Leaf("a").is_eq(make({}))
-        \\bare_method = Leaf("a").is_eq(make({}))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a method called on a tag literal is decided against the plain union" {
+    // A method call on `Leaf("a")` is a requirement on its open row, and
+    // nothing gives that row a nominal type: the row closes as the plain
+    // union, whose derived `is_eq` compares it with itself, not with `Expr`.
+    const source =
+        \\Expr := [Leaf(Str), Next(Expr)].{
+        \\    is_eq = |self, other|
+        \\        match (self, other) {
+        \\            (Leaf(left), Leaf(right)) => left == right
+        \\            (Next(left), Next(right)) => left == right
+        \\            _ => False
+        \\        }
+        \\}
+        \\
+        \\make : {} -> Expr
+        \\make = |_| Leaf("a")
+        \\
+        \\bare_method = Leaf("a").is_eq(make({}))
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - recursive equality method using an enclosing value is a capture" {
