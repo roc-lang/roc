@@ -538,9 +538,10 @@ jobs:
       - name: Install Valgrind
         if: matrix.valgrind
         run: |
-          # libc6-dbg is required for Valgrind's function redirections.
-          sudo apt-get update && sudo apt-get install -y libc6-dbg
-          sudo snap install valgrind --classic
+          # libc6-dbg is required for Valgrind's function redirections. Ubuntu's
+          # Valgrind is enough here because build.zig pins x86-64 builds to the
+          # baseline CPU, so they contain no AVX-512 instructions it can't emulate.
+          sudo apt-get update && sudo apt-get install -y libc6-dbg valgrind
           valgrind --version
 
       # The embedded lld-link resolves /defaultlib via the LIB env and roc's
