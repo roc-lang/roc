@@ -142,6 +142,7 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
         TestUnexpectedResult,
         UnsupportedBuiltinAnnotationOnly,
         UnsupportedHeader,
+        UnsupportedTarget,
         WriteFailed,
         Issue806UnsafeLargeStackStructAssign,
         Issue806UnsafeLargeStackTagAssign,
@@ -1320,6 +1321,10 @@ fn lowerAppPathToLir(
     };
     const lower_target: lir.CheckedPipeline.TargetConfig = .{
         .comptime_value_reads = opts.shared_comptime_reads,
+        .completed_scalar_values = if (coord.program_session) |*session|
+            if (session.completed) |*completed| &completed.scalar_values else null
+        else
+            null,
         .specialization_strategy = opts.specialization_strategy,
         .target_usize = opts.target_usize,
         .inline_mode = opts.inline_mode,
