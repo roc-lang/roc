@@ -37,5 +37,5 @@ run! = |input| {
 	expect allocs == 1
 	expect List.len($list) == 5000
 	expect List.first($list) == Ok(7)
-	"refill length: ${List.len($list).to_str()}, refill allocations: ${allocs.to_str()}"
+	"refill length: ${List.len($list).to_str()}, refill allocations: ${allocs.to_str()};"
 }
