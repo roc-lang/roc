@@ -28,7 +28,7 @@ use_it = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
+MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:19:34:19:35
 # PROBLEMS
 ~~~clojure
 (reports

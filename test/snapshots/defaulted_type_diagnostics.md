@@ -32,10 +32,10 @@ written_method = written.foo()
 MISSING METHOD - defaulted_type_diagnostics.md:22:26:22:29
 MISSING METHOD - defaulted_type_diagnostics.md:15:18:15:25
 MISSING METHOD - defaulted_type_diagnostics.md:17:17:17:20
+MISSING METHOD - defaulted_type_diagnostics.md:7:26:7:27
 MISSING METHOD - defaulted_type_diagnostics.md:9:18:9:20
 MISSING METHOD - defaulted_type_diagnostics.md:11:21:11:23
 TYPE MISMATCH - defaulted_type_diagnostics.md:13:34:13:37
-MISSING METHOD - defaulted_type_diagnostics.md:7:16:7:17
 # PROBLEMS
 ~~~clojure
 (reports

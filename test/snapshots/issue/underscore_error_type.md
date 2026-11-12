@@ -38,9 +38,9 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:11:23:11:24
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:16:16:16:17
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:16:21:16:22
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:15
-TYPE MISMATCH - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:19:7:19:10
+TYPE MISMATCH - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 # PROBLEMS
 ~~~clojure

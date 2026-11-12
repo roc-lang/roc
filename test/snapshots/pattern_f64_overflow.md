@@ -14,7 +14,7 @@ match x {
 }
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - pattern_f64_overflow.md:2:5:2:10
 # PROBLEMS
 ~~~clojure
 (reports

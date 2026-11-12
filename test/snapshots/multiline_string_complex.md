@@ -56,7 +56,7 @@ x = {
 # EXPECTED
 EXPECTED PACKAGE PATH - multiline_string_complex.md:4:6:4:17
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
-MISSING METHOD - multiline_string_complex.md:37:3:37:4
+TYPE MISMATCH - multiline_string_complex.md:37:7:37:9
 # PROBLEMS
 ~~~clojure
 (reports
