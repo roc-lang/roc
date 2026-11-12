@@ -5785,8 +5785,7 @@ const StaticDataUse = struct {
 /// `finishConstAtNode`), so whether it needs target storage is a function of
 /// the string alone, as it is for a string read from a completed evaluation:
 /// a string fits its descriptor when its capacity does.
-fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstString) u64 {
-    _ = view;
+fn constStringBackingLength(str: check.ConstStore.ConstString) u64 {
     return str.capacity;
 }
 
@@ -5794,7 +5793,7 @@ fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.St
     var current = node;
     while (true) switch (view.const_store.get(current)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .str => |str| return .{ .string_backing = constStringBackingLength(view, str) },
+        .str => |str| return .{ .string_backing = constStringBackingLength(str) },
         .nominal => |nominal| current = nominal.backing,
         .pending => Common.invariant("pending const reached static storage metadata production"),
         .zst, .scalar, .fn_value, .list, .box, .tuple, .record, .tag, .crash, .checked_error => return .aggregate,
@@ -6380,27 +6379,6 @@ const Builder = struct {
     /// This scope's expression-data type for restored const values.
     const ConstExprData = Ast.ExprData;
     const ConstExprId = Ast.ExprId;
-
-    /// A stored list's restored form when it has `spare` capacity beyond its
-    /// items: the reservation it was evaluated with, applied to `items`, or
-    /// to the empty list when `items` is null. A static-data initializer
-    /// evaluates this into the descriptor's capacity; anywhere else it is
-    /// the list operation the constant's own code ran.
-    fn constListWithSpareCapacity(self: *Builder, items: ?Ast.ExprId, spare: u64) Allocator.Error!ConstExprData {
-        const amount = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(Ast.ExprData, .{ .u64 = spare }) });
-        const list = items orelse return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.program.addExprSpan(&.{amount}) } };
-        return .{ .low_level = .{ .op = .list_reserve, .args = try self.program.addExprSpan(&.{ list, amount }) } };
-    }
-
-    /// A stored string's restored form when it has `spare` capacity beyond
-    /// its bytes: the reservation it was evaluated with, applied to its
-    /// literal. A static-data initializer evaluates this into the
-    /// descriptor's capacity; anywhere else it is the string operation the
-    /// constant's own code ran.
-    fn constStrWithSpareCapacity(self: *Builder, literal: Ast.ExprId, spare: u64) Allocator.Error!ConstExprData {
-        const amount = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(Ast.ExprData, .{ .u64 = spare }) });
-        return .{ .low_level = .{ .op = .str_reserve, .args = try self.program.addExprSpan(&.{ literal, amount }) } };
-    }
 
     fn addExpr(self: *Builder, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
         return self.program.addExpr(expr);
@@ -12919,7 +12897,7 @@ const Builder = struct {
             .crash,
             .checked_error,
             => return false,
-            .str => |str| return constStringBackingLength(view, str) != 0,
+            .str => |str| return constStringBackingLength(str) != 0,
             .fn_value => return true,
             .list => return true,
             .box => return true,
@@ -23086,26 +23064,6 @@ const BodyContext = struct {
     const ConstExprData = BodyExprData;
     const ConstExprId = DraftExprId;
 
-    /// A stored list's restored form when it has `spare` capacity beyond its
-    /// items: the reservation it was evaluated with, applied to `items`, or
-    /// to the empty list when `items` is null. A static-data initializer
-    /// evaluates this into the descriptor's capacity; anywhere else it is
-    /// the list operation the constant's own code ran.
-    /// A stored string's restored form when it has `spare` capacity beyond
-    /// its bytes: the reservation it was evaluated with, applied to its
-    /// literal. A static-data initializer evaluates this into the
-    /// descriptor's capacity; anywhere else it is the string operation the
-    /// constant's own code ran.
-    fn constStrWithSpareCapacity(self: *BodyContext, literal: DraftExprId, spare: u64) Allocator.Error!ConstExprData {
-        const amount = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(BodyExprData, .{ .u64 = spare }) });
-        return .{ .low_level = .{ .op = .str_reserve, .args = try self.addExprSpan(&.{ literal, amount }) } };
-    }
-
-    fn constListWithSpareCapacity(self: *BodyContext, items: ?DraftExprId, spare: u64) Allocator.Error!ConstExprData {
-        const amount = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(BodyExprData, .{ .u64 = spare }) });
-        const list = items orelse return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.addExprSpan(&.{amount}) } };
-        return .{ .low_level = .{ .op = .list_reserve, .args = try self.addExprSpan(&.{ list, amount }) } };
-    }
     const ConstExprSpan = DraftSpan(DraftExprId);
     const ConstFieldExpr = DraftFieldExpr;
     const ConstFieldExprSpan = DraftSpan(DraftFieldExpr);
@@ -48512,7 +48470,7 @@ const BodyContext = struct {
                         const literal: BodyExprData = .{ .str_lit = try self.addStringLiteral(bytes) };
                         const spare = str.capacity - bytes.len;
                         if (spare == 0) break :str literal;
-                        break :str try self.constStrWithSpareCapacity(try self.addExprWithTypeCell(cell, literal), spare);
+                        break :str try constStrWithSpareCapacity(self, try self.addExprWithTypeCell(cell, literal), spare);
                     },
                     .crash => |str| .{ .crash = try self.addStringLiteral(
                         store_view.const_store.strBytes(str),
@@ -48537,7 +48495,8 @@ const BodyContext = struct {
                         };
                         const spare = list.capacity - list.items.len();
                         if (spare == 0) break :list items;
-                        break :list try self.constListWithSpareCapacity(
+                        break :list try constListWithSpareCapacity(
+                            self,
                             if (list.items == .empty) null else try self.addExprWithTypeCell(cell, items),
                             spare,
                         );
@@ -70434,6 +70393,43 @@ fn constRestoreChildType(restorer: anytype, frame: anytype, index: usize) Type.T
     };
 }
 
+/// A stored list's restored form when it has `spare` capacity beyond its
+/// items: the reservation it was evaluated with, applied to `items`, or
+/// to the empty list when `items` is null. A static-data initializer
+/// evaluates this into the descriptor's capacity; anywhere else it is
+/// the list operation the constant's own code ran.
+fn constListWithSpareCapacity(
+    restorer: anytype,
+    items: ?@TypeOf(restorer.*).ConstExprId,
+    spare: u64,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
+    const emit = restorer.constEmit();
+    const amount = try restorer.addExpr(.{
+        .ty = try restorer.primitiveType(.u64),
+        .data = restoreScalar(@TypeOf(restorer.*).ConstExprData, .{ .u64 = spare }),
+    });
+    const list = items orelse return .{ .low_level = .{ .op = .list_with_capacity, .args = try emit.addExprSpan(&.{amount}) } };
+    return .{ .low_level = .{ .op = .list_reserve, .args = try emit.addExprSpan(&.{ list, amount }) } };
+}
+
+/// A stored string's restored form when it has `spare` capacity beyond
+/// its bytes: the reservation it was evaluated with, applied to its
+/// literal. A static-data initializer evaluates this into the
+/// descriptor's capacity; anywhere else it is the string operation the
+/// constant's own code ran.
+fn constStrWithSpareCapacity(
+    restorer: anytype,
+    literal: @TypeOf(restorer.*).ConstExprId,
+    spare: u64,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
+    const emit = restorer.constEmit();
+    const amount = try restorer.addExpr(.{
+        .ty = try restorer.primitiveType(.u64),
+        .data = restoreScalar(@TypeOf(restorer.*).ConstExprData, .{ .u64 = spare }),
+    });
+    return .{ .low_level = .{ .op = .str_reserve, .args = try emit.addExprSpan(&.{ literal, amount }) } };
+}
+
 /// A restored node's expression data, from its restored children.
 fn constRestoreData(
     restorer: anytype,
@@ -70453,7 +70449,7 @@ fn constRestoreData(
             const literal: Data = .{ .str_lit = try emit.addStringLiteral(bytes) };
             const spare = str.capacity - bytes.len;
             if (spare == 0) break :blk literal;
-            break :blk try restorer.constStrWithSpareCapacity(try restorer.addExpr(.{ .ty = frame.ty, .data = literal }), spare);
+            break :blk try constStrWithSpareCapacity(restorer, try restorer.addExpr(.{ .ty = frame.ty, .data = literal }), spare);
         },
         .crash => |str| .{ .crash = try emit.addStringLiteral(
             store_view.const_store.strBytes(str),
@@ -70483,7 +70479,8 @@ fn constRestoreData(
             };
             const spare = list.capacity - list.items.len();
             if (spare == 0) break :blk items;
-            break :blk try restorer.constListWithSpareCapacity(
+            break :blk try constListWithSpareCapacity(
+                restorer,
                 if (list.items == .empty) null else try restorer.addExpr(.{ .ty = frame.ty, .data = items }),
                 spare,
             );
