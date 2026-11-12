@@ -203,6 +203,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12887_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12953_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12951_test.zig"));
+    std.testing.refAllDecls(@import("test/copied_dispatch_requirement_test.zig"));
 
     // Cross-module monomorphization tests
     std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));

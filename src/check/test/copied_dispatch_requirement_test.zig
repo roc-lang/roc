@@ -1,0 +1,151 @@
+//! A local definition that calls a method on an enclosing definition's
+//! unresolved receiver keeps that requirement in its own scheme, and each use
+//! of the local definition copies it. When the receiver is still a type
+//! variable at the enclosing definition's generalization boundary, it has one
+//! method of each name, so those copies, the requirement the local scheme
+//! holds, and the enclosing definition's own calls are one requirement. When
+//! the receiver resolves to a concrete type first, each copy is discharged
+//! against that type's method on its own.
+
+const TestEnv = @import("./TestEnv.zig");
+
+const prelude =
+    \\Repro := [].{}
+    \\
+    \\hole : {} -> a
+    \\hole = |{}| crash "hole"
+    \\
+    \\same : a, a -> {}
+    \\same = |_, _| {}
+    \\
+    \\W := [W].{
+    \\    wrap : W, x -> List(x)
+    \\    wrap = |_, x| [x]
+    \\}
+    \\
+;
+
+test "copied method requirements - a nested use on an unresolved receiver is a method conflict" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    List.len(helper(helper(1.U8)))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "two different, incompatible `wrap` methods");
+}
+
+test "copied method requirements - a receiver unified with the outer one is a method conflict" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer| {
+        \\    helper = |v| {
+        \\        p = hole({})
+        \\        _s = same(p, outer)
+        \\        p.wrap(v)
+        \\    }
+        \\    List.len(helper(helper(1.U8)))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "two different, incompatible `wrap` methods");
+}
+
+test "copied method requirements - uses at two types on an unresolved receiver are a method conflict" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    x = helper(1.U8)
+        \\    y = helper("s")
+        \\    (List.len(x), List.len(y))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "two different, incompatible `wrap` methods");
+}
+
+test "copied method requirements - a use conflicting with a direct call is a method conflict" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    x = outer.wrap(1.U8)
+        \\    y = helper("s")
+        \\    List.len(x) + List.len(y)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "two different, incompatible `wrap` methods");
+}
+
+test "copied method requirements - agreeing uses and a direct call are one requirement" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    x = outer.wrap(1.U8)
+        \\    y = helper(2.U8)
+        \\    z = helper(3.U8)
+        \\    List.len(x) + List.len(y) + List.len(z)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "b -> U64 where [b.wrap : b, U8 -> List(_item)]");
+}
+
+test "copied method requirements - a receiver resolved later serves each use at its own type" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    x = helper(1.U8)
+        \\    y = helper("s")
+        \\    _s = same(outer, W.W)
+        \\    (x, y)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "W -> (List(U8), List(Str))");
+}
+
+test "copied method requirements - a receiver resolved later serves a nested use" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer| {
+        \\    helper = |v| {
+        \\        p = hole({})
+        \\        _s = same(p, outer)
+        \\        p.wrap(v)
+        \\    }
+        \\    n = List.len(helper(helper(1.U8)))
+        \\    _t = same(outer, W.W)
+        \\    n
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "W -> U64");
+}
+
+test "copied method requirements - a local definition using another is not polymorphic recursion" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a = |outer, x| {
+        \\    helper = |v| {
+        \\        p = hole({})
+        \\        _s = same(p, outer)
+        \\        p.id(v)
+        \\    }
+        \\    other = |w| helper(w)
+        \\    other(helper(x))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "a, b -> b where [a.id : a, b -> b]");
+}

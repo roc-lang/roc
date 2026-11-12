@@ -22,6 +22,12 @@ const prelude =
     \\check : U64 -> Try(U64, [Bad])
     \\check = |n| Ok(n)
     \\
+    \\hole : {} -> a
+    \\hole = |{}| crash "hole"
+    \\
+    \\same : a, a -> {}
+    \\same = |_, _| {}
+    \\
 ;
 
 test "issue 12951 - method call with ? in a lambda passed to a generic function" {
@@ -125,6 +131,87 @@ test "issue 12951 - nested helper's receiver outlives the helper" {
 
     try test_env.assertNoErrors();
     try test_env.assertDefType("a", "Source -> Try(U64, [Bad])");
+}
+
+test "issue 12951 - nested helper's only ? is a method call on a captured receiver" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a : Source -> Try(U64, [Bad])
+        \\a = run(|source| {
+        \\    helper = |{}| {
+        \\        m = source.read()?
+        \\        Ok(m)
+        \\    }
+        \\    helper({})
+        \\})
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "Source -> Try(U64, [Bad])");
+}
+
+test "issue 12951 - nested helper's receiver joins the captured receiver after the call" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a : Source -> Try(U64, [Bad])
+        \\a = run(|source| {
+        \\    helper = |{}| {
+        \\        p = hole({})
+        \\        m = p.read()?
+        \\        _s = same(p, source)
+        \\        Ok(m)
+        \\    }
+        \\    helper({})
+        \\})
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "Source -> Try(U64, [Bad])");
+}
+
+test "issue 12951 - nested helper's receiver joins the captured receiver before the call" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\a : Source -> Try(U64, [Bad])
+        \\a = run(|source| {
+        \\    helper = |{}| {
+        \\        p = hole({})
+        \\        _s = same(p, source)
+        \\        m = p.read()?
+        \\        Ok(m + 1)
+        \\    }
+        \\    helper({})
+        \\})
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "Source -> Try(U64, [Bad])");
+}
+
+test "issue 12951 - nested helper's method error missing from the annotation is still rejected" {
+    var test_env = try TestEnv.init("Repro",
+        \\Repro := [].{}
+        \\
+        \\Source := { n : U64 }.{
+        \\    read : Source -> Try(U64, [Missing])
+        \\    read = |s| Ok(s.n)
+        \\}
+        \\
+        \\run : (input -> output) -> (input -> output)
+        \\run = |f| f
+        \\
+        \\a : Source -> Try(U64, [Bad])
+        \\a = run(|source| {
+        \\    helper = |{}| {
+        \\        m = source.read()?
+        \\        Ok(m)
+        \\    }
+        \\    helper({})
+        \\})
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "Missing");
 }
 
 test "issue 12951 - a local helper stays polymorphic in its receiver's method errors" {

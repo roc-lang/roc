@@ -11315,8 +11315,15 @@ errors other than the tags the lambda's other `?`s contribute, which the
 method may also raise
 (`run(|source| { m = source.read()?  k = check(m)?  Ok(k) })` with both
 failing with `Bad`). The contribution waits for the outermost fixpoint in which
-its source is open, and the destination's residual tail is kept at that
-fixpoint's rank so no frame nested inside it generalizes the tail first. A
+its source is open. The destination's residual tail and the whole source row
+are kept at that fixpoint's rank, so no frame nested inside it generalizes
+either first: that boundary relates the two, and a row a nested frame had
+quantified would reach the boundary only as its template, never as the row
+the frame's uses share. A pending method call's result row is created where
+the call is made, inside any frame nested in the receiver's, so this is what
+keeps `helper = |{}| { m = source.read()?  Ok(m) }` inside `run(|source| ...)`
+from generalizing the method's errors away from the result it contributes
+to. A
 member result reached before the member's own result is built may still be
 the structural union `Try`'s backing relates to; its error row is the `Err`
 payload. A pending method call is open in the fixpoint of the frame where
@@ -11337,8 +11344,13 @@ another, and every other contribution then relates exactly as its lambda
 classified it, visiting components after everything they reach. A source that
 already ends in its destination's residual tail and has no tag the
 destination lacks is already included. A destination generalized by a frame
-nested inside the fixpoint is live only through its residual tail, which
-receives the source. A contribution whose source ends in a row still open in
+nested inside the fixpoint is live only through the residual tail kept when
+the contribution reached the fixpoint, which receives the source by the same
+directed inclusion: the source's visible heads merge into that live row
+through a fresh spine sharing their payloads, then its residual tail, unless
+closed, becomes the row's. That row may have gained tags since, as when a use
+of the generalized function relates its result to an annotation, and a source
+tag it already lists is one tag rather than a repeated label. A contribution whose source ends in a row still open in
 an enclosing fixpoint moves to that fixpoint. Thus a self tail call adds
 nothing to its own result, mutually tail-calling functions share one error
 row, and a closure whose result includes its enclosing function's errors
@@ -14118,7 +14130,9 @@ Other solved-graph mutations:
   committed probe)—policy: one requirement per method on a type about to be
   generalized, as declared in Static Dispatch At The Checked Boundary
   ("Evidence params"). Each same-name callable pair on a receiver still flex
-  at the boundary's rank is related through an ordinary committed probe; a
+  at the boundary's rank—attached to its descriptor, copied by the boundary's
+  uses of nested definitions, or held by a nested definition's scheme—is
+  related through an ordinary committed probe; a
   probe that cannot establish the pair, or that makes the related callable's
   type infinite, rolls back, reports the method conflict, poisons the
   receiver, and retires every definition the boundary generalizes. A relation
@@ -18848,7 +18862,19 @@ neither fail nor bind anything else. A type has one method of each name, so
 when a receiver is still a type variable at its definition's generalization
 boundary, its requirements of one method become one requirement: the boundary
 relates their callables before it defaults literals and generalizes, and an
-inferred scheme never holds two requirements of one method on one type.
+inferred scheme never holds two requirements of one method on one type. A
+receiver's requirements are every relation on it the boundary's definitions
+own, not only those attached to its descriptor: a nested definition that calls
+the method on the receiver holds that requirement in its own scheme (Pending
+Dispatch Requirements In Type Schemes), each use copies it detached from the
+receiver, and the scheme's requirement, every copy, and the definition's own
+calls are related alike. A use of `helper = |v| outer.wrap(v)` inside
+`|outer| ...` is therefore exactly a call of `outer.wrap` at the use: when
+`outer` resolves first, each use instantiates its method on its own, and
+when `outer` is still a type variable, `helper(helper(1.U8))` requires two
+`wrap` methods. Relating the nested scheme's own requirement too keeps the
+nested definitions' scheme-use records, which Polymorphic Recursion reads,
+consistent with the one method type.
 Requirements that cannot be one are a type mismatch. That includes a relation
 that would make the method's type infinite, which no type can be (two uses of
 `row.i32()` whose results must be both `a` and `{ id: a }`); unification

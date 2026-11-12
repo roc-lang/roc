@@ -4326,6 +4326,11 @@ const DeferredTryRowEdge = struct {
     /// and that result's error row.
     composed: Var,
     composed_err: Var,
+    /// The destination row the edge's fixpoint keeps live: the residual tail
+    /// of `composed_err` when the edge reached that fixpoint. A frame nested
+    /// inside the fixpoint can generalize the rest of the destination, but
+    /// never this row or anything it later becomes.
+    live_destination: Var,
     /// The contribution exactly as the lambda classified it.
     plan: TryReturnRows.Plan,
     ctx: problem.Context,
@@ -43112,18 +43117,40 @@ fn isMethodUseOrigin(origin: StaticDispatchConstraint.Origin) bool {
 
 const SameMethodRelation = enum { merged, conflict, erroneous };
 
+/// One requirement of a method on a receiver at a generalization boundary:
+/// attached to the receiver's descriptor, or detached from it: a copy that a
+/// use of a nested definition made of that definition's scheme requirement,
+/// or the nested scheme's requirement itself.
+const SameMethodRequirement = struct {
+    constraint: StaticDispatchConstraint,
+    /// For a detached requirement, the expression whose use introduced it.
+    use_expr: ?CIR.Expr.Idx,
+};
+
+/// A detached requirement on a receiver at the boundary's rank.
+const SameMethodCopy = struct {
+    receiver_var: Var,
+    requirement: SameMethodRequirement,
+};
+
 /// A type has one method of each name, so a type about to be generalized
 /// holds one requirement of each method: relate every type in this boundary's
 /// pool that holds two. Requirements stay separate while the definition is
 /// checked, so each is discharged against the type its receiver resolves to;
 /// only a receiver that is still a type variable here becomes one requirement.
+/// A receiver's requirements include the detached ones: the copies the
+/// boundary's uses of nested definitions made of their schemes' requirements
+/// on it, exactly as if each use had called the method itself, and those
+/// schemes' requirements.
 /// Relating two callables can bring other receivers' requirements together,
 /// so the pool is revisited until a pass relates nothing.
 fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
     const rank = env.rank();
-    var snapshot: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
+    var snapshot: std.ArrayListUnmanaged(SameMethodRequirement) = .empty;
     defer snapshot.deinit(self.gpa);
-    var retained_by_name = std.AutoHashMap(Ident.Idx, StaticDispatchConstraint).init(self.gpa);
+    var copies: std.ArrayListUnmanaged(SameMethodCopy) = .empty;
+    defer copies.deinit(self.gpa);
+    var retained_by_name = std.AutoHashMap(Ident.Idx, SameMethodRequirement).init(self.gpa);
     defer retained_by_name.deinit();
     var visited = std.AutoHashMap(Var, void).init(self.gpa);
     defer visited.deinit();
@@ -43132,6 +43159,7 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
     while (related_any) {
         related_any = false;
         visited.clearRetainingCapacity();
+        try self.collectSameMethodCopies(roots, rank, &copies);
         // Relating appends fresh vars to the pool, so it is re-read by index.
         var index: usize = 0;
         while (index < env.var_pool.getVarsForRank(rank).len) : (index += 1) {
@@ -43141,25 +43169,33 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
                 .flex => |flex| flex,
                 .rigid, .alias, .structure, .field_presence, .err => continue,
             };
-            if (flex.constraints.len() <= 1) continue;
+            if (flex.constraints.len() <= 1 and copies.items.len == 0) continue;
             if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
 
             // Relating appends merged constraint ranges to the store, so the
             // receiver's list is iterated from a private copy.
             snapshot.clearRetainingCapacity();
-            try snapshot.appendSlice(self.gpa, self.types.sliceStaticDispatchConstraints(flex.constraints));
+            for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                try snapshot.append(self.gpa, .{ .constraint = constraint, .use_expr = null });
+            }
+            for (copies.items) |copy| {
+                if (self.types.resolveVar(copy.receiver_var).var_ != resolved.var_) continue;
+                try snapshot.append(self.gpa, copy.requirement);
+            }
+            if (snapshot.items.len <= 1) continue;
             retained_by_name.clearRetainingCapacity();
-            for (snapshot.items) |constraint| {
+            for (snapshot.items) |requirement| {
+                const constraint = requirement.constraint;
                 // A number or string literal's conversions are already one
                 // relation: they have one callable type per literal kind.
                 if (isFixedLiteralConversion(constraint.origin)) continue;
                 const entry = try retained_by_name.getOrPut(constraint.fn_name);
                 if (!entry.found_existing) {
-                    entry.value_ptr.* = constraint;
+                    entry.value_ptr.* = requirement;
                     continue;
                 }
-                if (self.types.resolveVar(entry.value_ptr.fn_var).var_ == self.types.resolveVar(constraint.fn_var).var_) continue;
-                switch (try self.relateSameMethodRequirements(entry.value_ptr.*, constraint, resolved.var_, roots, env)) {
+                if (self.types.resolveVar(entry.value_ptr.constraint.fn_var).var_ == self.types.resolveVar(constraint.fn_var).var_) continue;
+                switch (try self.relateSameMethodRequirements(entry.value_ptr.*, requirement, resolved.var_, roots, env)) {
                     .merged => related_any = true,
                     .erroneous => {},
                     // The conflict poisoned the receiver.
@@ -43168,6 +43204,58 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
             }
         }
     }
+}
+
+/// The still-open requirements on a type variable at the boundary's rank that
+/// its descriptor does not hold: the copies this boundary's roots own, which
+/// their uses of inner definitions made, and the requirements the schemes of
+/// definitions nested inside this boundary hold on it. A nested scheme's
+/// requirement on the receiver is the one its uses copied, so it is the same
+/// requirement once the receiver has one method of each name.
+fn collectSameMethodCopies(
+    self: *Self,
+    roots: []const BoundaryRoot,
+    rank: Rank,
+    out: *std.ArrayListUnmanaged(SameMethodCopy),
+) Allocator.Error!void {
+    out.clearRetainingCapacity();
+    for (roots) |root| {
+        const chain = self.scheme_requirement_candidate_chains_by_owner.get(root.owner) orelse continue;
+        var candidate_idx = chain.first;
+        while (candidate_idx != SchemeRequirementCandidate.none) : (candidate_idx = self.scheme_requirement_candidates.items[candidate_idx].next_of_owner) {
+            const candidate = self.scheme_requirement_candidates.items[candidate_idx];
+            if (candidate.source != .scheme_copy) continue;
+            try self.appendSameMethodCopy(candidate.receiver_var, candidate.constraint, candidate.failure_expr, candidate.deferred_generated_codec, rank, out);
+        }
+    }
+    const group_index = self.currentGroupIndex();
+    for (self.type_schemes.items) |scheme| {
+        if (!std.meta.eql(scheme.capture_group_index, group_index)) continue;
+        if (@backingInt(scheme.capture_rank) <= @backingInt(rank)) continue;
+        for (scheme.dispatch_requirements.items) |requirement| {
+            try self.appendSameMethodCopy(requirement.receiver_var, requirement.constraint, requirement.failure_expr, requirement.deferred_generated_codec, rank, out);
+        }
+    }
+}
+
+fn appendSameMethodCopy(
+    self: *Self,
+    receiver_var: Var,
+    constraint: StaticDispatchConstraint,
+    use_expr: ?CIR.Expr.Idx,
+    deferred_generated_codec: bool,
+    rank: Rank,
+    out: *std.ArrayListUnmanaged(SameMethodCopy),
+) Allocator.Error!void {
+    if (deferred_generated_codec) return;
+    if (self.final_codec_dispatch_constraint_fns.contains(constraint.fn_var)) return;
+    if (self.staticDispatchConstraintIsInactive(constraint)) return;
+    const receiver = self.types.resolveVar(receiver_var);
+    if (receiver.desc.content != .flex or receiver.desc.rank != rank) return;
+    try out.append(self.gpa, .{
+        .receiver_var = receiver_var,
+        .requirement = .{ .constraint = constraint, .use_expr = use_expr },
+    });
 }
 
 /// Relate two requirements of one method on a type about to be generalized.
@@ -43180,12 +43268,14 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
 /// type infinite, which no type can be, is that conflict too.
 fn relateSameMethodRequirements(
     self: *Self,
-    retained: StaticDispatchConstraint,
-    duplicate: StaticDispatchConstraint,
+    retained_requirement: SameMethodRequirement,
+    duplicate_requirement: SameMethodRequirement,
     receiver_var: Var,
     roots: []const BoundaryRoot,
     env: *Env,
 ) Allocator.Error!SameMethodRelation {
+    const retained = retained_requirement.constraint;
+    const duplicate = duplicate_requirement.constraint;
     const retained_fn_var = retained.fn_var;
     const deferred_start = env.deferred_static_dispatch_constraints.len();
     var probe = try self.beginCommitProbe(env);
@@ -43221,7 +43311,7 @@ fn relateSameMethodRequirements(
         const merged: MergedMethodObligation = .{
             .conflict = try self.methodConflict(retained, duplicate, receiver_var),
             .first_fn_var = retained_fn_var,
-            .use_var = self.methodConflictUseVar(duplicate, roots),
+            .use_var = self.methodConflictUseVar(duplicate_requirement, roots),
             .definitions = try self.recordMergedMethodDefinitions(roots),
         };
         var redo = try self.beginCommitProbe(env);
@@ -43242,7 +43332,7 @@ fn relateSameMethodRequirements(
     _ = try self.problems.appendProblem(try self.methodConflictProblem(
         try self.methodConflict(retained, duplicate, receiver_var),
         retained_fn_var,
-        self.methodConflictUseVar(duplicate, roots),
+        self.methodConflictUseVar(duplicate_requirement, roots),
         duplicate.fn_var,
     ));
     self.types.assertNoSavepointActive();
@@ -43341,8 +43431,9 @@ fn methodConflictProblem(
 /// requirement when that use is part of a definition this boundary
 /// generalizes, and otherwise, when another definition introduced it, at the
 /// definition.
-fn methodConflictUseVar(self: *Self, duplicate: StaticDispatchConstraint, roots: []const BoundaryRoot) Var {
-    const intro_var = if (constraintIntroExpr(duplicate)) |expr| ModuleEnv.varFrom(expr) else duplicate.fn_var;
+fn methodConflictUseVar(self: *Self, duplicate: SameMethodRequirement, roots: []const BoundaryRoot) Var {
+    const intro_expr = duplicate.use_expr orelse constraintIntroExpr(duplicate.constraint);
+    const intro_var = if (intro_expr) |expr| ModuleEnv.varFrom(expr) else duplicate.constraint.fn_var;
     const intro_region = self.getRegionAt(intro_var);
     for (roots) |root| {
         const definition_region = self.getRegionAt(root.owner);
@@ -46771,15 +46862,19 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
     }
 
     if (any_deferred) {
-        // The residual tail is where every deferred contribution lands, so
-        // it stays live at each owning fixpoint's rank until that boundary.
+        // The residual tail is where every deferred contribution lands, and
+        // the deferred source row is what that boundary includes in it, so
+        // both stay live at each owning fixpoint's rank until that boundary.
         const residual = self.tagRowTail(composed.err);
         for (rows.plans.items) |plan| {
             const owner = plan.deferred_owner orelse continue;
-            try self.pinVarAtRank(residual, self.try_row_fixpoints.items[owner].rank, env);
+            const owner_rank = self.try_row_fixpoints.items[owner].rank;
+            try self.pinVarAtRank(residual, owner_rank, env);
+            try self.pinReachableVarsAtRank(plan.err, owner_rank, env);
             try self.try_row_fixpoints.items[owner].edges.append(self.gpa, .{
                 .composed = composed_var,
                 .composed_err = composed.err,
+                .live_destination = residual,
                 .plan = plan,
                 .ctx = if (plan.is_body) body_ctx else try_ctx,
             });
@@ -46985,9 +47080,13 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
         const edge = self.try_row_fixpoints.items[fixpoint_idx].edges.items[edge_idx];
         if (self.openTryRowTailOwner(self.tagRowTail(edge.plan.err))) |outer| {
             std.debug.assert(outer < fixpoint_idx);
-            try self.try_row_fixpoints.items[outer].edges.append(self.gpa, edge);
+            const outer_rank = self.try_row_fixpoints.items[outer].rank;
             const destination_tail = self.tagRowTail(edge.composed_err);
-            try self.pinVarAtRank(destination_tail, self.try_row_fixpoints.items[outer].rank, env);
+            var moved = edge;
+            moved.live_destination = destination_tail;
+            try self.try_row_fixpoints.items[outer].edges.append(self.gpa, moved);
+            try self.pinVarAtRank(destination_tail, outer_rank, env);
+            try self.pinReachableVarsAtRank(edge.plan.err, outer_rank, env);
             try self.noteOpenTryRowTail(self.types.resolveVar(destination_tail).var_, outer);
             continue;
         }
@@ -47165,15 +47264,11 @@ fn tryRowHeadsIncluded(self: *Self, source: Var, destination: Var) bool {
 
 /// Relate a deferred contribution that is not part of a cycle, exactly as
 /// its lambda classified it. A destination generalized inside the fixpoint
-/// includes its source through its live residual tail.
+/// includes its source through the row the fixpoint kept live.
 fn relateDeferredTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Allocator.Error!void {
     const plan = edge.plan;
-    const residual = self.tagRowTail(edge.composed_err);
     if (self.tryRowEdgeDestinationGeneralized(edge)) {
-        if (self.types.resolveVar(residual).var_ == self.types.resolveVar(plan.err).var_) return;
-        if ((try self.unifyInContext(residual, plan.err, env, edge.ctx)).isProblem()) {
-            try self.markErroneousValueExpr(plan.expr);
-        }
+        try self.includeTryRowInLiveDestination(edge, env);
         return;
     }
     switch (plan.relation) {
@@ -47182,6 +47277,41 @@ fn relateDeferredTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Al
         // Only an unannotated result defers, so every tagless source here
         // becomes the result's residual tail, as it does undeferred.
         .tail, .projected => try self.includeTryRowDirected(edge, env),
+    }
+}
+
+/// The directed inclusion of Try Return-Row Composition into the live row of
+/// a destination generalized inside the edge's fixpoint. The source's visible
+/// heads merge into that row through a fresh spine that shares their
+/// payloads, then its residual tail, unless closed, becomes the row's: a head
+/// the row already lists, such as one a use of the generalized function
+/// related to it, is one tag rather than a repeated label.
+fn includeTryRowInLiveDestination(self: *Self, edge: DeferredTryRowEdge, env: *Env) Allocator.Error!void {
+    const plan = edge.plan;
+    const live = edge.live_destination;
+    if (self.types.resolveVar(live).var_ == self.types.resolveVar(plan.err).var_) return;
+    const rows = &self.try_return_rows;
+    rows.clear();
+    defer rows.clear();
+    try self.normalizeTryReturnRow(plan.err, plan.expr, env);
+    const gathered = try self.gatherTryReturnRow(plan.err, true);
+    if (rows.tags.items.len > 0) {
+        const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
+        const result = try self.runUnify(live, projection.row, env, unifyOptionsForContext(edge.ctx, .write_no_report));
+        if (!result.isAccepted()) {
+            // The report describes the contribution's own type, as an
+            // undeferred projected contribution's does.
+            const source = ModuleEnv.varFrom(plan.expr);
+            _ = try self.appendTypeMismatch(edge.composed, source, self.mismatchContext(edge.ctx, source));
+            try self.markErroneousValueExpr(plan.expr);
+            return;
+        }
+    }
+    // A closed source row has no residual to relate (Row Subsumption).
+    if (self.varIsEmptyTagUnion(gathered.tail)) return;
+    if (self.types.resolveVar(self.tagRowTail(live)).var_ == self.types.resolveVar(gathered.tail).var_) return;
+    if ((try self.unifyReturnContribution(self.tagRowTail(live), gathered.tail, env, edge.ctx)).isProblem()) {
+        try self.markErroneousValueExpr(plan.expr);
     }
 }
 
