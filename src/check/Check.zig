@@ -1589,9 +1589,11 @@ boundary_leak_vars: collections.DenseMap(Var, void),
 // at the start of its step and never read across the step-4 cascade.
 literal_defaulting_open_roots: std.ArrayListUnmanaged(Var) = .empty,
 literal_defaulting_seen_roots: collections.DenseMap(Var, void),
-literal_defaulting_is_driver: std.ArrayListUnmanaged(bool) = .empty,
-/// Every still-flex variable some gathered driver's method signatures reach.
-literal_defaulting_driven_vars: collections.DenseMap(Var, void),
+/// Each pair of distinct gathered literals where the first's method
+/// signatures reach the second.
+literal_defaulting_reaches: std.AutoHashMapUnmanaged(LiteralReach, void) = .empty,
+/// The gathered literals that wait this round.
+literal_defaulting_waiting: collections.DenseMap(Var, void),
 literal_defaulting_footprint: collections.DenseMap(Var, void),
 // Match alternative-pattern binding scratch (front-loaded; cleared per call/branch).
 alt_pattern_baseline: std.AutoHashMap(u32, MatchAltBaselineEntry),
@@ -2060,8 +2062,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .boundary_leak_vars = .scratch,
     .literal_defaulting_open_roots = .scratch,
     .literal_defaulting_seen_roots = .scratch,
-    .literal_defaulting_is_driver = .scratch,
-    .literal_defaulting_driven_vars = .scratch,
+    .literal_defaulting_reaches = .scratch,
+    .literal_defaulting_waiting = .scratch,
     .literal_defaulting_footprint = .scratch,
     .alt_pattern_baseline = .scratch,
     .alt_pattern_bindings = .scratch,
@@ -2779,6 +2781,13 @@ const DispatchReplayBinding = struct {
 const DispatchDerivation = struct {
     child_fn_var: Var,
     parent_fn_var: Var,
+};
+
+/// One gathered literal's method signatures reaching another
+/// (`runLiteralDefaultingRounds`).
+const LiteralReach = struct {
+    from: Var,
+    to: Var,
 };
 
 const SchemeReachabilityVisit = struct {
@@ -4757,7 +4766,7 @@ fn initAssumePrepared(
         .boundary_reachable_vars = collections.DenseMap(Var, void).init(gpa),
         .boundary_leak_vars = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_seen_roots = collections.DenseMap(Var, void).init(gpa),
-        .literal_defaulting_driven_vars = collections.DenseMap(Var, void).init(gpa),
+        .literal_defaulting_waiting = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_footprint = collections.DenseMap(Var, void).init(gpa),
         .alt_pattern_baseline = std.AutoHashMap(u32, MatchAltBaselineEntry).init(gpa),
         .alt_pattern_current = std.AutoHashMap(u32, CIR.Pattern.Idx).init(gpa),
@@ -42237,18 +42246,20 @@ const LiteralDefaultUniverse = union(enum) {
 ///   1. GATHER the still-open literal roots from the universe (per-universe
 ///      filters documented on `LiteralDefaultUniverse`); deduped by union-find
 ///      root.
-///   2. CLASSIFY them. A literal with non-literal constraints (a DRIVER) owns a
-///      footprint: every still-flex root reachable from those constraints' fn
-///      signatures (`collectReachableVars`, which recurses through nested
-///      constraint signatures, so the footprint is transitively closed). A
-///      literal with only literal-conversion provenance is a PASSIVE.
-///   3. COMMIT every driver, and every passive no driver's footprint reaches,
-///      to its kind's default: `Dec` for a number, `Str` for a string. A
-///      passive a driver reaches is NOT committed this round: the driver's
-///      method signatures may determine its type (`5.foo(3)` where the method
-///      takes a `U8`), and a default must not pre-empt that. If the resolved
-///      signatures leave it open, no driver reaches it next round and it
-///      defaults then.
+///   2. RELATE them. A literal with method constraints reaches every
+///      still-flex root reachable from those constraints' fn signatures
+///      (`collectReachableVars`, which recurses through the constraints of
+///      each variable it meets, so reaching is transitive).
+///   3. COMMIT each literal to its kind's default, `Dec` for a number and
+///      `Str` for a string, unless it WAITS: some other gathered literal
+///      reaches it and it does not reach that literal back. The methods the
+///      other literal's default selects may determine the waiting literal's
+///      type (in `"ab".repeat(3)` the `3` is `repeat`'s `U64` parameter, and in
+///      `5.to_str().count_utf8_bytes() + 1` the `1` is the `U64` that
+///      `count_utf8_bytes` returns), and a default must not pre-empt that. If
+///      the resolved signatures leave it open, nothing it waits on is
+///      gathered next round and it defaults then. Literals that reach each
+///      other wait on neither and default together.
 ///   4. CASCADE the deferred dispatches the commits unblocked, to fixpoint, so
 ///      pins propagate across multi-hop dispatch chains before the next round
 ///      re-gathers. One pass can be too few—a constraint re-defers while its
@@ -42263,21 +42274,21 @@ const LiteralDefaultUniverse = union(enum) {
 ///      defaulted-from-a-literal.
 ///
 /// ORDER-INDEPENDENCE: the gathered SET of literal roots, each literal's
-/// constraint SET, and therefore which literals are drivers and which
-/// passives a driver reaches depend only on the program's constraint graph,
-/// never on worklist/pool order. A commit gives its literal the one default
-/// its kind has and consults nothing else, so the set of commits a round makes
-/// and the type each gets are independent of the order they are made in.
+/// constraint SET, and therefore which literals reach which depend only on the
+/// program's constraint graph, never on worklist/pool order. A commit gives its
+/// literal the one default its kind has and consults nothing else, so the set
+/// of commits a round makes and the type each gets are independent of the
+/// order they are made in.
 ///
 /// TERMINATION: rounds iterate a universe snapshot of fixed length, and an open
 /// literal can only go flex -> resolved. Every round with a non-empty gather
-/// commits at least one literal: a round with no driver commits every passive,
-/// and a round with a driver commits it; a commit always resolves the var away
-/// from flex. Passives held back behind drivers are committed once no driver
-/// reaches them, so rounds <= snapshot length + 1. The per-round cascade
-/// terminates by `checkStaticDispatchConstraints`' own consume-or-re-defer
-/// contract (see `anyDeferredDispatchReceiverResolved`) and its semantic
-/// dispatch-cycle detection.
+/// commits at least one literal: reaching is transitive, so waiting is a
+/// strict partial order over the gathered literals, and a finite strict
+/// partial order has a minimal element, which waits on nothing. A commit
+/// always resolves the var away from flex, so rounds <= snapshot length + 1.
+/// The per-round cascade terminates by `checkStaticDispatchConstraints`' own
+/// consume-or-re-defer contract (see `anyDeferredDispatchReceiverResolved`)
+/// and its semantic dispatch-cycle detection.
 fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUniverse) std.mem.Allocator.Error!void {
     // Round zero: semantic judgments immediately before this boundary can
     // ground a deferred receiver without adding an ordinary constraint. Let
@@ -42335,14 +42346,16 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         try self.recordInterpolationPartNumerals();
 
         // --- 1b. Default quote literals before numerals. ---
-        // Resolving every open quote first—and letting step 4's cascade
-        // propagate the dispatches that unblocks—lets a dispatch whose
-        // receiver is a string (e.g. `s.count_utf8_bytes() : Str -> U64`)
-        // determine a numeral's type before the numeral is defaulted. Without
-        // this, `intermediate.count_utf8_bytes() > 0` commits `0` to Dec (the
-        // `count_utf8_bytes` dispatch is still latent behind the receiver's own
-        // open quote literal) and then conflicts when the Str-keyed dispatch
-        // resolves to U64.
+        // Step 2 finds what a literal's methods reach through the method
+        // constraints on the literal's own variable. A use of a generalized
+        // definition whose body calls a method on a module-level string
+        // literal copies the body's numerals, and no constraint on the
+        // literal's variable reaches the copies: with `weak = "a,b,c"` and a
+        // method whose body is `weak.split_on(",").get(0)`, each use of the
+        // method has its own `0`, which is `get`'s `U64` index. Resolving
+        // every open quote first, and letting step 4's cascade propagate the
+        // dispatches that unblocks, determines those numerals before any
+        // numeral defaults.
         //
         // Numerals are only held back while a quote is actually open; once the
         // quote round(s) have cascaded, numerals default through the steps
@@ -42369,21 +42382,19 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             }
         }
 
-        // --- 2. Find the literals a driver's method signatures reach. ---
+        // --- 2. Find which gathered literals reach which. ---
         // Everything this round's commits can choose—each gathered literal and
-        // each still-flex variable a driver's signatures reach—is recorded
-        // with its pre-default content before anything commits.
+        // each still-flex variable a gathered literal's method signatures
+        // reach—is recorded with its pre-default content before anything
+        // commits.
         const round_records_start = self.default_decided_records.items.len;
-        self.literal_defaulting_is_driver.clearRetainingCapacity();
-        self.literal_defaulting_driven_vars.clearRetainingCapacity();
+        self.literal_defaulting_reaches.clearRetainingCapacity();
         for (self.literal_defaulting_open_roots.items) |root| {
             try self.recordDefaultDecidedVar(root, .chosen);
         }
         for (self.literal_defaulting_open_roots.items) |root| {
             const constraint_range = self.types.resolveVar(root).desc.content.flex.constraints;
-            const drives = self.rangeHasNonLiteralConstraint(constraint_range);
-            try self.literal_defaulting_is_driver.append(self.gpa, drives);
-            if (!drives) continue;
+            if (!self.rangeHasNonLiteralConstraint(constraint_range)) continue;
 
             try self.collectConstraintSignatureReachable(constraint_range, &self.literal_defaulting_footprint);
             var fp_iter = self.literal_defaulting_footprint.keyIterator();
@@ -42392,20 +42403,34 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 // signature.
                 if (self.types.resolveVar(fp_var.*).desc.content != .flex) continue;
                 try self.recordDefaultDecidedVar(fp_var.*, .reached);
-                try self.literal_defaulting_driven_vars.put(fp_var.*, {});
+                if (fp_var.* == root) continue;
+                if (!self.literal_defaulting_seen_roots.contains(fp_var.*)) continue;
+                try self.literal_defaulting_reaches.put(self.gpa, .{ .from = root, .to = fp_var.* }, {});
             }
         }
 
-        // --- 3. Commit every driver and every passive no driver reaches. ---
-        // A commit unifies one gathered root with its default and nothing
-        // else, so every gathered root is still flex with its
+        // --- 3. Commit every literal that waits on no other. ---
+        // A literal waits on each literal that reaches it and that it does not
+        // reach back. A commit unifies one gathered root with its default and
+        // nothing else, so every gathered root is still flex with its
         // literal-conversion provenance when its turn comes, and the order of
         // the commits is unobservable.
-        for (self.literal_defaulting_open_roots.items, self.literal_defaulting_is_driver.items) |root, drives| {
-            if (!drives and self.literal_defaulting_driven_vars.contains(root)) continue;
+        self.literal_defaulting_waiting.clearRetainingCapacity();
+        var reach_iter = self.literal_defaulting_reaches.keyIterator();
+        while (reach_iter.next()) |reach| {
+            if (self.literal_defaulting_reaches.contains(.{ .from = reach.to, .to = reach.from })) continue;
+            try self.literal_defaulting_waiting.put(reach.to, {});
+        }
+        var committed_any = false;
+        for (self.literal_defaulting_open_roots.items) |root| {
+            if (self.literal_defaulting_waiting.contains(root)) continue;
             const kind = self.varLiteralKind(root) orelse unreachable; // gather left this root flex with literal-conversion provenance
             try self.commitGatheredLiteral(root, kind, universe, env);
+            committed_any = true;
         }
+        // Waiting is a strict partial order, so some gathered literal waits
+        // on nothing (see TERMINATION).
+        std.debug.assert(committed_any);
 
         // --- 4. Cascade the constraints the commits unblocked. ---
         try self.quiesceConstraints(env, true);
@@ -48660,7 +48685,6 @@ noinline fn dispatchReplayEligible(
     else
         try self.importedMethodScheme(method_lookup);
     if (self.schemeHasExplicitRequirements(scheme_root)) return false;
-    if (self.types.varDefaultDecided(dispatcher_var)) return false;
     return try self.varIsReplayGround(dispatcher_var);
 }
 
@@ -51931,7 +51955,10 @@ inline fn processDeferredDispatchEntry(
                             unifyOptionsForContext(fn_ctx, .write_no_report),
                         );
                     }
-                    if (!receiver_default_decided) {
+                    // A replayed edge's callable already is its method's
+                    // instance (`replayDispatchTarget`), so the relation is
+                    // established and there is nothing to rewind.
+                    if (!receiver_default_decided or method_var == constraint.fn_var) {
                         break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
                     }
                     // This receiver's type is a default: a type the checker

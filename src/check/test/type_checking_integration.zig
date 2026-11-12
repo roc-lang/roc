@@ -13879,6 +13879,71 @@ test "check type - dispatch - cap-free generational discharge across pending sch
     try testing.expect(scheme_requirement_dispatchers >= hops);
 }
 
+// A LITERAL WAITS FOR THE LITERALS WHOSE METHODS REACH IT. A literal defaults
+// only once no other open literal's method signatures reach it, so the methods
+// those literals' defaults select type it first.
+
+test "check type - a number literal takes the type a defaulted number's method chain gives it" {
+    // `5` and `1.5` default to Dec, `to_str` gives Str, and `count_utf8_bytes`
+    // gives U64. The `1` and the `0` are the other operand of an operator on
+    // that U64, so they are U64 too, not Dec.
+    const source =
+        \\c = 5.to_str().count_utf8_bytes() + 1
+        \\b = 1.5.to_str().count_utf8_bytes() > 0
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("c", "U64");
+    try test_env.assertDefType("b", "Bool");
+}
+
+test "check type - a number literal takes the type an interpolated string's method chain gives it" {
+    // The interpolated strings default to Str. `repeat` takes a U64, and
+    // `count_utf8_bytes` returns one, so the `3` and the `0` are U64.
+    const source =
+        \\x = "w"
+        \\s = "a${x}b".repeat(3)
+        \\f = |a| {
+        \\    i = "x${a}"
+        \\    i.count_utf8_bytes() > 0
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("s", "Str");
+}
+
+test "check type - a number literal a method chain types rejects a value that type cannot hold" {
+    // The `1.5` is the other operand of `+` on the U64 `count_utf8_bytes`
+    // returns. It is that U64 rather than a Dec, so its fraction is an error.
+    const source =
+        \\c = 5.to_str().count_utf8_bytes() + 1.5
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try testing.expect(try test_env.typeProblemCount() >= 1);
+}
+
+test "check type - literals whose methods reach each other default together" {
+    // `x`'s `plus` names `y` and `y`'s names `x`, so neither waits for the
+    // other and both default to Dec in the same round.
+    const source =
+        \\x = 1
+        \\y = 2
+        \\a = x + y
+        \\b = y + x
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("x", "Dec");
+    try test_env.assertDefType("y", "Dec");
+    try test_env.assertDefType("a", "Dec");
+    try test_env.assertDefType("b", "Dec");
+}
+
 test "check type - literals defaulted together report only the one whose default is rejected" {
     // The string literal "az", whose concat obligation Str satisfies, and the
     // number literal 5, whose plus relation is return-pinned to Str so Dec

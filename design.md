@@ -14361,10 +14361,13 @@ Other solved-graph mutations:
   declared in Static Dispatch At The Checked Boundary (the `LITERAL DEFAULTED`
   warning). A number literal still open when its defaulting pass runs is
   unified with `Dec` and a string literal with `Str`, through ordinary
-  unification; no other type is tried and nothing is validated first. A
-  literal whose own method requirements reach another open literal defaults
-  first, and the literal it reaches waits a round, since the selected method's
-  signature may determine it. The dispatch pass then checks each method
+  unification; no other type is tried and nothing is validated first. An open
+  literal waits while another open literal's method requirements reach it and
+  it does not reach that literal back, since the methods the other literal's
+  default selects may determine it: in `5.to_str().count_utf8_bytes() + 1` the
+  `1` is the `U64` that `count_utf8_bytes` returns. Literals that reach each
+  other default together. Number literals also wait while any plain string
+  literal is open. The dispatch pass then checks each method
   requirement of a default-decided receiver against the default. The default
   is a type the program never chose, so that unification runs in a
   commit-probe: a requirement the default satisfies is kept, and one it
@@ -19599,8 +19602,10 @@ for each queued entry, before checking the entry's requirements: a
 requirement the default satisfies can merge the receiver's class into a
 frozen class shared with other uses of the same type (see "Concrete dispatch
 replay"), which carries no flag, and the entry's remaining requirements are
-still requirements of the default. A default-decided receiver's dispatch is
-never replayed.
+still requirements of the default. A default-decided receiver's dispatch
+replays like any other. A replay shares an instance whose relation to an equal
+callable already succeeded, so it cannot reject the default and runs outside
+the commit-probe that brackets the receiver's other requirements.
 
 The report's type is the class as the program wrote it: every default-decided
 class reachable from the receiver is shown with the union of its recorded
