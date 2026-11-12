@@ -97,9 +97,6 @@ pub const Termination = enum {
 /// through its line table and failure sites (design.md "Compile-Time Failure
 /// Sites").
 pub const FailurePoint = struct {
-    /// The program counter a fault stopped at, when it stopped in generated
-    /// code.
-    fault: ?usize = null,
     /// The return addresses into generated code on the frame-pointer chain,
     /// innermost first: the generated call the failure came out of, then each
     /// generated call enclosing it.
@@ -200,15 +197,15 @@ pub fn resetForRun(self: *CompileTimeHost) void {
 pub const CrashBoundary = crash_boundary_mod.CrashBoundary(CompileTimeHost, true);
 
 /// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
-/// so the finalizer reports it as this root's compile-time crash: at the
-/// faulting instruction when it is generated code, otherwise at the generated
-/// call the fault happened inside of.
+/// so the finalizer reports it as this root's compile-time crash at the
+/// innermost generated call on the frame-pointer chain: the call that entered
+/// the innermost frame whose record was in place when the stack ran out.
+/// Which instruction touched the guard first depends on where the guard falls
+/// within a frame, so the faulting program counter takes no part in the
+/// location.
 pub fn noteStackOverflow(self: *CompileTimeHost) void {
     if (signal_handler.takeOverflowFrame()) |frame| {
-        self.failure = .{
-            .fault = if (self.inGeneratedCode(frame.pc)) frame.pc else null,
-            .calls = self.generatedCalls(frame.fp, frame.sp),
-        };
+        self.failure = .{ .calls = self.generatedCalls(frame.fp, frame.sp) };
     }
     self.appendEvent(.crashed, crash_boundary_mod.STACK_OVERFLOW_MESSAGE);
     self.termination = .crashed;

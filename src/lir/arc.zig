@@ -9384,7 +9384,7 @@ test "ARC retains an erased callable whose repack input is used later" {
 const RcKind = enum { incref, decref, free };
 const RcStopKind = enum { ret, crash };
 
-fn setupUnusedBinding(layout_idx: layout_mod.Idx) Allocator.Error!struct { fixture: ArcTest, value: LIR.LocalId } {
+fn setupUnusedBinding(layout_idx: layout_mod.Idx) Allocator.Error!struct { fixture: ArcTest, value: LIR.LocalId, proc: LIR.LirProcSpecId } {
     var f = try ArcTest.init(testing.allocator);
     errdefer f.deinit();
     const value = try f.local(layout_idx);
@@ -9394,9 +9394,9 @@ fn setupUnusedBinding(layout_idx: layout_mod.Idx) Allocator.Error!struct { fixtu
         try f.assignStr(value, "tmp", ret)
     else
         try f.assignList(value, &.{}, ret);
-    _ = try f.addProc(&.{}, body, .i64);
+    const proc = try f.addProc(&.{}, body, .i64);
     try f.run();
-    return .{ .fixture = f, .value = value };
+    return .{ .fixture = f, .value = value, .proc = proc };
 }
 
 fn setupSwitchUse(use_branch: bool, use_default: bool, use_twice_in_branch: bool, use_after: bool) Allocator.Error!struct { fixture: ArcTest, value: LIR.LocalId, branch_local: LIR.LocalId, default_local: LIR.LocalId } {
@@ -18508,6 +18508,26 @@ test "ARC erased argument products take fields and preserve prefix and scalar re
     }
 }
 
+test "only a consumer that counts string literals as image data drops their releases" {
+    const immortal_locals = @import("immortal_locals.zig");
+    var setup = try setupUnusedBinding(.str);
+    defer setup.fixture.deinit();
+    const f = &setup.fixture;
+    try testing.expectEqual(@as(usize, 1), f.countRc(setup.value, .decref));
+
+    try testing.expectEqual(@as(usize, 0), try immortal_locals.elide(testing.allocator, &f.store, .static_data));
+    try testing.expectEqual(@as(usize, 1), f.countRc(setup.value, .decref));
+
+    try testing.expectEqual(@as(usize, 1), try immortal_locals.elide(testing.allocator, &f.store, .static_data_and_strings));
+    // The dropped statement stays in the store, unlinked from the body.
+    var walk = try body_clone.ReachableStmts.initWithAllocator(&f.store, f.store.getProcSpec(setup.proc).body.get().?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| switch (f.store.getCFStmt(stmt_id)) {
+        .incref, .decref, .decref_if_initialized, .free => return error.TestUnexpectedResult,
+        .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
+    };
+}
+
 test "ARC places no reference counts around a callable read from a type table" {
     var d = try DynFixture.init();
     defer d.deinit();
@@ -18526,10 +18546,10 @@ test "ARC places no reference counts around a callable read from a type table" {
     // ARC owns the word as it owns a static-data literal read: no retain
     // around its uses, one release where it dies, which names image data.
     try d.f.expectRc(callable, 0, 1, 0);
-    var immortal = try @import("immortal_locals.zig").compute(testing.allocator, &d.f.store);
+    var immortal = try @import("immortal_locals.zig").compute(testing.allocator, &d.f.store, .static_data);
     defer immortal.deinit(testing.allocator);
     try testing.expect(immortal.contains(callable));
-    try testing.expectEqual(@as(usize, 1), try @import("immortal_locals.zig").elide(testing.allocator, &d.f.store));
+    try testing.expectEqual(@as(usize, 1), try @import("immortal_locals.zig").elide(testing.allocator, &d.f.store, .static_data));
     var walk = try body_clone.ReachableStmts.initWithAllocator(&d.f.store, d.f.store.getProcSpec(proc).body.get().?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| switch (d.f.store.getCFStmt(stmt_id)) {

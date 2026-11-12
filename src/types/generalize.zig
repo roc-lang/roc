@@ -56,6 +56,8 @@ const Var = @import("types.zig").Var;
 const Rank = @import("types.zig").Rank;
 const DescStoreIdx = @import("store.zig").DescStoreIdx;
 const RecordField = @import("types.zig").RecordField;
+const types = @import("types.zig");
+const UseAbsorbers = @import("use_absorbers.zig").UseAbsorbers;
 
 /// The descriptor a rank frame settles once its children have reported.
 const RankFill = struct {
@@ -156,6 +158,15 @@ pub const Generalizer = struct {
     rank_frames: std.ArrayList(RankFrame),
     /// Settled child ranks, consumed by the frame that requested them.
     pending_ranks: std.ArrayList(Rank),
+    /// What the module being checked can change anonymous structure into,
+    /// or null when every liftable class is copied per use.
+    use_absorbers: ?UseAbsorberQuery = null,
+
+    /// What `Generalizer.use_absorbers` reads structure's names through.
+    pub const UseAbsorberQuery = struct {
+        absorbers: *UseAbsorbers,
+        idents: *const base.Ident.Store,
+    };
 
     const Self = @This();
 
@@ -170,6 +181,12 @@ pub const Generalizer = struct {
             .rank_frames = .empty,
             .pending_ranks = .empty,
         };
+    }
+
+    /// Whether a class this pass leaves ungeneralized is per-use structure.
+    fn copiedPerUse(self: *Self, desc: types.Descriptor) std.mem.Allocator.Error!bool {
+        const query = self.use_absorbers orelse return desc.liftsIntoNominal();
+        return query.absorbers.copiedPerUse(self.gpa, self.store, query.idents, desc);
     }
 
     /// Reset the state of the generalizer
@@ -287,7 +304,7 @@ pub const Generalizer = struct {
                     // every use even though no variable in it is quantified:
                     // a use may lift it into a nominal type (design.md
                     // "Anonymous Structure Is Copied Per Use").
-                    if (resolved.desc.liftsIntoNominal()) {
+                    if (try self.copiedPerUse(resolved.desc)) {
                         try self.store.markPerUseStructure(resolved.desc_idx);
                     }
                 } else {
