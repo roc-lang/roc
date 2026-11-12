@@ -149,10 +149,8 @@ pub const StackOverflowRecovery = struct {
 
 threadlocal var stack_overflow_recovery: ?*const StackOverflowRecovery = null;
 
-/// The program counter, frame pointer, and stack pointer a stack overflow
-/// interrupted.
+/// The frame pointer and stack pointer a stack overflow interrupted.
 pub const FaultFrame = struct {
-    pc: usize,
     fp: usize,
     sp: usize,
 };
@@ -174,7 +172,7 @@ fn faultFrame(cpu: anytype) ?FaultFrame {
         @intCast(cpu.sp)
     else
         return null;
-    return .{ .pc = cpu.getPc(), .fp = cpu.getFp(), .sp = sp };
+    return .{ .fp = cpu.getFp(), .sp = sp };
 }
 
 fn posixFaultFrame(context: ?*anyopaque) ?FaultFrame {
