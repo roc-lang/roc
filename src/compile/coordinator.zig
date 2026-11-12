@@ -4093,8 +4093,9 @@ pub const Coordinator = struct {
     };
 
     /// Write every pending store, on the post-check workers where the
-    /// coordinator has them.
-    fn writePendingStores(self: *Coordinator, stores: []PendingStore) CoordinatorError!void {
+    /// coordinator has them. Only task acceptance can fail here; individual
+    /// cache-write failures are recorded by PendingStore.run.
+    fn writePendingStores(self: *Coordinator, stores: []PendingStore) Allocator.Error!void {
         if (stores.len == 0) return;
         if (self.hasWorkers()) {
             var session = try self.postCheckExecutor().begin();
