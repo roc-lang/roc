@@ -143,10 +143,10 @@ EndOfFile,
 								(builtin)
 								(e-tag (name "False")))))
 					(if-else
-						(e-call (constraint-fn-var 301)
+						(e-call (constraint-fn-var 296)
 							(e-lookup-local
 								(p-assign (ident "is_even")))
-							(e-dispatch-call (method "minus") (constraint-fn-var 299)
+							(e-dispatch-call (method "minus") (constraint-fn-var 300)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "n"))))

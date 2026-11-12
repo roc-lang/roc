@@ -335,13 +335,13 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 337)
+					(e-dispatch-call (method "minus") (constraint-fn-var 353)
 						(receiver
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(args
 							(e-runtime-error (tag "erroneous_value_expr")))))
 				(field (name "e")
-					(e-call (constraint-fn-var 352)
+					(e-call (constraint-fn-var 350)
 						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18902") (target-def "18902"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let

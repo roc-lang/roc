@@ -361,7 +361,7 @@ NO CHANGE
 						(e-tag (name "True"))))
 				(s-reassign
 					(p-var-assign (ident "$count"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 382)
+					(e-dispatch-call (method "plus") (constraint-fn-var 360)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "$count"))))

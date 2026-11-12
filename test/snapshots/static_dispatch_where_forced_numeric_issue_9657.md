@@ -246,18 +246,18 @@ use_it = {
 		(e-block
 			(s-let
 				(p-assign (ident "transform"))
-				(e-call (constraint-fn-var 338)
+				(e-call (constraint-fn-var 336)
 					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 336)
+						(e-dispatch-call (method "plus") (constraint-fn-var 338)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
 							(args
 								(e-num (value "1")))))))
-			(e-call (constraint-fn-var 339)
+			(e-call (constraint-fn-var 337)
 				(e-lookup-local
 					(p-assign (ident "transform")))
 				(e-num (value "41"))))))

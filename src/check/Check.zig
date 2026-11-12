@@ -1494,6 +1494,12 @@ open_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// constraint, by the first generalization boundary that finds its type
 /// settled or about to generalize, and by type finalization otherwise.
 pending_literals: std.ArrayListUnmanaged(PendingLiteral) = .empty,
+/// The operators whose requirement is deferred (`deferOperatorRequirement`),
+/// until `settlePendingOperators` decides each one.
+pending_operators: std.ArrayListUnmanaged(PendingOperator) = .empty,
+/// Whether `settlePendingOperators` is running: a relation it makes can
+/// determine a literal, and the pass already under way decides every entry.
+settling_pending_operators: bool = false,
 /// The literal patterns of the pattern being checked whose conversion is
 /// deferred (`deferPatternLiteralConversion`), until that pattern has been
 /// related to the value it matches (`settlePendingPatternLiterals`).
@@ -2059,6 +2065,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .open_literal_vars = .settled,
     .pending_literals = .settled,
     .pending_pattern_literals = .scratch,
+    .pending_operators = .settled,
+    .settling_pending_operators = .settled,
     .pending_literals_scanned = .settled,
     .determined_literal_vars = .settled,
     .instantiated_literal_conversion_uses = .keyed,
@@ -14218,6 +14226,7 @@ fn settlePendingLiterals(self: *Self, env: *Env, scope: PendingLiteralScope) All
 /// related to that variable, as its constraint would have been deferred on
 /// it, so a rejection can show where the type was determined.
 fn settlePendingLiteralsAt(self: *Self, env: *Env, scope: PendingLiteralScope, determined_top: usize) Allocator.Error!void {
+    try self.settlePendingOperators(env, scope);
     const first: usize = switch (scope) {
         .introduced => self.pending_literals_scanned,
         .boundary, .all => 0,
@@ -37207,7 +37216,9 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (!try self.resolveClosedOperator(expr_idx, lhs_var, method_name, .operand, expr_region)) {
+            if (!try self.resolveClosedOperator(expr_idx, lhs_var, method_name, .operand, expr_region) and
+                !try self.deferOperatorRequirement(expr_idx, lhs_var, method_name, .operand, false, env))
+            {
                 // The operator's method: operand.method(operand) -> operand.
                 _ = try self.mkBinopConstraint(
                     lhs_var,
@@ -37259,7 +37270,9 @@ fn finishBinopExpr(
 
             const arg_var = rhs_var;
 
-            if (try self.resolveClosedOperator(expr_idx, arg_var, method_name, .bool, expr_region)) {
+            if (try self.resolveClosedOperator(expr_idx, arg_var, method_name, .bool, expr_region) or
+                try self.deferOperatorRequirement(expr_idx, arg_var, method_name, .bool, false, env))
+            {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
@@ -37349,7 +37362,8 @@ fn finishBinopExpr(
             }
 
             if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region) or
-                try self.resolveClosedStructuralEquality(expr_idx, binop, rhs_var))
+                try self.resolveClosedStructuralEquality(expr_idx, binop, rhs_var) or
+                try self.deferOperatorRequirement(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, binop.op == .ne, env))
             {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
@@ -37384,7 +37398,8 @@ fn finishBinopExpr(
             }
 
             if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region) or
-                try self.resolveClosedStructuralEquality(expr_idx, binop, rhs_var))
+                try self.resolveClosedStructuralEquality(expr_idx, binop, rhs_var) or
+                try self.deferOperatorRequirement(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, binop.op == .ne, env))
             {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
@@ -37537,6 +37552,168 @@ fn resolveClosedOperator(
     });
     try self.publishBinopDispatchExpr(expr_idx, method_name, region, method.scheme_var);
     return true;
+}
+
+/// An operator whose requirement is deferred, in `pending_operators`, with
+/// the context its requirement is created in if it needs one: a requirement
+/// records the scheme, the `expect`, and the ambiguity judgment it belongs to
+/// when it is created.
+const PendingOperator = struct {
+    expr: CIR.Expr.Idx,
+    /// The operands' type, and for an arithmetic operator the result's.
+    operand_var: Var,
+    method_name: Ident.Idx,
+    result: OperatorResult,
+    negated: bool,
+    /// The rank of the scope the operator was checked in.
+    rank: Rank,
+    expect_slot: ?ExpectEffectSlotId,
+    scheme_root: ?Var,
+    checking_executable_root: bool,
+    delayed_dependency_depth: u32,
+    instantiation_source_expr: ?CIR.Expr.Idx,
+    instantiation_is_immediate_callee: bool,
+};
+
+/// Deferred Operator Requirement (design.md): leave the operator at
+/// `expr_idx` without its constraint while its operands' type is the
+/// still-undetermined type of a deferred literal. `settlePendingOperators`
+/// decides it once that type has settled, and no later than the boundary of
+/// the scope it was checked in. Returns false for an operator that needs its
+/// constraint now.
+fn deferOperatorRequirement(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    operand_var: Var,
+    method_name: Ident.Idx,
+    result: OperatorResult,
+    negated: bool,
+    env: *Env,
+) Allocator.Error!bool {
+    // A probe's rollback restores the type store, not this list.
+    if (self.probe_depth != 0) return false;
+    // A module that declares methods in a function body records where each
+    // requirement is created (`noteHoistDispatchDependency`).
+    if (try self.moduleDeclaresLocalMethods()) return false;
+    switch (self.types.resolveVar(operand_var).desc.content) {
+        .flex => |flex| if (flex.literal == .none) return false,
+        .rigid, .alias, .structure, .field_presence, .err => return false,
+    }
+    try self.pending_operators.append(self.gpa, .{
+        .expr = expr_idx,
+        .operand_var = operand_var,
+        .method_name = method_name,
+        .result = result,
+        .negated = negated,
+        .rank = env.rank(),
+        .expect_slot = self.current_expect_effect_slot,
+        .scheme_root = self.active_scheme_root,
+        .checking_executable_root = self.checking_executable_root,
+        .delayed_dependency_depth = self.delayed_dependency_depth,
+        .instantiation_source_expr = self.instantiation_source_expr,
+        .instantiation_is_immediate_callee = self.instantiation_is_immediate_callee,
+    });
+    return true;
+}
+
+/// Deferred Operator Requirement (design.md): decide the pending operators
+/// in `scope`. One whose operands' type has settled is resolved by Closed
+/// Operator Resolution, or gets its ordinary constraint. One whose operands'
+/// type is still undetermined waits, but never past the boundary of the
+/// scope it was checked in, where it gets its ordinary constraint: a
+/// requirement belongs to the scheme of that scope, which the boundary is
+/// about to output.
+fn settlePendingOperators(self: *Self, env: *Env, scope: PendingLiteralScope) Allocator.Error!void {
+    if (self.pending_operators.items.len == 0) return;
+    if (self.settling_pending_operators) return;
+    // A rollback would discard a constraint created here while its operator
+    // had already left the list.
+    if (self.probe_depth != 0 or self.commit_probe_active or self.types.savepointActive()) return;
+
+    self.settling_pending_operators = true;
+    defer self.settling_pending_operators = false;
+    const boundary_rank = env.rank();
+    var kept: usize = 0;
+    var index: usize = 0;
+    // A requirement created here checks no expression, so the list does not
+    // grow while it is read.
+    while (index < self.pending_operators.items.len) : (index += 1) {
+        const pending = self.pending_operators.items[index];
+        const undetermined = self.types.resolveVar(pending.operand_var).desc.content == .flex;
+        const waits = undetermined and switch (scope) {
+            .introduced => true,
+            .boundary => @backingInt(pending.rank) < @backingInt(boundary_rank),
+            .all => false,
+        };
+        if (waits) {
+            self.pending_operators.items[kept] = pending;
+            kept += 1;
+            continue;
+        }
+        try self.introducePendingOperator(pending, env);
+    }
+    self.pending_operators.shrinkRetainingCapacity(kept);
+}
+
+/// Resolve one pending operator by Closed Operator Resolution, or create its
+/// ordinary constraint in the context the operator was checked in.
+fn introducePendingOperator(self: *Self, pending: PendingOperator, env: *Env) Allocator.Error!void {
+    // An operator retired since it was checked is an erroneous expression,
+    // which has no requirement.
+    if (self.cir.store.getExpr(pending.expr) != .e_binop) return;
+    const region = self.cir.store.getExprRegion(pending.expr);
+    if (try self.resolveClosedOperator(pending.expr, pending.operand_var, pending.method_name, pending.result, region)) return;
+
+    const saved_expect_slot = self.current_expect_effect_slot;
+    const saved_scheme_root = self.active_scheme_root;
+    const saved_executable_root = self.checking_executable_root;
+    const saved_delayed_depth = self.delayed_dependency_depth;
+    const saved_instantiation_expr = self.instantiation_source_expr;
+    const saved_immediate_callee = self.instantiation_is_immediate_callee;
+    const saved_relation_owner = self.relation_owner;
+    defer {
+        self.current_expect_effect_slot = saved_expect_slot;
+        self.active_scheme_root = saved_scheme_root;
+        self.checking_executable_root = saved_executable_root;
+        self.delayed_dependency_depth = saved_delayed_depth;
+        self.instantiation_source_expr = saved_instantiation_expr;
+        self.instantiation_is_immediate_callee = saved_immediate_callee;
+        self.relation_owner = saved_relation_owner;
+    }
+    self.current_expect_effect_slot = pending.expect_slot;
+    self.active_scheme_root = pending.scheme_root;
+    self.checking_executable_root = pending.checking_executable_root;
+    self.delayed_dependency_depth = pending.delayed_dependency_depth;
+    self.instantiation_source_expr = pending.instantiation_source_expr;
+    self.instantiation_is_immediate_callee = pending.instantiation_is_immediate_callee;
+    self.relation_owner = ownDispatchRelation(pending.expr);
+
+    switch (pending.result) {
+        .operand => _ = try self.mkBinopConstraint(
+            pending.operand_var,
+            pending.operand_var,
+            pending.operand_var,
+            pending.method_name,
+            false,
+            env,
+            region,
+            pending.expr,
+        ),
+        .bool => {
+            const ret_var = try self.freshBool(env, region);
+            _ = try self.mkBinopConstraint(
+                pending.operand_var,
+                pending.operand_var,
+                ret_var,
+                pending.method_name,
+                pending.negated,
+                env,
+                region,
+                pending.expr,
+            );
+            _ = try self.unify(ModuleEnv.varFrom(pending.expr), ret_var, env);
+        },
+    }
 }
 
 const ClosedOperatorMethod = struct {

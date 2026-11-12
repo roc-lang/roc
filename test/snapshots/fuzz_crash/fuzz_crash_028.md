@@ -3255,11 +3255,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1373)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1539)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1370)
+										(e-dispatch-call (method "times") (constraint-fn-var 1536)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3274,18 +3274,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1385)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1544)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1382)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1541)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1391)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1549)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1388)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1546)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3300,11 +3300,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1409)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1554)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1406)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1551)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3319,12 +3319,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1475)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1455)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1445)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1425)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))
