@@ -2234,24 +2234,9 @@ Builtin :: [].{
 		parser_for : _
 		encoder_for : _
 
-		Utf8Problem := [
-			InvalidStartByte,
-			UnexpectedEndOfSequence,
-			ExpectedContinuation,
-			OverlongEncoding,
-			CodepointTooLarge,
-			EncodesSurrogateHalf,
-		].{
-			is_eq : Utf8Problem, Utf8Problem -> Bool
-		}
-
-		Utf16Problem := [UnpairedHighSurrogate, UnpairedLowSurrogate, UnexpectedEndOfSequence].{
-			is_eq : Utf16Problem, Utf16Problem -> Bool
-		}
-
-		Utf32Problem := [CodePointTooLarge, SurrogateCodePoint, UnexpectedEndOfSequence].{
-			is_eq : Utf32Problem, Utf32Problem -> Bool
-		}
+		Utf8Problem : StrUtf8Problem
+		Utf16Problem : StrUtf16Problem
+		Utf32Problem : StrUtf32Problem
 
 		## Returns guidance about string length instead of a number.
 		##
@@ -23699,6 +23684,25 @@ Builtin :: [].{
 		}
 	}
 
+}
+
+StrUtf8Problem := [
+	InvalidStartByte,
+	UnexpectedEndOfSequence,
+	ExpectedContinuation,
+	OverlongEncoding,
+	CodepointTooLarge,
+	EncodesSurrogateHalf,
+].{
+	is_eq : StrUtf8Problem, StrUtf8Problem -> Bool
+}
+
+StrUtf16Problem := [UnpairedHighSurrogate, UnpairedLowSurrogate, UnexpectedEndOfSequence].{
+	is_eq : StrUtf16Problem, StrUtf16Problem -> Bool
+}
+
+StrUtf32Problem := [CodePointTooLarge, SurrogateCodePoint, UnexpectedEndOfSequence].{
+	is_eq : StrUtf32Problem, StrUtf32Problem -> Bool
 }
 
 hasher_start : U64 -> Hasher

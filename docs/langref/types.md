@@ -359,10 +359,21 @@ Config := [].{
 }
 ```
 
-Members of a nested type don't get shadowing warnings for having the same names as
-members of the types they're nested in. Lots of types have methods with the same
-names (like `is_eq` or `to_str`), and you can always refer to the outer type's
-member by putting the outer type's name in front of it.
+A nested type's block is inside its enclosing type's block, so a nested type's member
+shadows a member of the enclosing type that has the same name, just like any other
+definition outside its block:
+
+```roc
+Temperature := F64.{
+    Celsius := F64.{
+        to_str : Celsius -> Str
+        to_str = |Celsius.(degrees)| degrees.to_str() # Warning: to_str shadows the to_str below
+    }
+
+    to_str : Temperature -> Str
+    to_str = |Temperature.(degrees)| degrees.to_str()
+}
+```
 
 ## Type Aliases
 

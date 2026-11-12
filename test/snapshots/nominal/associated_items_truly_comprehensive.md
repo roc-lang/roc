@@ -481,6 +481,8 @@ anno2 = Annotated.L2.alsoTyped                  # 889
 # EXPECTED
 NAME NOT IN SCOPE - associated_items_truly_comprehensive.md:382:20:382:24
 NAME NOT IN SCOPE - associated_items_truly_comprehensive.md:388:12:388:16
+DUPLICATE DEFINITION - associated_items_truly_comprehensive.md:431:9:431:12
+DUPLICATE DEFINITION - associated_items_truly_comprehensive.md:437:13:437:16
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:13:167:17
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:170:9:170:13
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:173:5:173:9
@@ -513,6 +515,48 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:173:5:173:9
 			(line-break)
 			(line-break)
 			(source-region (file "associated_items_truly_comprehensive.md") (start 388 12) (end 388 16) (annotation error) (line-text "    val1 = val2 + 1                                         # Unqualified"))))
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 431 9) (end 431 12))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "val")
+			(reflow " is being redeclared here."))
+		(document
+			(source-region (file "associated_items_truly_comprehensive.md") (start 431 9) (end 431 12) (annotation error) (line-text "        val = 2                                 # Shadows outer val in this scope"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "val")
+			(reflow " was already defined in ")
+			(source-location
+				(file "associated_items_truly_comprehensive.md")
+				(line 428)
+				(column 5))
+			(reflow ".")
+			(line-break)
+			(source-region (file "associated_items_truly_comprehensive.md") (start 428 5) (end 428 8) (annotation dim) (line-text "    val = 1"))))
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 437 13) (end 437 16))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "val")
+			(reflow " is being redeclared here."))
+		(document
+			(source-region (file "associated_items_truly_comprehensive.md") (start 437 13) (end 437 16) (annotation error) (line-text "            val = 3                             # Shadows both"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "val")
+			(reflow " was already defined in ")
+			(source-location
+				(file "associated_items_truly_comprehensive.md")
+				(line 431)
+				(column 9))
+			(reflow ".")
+			(line-break)
+			(source-region (file "associated_items_truly_comprehensive.md") (start 431 9) (end 431 12) (annotation dim) (line-text "        val = 2                                 # Shadows outer val in this scope"))))
 	(report
 		(severity runtime_error)
 		(title "Circular Value Definition")
@@ -2648,7 +2692,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D1_Backward.second"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.a"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1307)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1309)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.b"))))
@@ -2660,7 +2704,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.c"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1305)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1307)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.d"))))
@@ -2777,7 +2821,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner_Back.Inner.innerVal"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerA.valA"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1365)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1367)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB.valB"))))
@@ -2799,7 +2843,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "50")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerB.valB"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1381)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1383)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerA.valA"))))
@@ -2815,7 +2859,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerB.valB"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1406)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1408)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.Inner.innerVal"))))
@@ -2823,7 +2867,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.Inner.innerVal"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1397)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1399)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val2"))))
@@ -2852,7 +2896,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "200")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1422)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1424)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.val1"))))
@@ -2885,7 +2929,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "1000")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1438)
+		(e-dispatch-call (method "times") (constraint-fn-var 1440)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.L3.val3"))))
@@ -2893,7 +2937,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.val1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1447)
+		(e-dispatch-call (method "times") (constraint-fn-var 1449)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.val2"))))
@@ -2916,7 +2960,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1463)
+		(e-dispatch-call (method "times") (constraint-fn-var 1465)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1"))))
@@ -2924,7 +2968,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1465)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1467)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3"))))
@@ -2951,7 +2995,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1481)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1483)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.val1"))))
@@ -2964,7 +3008,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.L3.val3"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1499)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1501)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.val2"))))
@@ -2973,7 +3017,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1"))))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1497)
+		(e-dispatch-call (method "times") (constraint-fn-var 1499)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1"))))
@@ -3027,9 +3071,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1538)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1540)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1536)
+				(e-dispatch-call (method "plus") (constraint-fn-var 1538)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.val1"))))
@@ -3048,7 +3092,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.val3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1554)
+		(e-dispatch-call (method "times") (constraint-fn-var 1556)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.L4.val4"))))
@@ -3056,7 +3100,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1563)
+		(e-dispatch-call (method "times") (constraint-fn-var 1565)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.val3"))))
@@ -3064,7 +3108,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.val1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1572)
+		(e-dispatch-call (method "times") (constraint-fn-var 1574)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.val2"))))
@@ -3088,7 +3132,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.val1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1588)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1590)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2"))))
@@ -3099,7 +3143,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1590)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1592)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.val1"))))
@@ -3108,7 +3152,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2"))))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.L4.val4"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1599)
+		(e-dispatch-call (method "times") (constraint-fn-var 1601)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3"))))
@@ -3135,7 +3179,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1615)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1617)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.val1"))))
@@ -3144,7 +3188,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2"))))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1617)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1619)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3"))))
@@ -3176,11 +3220,11 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "4")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1651)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1653)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1649)
+				(e-dispatch-call (method "plus") (constraint-fn-var 1651)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 1647)
+						(e-dispatch-call (method "plus") (constraint-fn-var 1649)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.val1"))))
@@ -3202,7 +3246,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "999")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1667)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1669)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5.val5"))))
@@ -3236,7 +3280,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1704)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1706)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))))
@@ -3247,11 +3291,11 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1728)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1730)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1726)
+				(e-dispatch-call (method "plus") (constraint-fn-var 1728)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 1724)
+						(e-dispatch-call (method "plus") (constraint-fn-var 1726)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1"))))
@@ -3266,7 +3310,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1713)
+		(e-dispatch-call (method "times") (constraint-fn-var 1715)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))))
@@ -3274,7 +3318,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1722)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1724)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))))
@@ -3375,7 +3419,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.Annotated.L2.alsoTyped"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1769)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1771)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.Annotated.typed"))))

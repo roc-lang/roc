@@ -194,7 +194,7 @@ test "issue 12962: a local type's member shadowing a parameter of the enclosing 
     try std.testing.expectEqual(@as(usize, 1), try countShadowingWarnings(source, "double"));
 }
 
-test "issue 12962: a nested type's member does not shadow the enclosing type's member" {
+test "issue 12962: a nested type's member shadowing a later member of the enclosing type is reported" {
     const source =
         \\T := [].{
         \\    U := [].{
@@ -203,7 +203,19 @@ test "issue 12962: a nested type's member does not shadow the enclosing type's m
         \\    to_num = |_| 2
         \\}
     ;
-    try std.testing.expectEqual(@as(usize, 0), try countShadowingWarnings(source, "to_num"));
+    try std.testing.expectEqual(@as(usize, 1), try countShadowingWarnings(source, "to_num"));
+}
+
+test "issue 12962: a nested type's member shadowing an earlier member of the enclosing type is reported" {
+    const source =
+        \\T := [].{
+        \\    to_num = |_| 2
+        \\    U := [].{
+        \\        to_num = |_| 1
+        \\    }
+        \\}
+    ;
+    try std.testing.expectEqual(@as(usize, 1), try countShadowingWarnings(source, "to_num"));
 }
 
 /// Canonicalizes `source` and reports which definition the body of the

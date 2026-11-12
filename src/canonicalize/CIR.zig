@@ -58,8 +58,11 @@ pub const BuiltinIndices = struct {
     http_header_encoding_type: Statement.Idx,
     http_header_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
+    str_utf8_problem_type: Statement.Idx,
     utf16_problem_type: Statement.Idx,
+    str_utf16_problem_type: Statement.Idx,
     utf32_problem_type: Statement.Idx,
+    str_utf32_problem_type: Statement.Idx,
     range_type: Statement.Idx,
     raw_order_type: Statement.Idx,
     u8_type: Statement.Idx,
@@ -116,8 +119,11 @@ pub const BuiltinIndices = struct {
     http_header_encoding_ident: Ident.Idx,
     http_header_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
+    str_utf8_problem_ident: Ident.Idx,
     utf16_problem_ident: Ident.Idx,
+    str_utf16_problem_ident: Ident.Idx,
     utf32_problem_ident: Ident.Idx,
+    str_utf32_problem_ident: Ident.Idx,
     range_ident: Ident.Idx,
     raw_order_ident: Ident.Idx,
     u8_ident: Ident.Idx,
@@ -265,8 +271,11 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "HttpHeaderEncoding", .qualified_name = "Builtin.Encoding.HttpHeaderEncoding", .type_field = "http_header_encoding_type", .ident_field = "http_header_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderEncoding" }, .auto_import = false, .internal_kind = .http_header },
     .{ .display_name = "HttpHeader", .qualified_name = "Builtin.Encoding.HttpHeader", .type_field = "http_header_type", .ident_field = "http_header_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "HttpHeader" } }, .auto_import = false },
     .{ .display_name = "Utf8Problem", .qualified_name = "Builtin.Str.Utf8Problem", .type_field = "utf8_problem_type", .ident_field = "utf8_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf8Problem" } } },
+    .{ .display_name = "StrUtf8Problem", .qualified_name = "StrUtf8Problem", .type_field = "str_utf8_problem_type", .ident_field = "str_utf8_problem_ident", .lookup = .{ .qualified = "StrUtf8Problem" }, .auto_import = false },
     .{ .display_name = "Utf16Problem", .qualified_name = "Builtin.Str.Utf16Problem", .type_field = "utf16_problem_type", .ident_field = "utf16_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf16Problem" } } },
+    .{ .display_name = "StrUtf16Problem", .qualified_name = "StrUtf16Problem", .type_field = "str_utf16_problem_type", .ident_field = "str_utf16_problem_ident", .lookup = .{ .qualified = "StrUtf16Problem" }, .auto_import = false },
     .{ .display_name = "Utf32Problem", .qualified_name = "Builtin.Str.Utf32Problem", .type_field = "utf32_problem_type", .ident_field = "utf32_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf32Problem" } } },
+    .{ .display_name = "StrUtf32Problem", .qualified_name = "StrUtf32Problem", .type_field = "str_utf32_problem_type", .ident_field = "str_utf32_problem_ident", .lookup = .{ .qualified = "StrUtf32Problem" }, .auto_import = false },
     .{ .display_name = "Range", .qualified_name = "Builtin.Num.Range", .type_field = "range_type", .ident_field = "range_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Range" } } },
     .{ .display_name = "RawOrder", .qualified_name = "Builtin.Num.RawOrder", .type_field = "raw_order_type", .ident_field = "raw_order_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "RawOrder" } }, .auto_import = false },
     .{ .display_name = "U8", .qualified_name = "Builtin.Num.U8", .type_field = "u8_type", .ident_field = "u8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8" } }, .num_kind = .u8 },
@@ -340,7 +349,7 @@ fn hashInt(hash: u64, value: u64) u64 {
 
 /// Hash of the builtin type registry used to reject stale generated builtin index metadata.
 pub const BUILTIN_TYPE_REGISTRY_HASH: u64 = blk: {
-    @setEvalBranchQuota(10_000);
+    @setEvalBranchQuota(20_000);
     var hash = hashBytes(hash_offset, "roc-builtin-type-registry-v1");
     for (builtin_type_specs) |spec| {
         hash = hashBytes(hash, spec.display_name);

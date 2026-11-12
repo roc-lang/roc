@@ -3472,11 +3472,6 @@ fn bindAssociatedMemberNames(
 /// declaration is preferred over a binding from an outer scope, since a
 /// binding of a not-yet-canonicalized declaration's name can be a forward
 /// reference whose region is the reference site.
-///
-/// A member of an enclosing type's associated block is not shadowed: each
-/// type's members are its own namespace, so a nested type commonly declares a
-/// member (such as `is_eq`) that its enclosing type also declares, and the
-/// enclosing one stays reachable by its qualified name.
 fn associatedMemberShadowedRegion(
     self: *Self,
     entry: ActiveDeclValueEntry,
@@ -3492,14 +3487,11 @@ fn associatedMemberShadowedRegion(
         else
             true;
         if (decl_is_nearest) {
-            const parser_scope = self.parse_ir.decl_index.scopes.items[@backingInt(previous.binding.parser_scope)];
-            if (parser_scope.kind == .associated) return null;
             return self.parserValueDeclNameRegion(previous.decl_idx);
         }
     }
 
     const binding = outer_binding orelse return null;
-    if (self.scopes.items[binding.scope].associated_type_name != null) return null;
     return self.env.store.getPatternRegion(binding.value);
 }
 

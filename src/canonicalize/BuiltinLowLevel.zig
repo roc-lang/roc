@@ -72,9 +72,9 @@ pub fn intrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) ?Intrin
     if (ident.eql(env.idents.builtin_str_inspect)) return .str_inspect;
 
     const entries = [_]struct { name: []const u8, intrinsic: IntrinsicId }{
-        .{ .name = "Builtin.Str.Utf8Problem.is_eq", .intrinsic = .structural_eq },
-        .{ .name = "Builtin.Str.Utf16Problem.is_eq", .intrinsic = .structural_eq },
-        .{ .name = "Builtin.Str.Utf32Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.StrUtf8Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.StrUtf16Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.StrUtf32Problem.is_eq", .intrinsic = .structural_eq },
         .{ .name = "Builtin.Encoding.ParseTagUnionSpec.parse", .intrinsic = .parse_tag_union },
         .{ .name = "Builtin.Encoding.FieldName.FieldNames.rename_fields", .intrinsic = .field_names_rename_fields },
         .{ .name = "Builtin.Encoding.FieldName.FieldNames.shortest_name", .intrinsic = .field_names_shortest_name },
