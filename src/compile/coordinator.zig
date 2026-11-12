@@ -1618,8 +1618,9 @@ const BoxyObjects = struct {
     /// Snapshot units before worker preparation. The program's emitted imports
     /// subsequently select which snapshots actually become compiler-only units.
     fn functionObjects(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.FunctionObjectSource {
-        // Freestanding evaluation has no native unit-image loader.
-        if (comptime is_freestanding) return null;
+        if (comptime eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) {
+            Coordinator.coordinatorInvariant("a host that interprets compile-time evaluation planned Boxy function units", .{});
+        }
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         if (self.function_plans.get(module.key.bytes)) |plan| return plan.source();
         const objects = (try objectSet(context, module)) orelse return null;
