@@ -1488,7 +1488,7 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
     ) Allocator.Error!void {
         // Iterate all tags in the type store
-        const tag_names = module_env.types.tags.items.items(.name);
+        const tag_names = module_env.types.tags.items(.name);
         for (tag_names) |name_idx| {
             const tag_name = module_env.getIdentText(name_idx);
             if (tag_name.len == 0) continue;

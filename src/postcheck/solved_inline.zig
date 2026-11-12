@@ -41,9 +41,12 @@ pub const InlineKind = enum(u8) {
     source_single_use,
 };
 
+/// Each lifted function's inline body, when it has one.
+const InlineBodies = collections.OptionalIndexColumn(Lifted.ExprId);
+
 /// Immutable inline eligibility table consumed by later lowering stages.
 pub const Plan = struct {
-    inline_bodies: []const ?Lifted.ExprId = &.{},
+    inline_bodies: InlineBodies.View = .{},
     kinds: []const InlineKind = &.{},
 
     pub fn kind(self: Plan, fn_id: Lifted.FnId) InlineKind {
@@ -68,34 +71,34 @@ pub const Plan = struct {
     }
 
     pub fn bodyForFn(self: Plan, fn_id: Lifted.FnId) ?Lifted.ExprId {
-        if (self.inline_bodies.len == 0) return null;
+        if (self.inline_bodies.len() == 0) return null;
 
         const index = @backingInt(fn_id);
-        if (index >= self.inline_bodies.len) {
+        if (index >= self.inline_bodies.len()) {
             Common.invariant("inline plan did not contain a lifted function");
         }
-        return self.inline_bodies[index];
+        return self.inline_bodies.get(index);
     }
 };
 
 /// Allocator-owned storage for a post-check inline plan.
 pub const OwnedPlan = struct {
     allocator: std.mem.Allocator,
-    inline_bodies: []?Lifted.ExprId,
+    inline_bodies: InlineBodies,
     kinds: []InlineKind,
 
     pub fn empty(allocator: std.mem.Allocator) OwnedPlan {
-        return .{ .allocator = allocator, .inline_bodies = &.{}, .kinds = &.{} };
+        return .{ .allocator = allocator, .inline_bodies = .{}, .kinds = &.{} };
     }
 
     pub fn deinit(self: *OwnedPlan) void {
-        if (self.inline_bodies.len != 0) self.allocator.free(self.inline_bodies);
+        self.inline_bodies.deinit(self.allocator);
         if (self.kinds.len != 0) self.allocator.free(self.kinds);
         self.* = empty(self.allocator);
     }
 
     pub fn view(self: *const OwnedPlan) Plan {
-        return .{ .inline_bodies = self.inline_bodies, .kinds = self.kinds };
+        return .{ .inline_bodies = self.inline_bodies.view(), .kinds = self.kinds };
     }
 };
 
@@ -176,17 +179,17 @@ const InlineAnalyzer = struct {
             try analyzer.resolveSingleUseMaterialization(fn_id, materialization_states);
         }
 
-        const inline_bodies = try allocator.alloc(?Lifted.ExprId, decisions.len);
-        errdefer allocator.free(inline_bodies);
+        var inline_bodies = try InlineBodies.initFilled(allocator, decisions.len);
+        errdefer inline_bodies.deinit(allocator);
         const kinds = try allocator.alloc(InlineKind, decisions.len);
         errdefer allocator.free(kinds);
-        for (decisions, inline_bodies, kinds) |decision, *body, *body_kind| {
-            body.* = switch (decision) {
-                .inline_body => |candidate| candidate.body,
+        for (decisions, kinds, 0..) |decision, *body_kind, index| {
+            switch (decision) {
+                .inline_body => |candidate| inline_bodies.set(index, candidate.body),
                 .unknown,
                 .never,
-                => null,
-            };
+                => {},
+            }
             body_kind.* = if (decision == .inline_body) decision.inline_body.kind else .none;
         }
 
@@ -285,16 +288,19 @@ const InlineAnalyzer = struct {
         callees_end: u32,
     };
 
+    /// A position in `CandidateGraph.nodes`.
+    const CandidateNodeIndex = enum(u32) { _ };
+
     const CandidateGraph = struct {
         nodes: std.ArrayList(CandidateNode) = .empty,
         callees: std.ArrayList(Lifted.FnId) = .empty,
         /// Per lifted function, its index in `nodes`.
-        node_of: []?u32,
+        node_of: collections.OptionalIndexColumn(CandidateNodeIndex),
 
         fn deinit(self: *CandidateGraph, allocator: std.mem.Allocator) void {
             self.nodes.deinit(allocator);
             self.callees.deinit(allocator);
-            allocator.free(self.node_of);
+            self.node_of.deinit(allocator);
         }
 
         fn calleeNodes(self: *const CandidateGraph, node: u32) []const Lifted.FnId {
@@ -313,9 +319,8 @@ const InlineAnalyzer = struct {
     /// are numbered in.
     fn decideCandidates(self: *InlineAnalyzer) std.mem.Allocator.Error!void {
         const fn_count = self.solved.lifted.fnCount();
-        var graph = CandidateGraph{ .node_of = try self.allocator.alloc(?u32, fn_count) };
+        var graph = CandidateGraph{ .node_of = try collections.OptionalIndexColumn(CandidateNodeIndex).initFilled(self.allocator, fn_count) };
         defer graph.deinit(self.allocator);
-        @memset(graph.node_of, null);
 
         for (0..fn_count) |index| {
             const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
@@ -332,7 +337,7 @@ const InlineAnalyzer = struct {
                     continue;
                 },
             }
-            graph.node_of[index] = @intCast(graph.nodes.items.len);
+            graph.node_of.set(index, @fromBackingInt(@as(u32, @intCast(graph.nodes.items.len))));
             try graph.nodes.append(self.allocator, .{
                 .fn_id = fn_id,
                 .candidate = candidate,
@@ -460,7 +465,8 @@ const InlineAnalyzer = struct {
     /// never become native call depth.
     fn rejectCandidateCycles(self: *InlineAnalyzer, graph: *const CandidateGraph, pass: CyclePass) std.mem.Allocator.Error!void {
         const node_count = graph.nodes.items.len;
-        const unvisited = std.math.maxInt(u32);
+        // Visit orders are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
         const order = try self.allocator.alloc(u32, node_count);
         defer self.allocator.free(order);
         const low = try self.allocator.alloc(u32, node_count);
@@ -475,7 +481,7 @@ const InlineAnalyzer = struct {
         defer frames.deinit(self.allocator);
         var component_stack: std.ArrayList(u32) = .empty;
         defer component_stack.deinit(self.allocator);
-        var next_order: u32 = 0;
+        var next_order: u32 = 1;
 
         for (0..node_count) |root_index| {
             const root: u32 = @intCast(root_index);
@@ -495,7 +501,7 @@ const InlineAnalyzer = struct {
                 if (frame.next_callee < callees.len) {
                     const callee_fn = callees[frame.next_callee];
                     frame.next_callee += 1;
-                    const callee = graph.node_of[@backingInt(callee_fn)] orelse continue;
+                    const callee: u32 = @backingInt(graph.node_of.get(@backingInt(callee_fn)) orelse continue);
                     if (pass == .accepted and !self.acceptedNode(graph, callee)) continue;
                     if (order[callee] == unvisited) {
                         order[callee] = next_order;

@@ -151,14 +151,14 @@ const Builder = struct {
             .name = self.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(self.next_identity),
             .args = try self.store.addLocalSpan(args),
-            .body = body,
+            .body = .some(body),
             .ret_layout = ret_layout,
             .frame_locals = try self.store.addLocalSpan(self.proc_locals.items),
             .join_points = try self.store.addJoinPointSpan(options.join_points),
-            .dyn_result = options.dyn_result,
+            .dyn_result = .of(options.dyn_result),
             .abi = options.abi,
-            .erased_capture_arg = options.erased_capture_arg,
-            .tail_group = options.tail_group,
+            .erased_capture_arg = .of(options.erased_capture_arg),
+            .tail_group = .of(options.tail_group),
             .uses_pending_cell = options.uses_pending_cell,
         }, .none);
     }
@@ -1217,14 +1217,14 @@ test "boxy unsafe list appends agree across backends for every item size" {
         try std.testing.expectEqual(@as(u64, 3), (try run.eval(len, .u64)).value.read(u64));
         if (last) |proc_id| {
             const result = try run.eval(proc_id, item.field());
-            switch (item.field()) {
+            switch (item) {
+                .zero_sized => unreachable, // a zero-sized item has no read-back procedure
                 .u8 => try std.testing.expectEqual(@as(u8, 41), result.value.read(u8)),
-                .i64 => try std.testing.expectEqual(@as(i64, 41), result.value.read(i64)),
-                .str => {
+                .i64, .i64_pair => try std.testing.expectEqual(@as(i64, 41), result.value.read(i64)),
+                .str, .str_pair => {
                     try std.testing.expectEqualStrings(WriteItem.second_text, readStr(result.value));
                     run.interpreter.dropValue(result.value, .str);
                 },
-                else => unreachable, // `WriteItem.field` yields only these layouts
             }
         }
         try run.env.checkForLeaks();

@@ -14017,7 +14017,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 );
             }
 
-            if (proc_spec.hosted) |hosted| {
+            if (proc_spec.hosted.get()) |hosted| {
                 return try self.generateCAbiCall(.{ .hosted = hosted }, arg_locs, arg_layouts, call.ret_layout);
             }
             if (proc_spec.linked) {
@@ -14032,7 +14032,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// has a dynamic parameter or result, or the target is dynamic.
         fn callIsDynamic(self: *Self, proc_id: lir.LIR.LirProcSpecId, target_local: LocalId) bool {
             const callee = self.store.getProcSpec(proc_id);
-            if (callee.dyn_result != null or callee.takesPendingCell() or self.localDyn(target_local) != null) return true;
+            if (callee.dyn_result != .none or callee.takesPendingCell() or self.localDyn(target_local) != null) return true;
             const params = self.store.getLocalSpan(callee.args);
             for (0..params.len) |i| {
                 if (self.localDyn(GuardedList.at(params, i)) != null) return true;
@@ -14048,7 +14048,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateDynCall(self: *Self, proc_id: lir.LIR.LirProcSpecId, args: LocalSpan, target_local: LocalId, drive: lir.LIR.PendingDrive) Allocator.Error!void {
             try self.spillAllVectorLocals();
             const callee = self.store.getProcSpec(proc_id);
-            if (callee.hosted != null) base.invariant("LIR/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
+            if (callee.hosted.get() != null) base.invariant("LIR/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
             const arg_refs = self.store.getLocalSpan(args);
             const param_refs = self.store.getLocalSpan(callee.args);
             if (arg_refs.len != param_refs.len) base.invariant(
@@ -14057,7 +14057,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             );
             const carries = procCarriesTailArgs(self.store, callee);
             const takes_pending = callee.takesPendingCell();
-            const count = arg_refs.len + @intFromBool(callee.dyn_result != null) + @intFromBool(carries) + @intFromBool(takes_pending);
+            const count = arg_refs.len + @intFromBool(callee.dyn_result != .none) + @intFromBool(carries) + @intFromBool(takes_pending);
             const arg_locs = try self.allocator.alloc(ValueLocation, count);
             defer self.allocator.free(arg_locs);
             const arg_layouts = try self.allocator.alloc(layout.Idx, count);
@@ -14090,7 +14090,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             var result_target: ?DynTarget = null;
-            if (callee.dyn_result) |callee_result| {
+            if (callee.dyn_result.get()) |callee_result| {
                 const dst = try self.dynTarget(target_local);
                 result_target = dst;
                 const slot = self.codegen.allocStackSlot(8);
@@ -14150,7 +14150,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const param_refs = self.store.getLocalSpan(proc_spec.args);
             if (proc_spec.linked) base.invariant("LIR/codegen invariant violated: a frame-replacing call targets a procedure another object defines", .{});
             if (param_refs.len != arg_refs.len or
-                proc_spec.hosted != null or
+                proc_spec.hosted.get() != null or
                 proc_spec.abi != .roc or
                 proc_spec.ret_layout != call.ret_layout or
                 self.early_return_ret_layout != call.ret_layout)
@@ -14191,7 +14191,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .num_regs = self.calcArgRegCount(arg_loc, expected_layout),
                 });
             }
-            if (proc_spec.dyn_result) |callee_result| {
+            if (proc_spec.dyn_result.get()) |callee_result| {
                 // The callee writes its result where this procedure's caller
                 // asked for this procedure's.
                 const own_result = self.current_dyn_result orelse base.invariant("LIR/codegen invariant violated: frame-replacing call with a dynamic result from a procedure without one", .{});
@@ -18625,14 +18625,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.saveIncomingPointerArg(capture_slot, 3);
             try self.saveIncomingPointerArg(reuse_slot, 4);
 
-            if (proc.dyn_result) |result| {
+            if (proc.dyn_result.get()) |result| {
                 try self.setLocalLocation(localKey(result), self.stackLocationForLayout(self.localLayout(result), ret_slot));
                 self.ret_ptr_slot = null;
             } else {
                 self.ret_ptr_slot = ret_slot;
             }
 
-            const capture_param = proc.erased_capture_arg orelse base.invariant("LIR/codegen invariant violated: erased_record proc has no capture parameter", .{});
+            const capture_param = proc.erased_capture_arg.get() orelse base.invariant("LIR/codegen invariant violated: erased_record proc has no capture parameter", .{});
             const params = self.store.getLocalSpan(proc.args);
             var explicit_count: usize = 0;
             for (0..params.len) |i| {
@@ -18648,7 +18648,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.setLocalLocation(localKey(param), self.stackLocationForLayout(.opaque_ptr, capture_slot));
                     continue;
                 }
-                if (proc.erased_reuse_arg != null and param == proc.erased_reuse_arg.?) {
+                if (proc.erased_reuse_arg != .none and param == proc.erased_reuse_arg.get().?) {
                     try self.setLocalLocation(localKey(param), self.stackLocationForLayout(self.localLayout(param), reuse_slot));
                     continue;
                 }
@@ -19057,7 +19057,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.uses_caller_stack_arg_base = false;
             self.current_proc_arg_pop = 0;
             self.caller_drives_slot = null;
-            self.current_dyn_result = proc.dyn_result;
+            self.current_dyn_result = proc.dyn_result.get();
             self.proc_has_dyn_region = false;
             self.carry_slot = null;
             self.pending_cell_slot = null;
@@ -19170,7 +19170,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const ret_ptr_reg = self.getArgumentRegister(1);
                 try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
-                try self.bindErasedCallableAdapterParams(proc, proc.erased_call_args orelse base.invariant("LIR/codegen invariant violated: erased-callable proc has no erased call args", .{}));
+                try self.bindErasedCallableAdapterParams(proc, proc.erased_call_args.get() orelse base.invariant("LIR/codegen invariant violated: erased-callable proc has no erased call args", .{}));
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
             } else if (proc.abi == .erased_record) {
                 try self.bindErasedRecordParams(proc);
@@ -19187,11 +19187,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Bind parameters to argument registers. Large returns use a hidden
                 // first argument register for the return buffer.
                 const initial_param_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
-                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result, procCarriesTailArgs(self.store, proc), proc.takesPendingCell());
+                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result.get(), procCarriesTailArgs(self.store, proc), proc.takesPendingCell());
             }
             if (proc.uses_pending_cell and !proc.takesPendingCell()) try self.emitOwnPendingCell(invocation_slot);
 
-            if (proc.hosted) |hosted| {
+            if (proc.hosted.get()) |hosted| {
                 try self.generateCAbiProcWrapper(.{ .hosted = hosted }, proc);
             } else {
                 const body = requireProcBody(proc_id, proc);
@@ -19387,7 +19387,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// calls; it releases its carry when it returns or replaces its own
         /// frame. Every other caller passes none.
         fn procCarriesTailArgs(store: *const LirStore, proc: LirProcSpec) bool {
-            if (proc.abi != .roc or proc.tail_group == null) return false;
+            if (proc.abi != .roc or proc.tail_group == .none) return false;
             const params = store.getLocalSpan(proc.args);
             for (0..params.len) |i| {
                 if (store.getLocal(GuardedList.at(params, i)).dyn != null) return true;
@@ -19416,7 +19416,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn requireProcBody(proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) lir.LIR.CFStmtId {
-            return proc.body orelse base.invariant(
+            return proc.body.get() orelse base.invariant(
                 "Dev/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
                 .{ @backingInt(proc_id), proc.name.raw() },
             );
@@ -19427,7 +19427,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             callee: CAbiCallee,
             proc: LirProcSpec,
         ) Allocator.Error!void {
-            if (builtin.mode == .debug and proc.body != null) {
+            if (builtin.mode == .debug and proc.body != .none) {
                 base.invariant(
                     "Dev/codegen invariant violated: C-ABI proc {d} unexpectedly carried a statement body",
                     .{proc.name.raw()},
@@ -20165,7 +20165,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.saveIncomingPointerArg(capture_ptr_slot, 3);
             try self.saveIncomingPointerArg(reuse_ptr_slot, 4);
 
-            const capture_arg = proc.erased_capture_arg orelse base.invariant("Dev/codegen invariant violated: erased callable proc had no capture argument", .{});
+            const capture_arg = proc.erased_capture_arg.get() orelse base.invariant("Dev/codegen invariant violated: erased callable proc had no capture argument", .{});
             const explicit_count = locals.len - 2;
             if (builtin.mode == .debug and GuardedList.at(locals, explicit_count) != capture_arg) {
                 base.invariant("Dev/codegen invariant violated: erased callable capture argument was not the first hidden parameter", .{});
@@ -24013,7 +24013,7 @@ fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) Alloca
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = ret_layout,
     }, .none);
 }
@@ -24023,7 +24023,7 @@ fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: 
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(args),
-        .body = body,
+        .body = .some(body),
         .ret_layout = ret_layout,
     }, .none);
 }
@@ -25082,9 +25082,9 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(3),
         .args = args,
-        .erased_reuse_arg = reuse_arg,
-        .erased_call_args = arg_plan,
-        .erased_capture_arg = capture_arg,
+        .erased_reuse_arg = .of(reuse_arg),
+        .erased_call_args = .of(arg_plan),
+        .erased_capture_arg = .of(capture_arg),
         .ret_layout = .u64,
     };
     try codegen.bindErasedCallableAdapterParams(proc, arg_plan);
@@ -26091,7 +26091,7 @@ fn addHostedCallRoot(
         .identity = lir.LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(params),
         .ret_layout = .i64,
-        .hosted = .{ .symbol = try store.insertString(symbol_name), .dispatch_index = 0 },
+        .hosted = .some(.{ .symbol = try store.insertString(symbol_name), .dispatch_index = 0 }),
     }, .none);
 
     const args = try allocator.alloc(LocalId, arg_layouts.len);
@@ -26189,7 +26189,7 @@ test "symbol producer caches reuse identities and reset with generated code" {
     const local = try store.addLocal(.{ .layout_idx = .str });
     const end = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } }, .test_fixture);
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = body, .ret_layout = .str }, .none);
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = .some(body), .ret_layout = .str }, .none);
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
@@ -26260,7 +26260,7 @@ test "independent fragment emits only requested procedure with unresolved self a
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(81),
             .args = .empty(),
-            .body = call,
+            .body = .some(call),
             .ret_layout = .i64,
         }, .none);
         var cg = try LirCodeGen(target).init(allocator, &store, &layouts.layout_store, .{}, .default);
@@ -26333,7 +26333,7 @@ test "independent fragment symbolic calls resolve after all procedures are place
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(99),
             .args = .empty(),
-            .body = call,
+            .body = .some(call),
             .ret_layout = .i64,
         }, .none);
         var image = try CG.init(allocator, &store, &layouts.layout_store, .{}, .default);

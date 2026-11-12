@@ -18,7 +18,7 @@ const LayoutIdx = layout_mod.Idx;
 const MonoAst = postcheck.Monotype.Ast;
 const MonoLower = postcheck.Monotype.Lower;
 
-const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || error{
+const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || @import("static_data").MaterializationError || error{
     TestExpectedEqual,
     TestUnexpectedResult,
     MissingRootProcedure,
@@ -220,12 +220,17 @@ fn lowerModuleWithOptions(
     );
     errdefer lowered.deinit();
 
-    const static_data = try eval.buildStaticDataForWidth(allocator, .{
-        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
-        .imports = import_views,
-    }, &lowered, lowered.target_usize, .{});
-    if (lowered.frozen_static_data) |*previous| previous.deinit();
-    lowered.frozen_static_data = .{ .allocator = allocator, .exports = static_data };
+    // These fixtures execute the lowered program. Freeze its closed static
+    // initializers as well as any data produced during compile-time evaluation.
+    const exports = try eval.buildStaticDataForWidth(
+        allocator,
+        .{ .root = check.CheckedArtifact.loweringView(&resources.checked_artifact), .imports = import_views },
+        &lowered,
+        lowered.target_usize,
+        .{},
+    );
+    if (lowered.frozen_static_data) |*frozen| frozen.deinit();
+    lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 
     return .{
         .resources = resources,
@@ -487,6 +492,7 @@ fn structuralJsonMonotypeStatsForSource(
     for (lowered.mono.view().exprs) |expr| {
         if (expr.data == .static_data_candidate) static_candidates += 1;
     }
+
     return .{
         .functions = lowered.mono.view().fns.len,
         .definitions = lowered.mono.view().defs.len,
@@ -1353,7 +1359,7 @@ fn collectAssignCallProcs(
     proc_id: LIR.LirProcSpecId,
 ) TestError![]LIR.LirProcSpecId {
     const proc = lowered.lir_result.store.getProcSpec(proc_id);
-    const body = proc.body orelse return allocator.alloc(LIR.LirProcSpecId, 0);
+    const body = proc.body.get() orelse return allocator.alloc(LIR.LirProcSpecId, 0);
 
     var calls = std.ArrayList(LIR.LirProcSpecId).empty;
     errdefer calls.deinit(allocator);
@@ -4992,6 +4998,51 @@ test "LIR locals carry source-level names" {
     try std.testing.expect(found_second);
 }
 
+test "a capture slot of a lifted closure reads as a slot only of the closure's body" {
+    const allocator = std.testing.allocator;
+    // Each closure's capture slot is the enclosing function's parameter
+    // local, which the enclosing body must keep reading as its own parameter.
+    const source =
+        \\get : U64 -> U64
+        \\get = |x| {
+        \\    var $out = 0.U64
+        \\    if x > 3 {
+        \\        $out = x * 2
+        \\    }
+        \\    $out = $out + (|| x)()
+        \\    $out
+        \\}
+        \\pick : U64 -> U64
+        \\pick = |x| match x {
+        \\    0 => (|| x)()
+        \\    _ => (|| x)()
+        \\}
+        \\main : U64 -> U64
+        \\main = |n| get(n) + get(n + 1) + pick(n) + pick(n + 2)
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+            defer interpreter.deinit();
+            var n: u64 = 5;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&n),
+            });
+            try std.testing.expectEqual(@as(u64, 45), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
 test "issue 11317 or-pattern captures reuse one closure with and without specialization" {
     const allocator = std.testing.allocator;
     const source =
@@ -5170,7 +5221,7 @@ fn collectLirResultProcShape(
         .arg_count = result.store.getLocalSpan(proc.args).len,
     };
 
-    const body = proc.body orelse return shape;
+    const body = proc.body.get() orelse return shape;
 
     var work = std.ArrayList(LIR.CFStmtId).empty;
     defer work.deinit(allocator);
@@ -5356,7 +5407,7 @@ fn perElementProcSummary(
     while (reachable.pop()) |proc_id| {
         const proc_entry = try reachable_visited.getOrPut(proc_id);
         if (proc_entry.found_existing) continue;
-        const proc_body = store.getProcSpecImmediate(proc_id).body orelse continue;
+        const proc_body = store.getProcSpecImmediate(proc_id).body.get() orelse continue;
 
         const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
         defer allocator.free(calls);
@@ -5526,7 +5577,7 @@ fn perElementConstructionSummary(
     lowered: *lir.CheckedPipeline.LoweredProgram,
 ) TestError!PerElementConstructionSummary {
     const store = &lowered.lir_result.store;
-    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body.get() orelse return error.MissingRootProcedure;
     const loop = try findSingleLoopJoin(store, root_body);
 
     var bodies = std.ArrayList(LIR.CFStmtId).empty;
@@ -5555,7 +5606,7 @@ fn perElementConstructionSummary(
             if (stmt == .assign_call) {
                 const entry = try visited_procs.getOrPut(stmt.assign_call.proc);
                 if (!entry.found_existing) {
-                    const proc_body = store.getProcSpecImmediate(stmt.assign_call.proc).body orelse continue;
+                    const proc_body = store.getProcSpecImmediate(stmt.assign_call.proc).body.get() orelse continue;
                     try bodies.append(allocator, proc_body);
                 }
             }
@@ -5567,7 +5618,7 @@ fn perElementConstructionSummary(
 fn loopCarriedWrapperCount(lowered: *lir.CheckedPipeline.LoweredProgram) TestError!usize {
     const store = &lowered.lir_result.store;
     const layouts = &lowered.lir_result.layouts;
-    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body.get() orelse return error.MissingRootProcedure;
     const loop = try findSingleLoopJoin(store, root_body);
     const params = store.getLocalSpan(loop.params);
     var count: usize = 0;
@@ -5633,7 +5684,7 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
         defer lowered.deinit(allocator);
 
         const store = &lowered.lowered.lir_result.store;
-        const root_body = store.getProcSpecImmediate(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
+        const root_body = store.getProcSpecImmediate(try rootProc(&lowered.lowered)).body.get() orelse return error.MissingRootProcedure;
         var walk = try lir.BodyClone.ReachableStmts.init(store, root_body);
         defer walk.deinit();
 
@@ -7352,6 +7403,197 @@ test "multi-use match binding emits branch bodies once" {
     try std.testing.expectEqual(@as(usize, 5), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_concat_count"));
 }
 
+fn orPatternArmSource(comptime outer_arms: []const u8) []const u8 {
+    return
+    \\classify : U64 -> [A, B, C, D, E, F, Z]
+    \\classify = |n| match n {
+    \\    0 => A
+    \\    1 => B
+    \\    2 => C
+    \\    3 => D
+    \\    4 => E
+    \\    5 => F
+    \\    _ => Z
+    \\}
+    \\
+    \\label : U64, Str -> Str
+    \\label = |n, s| match classify(n) {
+    \\
+    ++ outer_arms ++
+        \\}
+        \\
+        \\main : U64, Str -> Str
+        \\main = |n, s| label(n, s)
+    ;
+}
+
+const or_pattern_arm_body =
+    \\match s {
+    \\        "k0" => Str.concat("line 00", s)
+    \\        "k1" => Str.concat("line 01", s)
+    \\        "k2" => Str.concat("line 02", s)
+    \\        "k3" => Str.concat("line 03", s)
+    \\        _ => ""
+    \\    }
+;
+
+test "issue 12903 an or-pattern arm body is emitted once regardless of alternative count" {
+    // repro for https://github.com/roc-lang/roc/issues/12903
+    // A match arm whose pattern is `A | B | C | D | E | F` must lower its
+    // body once, exactly like the equivalent `_` arm, rather than once per
+    // alternative.
+    const allocator = std.testing.allocator;
+
+    var or_pattern = try lowerModule(allocator, orPatternArmSource(
+        "    A | B | C | D | E | F => " ++ or_pattern_arm_body ++ "\n    Z => \"\"\n",
+    ), .none);
+    defer or_pattern.deinit(allocator);
+
+    var wildcard = try lowerModule(allocator, orPatternArmSource(
+        "    Z => \"\"\n    _ => " ++ or_pattern_arm_body ++ "\n",
+    ), .none);
+    defer wildcard.deinit(allocator);
+
+    const wildcard_concats = try reachableProcShapeFieldTotal(allocator, &wildcard.lowered, "str_concat_count");
+    try std.testing.expect(wildcard_concats > 0);
+    try std.testing.expectEqual(wildcard_concats, try reachableProcShapeFieldTotal(allocator, &or_pattern.lowered, "str_concat_count"));
+    try std.testing.expectEqual(
+        try reachableProcShapeFieldTotal(allocator, &wildcard.lowered, "str_match_set_count"),
+        try reachableProcShapeFieldTotal(allocator, &or_pattern.lowered, "str_match_set_count"),
+    );
+}
+
+test "issue 12903 shared arms preserve guards captures state and producer values" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, expected: [2]u64 }{
+        .{
+            .source =
+            \\main : U64 -> U64
+            \\main = |n| {
+            \\    var $sum = n
+            \\    match (0.U64, n) {
+            \\        (x, _) | (_, x) if x > 0 => {
+            \\            value = (|| x)()
+            \\            $sum = $sum + value
+            \\        }
+            \\        _ => {}
+            \\    }
+            \\    $sum
+            \\}
+            ,
+            .expected = .{ 0, 10 },
+        },
+        .{
+            .source =
+            \\main : U64 -> U64
+            \\main = |n| {
+            \\    var $seen = 0.U64
+            \\    match (n, n) {
+            \\        (x, _) | (_, x) if {
+            \\            $seen = $seen + 1
+            \\            True
+            \\        } => {
+            \\            $seen = $seen + x
+            \\        }
+            \\        _ => {}
+            \\    }
+            \\    $seen
+            \\}
+            ,
+            .expected = .{ 1, 6 },
+        },
+        .{
+            .source =
+            \\get : [A(Str, List(U64)), B(List(U64), Str)] -> U64
+            \\get = |v| match v {
+            \\    A(s, xs) | B(xs, s) => (|| s.concat("!").to_utf8().len() + xs.len() + (xs.get(0) ?? 0))()
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| {
+            \\    s = n.to_str().concat("01234567890123456789012345678901")
+            \\    xs = [n, n + 1]
+            \\    get(A(s, xs)) + get(B(xs, s))
+            \\}
+            ,
+            .expected = .{ 72, 82 },
+        },
+        .{
+            .source =
+            \\get : [A(U64 -> U64), B(U64 -> U64)], U64 -> U64
+            \\get = |v, n| match v {
+            \\    A(f) | B(f) => f(n)
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| get(A(|x| x + n), 1) + get(B(|x| x * 2), n)
+            ,
+            .expected = .{ 1, 16 },
+        },
+        .{
+            .source =
+            \\get : [A(Iter(U64)), B(Iter(U64))] -> U64
+            \\get = |v| match v {
+            \\    A(items) | B(items) => items.sum()
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| get(
+            \\    if n == 0 A([n].iter())
+            \\    else B([n, n + 1].iter().map(|x| x + 1)),
+            \\)
+            ,
+            .expected = .{ 0, 13 },
+        },
+        .{
+            .source =
+            \\get : [A({ head : U64, tail : U64 }), B({ head : U64, tail : U64 })] -> U64
+            \\get = |v| match v {
+            \\    A({ head, ..rest }) | B({ head, ..rest }) if rest.tail > 0 => head + rest.tail
+            \\    _ => 0
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| get(A({ head: n, tail: 2 })) + get(B({ head: 3, tail: n }))
+            ,
+            .expected = .{ 2, 15 },
+        },
+        .{
+            .source =
+            \\get : [A([], U64), B(U64), C(U64)] -> U64
+            \\get = |v| match v {
+            \\    A(_, x) | B(x) | C(x) => (|| x)()
+            \\}
+            \\main : U64 -> U64
+            \\main = |n| get(B(n)) + get(C(n + 1))
+            ,
+            .expected = .{ 1, 11 },
+        },
+    };
+    for (cases, 0..) |case, index| {
+        errdefer std.debug.print("shared arm case {d}\n", .{index});
+        for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+            var lowered = try lowerModule(allocator, case.source, inline_mode);
+            defer lowered.deinit(allocator);
+            var runtime_env = eval.RuntimeHostEnv.init(allocator);
+            defer runtime_env.deinit();
+            {
+                const result = &lowered.lowered.lir_result;
+                var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+                defer static_strings.deinit();
+                var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+                defer interpreter.deinit();
+                for ([_]u64{ 0, 5 }, case.expected) |input, expected| {
+                    var n = input;
+                    const evaluated = try interpreter.eval(.{
+                        .proc_id = try rootProc(&lowered.lowered),
+                        .arg_layouts = &.{.u64},
+                        .arg_ptr = @ptrCast(&n),
+                    });
+                    try std.testing.expectEqual(expected, evaluated.value.read(u64));
+                }
+            }
+            try runtime_env.checkForLeaks();
+        }
+    }
+}
+
 test "boundary field access projects private leaf branch" {
     // A record consumed only through demanded field accesses splits into a
     // sparse private product, and an if branch whose value is an opaque call
@@ -7398,6 +7640,50 @@ test "boundary field access projects private leaf branch" {
         \\}
     , .wrappers);
     defer optimized.deinit(allocator);
+}
+
+test "issue 12922 aggregate snapshots and shared arms execute on native and wasm" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\{
+        \\    read = |v| match v {
+        \\        A({ label, value }) | B({ label, value }) if label != "" => {
+        \\            saved = { label, value }
+        \\            replaced = { ..saved, value: saved.value + 1 }
+        \\            saved.value + replaced.value
+        \\        }
+        \\        _ => 0
+        \\    }
+        \\    records = [{ label: "left", value: 5.U64 }, { label: "right", value: 7 }]
+        \\    var $total = 0.U64
+        \\    for record in records {
+        \\        $total = $total + read(A(record)) + read(B(record))
+        \\    }
+        \\    $total
+        \\}
+    ;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var compiled = try eval.Inspected.compileInspectedProgramWithOptions(
+            allocator,
+            std.testing.io,
+            .expr,
+            source,
+            &.{},
+            .{
+                .pre_published_builtin = try sharedPrePublishedBuiltin(),
+                .specialization_strategy = strategy,
+            },
+        );
+        defer compiled.deinit(allocator);
+        const native = try eval.Inspected.devEvaluatorInspectedStr(allocator, &compiled.lowered);
+        defer allocator.free(native);
+        try std.testing.expectEqualStrings("52", native);
+        inline for (.{ .default, .v1 }) |cpu| {
+            const wasm = try eval.Inspected.wasmRunAt(allocator, &compiled.wasm_lowered.?, cpu);
+            defer allocator.free(wasm.output);
+            try std.testing.expectEqualStrings("52", wasm.output);
+        }
+    }
 }
 
 test "local iterator append loop demands step captures across states" {
@@ -9312,7 +9598,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
 
     try mono.defs.append(allocator, .{
         .symbol = @fromBackingInt(@intCast(10)),
-        .fn_id = worker_fn_id,
+        .fn_id = .some(worker_fn_id),
         .args = try mono.addTypedLocalSpan(&.{.{ .local = pair_local, .ty = pair_ty }}),
         .body = .{ .roc = worker_body },
         .ret = pair_ty,
@@ -9658,7 +9944,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     templates.templates.items[raw_template].specialization_interface_relations = saved_template_span;
 
     const saved_parent = templates.dispatch_scopes[0].parent;
-    templates.dispatch_scopes[0].parent = @fromBackingInt(@intCast(templates.dispatch_scopes.len));
+    templates.dispatch_scopes[0].parent = .some(@fromBackingInt(@intCast(templates.dispatch_scopes.len)));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
     templates.dispatch_scopes[0].parent = saved_parent;
@@ -11093,7 +11379,7 @@ fn recordFieldReadCounts(
 ) TestError!struct { before_first_call: usize, total: usize } {
     const store = &lowered.lir_result.store;
     const proc = store.getProcSpec(proc_id);
-    const body = proc.body orelse return .{ .before_first_call = 0, .total = 0 };
+    const body = proc.body.get() orelse return .{ .before_first_call = 0, .total = 0 };
 
     var aliases = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer aliases.deinit();
@@ -11214,7 +11500,7 @@ fn fieldReadRetainCount(
 ) TestError!usize {
     const store = &lowered.lir_result.store;
     const proc = store.getProcSpec(proc_id);
-    const body = proc.body orelse return 0;
+    const body = proc.body.get() orelse return 0;
 
     var read_targets = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer read_targets.deinit();
@@ -11325,7 +11611,7 @@ test "field takes drop the field-read retains of dying local records" {
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 0) continue;
-        if (proc.body == null) continue;
+        if (proc.body == .none) continue;
         const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
         root_retained = (root_retained orelse 0) + retained;
     }
@@ -11364,7 +11650,7 @@ test "field takes cross a fall-through branch diamond" {
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 0) continue;
-        if (proc.body == null) continue;
+        if (proc.body == .none) continue;
         const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
         root_retained = (root_retained orelse 0) + retained;
     }
@@ -11399,7 +11685,7 @@ test "field takes split across the arms of a branch" {
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 0) continue;
-        if (proc.body == null) continue;
+        if (proc.body == .none) continue;
         const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
         root_retained = (root_retained orelse 0) + retained;
     }
@@ -11432,7 +11718,7 @@ fn mainFieldReadTakes(allocator: Allocator, lowered: *const lir.CheckedPipeline.
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
         found_main = true;
         const stmts = try procStmts(allocator, store, proc_id);
         defer allocator.free(stmts);
@@ -11462,7 +11748,7 @@ fn mainFieldReadRetainCount(allocator: Allocator, lowered: *const lir.CheckedPip
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
         found_main = true;
         retained += try fieldReadRetainCount(allocator, lowered, proc_id);
     }
@@ -11762,7 +12048,7 @@ test "field takes dismantle a Try whose caller match tag reachability folded" {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
         const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
         main_retained = (main_retained orelse 0) + retained;
     }
@@ -11818,7 +12104,7 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
         const sets = listSetCounts(store, proc_id);
         var total = main_sets orelse ListSetCounts{};
         total.checked += sets.checked;
@@ -11919,7 +12205,7 @@ test "issue 12420 a string match in a loop keeps dying call arguments on the own
             if (visited_entry.found_existing) continue;
 
             if (store.procDebugName(proc_id)) |name| {
-                if (std.mem.eql(u8, name, "add") and store.getProcSpecImmediate(proc_id).body != null) {
+                if (std.mem.eql(u8, name, "add") and store.getProcSpecImmediate(proc_id).body != .none) {
                     add_count += 1;
                     add_retained += try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
                 }
@@ -12102,7 +12388,7 @@ test "owned variants take a helper parameter's fields at the call" {
     for (0..store.procSpecCount()) |index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpec(proc_id);
-        if (proc.body == null) continue;
+        if (proc.body == .none) continue;
         const sets = listSetCounts(store, proc_id);
         if (sets.checked + sets.check_free == 0) continue;
         const retained = try fieldReadRetainCount(allocator, &optimized.lowered, proc_id);
@@ -12140,7 +12426,7 @@ const ListSetCounts = struct {
 fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSetCounts {
     var counts: ListSetCounts = .{};
     const proc = store.getProcSpec(proc_id);
-    const body = proc.body orelse return counts;
+    const body = proc.body.get() orelse return counts;
     var cursor_stack: [256]LIR.CFStmtId = undefined;
     var top: usize = 0;
     cursor_stack[top] = body;
@@ -13420,6 +13706,27 @@ test "issue 11376: mixed-width products survive Boxy boundaries and copy-on-writ
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
+        var found_packed_local = false;
+        // Verify the product itself, not an incidental descriptor byte string:
+        // descriptors may live in the static image rather than inline literals.
+        for (result.store.getLocals()) |local| {
+            const layout = result.layouts.getLayout(local.layout_idx);
+            if (layout.tag != .struct_) continue;
+            const info = result.layouts.getStructInfo(layout);
+            if (info.fields.len != 2) continue;
+            const first = info.fields.get(0).layout;
+            const second = info.fields.get(1).layout;
+            if ((first == .u8 and second == .u64) or (first == .u64 and second == .u8)) {
+                try std.testing.expectEqual(@as(u32, 16), info.size());
+                found_packed_local = true;
+            }
+        }
+        try std.testing.expect(found_packed_local);
+        // The product's packing metadata and the shared list live in the
+        // frozen image, not a two-byte LIR literal. Execute that image through
+        // both strategies and verify the original shared list stays unchanged.
+        try std.testing.expect(result.static_data_values.items.len != 0);
+        try std.testing.expect(lowered.lowered.frozen_static_data.?.exports.len != 0);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
@@ -14038,7 +14345,7 @@ fn procStmts(
     defer work.deinit(allocator);
     var seen = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer seen.deinit();
-    try work.append(allocator, store.getProcSpecImmediate(proc).body orelse return error.MissingProcSpec);
+    try work.append(allocator, store.getProcSpecImmediate(proc).body.get() orelse return error.MissingProcSpec);
     while (work.pop()) |stmt_id| {
         if ((try seen.getOrPut(stmt_id)).found_existing) continue;
         try lir.BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
@@ -14071,7 +14378,7 @@ test "provenance: TRMC statements state their kind at the site they rewrite" {
     defer allocator.free(stmts);
 
     // The loop join TRMC wraps around the body sits at the procedure body.
-    const entry = store.getProcSpecImmediate(repeat).body.?;
+    const entry = store.getProcSpecImmediate(repeat).body.get().?;
     try std.testing.expect(store.getCFStmtImmediate(entry).* == .join);
     try std.testing.expect(store.stmtOriginKind(entry) == .trmc);
     try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(entry).line);
@@ -14307,7 +14614,7 @@ test "issue 12491 nested closure chain bound to a block local lowers under boxy"
 /// The procedure template of `artifact` exported as `name`.
 fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
     for (artifact.checked_procedure_templates.templates.items) |template| {
-        const export_name = artifact.canonical_names.procBase(template.proc_base).export_name orelse continue;
+        const export_name = artifact.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
         if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) return template;
     }
     std.debug.print("no template named {s}\n", .{name});
@@ -14396,11 +14703,12 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         const procs = try procsNamed(allocator, result, "pass");
         defer allocator.free(procs);
         try std.testing.expectEqual(@as(usize, 1), procs.len);
-        // Hidden descriptors live in the worker's type table, not separate
-        // arguments. The row-polymorphic worker receives its dynamic value
-        // and one table pointer; the closed workers above receive no table.
-        const args = result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args);
+        const pass_spec = result.store.getProcSpec(procs[0]);
+        // The explicit dynamic parameter and one type table. The row variable
+        // and `[A, ..r]` descriptors are table entries, not separate arguments.
+        const args = result.store.getLocalSpan(pass_spec.args);
         try std.testing.expectEqual(@as(usize, 2), args.len);
+        try std.testing.expect(result.store.getLocal(GuardedList.at(args, 0)).dyn != null);
         try std.testing.expectEqual(.dynamic, result.layouts.getLayout(result.store.getLocal(GuardedList.at(args, 0)).layout_idx).tag);
         try std.testing.expectEqual(LayoutIdx.opaque_ptr, result.store.getLocal(GuardedList.at(args, 1)).layout_idx);
     }

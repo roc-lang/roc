@@ -241,7 +241,7 @@ test "issue 11801: concrete dispatch replay reuses a settled ground target acros
     for (env.checker.dispatch_target_instantiations.items, 0..) |edge, edge_index| {
         const name = env.module_env.getIdentText(edge.method_name);
         if (replayedEdge(env.checker.dispatch_replayed_edges.items, edge_index)) {
-            try std.testing.expect(edge.parent_constraint_fn_var == null);
+            try std.testing.expect(edge.parent_constraint_fn_var == .none);
             try std.testing.expectEqualStrings("step", name);
         } else if (textEql(name, "step")) {
             fresh_steps += 1;
