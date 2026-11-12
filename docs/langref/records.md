@@ -456,6 +456,79 @@ Math :: [].{
 answer = Math.double(21)
 ```
 
+## Methods on Open Records
+
+When a function's record type ends in a named `..others`, the caller decides what the record
+actually is. It might be a record with more fields, or a [nominal record](#nominal-records) with
+these fields. So when the function calls a method on the whole record—including `==`, which calls
+`is_eq`—it gets whichever method the caller's type has.
+
+That's why a function like this needs a `where` clause:
+
+```roc
+same_account : { id : U64, ..others }, { id : U64, ..others } -> Bool where [others.is_eq : others, others -> Bool]
+same_account = |a, b| a.id == b.id and a == b
+```
+
+Without the `where` clause, a caller could pass in a record that doesn't have `is_eq`, because it
+has a function in one of its fields, or because it's a nominal type that doesn't happen to
+implement `is_eq`. In `where [others.is_eq : others, others -> Bool]`, `others` stands for the
+whole record that ends in `..others`, not just the fields `..others` stands for.
+
+Each call checks the record it passes:
+
+```roc
+same_account({ id: 1, name: "Sam" }, { id: 1, name: "Sam" }) # True
+
+same_account({ id: 1, log: |msg| msg }, { id: 1, log: |msg| msg }) # ERROR! Functions can't be compared with ==, so this record has no is_eq.
+
+Account := { id : U64, name : Str }
+
+same_account(Account.{ id: 1, name: "Sam" }, Account.{ id: 1, name: "Sam" }) # ERROR! Account doesn't implement is_eq.
+```
+
+A nominal record that does implement `is_eq` is accepted, and its own `is_eq` is the one that runs:
+
+```roc
+Customer := { id : U64, name : Str }.{
+    is_eq : Customer, Customer -> Bool
+    is_eq = |a, b| a.id == b.id
+}
+
+same_account(Customer.{ id: 1, name: "Sam" }, Customer.{ id: 1, name: "Samantha" }) # True, because Customer.is_eq only compares ids
+```
+
+If the function doesn't call a method on the whole record, it doesn't need a `where` clause at
+all. Reading fields doesn't need one, so this is completely valid:
+
+```roc
+get_id : { id : U64, ..others } -> U64
+get_id = |record| record.id
+```
+
+If the function calls a method on the record but its annotation has no `where` clause for it,
+that's an error, the same way it is for any [type variable](static-dispatch#where-clauses):
+
+```roc
+same_account : { id : U64, ..others }, { id : U64, ..others } -> Bool
+same_account = |a, b| a.id == b.id and a == b # ERROR! the annotation doesn't say others has is_eq
+```
+
+Methods you define work the same way as `==`. A plain record has `is_eq` and `to_hash` when all
+of its fields do, and no other methods, so only a nominal record with a `describe` method can be
+passed here:
+
+```roc
+describe_with_id : { id : U64, ..others } -> Str where [others.describe : others -> Str]
+describe_with_id = |record| "${record.id.to_str()}: ${record.describe()}"
+```
+
+Since the `where` clause goes on the name after `..`, a plain `..` can't carry one. Give it a
+name if the function calls a method on the record.
+
+The same goes for [tag unions](tag-unions#methods-on-open-tag-unions) whose type ends in
+`..others`.
+
 ## Performance
 
 ### Memory Layout

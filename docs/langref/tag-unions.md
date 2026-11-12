@@ -100,6 +100,22 @@ process = |result| match result {
 
 This is equivalent to writing `.._` but is more concise.
 
+### Methods on Open Tag Unions
+
+Calling a method on a value whose tag union type ends in a named `..others`, including comparing
+it with `==`, works the same way as it does for [open records](records#methods-on-open-records).
+The caller might pass a tag union with more tags, or a [nominal tag union](#nominal-tag-unions)
+with these tags, so the `where` clause goes on `others`, and there `others` stands for the whole
+tag union:
+
+```roc
+is_red : [Red, ..others] -> Bool where [others.is_eq : others, others -> Bool]
+is_red = |color| color == Red
+```
+
+`is_red(Green)` is `False`, and `is_red(Fn(|x| x))` gives an error at compile time, because
+functions can't be compared with `==`.
+
 ### Closed Tag Unions
 
 ⚠️ The `..[]` syntax shown in this section is planned for after 0.1.0 and has not been implemented yet. It is intended to restrict a tag union's ability to be extended, which is very rare but occasionally useful.
