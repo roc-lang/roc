@@ -2249,7 +2249,7 @@ pub const ReportBuilder = struct {
         try docs.append(D.bytes("has the type:"));
         try D.renderSlice(docs.items, self, &report);
         try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(types.expected_snapshot)));
+        try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(types.expected_snapshot)));
         try report.document.addLineBreaks(2);
 
         try self.addSourceHighlight(&report, regionIdxFrom(ctx.second_var));
@@ -2260,7 +2260,7 @@ pub const ReportBuilder = struct {
         try docs.append(D.bytes("has the type:"));
         try D.renderSlice(docs.items, self, &report);
         try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(types.actual_snapshot)));
+        try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(types.actual_snapshot)));
         try report.document.addLineBreaks(2);
 
         if (ctx.fn_name) |fn_name| {
@@ -2273,7 +2273,7 @@ pub const ReportBuilder = struct {
             try D.renderSlice(&.{D.bytes("Each fits the function's type by itself, but that type needs them to agree with each other:")}, self, &report);
         }
         try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(ctx.fn_type)));
+        try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(ctx.fn_type)));
 
         return report;
     }

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A list literal whose first element does not fit its expected element type is reported by whatever gave the list its expected type: an annotation, a call argument, a record field, or a tuple slot
+description=A list literal whose first item does not fit its expected item type is reported by whatever gave the list its expected type: an annotation, a call argument, a record field, or a tuple slot
 type=file
 ~~~
 # SOURCE
@@ -23,10 +23,10 @@ slot : (List(File), U64)
 slot = ([{ url: "u" }], 1)
 ~~~
 # EXPECTED
-TYPE MISMATCH - list_first_element_mismatch_owner_reports.md:4:13:4:27
-TYPE MISMATCH - list_first_element_mismatch_owner_reports.md:10:12:10:12
-TYPE MISMATCH - list_first_element_mismatch_owner_reports.md:13:9:13:34
-TYPE MISMATCH - list_first_element_mismatch_owner_reports.md:16:8:16:27
+TYPE MISMATCH - list_first_item_mismatch_owner_reports.md:4:13:4:27
+TYPE MISMATCH - list_first_item_mismatch_owner_reports.md:10:12:10:12
+TYPE MISMATCH - list_first_item_mismatch_owner_reports.md:13:9:13:34
+TYPE MISMATCH - list_first_item_mismatch_owner_reports.md:16:8:16:27
 # PROBLEMS
 ~~~clojure
 (reports
@@ -37,7 +37,7 @@ TYPE MISMATCH - list_first_element_mismatch_owner_reports.md:16:8:16:27
 		(headline
 			(reflow "This expression is used in an unexpected way."))
 		(document
-			(source-region (file "list_first_element_mismatch_owner_reports.md") (start 4 13) (end 4 27) (annotation error) (line-text "annotated = [{ url: \"u\" }]"))
+			(source-region (file "list_first_item_mismatch_owner_reports.md") (start 4 13) (end 4 27) (annotation error) (line-text "annotated = [{ url: \"u\" }]"))
 			(line-break)
 			(reflow "It has the type:")
 			(line-break)
@@ -74,7 +74,7 @@ TYPE MISMATCH - list_first_element_mismatch_owner_reports.md:16:8:16:27
 			(reflow "argument being passed to this function has the wrong type."))
 		(document
 			(source-underlines
-				(display (file "list_first_element_mismatch_owner_reports.md") (start 10 12) (end 10 33) (annotation dim) (line-text "argument = total([{ url: \"u\" }])"))
+				(display (file "list_first_item_mismatch_owner_reports.md") (start 10 12) (end 10 33) (annotation dim) (line-text "argument = total([{ url: \"u\" }])"))
 				(underline (start 10 18) (end 10 32) (annotation error)))
 			(line-break)
 			(reflow "This argument has the type:")
@@ -115,7 +115,7 @@ TYPE MISMATCH - list_first_element_mismatch_owner_reports.md:16:8:16:27
 		(headline
 			(reflow "This expression is used in an unexpected way."))
 		(document
-			(source-region (file "list_first_element_mismatch_owner_reports.md") (start 13 9) (end 13 34) (annotation error) (line-text "field = { files: [{ url: \"u\" }] }"))
+			(source-region (file "list_first_item_mismatch_owner_reports.md") (start 13 9) (end 13 34) (annotation error) (line-text "field = { files: [{ url: \"u\" }] }"))
 			(line-break)
 			(reflow "It has the type:")
 			(line-break)
@@ -147,7 +147,7 @@ TYPE MISMATCH - list_first_element_mismatch_owner_reports.md:16:8:16:27
 		(headline
 			(reflow "This expression is used in an unexpected way."))
 		(document
-			(source-region (file "list_first_element_mismatch_owner_reports.md") (start 16 8) (end 16 27) (annotation error) (line-text "slot = ([{ url: \"u\" }], 1)"))
+			(source-region (file "list_first_item_mismatch_owner_reports.md") (start 16 8) (end 16 27) (annotation error) (line-text "slot = ([{ url: \"u\" }], 1)"))
 			(line-break)
 			(reflow "It has the type:")
 			(line-break)

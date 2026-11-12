@@ -2622,7 +2622,7 @@ const DispatchTargetInstantiation = struct {
     method_name: Ident.Idx,
     method_var: Var,
     /// The scheme `method_var` is an instance of, when it is one.
-    scheme_var: ?Var = null,
+    scheme_var: collections.OptionalId(Var) = .none,
     /// The edge's own nested requirements: the `dispatch_derivations` its
     /// target instantiation recorded.
     derivations_start: u32 = 0,
@@ -8574,10 +8574,8 @@ fn currentRelationRelatesUse(self: *const Self, use_expr: CIR.Expr.Idx) bool {
     if (owner.kind == .none) return false;
     const owner_expr = owner.exprIdx();
     if (owner_expr == use_expr) return true;
-    switch (self.cir.store.getExpr(owner_expr)) {
-        .e_call => |call| if (call.func == use_expr) return true,
-        else => {},
-    }
+    const owner_node = self.cir.store.getExpr(owner_expr);
+    if (owner_node == .e_call and owner_node.e_call.func == use_expr) return true;
     const operands = self.relation_operands.get(owner_expr) orelse return false;
     const values = self.relationOperandValues(operands);
     const len = switch (owner.kind) {
@@ -8585,7 +8583,10 @@ fn currentRelationRelatesUse(self: *const Self, use_expr: CIR.Expr.Idx) bool {
         .branch => owner.index + 1,
         .none, .operands, .value => values.len,
     };
-    return std.mem.indexOfScalar(CIR.Expr.Idx, values[0..@min(len, values.len)], use_expr) != null;
+    for (values[0..@min(len, values.len)]) |value| {
+        if (value == use_expr) return true;
+    }
+    return false;
 }
 
 /// Unify two types where `a` is the expected type and `b` is the actual type.
@@ -12089,7 +12090,9 @@ fn noteDirectCalleeScheme(self: *Self, scheme_var: Var, evidence: InstantiationE
         .value_use => |expr| if (self.direct_callee_expr == expr) {
             self.direct_callee_scheme = scheme_var;
         },
-        .none, .nested_function_use, .dispatch_target => {},
+        // A platform invocation instantiates the app binding after every
+        // body has been checked; it is not the callee of any source call.
+        .none, .nested_function_use, .platform_requirement, .dispatch_target => {},
     }
 }
 
@@ -37407,7 +37410,7 @@ fn varResolvesToKnownType(self: *const Self, var_: Var) bool {
 /// instance of, when a method was selected and its type is such an instance.
 fn dispatchTargetScheme(self: *const Self, constraint_fn_var: Var) ?Var {
     const index = self.dispatch_target_instantiation_by_fn_var.get(constraint_fn_var) orelse return null;
-    return self.dispatch_target_instantiations.items[index].scheme_var;
+    return self.dispatch_target_instantiations.items[index].scheme_var.get();
 }
 
 /// A call whose relation of one argument to its parameter was rejected.
@@ -49081,7 +49084,7 @@ fn instantiateDispatchTargetMethodVar(
         .target_binding = method_lookup.binding,
         .method_name = constraint.fn_name,
         .method_var = method_var,
-        .scheme_var = method_scheme_var,
+        .scheme_var = .of(method_scheme_var),
         .derivations_start = derivations_start,
         .derivations_end = derivations_end,
         .intro_expr = .of(constraintIntroExpr(constraint)),

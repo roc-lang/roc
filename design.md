@@ -4888,7 +4888,7 @@ compares that pair when the roots' own shapes agree
 (`ReportBuilder.mismatchLeafFor`), so a list of records missing a field names
 the field whether an annotation, a call, a record update, or an enclosing
 aggregate owns the relation. Pinned by
-test/snapshots/list_first_element_mismatch_owner_reports.md and
+test/snapshots/list_first_item_mismatch_owner_reports.md and
 test/snapshots/repro_issue_12968_record_update_list_field.md.
 
 The checker records scheme-ness as explicit binding metadata at each
