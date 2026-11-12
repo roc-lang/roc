@@ -1018,6 +1018,9 @@ pub const MonoLlvmCodeGen = struct {
                 \\_start:
                 \\    mov %rsp, %rbx
                 \\    and $-16, %rsp
+                \\    mov (%rbx), %rdi
+                \\    lea 8(%rbx), %rsi
+                \\    call {s}
                 \\    call {s}
                 \\    mov (%rbx), %rdi
                 \\    lea 8(%rbx), %rsi
@@ -1028,7 +1031,7 @@ pub const MonoLlvmCodeGen = struct {
                 \\    ud2
                 \\.size _start, .-_start
                 \\
-            , .{ shim_symbols.roc_default_runtime_init, shim_symbols.roc_shim_default_main }) catch return error.OutOfMemory;
+            , .{ shim_symbols.roc_default_linux_relocate, shim_symbols.roc_default_runtime_init, shim_symbols.roc_shim_default_main }) catch return error.OutOfMemory;
         } else if (self.target.cpu.arch == .aarch64) {
             w.print(
                 \\.text
@@ -1036,6 +1039,9 @@ pub const MonoLlvmCodeGen = struct {
                 \\.type _start,%function
                 \\_start:
                 \\    mov x19, sp
+                \\    ldr x0, [x19]
+                \\    add x1, x19, #8
+                \\    bl {s}
                 \\    bl {s}
                 \\    ldr x0, [x19]
                 \\    add x1, x19, #8
@@ -1045,7 +1051,7 @@ pub const MonoLlvmCodeGen = struct {
                 \\    brk #0
                 \\.size _start, .-_start
                 \\
-            , .{ shim_symbols.roc_default_runtime_init, shim_symbols.roc_shim_default_main }) catch return error.OutOfMemory;
+            , .{ shim_symbols.roc_default_linux_relocate, shim_symbols.roc_default_runtime_init, shim_symbols.roc_shim_default_main }) catch return error.OutOfMemory;
         } else {
             return error.CompilationFailed;
         }
@@ -1110,7 +1116,7 @@ pub const MonoLlvmCodeGen = struct {
         const procs = self.store.getProcSpecs();
         const frozen_globals = if (self.embed_static_data) try self.declareFrozenData() else &.{};
         defer if (self.embed_static_data) self.allocator.free(frozen_globals);
-        try self.compileAllProcSpecs(procs);
+        try self.compileProcSpecs(procs, entrypoints);
         for (frozen_globals, self.static_data_exports[0..frozen_globals.len]) |variable, data_export| {
             const initializer = (try self.frozenExportConstant(data_export)) orelse
                 llvmInvariantFmt("materialized frozen data must have an LLVM constant representation", .{});
@@ -1756,16 +1762,12 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Declares and compiles every procedure in dependency-index order.
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
-        // Standalone in-process objects have no separately linked readonly
-        // object. Declare the whole image first so cyclic data references
-        // and procedure bodies resolve through the same symbol map.
-        const static_globals = if (self.program_kind == .in_process and self.static_data_addresses == null and !self.embed_static_data)
-            try self.declareStaticDataDefinitions()
-        else
-            &.{};
-        defer self.allocator.free(static_globals);
+        try self.compileProcSpecs(procs, &.{});
+    }
+
+    fn compileProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec, entrypoints: []const Entrypoint) Error!void {
         try self.ensureLocalScratch();
-        try self.computeInlineEverywhere(procs);
+        try self.computeInlineEverywhere(procs, entrypoints);
         if (self.stack_checks) try self.computeStackCheckProcs(procs);
         try self.computeTailScratch(procs);
         const order = try self.procEmitOrder(procs);
@@ -1782,11 +1784,6 @@ pub const MonoLlvmCodeGen = struct {
             const proc = procs[i];
             if (proc.is_static_initializer) continue;
             try self.compileProcBody(@fromBackingInt(i), proc);
-        }
-        const builder = self.builder orelse return error.CompilationFailed;
-        for (static_globals, self.static_data_exports[0..static_globals.len]) |variable, data_export| {
-            const image = (try self.frozenExportImage(data_export, true)) orelse return error.CompilationFailed;
-            variable.setInitializer(image.value, builder) catch return error.OutOfMemory;
         }
     }
 
@@ -3987,13 +3984,13 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    /// What the always-inline decision reads off a body: its statement count,
-    /// whether it loops, whether it calls through a value it cannot name, and
-    /// the procs it calls directly.
+    /// Explicit entrypoint membership and the body facts the always-inline
+    /// decision consumes: size, loops, opaque calls, and direct callees.
     const InlineShape = struct {
         count: usize = 0,
         has_loop: bool = false,
         opaque_call: bool = false,
+        application_entry: bool = false,
         callees: std.ArrayList(LirProcSpecId) = .empty,
     };
 
@@ -4036,7 +4033,7 @@ pub const MonoLlvmCodeGen = struct {
     /// duplicates at most `max_leaf_inline_stmts` statements of expanded
     /// body either way. A proc on a cycle of direct calls always keeps a
     /// call, so it is never a leaf.
-    fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+    fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec, entrypoints: []const Entrypoint) Error!void {
         self.inline_everywhere.clearRetainingCapacity();
         try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
         if (self.optimize_for_size) return;
@@ -4046,6 +4043,9 @@ pub const MonoLlvmCodeGen = struct {
             self.allocator.free(shapes);
         }
         @memset(shapes, .{});
+        if (self.program_kind == .platform) {
+            for (entrypoints) |entrypoint| shapes[@backingInt(entrypoint.proc)].application_entry = true;
+        }
         for (procs, 0..) |proc, i| {
             if (proc.is_static_initializer) continue;
             if (proc.body) |body| try self.inlineShapeOf(body, &shapes[i]);
@@ -4109,7 +4109,11 @@ pub const MonoLlvmCodeGen = struct {
                 const expansion = &expansions[finished];
                 expansion.state = .done;
                 const wrapper = shape.count <= max_wrapper_inline_stmts and !shape.has_loop;
-                const leaf = expansion.size <= max_leaf_inline_stmts and !expansion.calls;
+                // An application entry's single ABI-wrapper caller can inline
+                // it after simplification. Forcing transitive leaves in early
+                // pessimizes that code; retain the original direct-leaf rule.
+                const eligible_leaf = !shape.application_entry or shape.callees.items.len == 0;
+                const leaf = eligible_leaf and expansion.size <= max_leaf_inline_stmts and !expansion.calls;
                 self.inline_everywhere.items[finished] = wrapper or leaf;
             }
         }
@@ -9494,8 +9498,8 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyBytes(out.ptr, try self.staticDataGlobal(id, out.size), out.size, out.alignment);
     }
 
-    /// Records the readonly object's exports so relocation-free value slots
-    /// can be defined as constants in this module.
+    /// Records frozen exports for standalone emission, or constant folding
+    /// from the separate readonly object of a linked program.
     pub fn setStaticDataExports(self: *MonoLlvmCodeGen, exports: []const lir.Program.StaticDataExport) Allocator.Error!void {
         self.static_data_exports = exports;
         self.static_data_export_rows.clearRetainingCapacity();
@@ -9503,26 +9507,6 @@ pub const MonoLlvmCodeGen = struct {
             const value_id = data_export.value_id orelse continue;
             try self.static_data_export_rows.put(@backingInt(value_id), @intCast(row));
         }
-    }
-
-    fn declareStaticDataDefinitions(self: *MonoLlvmCodeGen) Error![]LlvmBuilder.Variable.Index {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const variables = try self.allocator.alloc(LlvmBuilder.Variable.Index, self.static_data_exports.len);
-        errdefer self.allocator.free(variables);
-        for (self.static_data_exports, variables, 0..) |data_export, *variable, index| {
-            const image = (try self.frozenExportImage(data_export, false)) orelse return error.CompilationFailed;
-            const name = builder.strtabStringFmt(".roc.frozen.{d}", .{index}) catch return error.OutOfMemory;
-            variable.* = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
-            variable.ptrConst(builder).global.setLinkage(.internal, builder);
-            variable.setMutability(.constant, builder);
-            variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(data_export.alignment), builder);
-            const offset = builder.intConst(.i64, data_export.symbol_offset) catch return error.OutOfMemory;
-            const address = builder.gepConst(.normal, .i8, variable.toConst(builder), null, &.{offset}) catch return error.OutOfMemory;
-            const key = try self.allocator.dupe(u8, data_export.symbol_name);
-            errdefer self.allocator.free(key);
-            try self.static_data_symbols.put(key, address);
-        }
-        return variables;
     }
 
     /// Declare the whole graph before its edges: shared and cyclic nodes must
@@ -9606,12 +9590,9 @@ pub const MonoLlvmCodeGen = struct {
 
     /// The image of a frozen export as a constant: its bytes, with each
     /// relocation replaced by the target's address plus the addend. Null when
-    /// a separately linked slot cannot be embedded here: linked programs leave
-    /// function pointers in their separate readonly object, and standalone
-    /// in-process modules define the complete image themselves. Unaligned
-    /// pointer fields have a constant expression only in self-contained
-    /// emission, which also resolves callable identities and requires every
-    /// materialized node to have a constant representation.
+    /// a separately linked slot cannot be embedded here. Self-contained
+    /// emission also resolves callable identities and unaligned pointer fields;
+    /// every materialized node must have a constant representation in that mode.
     fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
         const image = (try self.frozenExportImage(data_export, true)) orelse return null;
         return image.value;
@@ -9637,10 +9618,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
-            if (!self.embed_static_data) {
-                if (relocation.kind == .function_pointer and self.program_kind != .in_process) return null;
-                if (relocation.offset % word != 0) return null;
-            }
+            if (!self.embed_static_data and (relocation.kind == .function_pointer or relocation.offset % word != 0)) return null;
             if (relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
         }
         const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
@@ -15449,69 +15427,6 @@ test "static-data slots with constant images are internal constants and function
     try std.testing.expect(callable.init == .no_init);
 }
 
-test "standalone LLVM modules define cyclic frozen data and procedure pointers" {
-    const allocator = std.testing.allocator;
-    var store = lir.LirStore.init(allocator);
-    defer store.deinit();
-    var layouts = try layout.Store.init(allocator, .u64);
-    defer layouts.deinit();
-    const result = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
-    const body = try store.addCFStmt(.{ .assign_literal = .{
-        .target = result,
-        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
-        .next = ret,
-    } }, .test_fixture);
-    const proc = try store.addProcSpec(.{
-        .name = store.freshSyntheticSymbol(),
-        .identity = lir.LIR.ProcIdentity.forTest(0),
-        .args = .empty(),
-        .body = body,
-        .ret_layout = .u64,
-        .frame_locals = try store.addLocalSpan(&.{result}),
-    }, .none);
-    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
-    var codegen = MonoLlvmCodeGen.initWithTarget(allocator, &store, target);
-    defer codegen.deinit();
-    codegen.layout_store = &layouts;
-    const exports = [_]lir.Program.StaticDataExport{
-        .{
-            .symbol_name = "first",
-            .bytes = &(@as([16]u8, @splat(0))),
-            .symbol_offset = 8,
-            .alignment = 8,
-            .relocations = &.{.{ .offset = 8, .target_symbol_name = "second" }},
-        },
-        .{
-            .symbol_name = "second",
-            .bytes = &(@as([8]u8, @splat(0))),
-            .alignment = 8,
-            .relocations = &.{.{ .offset = 0, .target_symbol_name = "first" }},
-        },
-        .{
-            .symbol_name = "callable",
-            .bytes = &(@as([8]u8, @splat(0))),
-            .alignment = 8,
-            .relocations = &.{.{ .offset = 0, .target_symbol_name = "unused_symbol_spelling", .kind = .function_pointer, .procedure = proc }},
-        },
-    };
-    try codegen.setStaticDataExports(&exports);
-    var builder = try codegen.createBuilder("standalone_static_data");
-    defer builder.deinit();
-    codegen.builder = &builder;
-    defer codegen.builder = null;
-    try codegen.buildEntrypointModule(&builder, "standalone_static_data", &.{});
-    try std.testing.expectEqual(@as(usize, 3), codegen.static_data_symbols.count());
-    for (builder.variables.items[0..exports.len], exports, 0..) |variable, data_export, index| {
-        try std.testing.expectEqual(.internal, variable.global.ptrConst(&builder).linkage);
-        try std.testing.expectEqual(.constant, variable.mutability);
-        try std.testing.expect(variable.init != .no_init);
-        const variable_id: LlvmBuilder.Variable.Index = @fromBackingInt(@intCast(index));
-        const expected = try builder.gepConst(.normal, .i8, variable_id.toConst(&builder), null, &.{try builder.intConst(.i64, data_export.symbol_offset)});
-        try std.testing.expectEqual(expected, codegen.static_data_symbols.get(data_export.symbol_name).?);
-    }
-}
-
 test "embedded frozen data declares cycles offsets and callable edges at both widths" {
     const allocator = std.testing.allocator;
     inline for (.{ std.Target.Cpu.Arch.wasm32, std.Target.Cpu.Arch.x86_64 }) |arch| {
@@ -15568,6 +15483,70 @@ test "embedded frozen data declares cycles offsets and callable edges at both wi
         try std.testing.expect(std.mem.find(u8, printed.written(), "external global") == null);
         try std.testing.expect(std.mem.find(u8, printed.written(), "unused-proc-spelling") == null);
         try std.testing.expect(std.mem.find(u8, printed.written(), "unused-helper-spelling") == null);
+    }
+}
+
+test "standalone LLVM modules define cyclic frozen data and procedure pointers" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const result = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .next = ret,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(0),
+        .args = .empty(),
+        .body = body,
+        .ret_layout = .u64,
+        .frame_locals = try store.addLocalSpan(&.{result}),
+    }, .none);
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
+    var codegen = MonoLlvmCodeGen.initWithTarget(allocator, &store, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    codegen.embed_static_data = true;
+    const exports = [_]lir.Program.StaticDataExport{
+        .{
+            .symbol_name = "first",
+            .bytes = &(@as([16]u8, @splat(0))),
+            .symbol_offset = 8,
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 8, .target_symbol_name = "second" }},
+        },
+        .{
+            .symbol_name = "second",
+            .bytes = &(@as([8]u8, @splat(0))),
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "first" }},
+        },
+        .{
+            .symbol_name = "callable",
+            .bytes = &(@as([8]u8, @splat(0))),
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "unused_symbol_spelling", .kind = .function_pointer, .procedure = proc }},
+        },
+    };
+    try codegen.setStaticDataExports(&exports);
+    var builder = try codegen.createBuilder("standalone_static_data");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.buildEntrypointModule(&builder, "standalone_static_data", &.{});
+    try std.testing.expectEqual(@as(usize, 3), codegen.static_data_symbols.count());
+    for (builder.variables.items[0..exports.len], exports, 0..) |variable, data_export, index| {
+        try std.testing.expectEqual(.internal, variable.global.ptrConst(&builder).linkage);
+        try std.testing.expectEqual(.constant, variable.mutability);
+        try std.testing.expect(variable.init != .no_init);
+        const variable_id: LlvmBuilder.Variable.Index = @fromBackingInt(@intCast(index));
+        const expected = try builder.gepConst(.normal, .i8, variable_id.toConst(&builder), null, &.{try builder.intConst(.i64, data_export.symbol_offset)});
+        try std.testing.expectEqual(expected, codegen.static_data_symbols.get(data_export.symbol_name).?);
     }
 }
 
@@ -16254,6 +16233,21 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
             return self.proc(arg, body, &.{});
         }
 
+        fn directLeaf(self: *@This()) Allocator.Error!LirProcSpecId {
+            const arg = try self.store.addLocal(.{ .layout_idx = .i64 });
+            const join: lir.LIR.JoinPointId = @fromBackingInt(self.next_join);
+            self.next_join += 1;
+            const repeat = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
+            const enter = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
+            const body = try self.store.addCFStmt(.{ .join = .{
+                .id = join,
+                .params = .empty(),
+                .body = repeat,
+                .remainder = enter,
+            } }, .test_fixture);
+            return self.proc(arg, body, &.{});
+        }
+
         /// A loop calling `callee` on every pass, or calling itself when
         /// `callee` is null.
         fn looping(self: *@This(), callee: ?LirProcSpecId) Allocator.Error!LirProcSpecId {
@@ -16304,17 +16298,35 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
     const recursive = try fixture.looping(null);
     // Calls a proc that stays a call.
     const over_recursive = try fixture.looping(recursive);
+    const direct_leaf = try fixture.directLeaf();
 
     var codegen = MonoLlvmCodeGen.init(gpa, &store);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
-    try codegen.computeInlineEverywhere(store.getProcSpecs());
+    try codegen.computeInlineEverywhere(store.getProcSpecs(), &.{});
 
     try std.testing.expect(codegen.inlineEverywhere(wrapper));
     try std.testing.expect(codegen.inlineEverywhere(over_wrapper));
     try std.testing.expect(codegen.inlineEverywhere(over_leaf));
     try std.testing.expect(!codegen.inlineEverywhere(recursive));
     try std.testing.expect(!codegen.inlineEverywhere(over_recursive));
+
+    const entrypoints = [_]MonoLlvmCodeGen.Entrypoint{
+        .{ .symbol_name = "arbitrary_export", .proc = over_leaf, .arg_layouts = &.{.i64}, .ret_layout = .i64 },
+        .{ .symbol_name = "direct_export", .proc = direct_leaf, .arg_layouts = &.{.i64}, .ret_layout = .i64 },
+        .{ .symbol_name = "wrapper_export", .proc = wrapper, .arg_layouts = &.{.i64}, .ret_layout = .i64 },
+    };
+    codegen.program_kind = .platform;
+    try codegen.computeInlineEverywhere(store.getProcSpecs(), &entrypoints);
+    try std.testing.expect(!codegen.inlineEverywhere(over_leaf));
+    try std.testing.expect(codegen.inlineEverywhere(over_wrapper));
+    try std.testing.expect(codegen.inlineEverywhere(wrapper));
+    try std.testing.expect(codegen.inlineEverywhere(direct_leaf));
+
+    // Interpreter/CTFE entrypoints are not application entries.
+    codegen.program_kind = .in_process;
+    try codegen.computeInlineEverywhere(store.getProcSpecs(), &entrypoints);
+    try std.testing.expect(codegen.inlineEverywhere(over_leaf));
 }
 
 test "wasm C-ABI classification follows the target's SIMD support" {

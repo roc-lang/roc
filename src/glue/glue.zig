@@ -459,16 +459,6 @@ fn compileGlueSpec(
     };
     errdefer lowered.deinit();
 
-    const exports = compile.static_data_exports.buildStaticDataForWidth(gpa, .{
-        .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-        .imports = imported_artifacts,
-    }, &lowered, script_target_usize, .{}) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.UnsupportedTarget => return error.CompilationFailed,
-    };
-    if (lowered.frozen_static_data) |*previous| previous.deinit();
-    lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
-
     const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
         glueInvariant("glue spec produced no published make_glue platform root", .{});
 
@@ -4719,7 +4709,7 @@ test "issue 12760: boundary layout requirements survive memoization and callable
         \\
         \\Alias(a) :: a
         \\Wrapper(a) := a
-        \\probe : Model, Alias(Model), Wrapper(Model), Box(Model), Box(Model -> Model), Box(U64 -> U64) -> Model
+        \\probe : Model, Alias(Model), Wrapper(Model), Box(Model), Box((Model -> Model)), Box((U64 -> U64)) -> Model
         \\probe = |model, _, _, _, _, _| model
     });
     const cwd = try tmp.dir.realPathFileAlloc(io, ".", gpa);
@@ -4799,8 +4789,9 @@ test "issue 12760: boundary layout requirements survive memoization and callable
 
     var table = TypeTable.init(gpa, &artifacts);
     defer table.deinit();
-    // The same unknown type can still be carried behind a real box. A stored
-    // callable stays representable, but must not advertise a fabricated ABI.
+    // The same unknown type can still be carried behind a real box. A
+    // directly boxed callable stays representable, but a callable over the
+    // unknown type must not advertise a fabricated ABI.
     const boxed = try table.getOrInsertRoot(artifact, signature.args[3]);
     try std.testing.expect(table.entries.items[@intCast(boxed)].repr == .box);
     const before_callable = table.entries.items.len;

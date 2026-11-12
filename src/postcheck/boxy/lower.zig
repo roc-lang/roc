@@ -3745,8 +3745,17 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
         try view.bodies().demandIndex();
+        // Checked procedure aliases forward directly to their targets. They
+        // have no evaluated value, so their evaluator wrappers are not part
+        // of the module's runtime interface.
+        const forwarded_roots = try program.allocator.alloc(bool, view.view.compile_time_roots.roots.len);
+        defer program.allocator.free(forwarded_roots);
+        @memset(forwarded_roots, false);
+        for (view.view.callable_eval_templates.templates) |callable| {
+            if (callable.forwarded_lookup != null) forwarded_roots[@backingInt(callable.root)] = true;
+        }
         for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
-            if (!unitEmitsTemplate(view, template)) continue;
+            if (!unitEmitsTemplate(view, template, forwarded_roots)) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
@@ -3792,12 +3801,17 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 /// every template another object may call or compose, which leaves out the
 /// wrappers of `expect` and REPL roots. Nothing reaches those but a test
 /// plan's or a REPL's own roots, and each of those lowers as one program.
-fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) bool {
+/// Exact procedure aliases forward to their targets without evaluator wrappers.
+fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, forwarded_roots: []const bool) bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
-        .entry_wrapper => |wrapper_id| switch (view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root).kind) {
-            .expect, .repl_expr => false,
-            .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
+        .entry_wrapper => |wrapper_id| blk: {
+            const root_id = view.view.entry_wrappers.get(wrapper_id).root;
+            if (forwarded_roots[@backingInt(root_id)]) break :blk false;
+            break :blk switch (view.view.compile_time_roots.root(root_id).kind) {
+                .expect, .repl_expr => false,
+                .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
+            };
         },
     };
 }

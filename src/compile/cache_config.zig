@@ -359,7 +359,10 @@ pub const Constants = struct {
     ///      stores list no widening field names, and checked variables record
     ///      uncommitted record tails.
     /// 182: descriptors record lift-only uncommitted record tails.
-    pub const CACHE_VERSION = 182;
+    /// 183: checked-module entries store reproducible checking and evaluation
+    ///      reports beside body-local type context arguments and
+    ///      generated-codec recurrences.
+    pub const CACHE_VERSION = 183;
 };
 
 /// Configuration for the Roc cache system.
