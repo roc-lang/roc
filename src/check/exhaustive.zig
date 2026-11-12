@@ -1615,7 +1615,9 @@ fn computeTypeInhabitedWithKnownEmpty(
 }
 
 fn isUnresolvedUnboundFlex(flex: types.Flex) bool {
-    return flex.constraints.len() == 0;
+    // A deferred literal's still-undetermined type is the type of a value
+    // (design.md "Deferred Literal Conversion").
+    return flex.constraints.len() == 0 and flex.literal == .none;
 }
 
 fn isUnresolvedUnboundRigid(rigid: types.Rigid) bool {

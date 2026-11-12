@@ -14504,7 +14504,9 @@ const FreshRank = enum { current, target };
 /// saving a typeslot and a full unification run.
 fn isUnconstrainedFlex(content: types_mod.Content) bool {
     return switch (content) {
-        .flex => |flex| flex.constraints.isEmpty(),
+        // A deferred literal's marker stands for its conversion (design.md
+        // "Deferred Literal Conversion"), which unification checks.
+        .flex => |flex| flex.constraints.isEmpty() and flex.literal == .none,
         .rigid, .alias, .structure, .field_presence, .err => false,
     };
 }
@@ -36686,7 +36688,9 @@ fn backfillRegionsForAnalysisVars(self: *Self) Allocator.Error!void {
 
 fn payloadVarCanResolveToEmpty(content: Content) bool {
     return switch (content) {
-        .flex => |flex| flex.constraints.len() == 0 and if (flex.name) |name| name.attributes.ignored else true,
+        // A deferred literal's still-undetermined type is the type of a
+        // value, whatever it turns out to be.
+        .flex => |flex| flex.constraints.len() == 0 and flex.literal == .none and if (flex.name) |name| name.attributes.ignored else true,
         .rigid => |rigid| rigid.constraints.len() == 0 and rigid.name.attributes.ignored,
         .alias, .field_presence, .structure, .err => false,
     };
@@ -59192,7 +59196,7 @@ fn constrainDerivedParserFormatError(
             .tag_union, .empty_tag_union => return try self.constrainDerivedParserErrorEquality(parent, child, constraint, failure_expr, env, region),
             .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
         },
-        .flex => |flex| if (flex.constraints.len() == 0) {
+        .flex => |flex| if (flex.constraints.len() == 0 and flex.literal == .none) {
             return try self.constrainDerivedParserErrorEquality(parent, child, constraint, failure_expr, env, region);
         },
         .rigid, .field_presence => {},

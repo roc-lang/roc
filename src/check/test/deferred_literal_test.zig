@@ -383,3 +383,23 @@ test "an interpolation with a part that is not a Str is still an error where a S
     defer env.deinit();
     try std.testing.expectEqual(@as(usize, 1), try env.typeProblemCount());
 }
+
+test "a waiting literal's type is not closed as an absent tag's payload" {
+    // `Ok(1)` never constructs `Err`, whose payload in `Pair(_)` is the
+    // literal's own type: a value's type, which is not empty.
+    var env = try TestEnv.init("Test",
+        \\Pair(t) : Try(t, t)
+        \\
+        \\shown = {
+        \\    x : Pair(_)
+        \\    x = Ok(1)
+        \\    match x {
+        \\        Ok(n) => n.to_str()
+        \\        Err(n) => n.to_str()
+        \\    }
+        \\}
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    try env.assertDefType("shown", "Str");
+}
