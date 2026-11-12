@@ -43118,9 +43118,9 @@ fn isMethodUseOrigin(origin: StaticDispatchConstraint.Origin) bool {
 const SameMethodRelation = enum { merged, conflict, erroneous };
 
 /// One requirement of a method on a receiver at a generalization boundary:
-/// attached to the receiver's descriptor, or detached from it: a copy that a
-/// use of a nested definition made of that definition's scheme requirement,
-/// or the nested scheme's requirement itself.
+/// attached to the receiver's descriptor, or a copy that a use of a nested
+/// definition made of that definition's scheme requirement, detached from the
+/// receiver it shares.
 const SameMethodRequirement = struct {
     constraint: StaticDispatchConstraint,
     /// For a detached requirement, the expression whose use introduced it.
@@ -43138,13 +43138,16 @@ const SameMethodCopy = struct {
 /// pool that holds two. Requirements stay separate while the definition is
 /// checked, so each is discharged against the type its receiver resolves to;
 /// only a receiver that is still a type variable here becomes one requirement.
-/// A receiver's requirements include the detached ones: the copies the
-/// boundary's uses of nested definitions made of their schemes' requirements
-/// on it, exactly as if each use had called the method itself, and those
-/// schemes' requirements.
+/// Literal defaulting has already run, so every receiver it settled had each
+/// of its requirements discharged on its own. A receiver's requirements
+/// include the copies the boundary's uses of nested definitions made of their
+/// schemes' requirements on it, exactly as if each use had called the method
+/// itself. A nested scheme's own relation, attached to the receiver, is that
+/// scheme's generalized template and is never related: relating it would make
+/// every later use's live variables the template's.
 /// Relating two callables can bring other receivers' requirements together,
 /// so the pool is revisited until a pass relates nothing.
-fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
+fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!bool {
     const rank = env.rank();
     var snapshot: std.ArrayListUnmanaged(SameMethodRequirement) = .empty;
     defer snapshot.deinit(self.gpa);
@@ -43155,6 +43158,7 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
     var visited = std.AutoHashMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
+    var related_ever = false;
     var related_any = true;
     while (related_any) {
         related_any = false;
@@ -43176,6 +43180,10 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
             // receiver's list is iterated from a private copy.
             snapshot.clearRetainingCapacity();
             for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                // A nested definition's own call on this receiver belongs to
+                // that definition's scheme, which quantified its callable; its
+                // uses' copies are the requirements this boundary relates.
+                if (self.types.resolveVar(constraint.fn_var).desc.rank == .generalized) continue;
                 try snapshot.append(self.gpa, .{ .constraint = constraint, .use_expr = null });
             }
             for (copies.items) |copy| {
@@ -43196,7 +43204,10 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
                 }
                 if (self.types.resolveVar(entry.value_ptr.constraint.fn_var).var_ == self.types.resolveVar(constraint.fn_var).var_) continue;
                 switch (try self.relateSameMethodRequirements(entry.value_ptr.*, requirement, resolved.var_, roots, env)) {
-                    .merged => related_any = true,
+                    .merged => {
+                        related_any = true;
+                        related_ever = true;
+                    },
                     .erroneous => {},
                     // The conflict poisoned the receiver.
                     .conflict => break,
@@ -43204,14 +43215,14 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
             }
         }
     }
+    return related_ever;
 }
 
-/// The still-open requirements on a type variable at the boundary's rank that
-/// its descriptor does not hold: the copies this boundary's roots own, which
-/// their uses of inner definitions made, and the requirements the schemes of
-/// definitions nested inside this boundary hold on it. A nested scheme's
-/// requirement on the receiver is the one its uses copied, so it is the same
-/// requirement once the receiver has one method of each name.
+/// The still-open copies this boundary's roots own, which their uses of
+/// nested definitions made, on a type variable at the boundary's rank. The
+/// relation runs after capture, which moves every copy on such a receiver
+/// into its root's scheme: a copy is detached from the receiver, so it is an
+/// explicit requirement even though the receiver generalizes here.
 fn collectSameMethodCopies(
     self: *Self,
     roots: []const BoundaryRoot,
@@ -43220,19 +43231,8 @@ fn collectSameMethodCopies(
 ) Allocator.Error!void {
     out.clearRetainingCapacity();
     for (roots) |root| {
-        const chain = self.scheme_requirement_candidate_chains_by_owner.get(root.owner) orelse continue;
-        var candidate_idx = chain.first;
-        while (candidate_idx != SchemeRequirementCandidate.none) : (candidate_idx = self.scheme_requirement_candidates.items[candidate_idx].next_of_owner) {
-            const candidate = self.scheme_requirement_candidates.items[candidate_idx];
-            if (candidate.source != .scheme_copy) continue;
-            try self.appendSameMethodCopy(candidate.receiver_var, candidate.constraint, candidate.failure_expr, candidate.deferred_generated_codec, rank, out);
-        }
-    }
-    const group_index = self.currentGroupIndex();
-    for (self.type_schemes.items) |scheme| {
-        if (!std.meta.eql(scheme.capture_group_index, group_index)) continue;
-        if (@backingInt(scheme.capture_rank) <= @backingInt(rank)) continue;
-        for (scheme.dispatch_requirements.items) |requirement| {
+        const scheme_idx = self.typeSchemeIndexForRoot(root.owner) orelse continue;
+        for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
             try self.appendSameMethodCopy(requirement.receiver_var, requirement.constraint, requirement.failure_expr, requirement.deferred_generated_codec, rank, out);
         }
     }
@@ -43250,6 +43250,7 @@ fn appendSameMethodCopy(
     if (deferred_generated_codec) return;
     if (self.final_codec_dispatch_constraint_fns.contains(constraint.fn_var)) return;
     if (self.staticDispatchConstraintIsInactive(constraint)) return;
+    if (self.settled_static_dispatch_constraint_fns.contains(constraint.fn_var)) return;
     const receiver = self.types.resolveVar(receiver_var);
     if (receiver.desc.content != .flex or receiver.desc.rank != rank) return;
     try out.append(self.gpa, .{
@@ -44473,7 +44474,6 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     var boundary_codecs = std.ArrayList(FinalCodecDispatchConstraint).empty;
     defer boundary_codecs.deinit(self.gpa);
 
-    try self.relateSameMethodRequirementsAtBoundary(roots, env);
     try self.relateUndischargedInterpolationParts(env);
 
     try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
@@ -44558,6 +44558,13 @@ fn quiesceSchemeRequirementsAtBoundary(
     env: *Env,
     boundary_codecs: *std.ArrayList(FinalCodecDispatchConstraint),
 ) std.mem.Allocator.Error!void {
+    // Literal defaulting has settled every receiver that is not about to be
+    // generalized, so each requirement on those was discharged on its own;
+    // a receiver still a type variable here holds one method of each name.
+    if (try self.relateSameMethodRequirementsAtBoundary(roots, env)) {
+        try self.checkStaticDispatchConstraints(env, false);
+        try self.checkAllConstraints(env);
+    }
     while (true) {
         if (boundary_codecs.items.len != 0) {
             const previous = self.constraining_boundary_codecs;

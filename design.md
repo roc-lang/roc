@@ -14130,9 +14130,10 @@ Other solved-graph mutations:
   committed probe)—policy: one requirement per method on a type about to be
   generalized, as declared in Static Dispatch At The Checked Boundary
   ("Evidence params"). Each same-name callable pair on a receiver still flex
-  at the boundary's rank—attached to its descriptor, copied by the boundary's
-  uses of nested definitions, or held by a nested definition's scheme—is
-  related through an ordinary committed probe; a
+  at the boundary's rank once literals have defaulted—attached to its
+  descriptor or copied by the boundary's uses of nested definitions, but never
+  a nested scheme's generalized template—is related through an ordinary
+  committed probe; a
   probe that cannot establish the pair, or that makes the related callable's
   type infinite, rolls back, reports the method conflict, poisons the
   receiver, and retires every definition the boundary generalizes. A relation
@@ -18860,21 +18861,28 @@ literal's conversion has one callable type for every literal of its kind, so
 those share one relation per literal kind from the start; relating them can
 neither fail nor bind anything else. A type has one method of each name, so
 when a receiver is still a type variable at its definition's generalization
-boundary, its requirements of one method become one requirement: the boundary
-relates their callables before it defaults literals and generalizes, and an
-inferred scheme never holds two requirements of one method on one type. A
-receiver's requirements are every relation on it the boundary's definitions
-own, not only those attached to its descriptor: a nested definition that calls
-the method on the receiver holds that requirement in its own scheme (Pending
-Dispatch Requirements In Type Schemes), each use copies it detached from the
-receiver, and the scheme's requirement, every copy, and the definition's own
-calls are related alike. A use of `helper = |v| outer.wrap(v)` inside
-`|outer| ...` is therefore exactly a call of `outer.wrap` at the use: when
-`outer` resolves first, each use instantiates its method on its own, and
-when `outer` is still a type variable, `helper(helper(1.U8))` requires two
-`wrap` methods. Relating the nested scheme's own requirement too keeps the
-nested definitions' scheme-use records, which Polymorphic Recursion reads,
-consistent with the one method type.
+boundary, its requirements of one method become one requirement: once the
+boundary has defaulted literals, and before it generalizes, it relates their
+callables, and an inferred scheme never holds two requirements of one method
+on one type that its definition made. Defaulting comes first because a
+receiver it settles, such as an unannotated `weak = "a,b,c"` inside the
+definition, is not a type variable at all: each requirement on it is
+discharged against its default type on its own, exactly as when it is
+annotated (`Str`), so an annotation never changes whether two uses of a
+method agree. A receiver's requirements are every live relation on it the
+boundary's definitions own, not only those attached to its descriptor: a
+nested definition that calls the method on the receiver holds that
+requirement in its own scheme (Pending Dispatch Requirements In Type
+Schemes), and each use copies it detached from the receiver, so the copies
+and the definition's own calls are related alike. A use of
+`helper = |v| outer.wrap(v)` inside `|outer| ...` is therefore exactly a call
+of `outer.wrap` at the use: when `outer` resolves first, each use
+instantiates its method on its own, and when `outer` is still a type
+variable, `helper(helper(1.U8))` requires two `wrap` methods. The nested
+definition's own relation stays attached to the receiver, but its callable is
+that scheme's generalized template, which no boundary relation may change:
+relating it would turn the live variables of every later use into the
+template's, so it is never one of the related requirements.
 Requirements that cannot be one are a type mismatch. That includes a relation
 that would make the method's type infinite, which no type can be (two uses of
 `row.i32()` whose results must be both `a` and `{ id: a }`); unification

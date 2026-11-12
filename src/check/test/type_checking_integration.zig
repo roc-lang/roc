@@ -12463,6 +12463,19 @@ test "check type - principality - inferred enclosing weak receiver, two call sit
     try checkTypesModuleDefs(source, principality_enclosing_defs);
 }
 
+test "check type - principality - inferred enclosing weak receiver, direct calls" {
+    const source =
+        \\outer = |_unit| {
+        \\    weak = "a,b,c"
+        \\    lengths = weak.split_on(",").map(|s| s.count_utf8_bytes())
+        \\    selves = weak.split_on(",").map(|s| s)
+        \\    (lengths, selves)
+        \\}
+        \\result = outer({})
+    ;
+    try checkTypesModuleDefs(source, principality_enclosing_defs);
+}
+
 test "check type - principality - annotated weak numeric receiver, two call sites" {
     const source =
         \\weak : I64

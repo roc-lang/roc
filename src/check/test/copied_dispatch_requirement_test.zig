@@ -132,20 +132,54 @@ test "copied method requirements - a receiver resolved later serves a nested use
     try test_env.assertDefType("a", "W -> U64");
 }
 
-test "copied method requirements - a local definition using another is not polymorphic recursion" {
+test "copied method requirements - two uses of a local definition at one type check" {
     var test_env = try TestEnv.init("Repro", prelude ++
-        \\a = |outer, x| {
-        \\    helper = |v| {
-        \\        p = hole({})
-        \\        _s = same(p, outer)
-        \\        p.id(v)
-        \\    }
-        \\    other = |w| helper(w)
-        \\    other(helper(x))
+        \\poly = |s, t| {
+        \\    helper = |x| s.read() + x
+        \\    (helper(t), helper(t))
         \\}
     );
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("a", "a, b -> b where [a.id : a, b -> b]");
+}
+
+test "copied method requirements - two uses of a local definition with a ? check" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\Source := { n : U64 }.{
+        \\    read : Source -> Try(U64, [Other])
+        \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+        \\}
+        \\
+        \\poly = |s, t| {
+        \\    helper = |x| {
+        \\        m = s.read()?
+        \\        Ok(m + x)
+        \\    }
+        \\    (helper(t), helper(t))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "copied method requirements - an unused local definition's call keeps the enclosing argument monomorphic" {
+    var test_env = try TestEnv.init("Repro", prelude ++
+        \\f = |x| {
+        \\    g = |outer| {
+        \\        _helper = |v| outer.wrap(v)
+        \\        l = outer.wrap(x)
+        \\        l
+        \\    }
+        \\    n : U64
+        \\    n = x
+        \\    b : Str
+        \\    b = x
+        \\    (g, n, b)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "Str");
 }

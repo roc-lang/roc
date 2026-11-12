@@ -109,7 +109,7 @@ EndOfFile,
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 279)
+		(e-call (constraint-fn-var 281)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "1"))
@@ -119,9 +119,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c, d -> c where [c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "c, d -> c where [c.plus : c, e -> c, c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "c, d -> c where [c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "c, d -> c where [c.plus : c, e -> c, c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))))
 ~~~
