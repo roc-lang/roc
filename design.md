@@ -1946,8 +1946,10 @@ values, including empty lists, records, tuples, payload-bearing tags, boxes,
 and captured functions, read immutable stored
 data. There is no construction tree, runtime constructor, or fresh alternative
 for a completed value. Mutation uses the normal copy-on-write operation.
-Allocation capacity is not part of the frozen value; empty lists require no
-backing storage, and nonempty lists store their items without spare capacity.
+A list's or string's capacity is part of the frozen value (Static Lists And
+Strings Keep Their Capacity): its descriptor records the capacity the value
+was evaluated with, while its allocation stores the items alone, with no
+spare slots.
 The same rule applies when restoring values from the checked module cache.
 
 Static data can refer directly to a ConstStore node with its type plan, or
@@ -23972,11 +23974,15 @@ body for every level of nesting to remove one predictable branch per site;
 it keeps its flag-dispatched sets instead.
 
 `List.clear` is its own low-level, `list_clear`, run by every backend as the
-zero-length sublist from index zero: that window is never a slice, so unlike
-`list_sublist` its result is born unique, and a list cleared and refilled
-each iteration keeps both its allocation and its unique birth. Modeled as a
-sublist, the clear left the chain unborn, the parameter it emptied borrowed,
-and the retained parameter's clear returned an empty list with no capacity.
+`listClear` builtin: its result is never a slice and never shares an
+allocation, so unlike `list_sublist` its result is born unique, and a list
+cleared and refilled each iteration keeps both its allocation and its unique
+birth. Modeled as a sublist, the clear left the chain unborn, the parameter it
+emptied borrowed, and the retained parameter's clear returned an empty list
+with no capacity. A static list has no allocation the program may keep, so
+clearing one allocates the capacity its descriptor records (Static Lists And
+Strings Keep Their Capacity); a sublist of one never does, because a view
+reserves nothing.
 
 An append-only promoted loop versions on its slack instead. The fill limit
 answers whether the next append fits; a bound on the loop's remaining
@@ -25050,9 +25056,18 @@ compiled host and builtin code points its frame pointer into the middle of its
 frame rather than at a saved-frame-pointer record, so the host unwinds those
 frames with the system unwind tables until it reaches generated code, then
 walks the generated frame-pointer chain from there. A stack overflow is
-caught by the guard-page handler, which records the faulting program counter,
-frame pointer, and stack pointer before escaping; the host records the counter
-when it is in generated code and walks the chain from the frame pointer.
+caught by the guard-page handler, which records the faulting frame pointer and
+stack pointer before escaping; the host walks the chain from the frame
+pointer. The faulting program counter is not part of an overflow's point:
+which instruction of the innermost frame touches the guard first depends on
+where the guard falls within that frame (a callee's frame-record push, a
+store to one of its slots, or an x86_64 `call` pushing its return address),
+so an overflow is located at the innermost generated call on the chain: the
+call that entered the innermost frame whose record was in place when the
+stack ran out. Every
+frame of a self-recursive procedure but the outermost was entered by its
+recursive call, so its overflow is reported at that call wherever in the
+frame the guard is hit.
 
 Compile-time code runs on a dedicated fixed stack, the evaluation stack
 (`base.eval_stack`), never on the stack of whichever worker picked the root up.
@@ -25069,9 +25084,8 @@ the system unwinder all read a stack's extent from the thread's TEB, and
 the stack pointer, together with the fiber-local storage the C runtime keeps
 its per-thread state in. Every root starts at the same top, the same distance
 above the guard, with no compiler frames beneath the generated entry, so how
-deep a program recurses before it overflows, and the instruction that
-overflows, are a function of the program and the compiler build alone, and an
-overflow's reported position is reproducible. The crash boundary is set on the
+deep a program recurses before it overflows is a function of the program and
+the compiler build alone. The crash boundary is set on the
 evaluation stack (`CrashBoundary.run`). Its guarded callback is never tail-called:
 the frame containing the recovery point must remain live while the callback
 can escape to it. Thus the escape from a crash or an
@@ -25086,7 +25100,7 @@ interpreter and compiled runtime programs keep their own stack handling.
 
 The evaluating program resolves the point: the meaning of the innermost call,
 and the source position of the innermost statement with a region among the
-faulting instruction's and the enclosing generated calls'. A return address
+enclosing generated calls'. A return address
 belongs to the statement of the call instruction just before it. A failure
 whose meaning is an exhaustiveness failure is the empirical failure of that
 site; every other failure is reported as a crash at its position.
@@ -25468,14 +25482,21 @@ const ConstValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    string: ConstStr,
-    list: union(enum) {
-        nodes: Span(ConstNodeId),
-        scalar_bytes: struct {
-            bytes: ConstBlobDataId,
-            len: u32,
-            item: ConstPackedScalar,
+    string: struct {
+        bytes: ConstStr,
+        capacity: u64,
+    },
+    list: struct {
+        items: union(enum) {
+            nodes: Span(ConstNodeId),
+            scalar_bytes: struct {
+                bytes: ConstBlobDataId,
+                len: u32,
+                item: ConstPackedScalar,
+            },
+            empty,
         },
+        capacity: u64,
     },
     tuple: Span(ConstNodeId),
     record: Span(ConstField),
@@ -25507,10 +25528,12 @@ const ConstStr = ConstBlobDataId;
 ```
 
 A stored string or packed list is a whole blob, never a view into a longer
-one. How evaluation's allocations shared bytes (a seamless slice, or a string
-that kept a longer allocation's capacity) is runtime representation and does
-not enter `ConstStore`; the writer stores each string's own bytes, and equal
-contents share a blob because interning is by content.
+one. How evaluation's allocations shared bytes (a seamless slice of a longer
+allocation) is runtime representation and does not enter `ConstStore`; the writer stores each string's own bytes, and equal
+contents share a blob because interning is by content. Capacity is not
+representation: `ConstList.capacity` records a list's beside its items, which
+may be nodes, a packed blob, or nothing, and `ConstString.capacity` records a
+string's beside its blob (Static Lists And Strings Keep Their Capacity).
 Strings and packed scalar lists intern into the same exact-content namespace.
 Packed multi-byte scalars use little-endian checked-value bytes;
 this is target-independent `ConstStore` data, not a captured host allocation or
@@ -25841,12 +25864,91 @@ specialization strategy or any backend. This is a compiler invariant, not an
 optimization preference. There is no fresh-construction alternative, including
 for a consumer that may later update a list. Required runtime operations retain
 their ordinary meaning, but cannot change a constant read into reconstruction.
+The copy a later update makes is the ordinary copy-on-write copy, and it is
+where a list's or string's recorded capacity is allocated (Static Lists And
+Strings Keep Their Capacity).
 All nested storage and callable captures are emitted as immutable target data
 with explicit relocations. Scalars may be immediate literals. Target-data
 encoding happens in the compiler and emits no runtime initializer.
 A product whose committed layout is zero-sized has no stored field offsets.
 Lowering represents its field reads as zero-sized value aliases, including
 when the product comes from an immutable slot.
+
+### Static Lists And Strings Keep Their Capacity
+
+Compile-time evaluation must not change how much a program allocates. A list
+built by `List.with_capacity(5000)` and then filled reserves once whether the
+compiler evaluated the `with_capacity` or the program did, so capacity is part
+of a completed list's or string's value, and every form the value takes
+records it. For a list:
+
+- `ConstStore` stores each list's `capacity` beside its items
+  (`ConstList.capacity`, never below the length), and two lists that differ
+  only in capacity are different values.
+- A frozen descriptor's capacity word is that capacity. Its allocation holds
+  the items alone: no spare slot is emitted, so recording a capacity costs the
+  binary nothing. An empty list with capacity points just past the header of
+  an allocation holding no items, because a list with nonzero capacity always
+  points into an allocation, whose refcount word is how every runtime
+  uniqueness check finds out it is static. A list of zero-sized items is the
+  one exception: it holds no allocation on any backend, so its data pointer
+  is null and its capacity is a count alone, which `List.with_capacity` and
+  `List.reserve` set and the operations that change a list in place carry
+  (`RocList.zeroSized`). Whether an item is zero-sized is decided by the
+  program that evaluates the root, and a function value's size follows its
+  lambda set there: a list whose only function is one capture-free lambda is
+  a list of zero-sized items where it is evaluated. Its reservation is
+  recorded as that count, so a runtime use that gives its items a wider
+  representation reserves the same number of slots.
+- A stored list restores as static data frozen straight from its node whenever
+  it has spare capacity and its items are data alone, exactly as a non-empty
+  stored list does, so its read lowers to no list operation. A list with
+  spare capacity that holds function values restores as its items under the
+  reservation it was evaluated with (`list_reserve`, or `list_with_capacity`
+  for an empty list); a static-data initializer evaluates that reservation
+  into the descriptor's capacity word rather than running it.
+
+Static data is never unique, so nothing writes through a static descriptor's
+capacity. The runtime uses it in exactly one way: when a builtin copies a
+static list to give the program storage of its own, the copy is sized as if
+the static list were an exclusively owned allocation of the recorded capacity
+(`RocList.copyCapacity`). A request that fits the capacity allocates the
+capacity; one that outgrows it takes the geometric step from the capacity, as
+growing in place would. `List.clear` of a static list allocates its capacity
+with no items. A copy of a list some other reference holds is still sized by
+the items it copies, since that list's spare capacity belongs to its owner.
+The program therefore allocates what it would have had it built the value
+itself, except that the allocation moves from the value's construction to its
+first update, and never happens for a value that is only read.
+
+A literal has no spare capacity, so its descriptor's capacity is its length
+and its copies are sized as they would be for a uniquely owned list of that
+length. Capacity is counted in items as the evaluation left it; a seamless
+slice's capacity is its window.
+
+Strings follow the same rule with one addition, because a string may be held
+inline in its descriptor. `ConstStore` stores each string's capacity beside
+its bytes (`ConstString.capacity`); a string that was inline, or a seamless
+slice, when its evaluation finished has none beyond its length. A frozen
+string is inline exactly when its capacity fits the target's inline string,
+so a string without spare capacity is inline whenever its bytes fit, and
+`Str.with_capacity(1000)` freezes as an allocated string of no bytes whose
+descriptor records the thousand. A stored string with spare capacity restores
+as its literal under `str_reserve`, which a static-data initializer evaluates
+into the descriptor, and whether its read needs target storage is decided by
+its capacity rather than its length (`StaticDataStorage.string_backing`). A
+copy of a static string keeps the recorded capacity
+(`RocStr.copyCapacity`), in an append, a reserve, or an in-place edit's copy.
+`Str.reserve` hands back its argument only when nothing else holds it: a
+static string's descriptor may record enough capacity for the request, but
+it has no room behind it.
+
+Deriving capacity at the read instead, by having ARC choose a fresh
+construction where a value reaches an updating operation, is rejected: it
+makes every program pay an ownership analysis for the few that reserve, and it
+lets a read allocate. Declining to freeze a value that has spare capacity is
+rejected too, since any list built by appending has some, including the large
+precomputed tables freezing exists for.
 
 A build's executable binary is a function of its source, its command line, and its
 optimization state; whether the checked module cache already held a
