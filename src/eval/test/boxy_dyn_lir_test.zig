@@ -1217,14 +1217,14 @@ test "boxy unsafe list appends agree across backends for every item size" {
         try std.testing.expectEqual(@as(u64, 3), (try run.eval(len, .u64)).value.read(u64));
         if (last) |proc_id| {
             const result = try run.eval(proc_id, item.field());
-            switch (item.field()) {
+            switch (item) {
+                .zero_sized => unreachable, // a zero-sized item has no read-back procedure
                 .u8 => try std.testing.expectEqual(@as(u8, 41), result.value.read(u8)),
-                .i64 => try std.testing.expectEqual(@as(i64, 41), result.value.read(i64)),
-                .str => {
+                .i64, .i64_pair => try std.testing.expectEqual(@as(i64, 41), result.value.read(i64)),
+                .str, .str_pair => {
                     try std.testing.expectEqualStrings(WriteItem.second_text, readStr(result.value));
                     run.interpreter.dropValue(result.value, .str);
                 },
-                else => unreachable, // `WriteItem.field` yields only these layouts
             }
         }
         try run.env.checkForLeaks();
