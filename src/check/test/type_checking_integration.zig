@@ -15092,3 +15092,335 @@ test "check type - row subsumption - a method call widens a forwarded closed res
     defer test_env.deinit();
     try test_env.assertNoErrors();
 }
+
+// Methods on open rows (design.md "Methods On Open Rows")
+
+const open_row_tagged_decls =
+    \\Tagged := { id : U64 }.{
+    \\    is_eq : Tagged, Tagged -> Bool
+    \\    is_eq = |_, _| Bool.True
+    \\
+    \\    foo : Tagged, Tagged -> Bool
+    \\    foo = |_, _| Bool.True
+    \\}
+    \\
+    \\Plain := { id : U64 }
+    \\
+    \\one : Tagged
+    \\one = { id: 1 }
+    \\
+    \\two : Tagged
+    \\two = { id: 2 }
+    \\
+    \\p1 : Plain
+    \\p1 = { id: 1 }
+    \\
+    \\p2 : Plain
+    \\p2 = { id: 2 }
+    \\
+    \\same = |l, r| {
+    \\    _ = l.id + r.id
+    \\    l == r
+    \\}
+    \\
+    \\read_foo = |l, r| {
+    \\    _ = l.id + r.id
+    \\    l.foo(r)
+    \\}
+    \\
+    \\is_red = |c| c == Red
+    \\
+;
+
+test "methods on open rows - the requirement is written on the row variable for the whole value" {
+    try checkTypesModuleDefs(open_row_tagged_decls, &.{
+        .{ .def = "same", .expected =
+        \\{ id: a, ..b }, { id: a, ..b } -> Bool
+        \\  where [a.plus : a, a -> a
+        \\     , b.is_eq : b, b -> Bool]
+        },
+        .{ .def = "read_foo", .expected =
+        \\{ id: a, ..b }, { id: d, ..e } -> f
+        \\  where [a.plus : a, d -> a
+        \\     , b.foo : b, { id: d, ..e } -> f]
+        },
+        .{ .def = "is_red", .expected =
+        \\[Red, ..a] -> Bool where [a.is_eq : a, a -> Bool]
+        },
+    });
+}
+
+test "methods on open rows - each call answers the requirement with the type it supplies" {
+    const source = open_row_tagged_decls ++
+        \\a = same(one, two)
+        \\b = same({ id: 1 }, { id: 2 })
+        \\c = read_foo(one, two)
+        \\d = is_red(Green)
+        \\e = is_red(Other("x"))
+        \\generic_foo = |x, y| x.foo(y)
+        \\f = generic_foo(one, two)
+        \\list_eq = |xs, ys| {
+        \\    _ = List.map(xs, |x| x.id)
+        \\    xs == ys
+        \\}
+        \\g = list_eq([one], [two])
+        \\h = list_eq([{ id: 1 }], [{ id: 2 }])
+        \\i = is_red(Wrapped(one))
+        \\anno_eq : { id : U64, ..r }, { id : U64, ..r } -> Bool where [r.is_eq : r, r -> Bool]
+        \\anno_eq = |l, r| l == r
+        \\j = anno_eq(one, two)
+        \\k = anno_eq({ id: 1 }, { id: 2 })
+        \\anno_foo : { id : U64, ..r }, { id : U64, ..r } -> Bool where [r.foo : r, r -> Bool]
+        \\anno_foo = |l, r| l.foo(r)
+        \\m = anno_foo(one, two)
+        \\later = |l, r| {
+        \\    result = l == r
+        \\    _ = l.id + r.id
+        \\    result
+        \\}
+        \\n = later(one, two)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "methods on open rows - a nominal type without the method is rejected at the call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\a = same(p1, p2)
+    , .fail_with,
+        \\**Missing Method**
+        \\The value before this `==` operator has a type that doesn't have a `is_eq` method.
+        \\```roc
+        \\a = same(p1, p2)
+        \\```
+        \\    ^^^^^^^^^^^^
+        \\
+        \\The value's type, which does not have a method named `is_eq`, is:
+        \\
+        \\    Plain
+        \\
+        \\**Hint:** The `==` operator calls a method named `is_eq` on the value preceding it, passing the value after the operator as the one argument.
+        \\
+        \\This use needs that because of this code in the definition it uses:
+        \\```roc
+        \\    l == r
+        \\```
+        \\    ^^^^^^
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a plain record without the method is rejected at the call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\a = read_foo({ id: 1 }, { id: 2 })
+    , .fail_with,
+        \\**Missing Method**
+        \\This use needs the `foo` method, but the type being used doesn't have that method.
+        \\```roc
+        \\a = read_foo({ id: 1 }, { id: 2 })
+        \\```
+        \\    ^^^^^^^^
+        \\
+        \\The value's type, which does not have a method named `foo`, is:
+        \\
+        \\    { id: Dec }
+        \\
+        \\This use needs that because of this code in the definition it uses:
+        \\```roc
+        \\    l.foo(r)
+        \\```
+        \\    ^^^^^^^^
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a function field is rejected at the call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\a = same({ id: 1, f: |x| x }, { id: 1, f: |x| x })
+    , .fail_with,
+        \\**Type Does Not Support Equality**
+        \\This expression is doing an equality check on a type that doesn't support equality.
+        \\```roc
+        \\a = same({ id: 1, f: |x| x }, { id: 1, f: |x| x })
+        \\```
+        \\    ^^^^
+        \\
+        \\The type is:
+        \\
+        \\    { f: b -> b, id: Dec }
+        \\
+        \\This record does not support equality because these fields have types that don't support **is_eq**:
+        \\
+        \\    **f**: _b -> b_
+        \\        Function equality is not supported.
+        \\**Hint:** Anonymous records only have an **is_eq** method if all of their fields have **is_eq** methods.
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a function payload is rejected at the call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\a = is_red(Fn(|x| x))
+    , .fail_with,
+        \\**Type Does Not Support Equality**
+        \\This expression is doing an equality check on a type that doesn't support equality.
+        \\```roc
+        \\a = is_red(Fn(|x| x))
+        \\```
+        \\    ^^^^^^
+        \\
+        \\The type is:
+        \\
+        \\    [Fn(b -> b), Red]
+        \\
+        \\This tag union does not support equality because these tags have payload types that don't support **is_eq**:
+        \\
+        \\    **Fn** (_b -> b_)
+        \\        Function equality is not supported.
+        \\**Hint:** Tag unions only have an **is_eq** method if all of their payload types have **is_eq** methods.
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a call inside a function body is decided at that call" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\check = |_| is_red(Fn(|x| x))
+    , .fail_with,
+        \\**Type Does Not Support Equality**
+        \\This expression is doing an equality check on a type that doesn't support equality.
+        \\```roc
+        \\check = |_| is_red(Fn(|x| x))
+        \\```
+        \\            ^^^^^^
+        \\
+        \\The type is:
+        \\
+        \\    [Fn(a -> a), Red]
+        \\
+        \\This tag union does not support equality because these tags have payload types that don't support **is_eq**:
+        \\
+        \\    **Fn** (_a -> a_)
+        \\        Function equality is not supported.
+        \\**Hint:** Tag unions only have an **is_eq** method if all of their payload types have **is_eq** methods.
+        \\
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - an annotated row variable carries only its where clause" {
+    try checkTypesModule(
+        \\anno_foo : { id : U64, ..r }, { id : U64, ..r } -> Bool
+        \\anno_foo = |l, r| l.foo(r)
+    , .fail_with,
+        \\**Missing Method**
+        \\This `foo` method is being called on a value whose type doesn't have that method.
+        \\```roc
+        \\anno_foo = |l, r| l.foo(r)
+        \\```
+        \\                    ^^^
+        \\
+        \\The value's type, which does not have a method named `foo`, is:
+        \\
+        \\    r
+        \\
+        \\**Hint:** Did you forget to specify `foo` in the type annotation?
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a record a function compared cannot become a nominal type" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\eq_only = |a, b| {
+        \\    left = { id: a }
+        \\    right = { id: b }
+        \\    (left == right, (left, right))
+        \\}
+        \\pair : (Tagged, Tagged)
+        \\pair = eq_only(1, 2).1
+    , .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\pair = eq_only(1, 2).1
+        \\```
+        \\       ^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    ({ id: d }, { id: d })
+        \\      where [
+        \\        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        \\        d.is_eq : d, d -> Bool,
+        \\      ]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    (Tagged, Tagged)
+        \\
+        \\The function that built this record compared or hashed it as a plain record, so it can't become a `Tagged`.
+        \\
+        \\**Hint:** If you want a `Tagged`, you can write `Tagged.{ ... }` instead of `{ ... }` where this record is built, so the function compares it as a `Tagged`. You can also give the function that builds it a type annotation that says it's a `Tagged`.
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - a row variable joining a built record leaves it plain" {
+    try checkTypesModule(open_row_tagged_decls ++
+        \\keep_eq = |r, n| {
+        \\    other = if n == 0 r else { id: n }
+        \\    (r == other, other)
+        \\}
+        \\kept = keep_eq(one, 2)
+    , .fail_with,
+        \\**Type Mismatch**
+        \\The first argument being passed to this function has the wrong type.
+        \\```roc
+        \\kept = keep_eq(one, 2)
+        \\```
+        \\               ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Tagged
+        \\
+        \\But `keep_eq` needs the first argument to be:
+        \\
+        \\    { id: a }
+        \\      where [
+        \\        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\        a.is_eq : a, a -> Bool,
+        \\      ]
+        \\
+        \\The function that built this record compared or hashed it as a plain record, so it can't become a `Tagged`.
+        \\
+        \\**Hint:** If you want a `Tagged`, you can write `Tagged.{ ... }` instead of `{ ... }` where this record is built, so the function compares it as a `Tagged`. You can also give the function that builds it a type annotation that says it's a `Tagged`.
+        \\
+        \\
+    );
+}
+
+test "methods on open rows - an annotation decides a built record before it is compared" {
+    const source = open_row_tagged_decls ++
+        \\make_pair : U64, U64 -> (Bool, Tagged)
+        \\make_pair = |a, b| {
+        \\    left = { id: a }
+        \\    right = { id: b }
+        \\    (left == right, left)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}

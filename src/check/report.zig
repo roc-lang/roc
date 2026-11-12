@@ -5542,7 +5542,7 @@ pub const ReportBuilder = struct {
             .compared_plain => {
                 const nominal = refusal.nominal orelse unreachable;
                 try D.renderSlice(&.{
-                    D.bytes("The function this record came from compared or hashed it as a plain record, so it can't become a"),
+                    D.bytes("The function that built this record compared or hashed it as a plain record, so it can't become a"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
                     D.bytes(".").withNoPrecedingSpace(),
                 }, self, report);
@@ -5567,7 +5567,7 @@ pub const ReportBuilder = struct {
             .compared_plain_tags => {
                 const nominal = refusal.nominal orelse unreachable;
                 try D.renderSlice(&.{
-                    D.bytes("The function this value came from compared or hashed it as a plain tag union, so it can't become a"),
+                    D.bytes("The function that built this value compared or hashed it as a plain tag union, so it can't become a"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
                     D.bytes(".").withNoPrecedingSpace(),
                 }, self, report);
