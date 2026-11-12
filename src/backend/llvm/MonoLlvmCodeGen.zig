@@ -9482,15 +9482,29 @@ pub const MonoLlvmCodeGen = struct {
             _ = wip.store(.normal, value.toValue(), out, self.targetPointerAlignment()) catch return error.OutOfMemory;
             return;
         }
-        try self.callBuiltinVoid(
-            .str_from_literal,
-            &.{ try self.ptrType(), try self.ptrType(), self.ptrSizedIntType() },
-            &.{
-                out,
-                try self.staticBytes(bytes),
-                builder.intValue(self.ptrSizedIntType(), bytes.len) catch return error.OutOfMemory,
-            },
+        // A longer literal reads its backing in the image, behind a static
+        // refcount word, as a slice of that backing when it is only part of it.
+        const backing_bytes = self.store.getStringLiteralBacking(literal);
+        const whole_backing = literal.offset == 0 and @as(usize, literal.len) == backing_bytes.len;
+        const backing_ptr = try self.staticRefcountedBytes(literal.backing);
+        const bytes_ptr = try self.offsetPtrValue(
+            backing_ptr,
+            builder.intValue(self.ptrSizedIntType(), literal.offset) catch return error.OutOfMemory,
         );
+        try self.storePointer(out, bytes_ptr);
+        try self.storeUsize(
+            try self.offsetPtr(out, self.rocStrLenOffset()),
+            builder.intValue(self.ptrSizedIntType(), bytes.len) catch return error.OutOfMemory,
+        );
+        const capacity_ptr = try self.offsetPtr(out, self.rocStrCapacityOffset());
+        if (whole_backing) {
+            try self.storeUsize(capacity_ptr, builder.intValue(self.ptrSizedIntType(), @as(u64, bytes.len) << RocStr.capacity_shift) catch return error.OutOfMemory);
+        } else {
+            const wip = self.wip orelse return error.CompilationFailed;
+            const backing_int = wip.cast(.ptrtoint, backing_ptr, self.ptrSizedIntType(), "") catch return error.OutOfMemory;
+            const alloc_ptr = wip.bin(.add, backing_int, builder.intValue(self.ptrSizedIntType(), SEAMLESS_SLICE_TAG) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            try self.storeUsize(capacity_ptr, alloc_ptr);
+        }
     }
 
     fn emitStaticDataLiteral(self: *MonoLlvmCodeGen, out: LocalSlot, id: lir.LIR.StaticDataId) Error!void {

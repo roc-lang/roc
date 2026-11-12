@@ -19,9 +19,10 @@
 //! follows the `incref` and `decref` statements it is given and does not
 //! reason about reference counting itself.
 //!
-//! `str_literal` is not included and must not be. A string literal longer than
-//! a small string is materialized by `str_from_literal`, which heap-allocates
-//! and writes a refcount of one, so its retains and releases are load-bearing.
+//! `str_literal` is not included. A string literal longer than a small string
+//! reads its backing in the image too, so its retains and releases also decide
+//! to do nothing, but a procedure's shapes do not record string literals, and
+//! `elide` only visits a program whose shapes record a static-backed literal.
 //!
 //! A local qualifies only when a static-backed literal is the sole thing that
 //! ever writes it. `writers` marks the writes that are not binders and
@@ -108,9 +109,8 @@ const Pass = struct {
             .assign_literal => |s| switch (s.value) {
                 // Image data, refcount word zero.
                 .static_data, .bytes_literal => self.markStatic(s.target),
-                // A string literal longer than a small string is materialized
-                // by `str_from_literal`, which heap-allocates and writes a
-                // refcount of one, so its retains and releases are real.
+                // A string literal's backing is image data too, but procedure
+                // shapes do not record one, so `elide` is not gated on it.
                 .str_literal,
                 .i64_literal,
                 .i128_literal,

@@ -1618,12 +1618,6 @@ fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void 
     }
 }
 
-/// Build a RocStr from static literal bytes owned by generated code.
-pub fn roc_builtins_str_from_literal(out: *RocStr, bytes: [*]const u8, len: usize) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    writeRocStrFromSlice(out, bytes[0..len], roc_ops);
-}
-
 /// Wrapper: decToStrC (decomposed i128)
 pub fn roc_builtins_dec_to_str(out: *RocStr, value_low: u64, value_high: u64) callconv(.c) void {
     const roc_ops = in_process_host.ops();
