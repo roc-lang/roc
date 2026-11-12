@@ -9283,6 +9283,27 @@ producer-aware value relation. It never merges the child into the corresponding
 public slot or asks a later consumer to recover the child's runtime
 representation from the public container shape.
 
+A lambda is such a constructor for its result: a function type carries its
+result's representation, so a lambda that returns a produced iterator has a
+function type that holds generated-private evidence, at whatever depth of
+records, tags, tuples, lists, or further functions its result puts it. A generic
+procedure specialized at that function binds a parameter whose checked type is
+a bare type variable: `Box.box` and `Box.unbox`, the iterator a `for` loop
+walks a list of functions with, an identity a record of functions passes
+through. The parameter's fresh interface proof starts from that variable, so
+the opaque interface relation gives the variable the witness's public
+interface. It adopts each structural layer it meets (list, box, tuple, record,
+tag union, and function alike) with a fresh checked variable in every child
+slot, keeps descending wherever the child carries generated-private evidence,
+and unifies every other child, until a generated iterator supplies its public
+nominal. A function is one of those layers, not a boundary: its arguments and
+result relate like a tuple's items, the private function type stays the
+parameter's representation, and no public function type replaces it. A boxed
+function is an erased callable whose ABI is the function type it was erased
+from (Tier Unification And Callable Flow), so a call of the unboxed function
+lowers its result from that ABI at an explicit typed boundary, whichever view
+of the function the call site holds.
+
 `Iter.custom` marks its exact transition-function request with the capability
 to propagate constructor-carried representation evidence. That capability is
 consumed directly while lowering the transition and inherited by its nested

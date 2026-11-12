@@ -1327,4 +1327,144 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "49" },
     },
+    .{
+        // `Box.box` is specialized at a function whose result is a produced
+        // iterator, so its parameter, a bare type variable, takes that
+        // function's public interface.
+        .name = "a boxed function returning a produced iterator is unboxed and called",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |n| {
+        \\    make = Box.unbox(Box.box(|| [1.U8, 2].iter().map(|item| item + 1)))
+        \\    digits(make()) + n
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "23" },
+    },
+    .{
+        // The loop's iterator is specialized at a list whose element is a
+        // function with a produced iterator for a result.
+        .name = "a list of functions returning produced iterators is walked and called",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |n| {
+        \\    makers = [|| [1.U8, 2].iter(), || [3.U8].iter().map(|item| item + 1)]
+        \\    var $total = 0.U64
+        \\    for make in makers {
+        \\        $total = $total * 100 + digits(make())
+        \\    }
+        \\    $total + n
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "1204" },
+    },
+    .{
+        // The identity's parameter is a bare type variable at each call, and
+        // the function sits one container below it.
+        .name = "functions returning iterators cross a generic procedure inside a record and a tag",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\id : a -> a
+        \\id = |x| x
+        \\
+        \\run = |n| {
+        \\    record = id({ make: || [1.U8, 2].iter(), count: 3.U64 })
+        \\    tagged = id(if n > 0 { Ok(|| [5.U8, 6].iter()) } else { Err(6.U64) })
+        \\    from_tag = match tagged {
+        \\        Ok(make) => digits(make())
+        \\        Err(code) => code
+        \\    }
+        \\    digits((record.make)()) * 1000 + record.count * 100 + from_tag
+        \\}
+        \\
+        \\main : U64
+        \\main = run(2)
+        ,
+        .expected = .{ .inspect_str = "12356" },
+    },
+    .{
+        // The produced iterator is below a record field and below a second
+        // function's result in the boxed function's type.
+        .name = "a boxed function returns a record and a function that hold produced iterators",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |n| {
+        \\    record = Box.unbox(Box.box(|| { it: [1.U8, 2].iter(), count: 3.U64 }))()
+        \\    nested = Box.unbox(Box.box(|| || [4.U8, 5].iter()))
+        \\    digits(record.it) * 1000 + record.count * 100 + digits(nested()()) + n
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "12345" },
+    },
+    .{
+        // Both branches are functions whose results are distinct produced
+        // iterators; one of them crossed a box.
+        .name = "an unboxed function returning a produced iterator joins a local one",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |n| {
+        \\    held = Box.unbox(Box.box(|| [1.U8, 2].iter()))
+        \\    make = if n > 1 { held } else { || [9.U8].iter().map(|item| item - 1) }
+        \\    digits(make())
+        \\}
+        \\
+        \\main : U64
+        \\main = run(2) * 10 + run(1)
+        ,
+        .expected = .{ .inspect_str = "128" },
+    },
 };

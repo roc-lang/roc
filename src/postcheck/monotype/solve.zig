@@ -6270,14 +6270,16 @@ pub const InstGraph = struct {
     }
 
     /// A generated-private witness can sit behind a structural container—a
-    /// list literal element, a tuple slot, a record field, a tag payload—while
-    /// the checked request position is still an unstructured variable. The
-    /// public side then adopts the container shape with a fresh checked
-    /// variable in each child slot, and every generated-carrying child keeps
-    /// descending through the opaque relation. Keep the accepted set here
-    /// equal to the structural containers a constructor can mint a witness
-    /// for; private content this relation cannot structure returns false and
-    /// leaves the caller's invariant to report it.
+    /// list literal element, a tuple slot, a record field, a tag payload, a
+    /// lambda's result—while the checked request position is still an
+    /// unstructured variable, as a generic procedure's parameter is in its
+    /// fresh interface proof. The public side then adopts the container shape
+    /// with a fresh checked variable in each child slot, and every
+    /// generated-carrying child keeps descending through the opaque relation.
+    /// Keep the accepted set here equal to the structural containers a
+    /// constructor can mint a witness for; private content this relation
+    /// cannot structure returns false and leaves the caller's invariant to
+    /// report it.
     fn materializeStructuralRequestPublicInterface(
         self: *InstGraph,
         public_node: NodeId,
@@ -6287,8 +6289,8 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!bool {
         switch (private_content) {
-            .list, .box, .tuple, .record, .tag_union => {},
-            .redirect, .leaf, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
+            .list, .box, .tuple, .func, .record, .tag_union => {},
+            .redirect, .leaf, .unresolved, .primitive, .named, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         }
         if (public_var.numeric_default_phase != null or public_var.row_default != null) {
             Common.invariant("structural request interface relation received a defaultable public variable");
@@ -6313,6 +6315,18 @@ pub const InstGraph = struct {
                 for (items, private_items) |item, private_item| {
                     try self.relateOpaqueChild(item, private_item, row_width, pending);
                 }
+            },
+            .func => |private_fn| {
+                const args = try self.arena().alloc(NodeId, private_fn.args.len);
+                for (args) |*arg| {
+                    arg.* = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                }
+                const ret = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                try self.setContent(public_node, .{ .func = .{ .args = args, .ret = ret } });
+                for (args, private_fn.args) |arg, private_arg| {
+                    try self.relateOpaqueChild(arg, private_arg, row_width, pending);
+                }
+                try self.relateOpaqueChild(ret, private_fn.ret, row_width, pending);
             },
             .record => |private_row| {
                 const fields = try self.arena().alloc(InstField, private_row.fields.len);
@@ -6354,7 +6368,7 @@ pub const InstGraph = struct {
                 }
                 try self.relateOpaqueChild(ext, private_row.ext, row_width, pending);
             },
-            .redirect, .leaf, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst, .hole => unreachable, // the switch above returned false for every other variant
+            .redirect, .leaf, .unresolved, .primitive, .named, .empty_tag_union, .empty_record, .erased, .zst, .hole => unreachable, // the switch above returned false for every other variant
         }
         return true;
     }
@@ -13140,6 +13154,76 @@ test "opaque iterator relation materializes unresolved public interface from pro
     try std.testing.expectEqual(Type.IteratorRepresentation.none, retained_public.def.iterator_representation);
     try std.testing.expectEqual(@as(usize, 1), retained_public.args.len);
     try std.testing.expect(graph.sameClass(retained_public.args[0], private_item));
+}
+
+test "opaque interface relation gives an unresolved public variable a private function's shape" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x52))));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{} };
+    const public_source: InstIteratorPublicSource = .{
+        .named_type = named_type,
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
+        .declared_order = &.{},
+    };
+    const private_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const private_ret = try graph.newNode(try graph.namedContent(.{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .iterator_representation = .minted,
+            .iterator_kind = .list,
+            .iterator_depth = 1,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{ private_item, try graph.newNode(.empty_record) }),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+        .generated_iterator = try graph.generatedIterator(.{
+            .callable_evidence = null,
+            .public_source = public_source,
+        }),
+    }));
+    const private_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const private = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{private_arg}),
+        .ret = private_ret,
+    } });
+    // The function sits in a list, so the relation reaches it through a
+    // variable the list's own materialization introduced.
+    const private_list = try graph.newNode(.{ .list = private });
+    const public = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+
+    try graph.relateOpaqueInterface(public, private_list);
+
+    const public_fn = (try graph.content((try graph.content(public)).list)).func;
+    try std.testing.expect(!graph.sameClass(public, private_list));
+    try std.testing.expectEqual(@as(usize, 1), public_fn.args.len);
+    try std.testing.expect(graph.sameClass(public_fn.args[0], private_arg));
+    try std.testing.expect(!graph.sameClass(public_fn.ret, private_ret));
+    const public_ret = (try graph.content(public_fn.ret)).named;
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, public_ret.backing.?.authority);
+    try std.testing.expectEqual(Type.IteratorRepresentation.none, public_ret.def.iterator_representation);
+    try std.testing.expect(graph.sameClass(public_ret.args[0], private_item));
+    try std.testing.expect(!try graph.containsGeneratedPrivate(public));
 }
 
 test "opaque iterator relation resolves unresolved public variable to imported generated iterator" {
