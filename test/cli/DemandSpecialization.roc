@@ -67,14 +67,14 @@ expect {
 	units : List({})
 	units = [{}, {}, {}]
 	strs = ["a", "b"]
-	List.len(units) == 3 and List.capacity(units) == 0 and List.len(strs) == 2 and List.capacity(strs) >= 2
+	List.len(units) == 3 and List.capacity(units) == 3 and List.len(strs) == 2 and List.capacity(strs) >= 2
 }
 
 expect {
 	units : List({})
 	units = [{}, {}, {}]
 	more = List.concat(units, [{}, {}])
-	List.len(more) == 5 and List.capacity(more) == 0
+	List.len(more) == 5 and List.capacity(more) == 5
 }
 
 # A parser's field-name table follows its shape's field names, not just

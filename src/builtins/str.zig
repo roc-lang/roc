@@ -130,6 +130,12 @@ pub const RocStr = extern struct {
         return encodeCapacityGeneric(u64, capacity);
     }
 
+    /// Decode a big-string capacity word read from a target whose pointer
+    /// width may differ from the host's.
+    pub fn decodeCapacityForWidth(encoded: u64) u64 {
+        return encoded >> capacity_shift;
+    }
+
     pub inline fn decodeCapacity(encoded: usize) usize {
         return encoded >> capacity_shift;
     }
@@ -427,7 +433,7 @@ pub const RocStr = extern struct {
             return str;
         } else {
             const length = str.len();
-            const new_str = RocStr.allocateBig(length, length, roc_ops);
+            const new_str = RocStr.allocateBig(length, str.copyCapacity(), roc_ops);
 
             const old_bytes: [*]u8 = @as([*]u8, @ptrCast(str.bytes));
             const new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_str.bytes));
@@ -443,7 +449,9 @@ pub const RocStr = extern struct {
     /// slices still reallocate fresh: neither owns a growable big-string
     /// allocation, so the structural checks are not uniqueness checks. When
     /// growth is necessary, the resulting big string has exactly `new_length`
-    /// capacity; append operations use `reallocateForAppend` instead.
+    /// capacity; append operations use `reallocateForAppend` instead. A copy
+    /// of static data keeps the capacity its descriptor records when that
+    /// exceeds `new_length` (`copyCapacity`).
     pub fn reallocate(
         self: RocStr,
         new_length: usize,
@@ -454,7 +462,7 @@ pub const RocStr = extern struct {
         const old_capacity = self.getCapacity();
 
         if (!self.canReuseAllocation(update_mode)) {
-            return self.reallocateFresh(new_length, roc_ops);
+            return self.copyKeepingCapacity(new_length, roc_ops);
         }
 
         if (self.bytes) |source_ptr| {
@@ -476,7 +484,7 @@ pub const RocStr = extern struct {
 
             return RocStr{ .bytes = new_source, .capacity_or_alloc_ptr = encodeCapacity(new_capacity), .length = new_length };
         }
-        return self.reallocateFresh(new_length, roc_ops);
+        return self.copyKeepingCapacity(new_length, roc_ops);
     }
 
     /// Grow for a concatenation that appends bytes to this string. Unlike an
@@ -511,12 +519,16 @@ pub const RocStr = extern struct {
             return RocStr{ .bytes = new_source, .capacity_or_alloc_ptr = encodeCapacity(new_capacity), .length = new_length };
         }
 
-        const growth_base = if (self.isSmallStr()) old_capacity else old_length;
-        const new_capacity = if (new_length == old_length)
-            new_length
+        // The capacity the copy has before it grows: a small string's is
+        // its inline capacity, static data's is the capacity its descriptor
+        // records, and any other string's is the bytes it holds.
+        const kept_capacity = if (self.isSmallStr()) old_length else self.copyCapacity();
+        const growth_base = if (self.isSmallStr()) old_capacity else kept_capacity;
+        const new_capacity = if (new_length <= kept_capacity)
+            kept_capacity
         else
             @max(new_length, utils.geometricGrowth(growth_base, 1));
-        if (new_length >= SMALL_STRING_SIZE) {
+        if (new_length >= SMALL_STRING_SIZE or kept_capacity >= SMALL_STRING_SIZE) {
             var result = RocStr.allocateBig(new_length, new_capacity, roc_ops);
             std.mem.copyForwards(u8, result.asU8ptrMut()[0..old_length], self.asU8ptr()[0..old_length]);
             self.decref(roc_ops);
@@ -524,6 +536,46 @@ pub const RocStr = extern struct {
         }
 
         return self.reallocateFresh(new_length, roc_ops);
+    }
+
+    /// Returns true when this string's storage is immutable static data: a
+    /// literal or a completed compile-time value. Its allocation carries the
+    /// static refcount, so it is never unique, never written and never freed.
+    /// A small string holds no allocation and is never static data.
+    pub fn isStaticData(self: RocStr) bool {
+        return utils.rcConstant(@bitCast(self.refcount()));
+    }
+
+    /// The capacity a fresh copy of this string's bytes starts with.
+    ///
+    /// Static data stands for a value the program would otherwise have built
+    /// for itself, and its descriptor records the capacity that value has. The
+    /// copy that first gives the program storage of its own is that value, so
+    /// it keeps the recorded capacity: a string built by `Str.with_capacity`
+    /// at compile time still reserves once at runtime. A copy of a string some
+    /// other reference holds is sized by the bytes it copies instead, since
+    /// that string's spare capacity belongs to whoever still owns it.
+    pub fn copyCapacity(self: RocStr) usize {
+        return if (self.isStaticData()) self.getCapacity() else self.len();
+    }
+
+    /// Consumes this string into a fresh one of `new_length` bytes that
+    /// starts with its bytes, the rest zeroed, and that has room for at
+    /// least `copyCapacity()`.
+    fn copyKeepingCapacity(
+        self: RocStr,
+        new_length: usize,
+        roc_ops: *RocOps,
+    ) RocStr {
+        const capacity = @max(new_length, self.copyCapacity());
+        if (capacity == new_length or capacity < SMALL_STRING_SIZE) return self.reallocateFresh(new_length, roc_ops);
+        const old_length = self.len();
+        var result = RocStr.allocateBig(new_length, capacity, roc_ops);
+        const dest_ptr = result.asU8ptrMut();
+        std.mem.copyForwards(u8, dest_ptr[0..old_length], self.asU8ptr()[0..old_length]);
+        @memset(dest_ptr[old_length..new_length], 0);
+        self.decref(roc_ops);
+        return result;
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
@@ -2381,10 +2433,8 @@ inline fn strWithAsciiCase(
     // the backing allocation. This is not an allocation-reuse decision.
     var new_str = if (string.isExclusive(update_mode))
         string
-    else blk: {
-        string.decref(roc_ops);
-        break :blk RocStr.fromSlice(string.asSlice(), roc_ops);
-    };
+    else
+        string.copyKeepingCapacity(string.len(), roc_ops);
 
     const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
     for (new_str_bytes) |*c| {
@@ -2769,7 +2819,10 @@ pub fn reserve(
     // of wrapping below the capacity and becoming a no-op.
     const desired_length = old_length +| spare;
 
-    if (string.getCapacity() >= desired_length) {
+    // Only a string nobody else holds may be handed back as the result: the
+    // op's `result_unique` claim (`base/LowLevel.zig`) lets ARC treat it as
+    // freshly owned, and static data records capacity it has no room for.
+    if (string.getCapacity() >= desired_length and string.isExclusive(update_mode)) {
         return string;
     } else {
         var output = string.reallocate(desired_length, update_mode, roc_ops);
@@ -5528,4 +5581,113 @@ test "validated UTF-8 construction: seamless slices retain their allocation" {
     try testing.expectEqualStrings(text[8..], result.asSlice());
     result.decref(env.getOps());
     try testing.expectEqual(@as(usize, 0), env.allocation_map.count());
+}
+
+/// Static storage for one test string: the static refcount word, then
+/// `bytes`. `str` is the frozen form of a string holding those bytes with
+/// room for `capacity`.
+const StaticTestStr = struct {
+    words: [9]usize,
+    len: usize,
+
+    fn init(bytes: []const u8) StaticTestStr {
+        var result: StaticTestStr = .{ .words = @splat(0), .len = bytes.len };
+        result.words[0] = @bitCast(utils.REFCOUNT_STATIC_DATA);
+        const dest: [*]u8 = @ptrCast(&result.words[1]);
+        @memcpy(dest[0..bytes.len], bytes);
+        return result;
+    }
+
+    fn str(self: *StaticTestStr, capacity: usize) RocStr {
+        return .{
+            .bytes = @ptrCast(&self.words[1]),
+            .capacity_or_alloc_ptr = RocStr.encodeCapacity(capacity),
+            .length = self.len,
+        };
+    }
+};
+
+test "a static string is never unique and its copy keeps the recorded capacity" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    var storage = StaticTestStr.init("ab");
+    const static_str = storage.str(100);
+    try std.testing.expect(static_str.isStaticData());
+    try std.testing.expect(!static_str.isUnique());
+    try std.testing.expectEqual(@as(usize, 100), static_str.copyCapacity());
+
+    // Appending copies once, into the capacity the descriptor records.
+    var appended = strConcat(static_str, RocStr.fromSliceSmall("cd"), .Immutable, ops);
+    defer appended.decref(ops);
+    try std.testing.expect(appended.isUnique());
+    try std.testing.expect(!appended.isSmallStr());
+    try std.testing.expectEqualStrings("abcd", appended.asSlice());
+    try std.testing.expectEqual(@as(usize, 100), appended.getCapacity());
+    const allocation = appended.bytes;
+    appended = strConcat(appended, RocStr.fromSliceSmall("ef"), .Immutable, ops);
+    try std.testing.expect(appended.bytes == allocation);
+    // The static storage is untouched.
+    try std.testing.expectEqual(@as(usize, @bitCast(utils.REFCOUNT_STATIC_DATA)), storage.words[0]);
+    try std.testing.expectEqualStrings("ab", static_str.asSlice());
+}
+
+test "a static string with no bytes reserves its recorded capacity on the first append" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    // The frozen form of `Str.with_capacity(100)`.
+    var storage = StaticTestStr.init("");
+    const appended = strConcat(storage.str(100), RocStr.fromSliceSmall("x"), .Immutable, ops);
+    defer appended.decref(ops);
+    try std.testing.expectEqualStrings("x", appended.asSlice());
+    try std.testing.expectEqual(@as(usize, 100), appended.getCapacity());
+}
+
+test "a static string outgrown by an append grows from its recorded capacity" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    const text = "a literal long enough to be a big string";
+    var storage = StaticTestStr.init(text);
+    // A literal has no spare capacity, so the copy takes one geometric step
+    // from its bytes, as a uniquely owned string of that length would.
+    const appended = strConcat(storage.str(text.len), RocStr.fromSliceSmall("!"), .Immutable, ops);
+    defer appended.decref(ops);
+    try std.testing.expectEqual(utils.geometricGrowth(text.len, 1), appended.getCapacity());
+}
+
+test "Str.reserve hands back only a string nobody else holds" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    // Static data whose recorded capacity covers the request is still copied:
+    // it has no room for the bytes the capacity promises.
+    var storage = StaticTestStr.init("ab");
+    const from_static = reserve(storage.str(100), 50, .Immutable, ops);
+    defer from_static.decref(ops);
+    try std.testing.expect(from_static.isUnique());
+    try std.testing.expect(from_static.bytes != storage.str(100).bytes);
+    try std.testing.expectEqual(@as(usize, 100), from_static.getCapacity());
+    try std.testing.expectEqualStrings("ab", from_static.asSlice());
+
+    // So is a string another reference holds.
+    var shared = withCapacityC(100, ops);
+    shared.incref(1, ops);
+    defer shared.decref(ops);
+    const from_shared = reserve(shared, 50, .Immutable, ops);
+    defer from_shared.decref(ops);
+    try std.testing.expect(from_shared.bytes != shared.bytes);
+    try std.testing.expect(from_shared.isUnique());
+    try std.testing.expectEqual(@as(usize, 50), from_shared.getCapacity());
+
+    // A unique string with room keeps its allocation.
+    const unique = withCapacityC(100, ops);
+    const kept = reserve(unique, 50, .Immutable, ops);
+    defer kept.decref(ops);
+    try std.testing.expect(kept.bytes == unique.bytes);
 }
