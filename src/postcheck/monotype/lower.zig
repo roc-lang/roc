@@ -5787,18 +5787,19 @@ const StaticDataUse = struct {
     ty: Type.TypeId,
 };
 
-/// A restored string lowers as its own bytes (see `finishConstAtNode`), so
-/// whether it needs target storage is a function of the string alone, as it
-/// is for a string read from a completed evaluation.
-fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstStr) u64 {
-    return view.const_store.strBytes(str).len;
+/// A restored string lowers as its own bytes and capacity (see
+/// `finishConstAtNode`), so whether it needs target storage is a function of
+/// the string alone, as it is for a string read from a completed evaluation:
+/// a string fits its descriptor when its capacity does.
+fn constStringBackingLength(str: check.ConstStore.ConstString) u64 {
+    return str.capacity;
 }
 
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
     var current = node;
     while (true) switch (view.const_store.get(current)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .str => |str| return .{ .string_backing = constStringBackingLength(view, str) },
+        .str => |str| return .{ .string_backing = constStringBackingLength(str) },
         .nominal => |nominal| current = nominal.backing,
         .pending => Common.invariant("pending const reached static storage metadata production"),
         .zst, .scalar, .fn_value, .list, .box, .tuple, .record, .tag, .crash, .checked_error => return .aggregate,
@@ -6384,6 +6385,10 @@ const Builder = struct {
     /// This scope's expression-data type for restored const values.
     const ConstExprData = Ast.ExprData;
     const ConstExprId = Ast.ExprId;
+
+    fn addExpr(self: *Builder, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
+        return self.program.addExpr(expr);
+    }
     const ConstExprSpan = Ast.Span(Ast.ExprId);
     const ConstFieldExpr = Ast.FieldExpr;
     const ConstFieldExprSpan = Ast.Span(Ast.FieldExpr);
@@ -12836,7 +12841,7 @@ const Builder = struct {
                     try items.add(child);
                     break :blk null;
                 },
-                .list => |list| switch (list) {
+                .list => |list| switch (list.items) {
                     .packed_bytes, .empty => true,
                     .nodes => |children| blk: {
                         // An item stored as the item before it adds nothing
@@ -12885,21 +12890,25 @@ const Builder = struct {
         item_count: u32,
     };
 
-    /// The shape of `node`'s value when it is a non-empty list whose items
-    /// are data alone (`constNodeIsStoredData`); null for any other value.
+    /// The shape of `node`'s value when static data freezes it straight from
+    /// its node: a list whose items are data alone (`constNodeIsStoredData`)
+    /// and are stored as nodes, or that has spare capacity, which only its
+    /// node records. Null for any other value, including the empty and
+    /// packed lists without spare capacity, which restore as literals.
     fn storedListShape(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?StoredListShape {
-        const items = switch (view.const_store.get(node)) {
+        const list = switch (view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-            .list => |list| switch (list) {
-                .nodes => |items| items,
-                .empty, .packed_bytes => return null,
-            },
+            .list => |list| list,
             .pending => Common.invariant("pending ConstStore node reached stored list selection"),
             .zst, .scalar, .str, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => return null,
         };
-        if (items.len == 0) return null;
+        const item_count = list.items.len();
+        switch (list.items) {
+            .nodes => if (item_count == 0) return null,
+            .empty, .packed_bytes => if (list.capacity == item_count) return null,
+        }
         if (!try self.constNodeIsStoredData(view, node)) return null;
-        return .{ .item_count = @intCast(items.len) };
+        return .{ .item_count = @intCast(item_count) };
     }
 
     /// Whether everything `node`'s value reaches is data: no function value,
@@ -12920,13 +12929,15 @@ const Builder = struct {
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
-            // Strings already have literal lowering, including
-            // readonly backing for long literals. A separate datum obscures
-            // constants and changes code between evaluation and restoration.
-            .str,
             .crash,
             .checked_error,
             => return false,
+            // A string with no spare capacity already has literal lowering,
+            // including readonly backing for a long literal. A separate datum
+            // obscures constants and changes code between evaluation and
+            // restoration. Spare capacity has no literal form, so only a
+            // datum carries it.
+            .str => |str| return str.capacity != view.const_store.strBytes(str.bytes).len,
             .fn_value => return true,
             .list => return true,
             .box => return true,
@@ -23182,6 +23193,7 @@ const BodyContext = struct {
     /// This scope's expression-data type for restored const values.
     const ConstExprData = BodyExprData;
     const ConstExprId = DraftExprId;
+
     const ConstExprSpan = DraftSpan(DraftExprId);
     const ConstFieldExpr = DraftFieldExpr;
     const ConstFieldExprSpan = DraftSpan(DraftFieldExpr);
@@ -48477,18 +48489,18 @@ const BodyContext = struct {
         };
     }
 
-    /// Whether `node` is a part of the candidate being restored: a non-empty
-    /// list or a box on its constructor spine. Every other spine node is a
-    /// constructor whose own parts are decided as they are reached, or a leaf
-    /// that restores as a literal.
+    /// Whether `node` is a part of the candidate being restored: a box, or a
+    /// list that is non-empty or has spare capacity, on its constructor
+    /// spine. Every other spine node is a constructor whose own parts are
+    /// decided as they are reached, or a leaf that restores as a literal.
     fn isStaticDataPart(self: *const BodyContext, store_view: ModuleView, node: checked.ConstNodeId) bool {
         const root = self.static_data_part_root orelse return false;
         if (node == root.node or !moduleBytesEqual(root.module.bytes, store_view.key.bytes)) return false;
         return switch (store_view.const_store.get(node)) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-            .list => |list| switch (list) {
+            .list => |list| switch (list.items) {
                 .nodes => |items| items.len != 0,
-                .empty, .packed_bytes => false,
+                .empty, .packed_bytes => list.capacity != list.items.len(),
             },
             .box => true,
             .pending, .zst, .scalar, .str, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => false,
@@ -48694,7 +48706,7 @@ const BodyContext = struct {
         }
         switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-            .list => |list| switch (list) {
+            .list => |list| switch (list.items) {
                 .nodes => |items| {
                     const element_node = try self.graph.listElementNode(request_node);
                     frame.children = items;
@@ -48780,28 +48792,41 @@ const BodyContext = struct {
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(BodyExprData, scalar),
-                    .str => |str| .{ .str_lit = try self.addStringLiteral(
-                        store_view.const_store.strBytes(str),
-                    ) },
+                    .str => |str| str: {
+                        const bytes = store_view.const_store.strBytes(str.bytes);
+                        const literal: BodyExprData = .{ .str_lit = try self.addStringLiteral(bytes) };
+                        const spare = str.capacity - bytes.len;
+                        if (spare == 0) break :str literal;
+                        break :str try constStrWithSpareCapacity(self, try self.addExprWithTypeCell(cell, literal), spare);
+                    },
                     .crash => |str| .{ .crash = try self.addStringLiteral(
                         store_view.const_store.strBytes(str),
                     ) },
                     .checked_error => |str| .{ .checked_error = try self.addStringLiteral(
                         store_view.const_store.strBytes(str),
                     ) },
-                    .list => |list| switch (list) {
-                        .nodes => .{ .list = try self.addExprSpan(lowered_children) },
-                        .empty => .{ .list = try self.addExprSpan(&.{}) },
-                        .packed_bytes => |packed_list| .{ .bytes_lit = .{
-                            .literal = try self.addConstBlobView(
-                                store_view.key.bytes,
-                                packed_list.bytes,
-                                store_view.const_store.blobData(packed_list.bytes),
-                            ),
-                            .len = packed_list.len,
-                            .element = packed_list.element,
-                            .product_width = packed_list.product_width,
-                        } },
+                    .list => |list| list: {
+                        const items: BodyExprData = switch (list.items) {
+                            .nodes => .{ .list = try self.addExprSpan(lowered_children) },
+                            .empty => .{ .list = try self.addExprSpan(&.{}) },
+                            .packed_bytes => |packed_list| .{ .bytes_lit = .{
+                                .literal = try self.addConstBlobView(
+                                    store_view.key.bytes,
+                                    packed_list.bytes,
+                                    store_view.const_store.blobData(packed_list.bytes),
+                                ),
+                                .len = packed_list.len,
+                                .element = packed_list.element,
+                                .product_width = packed_list.product_width,
+                            } },
+                        };
+                        const spare = list.capacity - list.items.len();
+                        if (spare == 0) break :list items;
+                        break :list try constListWithSpareCapacity(
+                            self,
+                            if (list.items == .empty) null else try self.addExprWithTypeCell(cell, items),
+                            spare,
+                        );
                     },
                     .box => .{ .low_level = .{
                         .op = .box_box,
@@ -70653,7 +70678,7 @@ fn beginConstRestoreNode(
     switch (value) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .box => |payload| frame.single_child = payload,
-        .list => |list| switch (list) {
+        .list => |list| switch (list.items) {
             .nodes => |items| frame.children = items,
             .empty, .packed_bytes => {},
         },
@@ -70695,6 +70720,43 @@ fn constRestoreChildType(restorer: anytype, frame: anytype, index: usize) Type.T
     };
 }
 
+/// A stored list's restored form when it has `spare` capacity beyond its
+/// items: the reservation it was evaluated with, applied to `items`, or
+/// to the empty list when `items` is null. A static-data initializer
+/// evaluates this into the descriptor's capacity; anywhere else it is
+/// the list operation the constant's own code ran.
+fn constListWithSpareCapacity(
+    restorer: anytype,
+    items: ?@TypeOf(restorer.*).ConstExprId,
+    spare: u64,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
+    const emit = restorer.constEmit();
+    const amount = try restorer.addExpr(.{
+        .ty = try restorer.primitiveType(.u64),
+        .data = restoreScalar(@TypeOf(restorer.*).ConstExprData, .{ .u64 = spare }),
+    });
+    const list = items orelse return .{ .low_level = .{ .op = .list_with_capacity, .args = try emit.addExprSpan(&.{amount}) } };
+    return .{ .low_level = .{ .op = .list_reserve, .args = try emit.addExprSpan(&.{ list, amount }) } };
+}
+
+/// A stored string's restored form when it has `spare` capacity beyond
+/// its bytes: the reservation it was evaluated with, applied to its
+/// literal. A static-data initializer evaluates this into the
+/// descriptor's capacity; anywhere else it is the string operation the
+/// constant's own code ran.
+fn constStrWithSpareCapacity(
+    restorer: anytype,
+    literal: @TypeOf(restorer.*).ConstExprId,
+    spare: u64,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
+    const emit = restorer.constEmit();
+    const amount = try restorer.addExpr(.{
+        .ty = try restorer.primitiveType(.u64),
+        .data = restoreScalar(@TypeOf(restorer.*).ConstExprData, .{ .u64 = spare }),
+    });
+    return .{ .low_level = .{ .op = .str_reserve, .args = try emit.addExprSpan(&.{ literal, amount }) } };
+}
+
 /// A restored node's expression data, from its restored children.
 fn constRestoreData(
     restorer: anytype,
@@ -70708,9 +70770,14 @@ fn constRestoreData(
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
-        .str => |str| .{ .str_lit = try emit.addStringLiteral(
-            store_view.const_store.strBytes(str),
-        ) },
+        .str => |str| blk: {
+            const Data = @TypeOf(restorer.*).ConstExprData;
+            const bytes = store_view.const_store.strBytes(str.bytes);
+            const literal: Data = .{ .str_lit = try emit.addStringLiteral(bytes) };
+            const spare = str.capacity - bytes.len;
+            if (spare == 0) break :blk literal;
+            break :blk try constStrWithSpareCapacity(restorer, try restorer.addExpr(.{ .ty = frame.ty, .data = literal }), spare);
+        },
         .crash => |str| .{ .crash = try emit.addStringLiteral(
             store_view.const_store.strBytes(str),
         ) },
@@ -70721,19 +70788,29 @@ fn constRestoreData(
             .op = .box_box,
             .args = try emit.addExprSpan(lowered),
         } },
-        .list => |list| switch (list) {
-            .nodes => .{ .list = try emit.addExprSpan(lowered) },
-            .empty => .{ .list = try emit.addExprSpan(&.{}) },
-            .packed_bytes => |packed_list| .{ .bytes_lit = .{
-                .literal = try emit.addConstBlobView(
-                    store_view.key.bytes,
-                    packed_list.bytes,
-                    store_view.const_store.blobData(packed_list.bytes),
-                ),
-                .len = packed_list.len,
-                .element = packed_list.element,
-                .product_width = packed_list.product_width,
-            } },
+        .list => |list| blk: {
+            const Data = @TypeOf(restorer.*).ConstExprData;
+            const items: Data = switch (list.items) {
+                .nodes => .{ .list = try emit.addExprSpan(lowered) },
+                .empty => .{ .list = try emit.addExprSpan(&.{}) },
+                .packed_bytes => |packed_list| .{ .bytes_lit = .{
+                    .literal = try emit.addConstBlobView(
+                        store_view.key.bytes,
+                        packed_list.bytes,
+                        store_view.const_store.blobData(packed_list.bytes),
+                    ),
+                    .len = packed_list.len,
+                    .element = packed_list.element,
+                    .product_width = packed_list.product_width,
+                } },
+            };
+            const spare = list.capacity - list.items.len();
+            if (spare == 0) break :blk items;
+            break :blk try constListWithSpareCapacity(
+                restorer,
+                if (list.items == .empty) null else try restorer.addExpr(.{ .ty = frame.ty, .data = items }),
+                spare,
+            );
         },
         .tuple => .{ .tuple = try emit.addExprSpan(lowered) },
         .record => blk: {
@@ -71011,7 +71088,7 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .str => |str| @intCast(view.const_store.strBytes(str).len),
+        .str => |str| @intCast(view.const_store.strBytes(str.bytes).len),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
 }
@@ -71019,7 +71096,7 @@ fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
 fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .str => |str| view.const_store.strBytes(str),
+        .str => |str| view.const_store.strBytes(str.bytes),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
 }

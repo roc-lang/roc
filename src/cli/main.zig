@@ -13840,7 +13840,7 @@ test "only optimized builds emit thread-confined count updates" {
     }
 }
 
-test "only optimized builds prove uniqueness" {
+test "only optimized builds prove uniqueness and drop string literal reference counts" {
     for ([_]struct { opt: cli_args.OptLevel, proves: bool }{
         .{ .opt = .speed, .proves = true },
         .{ .opt = .size, .proves = true },
@@ -13851,6 +13851,8 @@ test "only optimized builds prove uniqueness" {
             const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, strategy, RocTarget.detectNative(), false);
             try std.testing.expectEqual(case.proves, config.target.prove_uniqueness);
             try std.testing.expectEqual(case.proves, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).prove_uniqueness);
+            try std.testing.expectEqual(case.proves, config.target.immortal_string_literals);
+            try std.testing.expectEqual(case.proves, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).immortal_string_literals);
         }
     }
 }
@@ -14006,6 +14008,7 @@ fn checkedRuntimeLoweringConfig(
             .reuse_boxes = optimizeLirForOpt(opt),
             .thread_confined_rc = optimizeLirForOpt(opt),
             .prove_uniqueness = optimizeLirForOpt(opt),
+            .immortal_string_literals = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names,
         },
     };

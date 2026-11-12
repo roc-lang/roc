@@ -224,7 +224,12 @@ const Builder = struct {
     fn string(self: *Builder, job: Job) Allocator.Error!void {
         const str = job.source.read(builtins.str.RocStr);
         const slice = str.asSlice();
-        if (builtins.str.RocStr.fitsInSmallStr(slice.len)) {
+        // The descriptor keeps the capacity the string was evaluated with;
+        // the allocation holds the bytes alone. A string held inline has no
+        // capacity of its own beyond its bytes, and a seamless slice's is its
+        // window, so either is inline again whenever its bytes fit.
+        const capacity = if (str.isSmallStr()) slice.len else str.getCapacity();
+        if (builtins.str.RocStr.fitsInSmallStr(capacity)) {
             var small = builtins.str.RocStr.fromSliceSmall(slice);
             @memcpy(self.graph.bytes(job.dest, @sizeOf(builtins.str.RocStr)), std.mem.asBytes(&small));
             return;
@@ -238,7 +243,7 @@ const Builder = struct {
         }, slice.len, 1, false, null);
         if (result.fresh) @memcpy(self.graph.bytes(result.dest, slice.len), slice);
         try self.graph.relocate(job.dest, result.dest);
-        try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(slice.len));
+        try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(capacity));
         try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "length")), slice.len);
     }
 
@@ -247,10 +252,13 @@ const Builder = struct {
         if (physical.tag != .list and physical.tag != .list_of_zst) invariant("list export plan had non-list layout");
         const list_value = job.source.read(builtins.list.RocList);
         try self.graph.writeWord(job.dest.offsetBy(word_size), list_value.len());
-        try self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
-        if (list_value.len() == 0) return;
-        if (physical.tag == .list_of_zst) return;
-        const ptr = list_value.bytes orelse invariant("nonempty native list had a null pointer");
+        // The descriptor keeps the capacity the list was evaluated with; the
+        // allocation holds the items alone. A list of zero-sized items holds
+        // no allocation, so its capacity is a count alone.
+        const capacity = list_value.getCapacity();
+        try self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(capacity));
+        if (physical.tag == .list_of_zst or capacity == 0) return;
+        const ptr = list_value.bytes orelse invariant("a native list with capacity had a null pointer");
         const element_layout = physical.getIdx();
         const element_size = self.graph.size(element_layout);
         const result = try self.graph.reserveAllocation(.{
@@ -417,7 +425,7 @@ fn testRoot(plan: Program.ConstPlanId, ret_layout: layout.Idx) Program.ConstRoot
     };
 }
 
-test "native root export stores an empty list without allocation or capacity reconstruction" {
+test "native root export keeps an empty list's capacity behind an allocation holding no items" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
@@ -435,8 +443,15 @@ test "native root export stores an empty list without allocation or capacity rec
     const slot = try testSlot(&program, list_layout);
     const exports = try freezeRoot(allocator, &program, slot, testRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&list_value) }, .{});
     defer static_data.deinitStaticData(allocator, exports);
-    try std.testing.expectEqual(@as(usize, 1), exports.len);
-    try std.testing.expectEqual(@as(usize, 0), exports[0].relocations.len);
+    // The descriptor points just past a static refcount word and records the
+    // sixteen items the list had room for.
+    try std.testing.expectEqual(@as(usize, 2), exports.len);
+    try std.testing.expectEqual(@as(usize, 1), exports[0].relocations.len);
+    const frozen: *const builtins.list.RocList = @ptrCast(@alignCast(exports[0].bytes.ptr));
+    try std.testing.expectEqual(@as(usize, 0), frozen.length);
+    try std.testing.expectEqual(builtins.list.RocList.encodeCapacity(backing.len), frozen.capacity_or_alloc_ptr);
+    try std.testing.expectEqual(@as(i64, word_size), exports[0].relocations[0].addend);
+    try std.testing.expectEqualSlices(u8, &@as([word_size]u8, @splat(0)), exports[1].bytes);
 }
 
 test "native root export owns list strings and preserves shared typed pointers" {
