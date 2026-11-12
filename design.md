@@ -25758,7 +25758,12 @@ records it. For a list:
   an allocation holding no items, because a list with nonzero capacity always
   points into an allocation, whose refcount word is how every runtime
   uniqueness check finds out it is static. A list of zero-sized items holds
-  no allocation and has no capacity beyond its length.
+  no allocation and has no capacity beyond its length. Whether an item is
+  zero-sized is decided by the program that evaluates the root, and a
+  function value's size follows its lambda set there: a list whose only
+  function is one capture-free lambda is a list of zero-sized items where it
+  is evaluated, so it records no reservation even if a runtime use gives its
+  items a wider representation.
 - A stored list restores as static data frozen straight from its node whenever
   it has spare capacity and its items are data alone, exactly as a non-empty
   stored list does, so its read lowers to no list operation. A list with

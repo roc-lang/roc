@@ -12,8 +12,10 @@ partly_filled = List.with_capacity(1000).append(1).append(2)
 in_record : { buffer : List(Str), count : U64 }
 in_record = { buffer: List.with_capacity(300), count: 3 }
 
+# Two different functions, so an item is not zero-sized where this is evaluated:
+# a list of zero-sized items has no capacity to keep.
 functions : List(U64 -> U64)
-functions = List.with_capacity(50).append(|x| x + 1)
+functions = List.with_capacity(50).append(|x| x + 1).append(|x| x * 3)
 
 run! : Str => Str
 run! = |input| {
@@ -41,7 +43,7 @@ run! = |input| {
 
 	var $functions = functions
 	var $k = 0
-	while $k < 49 {
+	while $k < 48 {
 		$functions = List.append($functions, |x| x + 2)
 		$k = $k + 1
 	}
@@ -55,7 +57,7 @@ run! = |input| {
 	}
 	cleared_allocs = Host.alloc_count!() - start - read_allocs - numbers_allocs - strings_allocs - functions_allocs
 
-	expect total == 3
+	expect total == 4
 	expect read_allocs == 0
 	expect numbers_allocs == 1
 	expect strings_allocs == 1
