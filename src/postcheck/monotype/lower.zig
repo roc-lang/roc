@@ -6745,17 +6745,7 @@ const Builder = struct {
         subst: SpecSubstitution,
     ) Allocator.Error!SpecSubstitution {
         if (subst.len == 0) return subst;
-        const address = checkedTypeAddress(view, template.checked_fn_root);
-        const known = self.request_determined_result_rows.get(address) orelse known: {
-            const found: RequestDeterminedResultRow = if (try requestDeterminedResultRowVariable(
-                self.allocator,
-                view,
-                template.checked_fn_root,
-            )) |variable| .{ .variable = variable } else .none;
-            try self.request_determined_result_rows.put(self.allocator, address, found);
-            break :known found;
-        };
-        const variable = switch (known) {
+        const variable = switch (try self.requestDeterminedResultRow(view, template.checked_fn_root)) {
             .none => return subst,
             .variable => |variable| variable,
         };
@@ -6775,6 +6765,45 @@ const Builder = struct {
             row_variable.row_default,
         ) }) };
         return released;
+    }
+
+    /// `requestDeterminedResultRowVariable` for a checked function type,
+    /// memoized per compilation.
+    fn requestDeterminedResultRow(
+        self: *Builder,
+        view: ModuleView,
+        checked_fn_root: checked.CheckedTypeId,
+    ) Allocator.Error!RequestDeterminedResultRow {
+        const address = checkedTypeAddress(view, checked_fn_root);
+        if (self.request_determined_result_rows.get(address)) |known| return known;
+        const found: RequestDeterminedResultRow = if (try requestDeterminedResultRowVariable(
+            self.allocator,
+            view,
+            checked_fn_root,
+        )) |variable| .{ .variable = variable } else .none;
+        try self.request_determined_result_rows.put(self.allocator, address, found);
+        return found;
+    }
+
+    /// Whether specializing `template` at a request whose result row is
+    /// wider than the template's own takes the request's row: the template's
+    /// root has a closed result row (`widenClosedResultRowToRequest`) or a
+    /// request-determined result row variable
+    /// (`requestDeterminedSubstitution`). Any other result row is shared with
+    /// another position of the template's type, so the request's result row
+    /// is the template's own (design.md "Closed Result Rows At Template
+    /// Boundaries").
+    fn templateTakesWiderResultRow(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+    ) Allocator.Error!bool {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = view.templates.get(template_ref.template);
+        if (closedResultRowOrNull(view, template.checked_fn_root) != null) return true;
+        return switch (try self.requestDeterminedResultRow(view, template.checked_fn_root)) {
+            .none => false,
+            .variable => true,
+        };
     }
 
     /// The slot of `variable` among a scheme's quantified variables. Small
@@ -18781,6 +18810,7 @@ const DraftRuntimeValueDemand = struct {
 
 const RuntimeDemandGuardFrameKind = enum {
     match_branch,
+    match_arm,
     pattern_success,
     iterator_one,
     statement_success,
@@ -33310,6 +33340,7 @@ const BodyContext = struct {
         scrutinee_node: NodeId = undefined,
         branches: []DraftBranch = &.{},
         pending: std.ArrayListUnmanaged(MatchPendingBranch) = .empty,
+        shared_arms: std.ArrayListUnmanaged(MatchSharedArm) = .empty,
         index: usize = 0,
         /// The reassigned binders a value `match` merges. Owned.
         merge_binders: []MergeBinder = &.{},
@@ -33324,9 +33355,22 @@ const BodyContext = struct {
         representative: CIR.Pattern.Idx,
         checked_guard: ?ExprSite,
         checked_body: ExprSite,
-        source_index: usize,
+        source_arm: usize,
+        shared_arm: ?usize = null,
         user_guard: ?DraftExprId = null,
         body: DraftExprId = undefined,
+    };
+
+    /// Alternative-specific pattern work and guards reach one source body.
+    /// The join's parameters retain checked binder/capture identity, but not
+    /// any alternative's runtime locals or conditional reachability proof.
+    const MatchSharedArm = struct {
+        ctx: *BodyContext,
+        join: DraftExprId,
+        params: DraftSpan(DraftTypedLocal),
+        binders: []BinderRestore,
+        checked_body: ExprSite,
+        body: ?DraftExprId = null,
     };
 
     fn releaseMatchTask(self: *BodyContext, task: *MatchTask) void {
@@ -33334,6 +33378,13 @@ const BodyContext = struct {
             entry.ctx.deinit();
             self.builder.task_storage.contexts.destroy(self.allocator, entry.ctx);
         }
+        for (task.shared_arms.items) |arm| {
+            arm.ctx.deinit();
+            self.builder.task_storage.contexts.destroy(self.allocator, arm.ctx);
+            self.allocator.free(arm.binders);
+        }
+        task.shared_arms.deinit(self.allocator);
+        task.shared_arms = .empty;
         task.pending.deinit(self.allocator);
         task.pending = .empty;
         self.allocator.free(task.branches);
@@ -33377,7 +33428,7 @@ const BodyContext = struct {
             .guard => {
                 task.pending.items[task.index].user_guard = input.?.exprValue();
                 task.stage = .body;
-                return self.matchBranchBodyStep(task);
+                if (try self.matchBranchBodyStep(task)) |step| return step;
             },
             .body => try self.finishMatchBranchBody(task, input.?.exprValue()),
             .scrutinee => return self.finishMatch(task, input.?.exprValue()),
@@ -33392,7 +33443,7 @@ const BodyContext = struct {
 
         // All checked pattern evidence must reach the shared scrutinee before
         // any branch body can request another specialization.
-        if (task.index < task.pending.items.len) {
+        while (task.index < task.pending.items.len) {
             const entry = &task.pending.items[task.index];
             entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame(
                 entry.pattern.pattern,
@@ -33404,12 +33455,18 @@ const BodyContext = struct {
             }
             entry.user_guard = null;
             task.stage = .body;
-            return self.matchBranchBodyStep(task);
+            if (try self.matchBranchBodyStep(task)) |step| return step;
         }
         if (task.select) {
             for (task.pending.items) |entry| {
-                if (self.exprImpossibilityProof(entry.body) == null) {
+                if (entry.shared_arm != null or self.exprImpossibilityProof(entry.body) == null) {
                     self.draft.exprs.items[@backingInt(entry.body)].ty = task.selection.selected;
+                }
+            }
+            for (task.shared_arms.items) |arm| {
+                const body = arm.body.?;
+                if (self.exprImpossibilityProof(body) == null) {
+                    self.draft.exprs.items[@backingInt(body)].ty = task.selection.selected;
                 }
             }
         }
@@ -33433,12 +33490,10 @@ const BodyContext = struct {
         // tag or record shape and permanently loses the callee's witness.
         task.scrutinee_node = try self.matchScrutineeTypeNode(match.cond);
         task.branches = try self.allocator.alloc(DraftBranch, branchCount(self.view, match.branches));
-        var source_index: usize = 0;
         for (0..match.branches.count()) |branch_index| {
             const branch = matchBranchAt(self.view, match.branches, branch_index);
             for (0..branch.patterns.len()) |pattern_index| {
                 const pattern = branch.patterns.at(self.view, pattern_index);
-                defer source_index += 1;
                 if (try self.checkedPatternIsProvenUninhabited(pattern.pattern)) continue;
                 try task.pending.ensureUnusedCapacity(self.allocator, 1);
                 const branch_ctx = try self.createBranchContext();
@@ -33448,7 +33503,7 @@ const BodyContext = struct {
                     .representative = branch.patterns.at(self.view, 0).pattern,
                     .checked_guard = branch.guard,
                     .checked_body = branch.value,
-                    .source_index = source_index,
+                    .source_arm = branch_index,
                 });
                 try relateRequestComponent(
                     self.graph,
@@ -33473,20 +33528,133 @@ const BodyContext = struct {
             }
         }
 
+        try self.prepareSharedMatchArms(task);
+
         // Select the shared result representation from every inhabited branch
         // before any branch body is emitted. Match patterns supplied their
         // exact binder cells above, so branch-local lookups participate in this
         // relation-production pass as ordinary producer evidence.
         if (task.select) {
             for (task.pending.items) |*entry| {
-                try entry.ctx.prepareControlFlowResultSelection(&task.selection, entry.checked_body);
+                if (entry.shared_arm == null) {
+                    try entry.ctx.prepareControlFlowResultSelection(&task.selection, entry.checked_body);
+                }
+            }
+            for (task.shared_arms.items) |arm| {
+                try arm.ctx.prepareControlFlowResultSelection(&task.selection, arm.checked_body);
+            }
+        }
+    }
+
+    fn prepareSharedMatchArms(self: *BodyContext, task: *MatchTask) Allocator.Error!void {
+        var start: usize = 0;
+        while (start < task.pending.items.len) {
+            var end = start + 1;
+            const first = task.pending.items[start];
+            while (end < task.pending.items.len and task.pending.items[end].source_arm == first.source_arm) : (end += 1) {}
+            defer start = end;
+
+            // Degenerate alternatives have erroneous, incompatible binder
+            // interfaces. They retain their checked error lowering, not the
+            // valid source arm's shared interface.
+            var valid_count: usize = 0;
+            for (task.pending.items[start..end]) |entry| {
+                if (!entry.pattern.degenerate) valid_count += 1;
+            }
+            if (valid_count < 2) continue;
+
+            try task.shared_arms.ensureUnusedCapacity(self.allocator, 1);
+            const ctx = try self.createBranchContext();
+            errdefer {
+                ctx.deinit();
+                self.builder.task_storage.contexts.destroy(self.allocator, ctx);
+            }
+            var binders: std.ArrayList(BinderRestore) = .empty;
+            defer binders.deinit(self.allocator);
+            try ctx.savePatternBinders(first.representative, &binders);
+            // A guard can update threaded state before its success body.
+            // Those versions cross the join just like pattern-bound values;
+            // the arm must not read the parent's pre-guard versions.
+            if (first.checked_guard != null) switch (task.output.?) {
+                .value => {},
+                inline .state_result, .state_only => |state| {
+                    for (state.merge_binders) |merge| try ctx.saveBinder(merge.binder, &binders);
+                },
+            };
+            const params = try self.allocator.alloc(DraftTypedLocal, binders.items.len);
+            defer self.allocator.free(params);
+            for (binders.items, params) |binder, *param| {
+                var selected: ?DraftTypeCell = null;
+                for (task.pending.items[start..end]) |entry| {
+                    if (entry.pattern.degenerate) continue;
+                    const local = entry.ctx.binders.get(binder.binder) orelse
+                        Common.invariant("shared match arm had no alternative binder");
+                    const cell = self.localTypeCell(local);
+                    if (selected) |previous| {
+                        const a = try previous.toGraphNode(self.graph);
+                        const b = try cell.toGraphNode(self.graph);
+                        try selectRequestRepresentation(self.graph, a, b);
+                        if (!try self.graph.containsGeneratedPrivate(a) and try self.graph.containsGeneratedPrivate(b)) selected = cell;
+                    } else {
+                        selected = cell;
+                    }
+                }
+                const cell = selected.?;
+                const local = try ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, binder.binder);
+                try ctx.bindLocalName(local, binder.binder);
+                try ctx.binders.put(binder.binder, local);
+                param.* = .{ .local = local, .ty = cell };
+            }
+            var proofs: std.ArrayList(?RuntimeImpossibilityProofId) = .empty;
+            defer proofs.deinit(self.allocator);
+            for (task.pending.items[start..end]) |entry| {
+                if (entry.pattern.degenerate) continue;
+                try proofs.append(self.allocator, try entry.ctx.maybeNodesImpossibilityProof(
+                    try entry.ctx.runtimeDemandGuardsForPattern(entry.pattern.pattern, task.scrutinee_node),
+                ));
+            }
+            // Success is the union of the alternatives; its impossibility is
+            // their intersection, never the first alternative's exemption.
+            if (try ctx.allImpossibilityProof(proofs.items)) |proof| {
+                ctx.runtime_demand_guard_frames = try addRuntimeDemandGuardFrame(
+                    self.draft,
+                    ctx.runtime_demand_guard_frames,
+                    ctx.runtimeDemandGuardFrameAddress(first.representative, .match_arm),
+                    proof,
+                );
+            }
+            const param_span = try self.draft.addTypedLocalSpan(params);
+            const join = try self.addExprWithTypeCell(self.branchOutputCell(task.output.?), .pending_deferred);
+            const owned_binders = try binders.toOwnedSlice(self.allocator);
+            const index = task.shared_arms.items.len;
+            task.shared_arms.appendAssumeCapacity(.{
+                .ctx = ctx,
+                .join = join,
+                .params = param_span,
+                .binders = owned_binders,
+                .checked_body = first.checked_body,
+            });
+            for (task.pending.items[start..end]) |*entry| {
+                if (!entry.pattern.degenerate) entry.shared_arm = index;
             }
         }
     }
 
     /// Lower the current branch's body as a child task.
-    fn matchBranchBodyStep(_: *BodyContext, task: *MatchTask) LowerStep {
+    fn matchBranchBodyStep(self: *BodyContext, task: *MatchTask) Allocator.Error!?LowerStep {
         const entry = &task.pending.items[task.index];
+        if (entry.shared_arm) |index| {
+            const arm = &task.shared_arms.items[index];
+            if (arm.body != null) {
+                try self.finishSharedMatchAlternative(task);
+                return null;
+            }
+            return branchBodyStep(
+                arm.ctx,
+                entry.checked_body,
+                controlFlowBranchOutput(task.output.?, task.select, task.selection),
+            );
+        }
         return branchBodyStep(
             entry.ctx,
             entry.checked_body,
@@ -33495,8 +33663,29 @@ const BodyContext = struct {
     }
 
     fn finishMatchBranchBody(self: *BodyContext, task: *MatchTask, body: DraftExprId) Allocator.Error!void {
-        task.pending.items[task.index].body = body;
         if (task.select) try self.includeControlFlowResult(&task.selection, body);
+        if (task.pending.items[task.index].shared_arm) |index| {
+            task.shared_arms.items[index].body = body;
+            return self.finishSharedMatchAlternative(task);
+        }
+        task.pending.items[task.index].body = body;
+        task.index += 1;
+    }
+
+    fn finishSharedMatchAlternative(self: *BodyContext, task: *MatchTask) Allocator.Error!void {
+        const entry = &task.pending.items[task.index];
+        const arm = task.shared_arms.items[entry.shared_arm.?];
+        const args = try self.allocator.alloc(DraftExprId, arm.binders.len);
+        defer self.allocator.free(args);
+        for (arm.binders, args) |binder, *arg| {
+            const local = entry.ctx.binders.get(binder.binder) orelse
+                Common.invariant("shared match jump had no alternative binder");
+            arg.* = try entry.ctx.addExprWithTypeCell(self.localTypeCell(local), .{ .local = local });
+        }
+        entry.body = try entry.ctx.addExprWithTypeCell(
+            self.branchOutputCell(controlFlowBranchOutput(task.output.?, task.select, task.selection)),
+            .{ .jump = .{ .target = arm.join, .args = try self.addExprSpan(args) } },
+        );
         task.index += 1;
     }
 
@@ -33543,14 +33732,24 @@ const BodyContext = struct {
             .branches = try self.addBranchSpan(task.branches[0..index]),
             .comptime_site = task.comptime_site,
         } };
-        if (task.select) {
-            const cell = try self.finishControlFlowResultSelection(task.selection);
-            self.releaseMatchTask(task);
-            return loweredExprStep(try self.addExprWithTypeCell(cell, data));
+        const cell = if (task.select)
+            try self.finishControlFlowResultSelection(task.selection)
+        else
+            self.branchOutputCell(task.output.?);
+        var expr = try self.addExprWithTypeCell(cell, data);
+        var arm_index = task.shared_arms.items.len;
+        while (arm_index > 0) {
+            arm_index -= 1;
+            const arm = task.shared_arms.items[arm_index];
+            self.draft.exprs.items[@backingInt(arm.join)].ty = cell;
+            try self.completeDraftJoinPoint(arm.join, arm.params, .empty(), arm.body.?, expr);
+            expr = arm.join;
         }
-        const step = try self.finishControlFlowOutput(task.output.?, task.unwrap_state, task.result_cell, task.merge_binders, data);
+        if (task.unwrap_state) |state_cell| {
+            expr = try self.unwrapStateResultAtTypeCells(expr, state_cell, task.result_cell, task.merge_binders);
+        }
         self.releaseMatchTask(task);
-        return step;
+        return loweredExprStep(expr);
     }
 
     fn uninhabitedScrutineeStep(ctx: *BodyContext, expr: ExprSite, cell: DraftTypeCell) LowerStep {
@@ -37821,9 +38020,12 @@ const BodyContext = struct {
     /// `expected_node`'s row includes, so the call is requested at the
     /// expected result and the callee specialized there (design.md "Closed
     /// Result Rows At Template Boundaries"). Only a procedure template takes
-    /// a wider row. A local procedure's request relates its instance exactly,
-    /// and a closed row in that instance belongs to the enclosing body, so a
-    /// call to one keeps its own row.
+    /// a wider row, and only one whose own result row is closed or
+    /// request-determined (`Builder.templateTakesWiderResultRow`): the
+    /// call's instance can close a row that the template shares with an
+    /// argument, which the request cannot widen. A local procedure's request
+    /// relates its instance exactly, and a closed row in that instance
+    /// belongs to the enclosing body, so a call to one keeps its own row.
     fn directCallWidensClosedResult(
         self: *BodyContext,
         call_expr: ExprSite,
@@ -37834,6 +38036,13 @@ const BodyContext = struct {
         if (self.directCallTargetIsLocalProc(target)) return false;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
         const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
+        const proc: checked.ProcedureUseTemplate = switch (self.finalDirectTarget(target).record.ref) {
+            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| proc,
+            .platform_required_proc => |required| required.procedure,
+            .local_proc => return false,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("checked direct call target was not a procedure"),
+        };
+        if (!try self.builder.templateTakesWiderResultRow(self.builder.templateRefForProcedureUse(proc))) return false;
         const call_ret_node = try self.instNode(checkedExpr(self.view, call_expr).ty);
         return (try resultRowWideningOrNull(self.graph, declared_row, call_ret_node, expected_node)) != null;
     }
@@ -45342,14 +45551,32 @@ const BodyContext = struct {
         body: DraftExprId,
         remainder: DraftExprId,
     ) Allocator.Error!void {
+        try self.completeDraftJoinPoint(
+            reservation,
+            try self.addTypedLocalSpan(params),
+            try self.addTypedLocalSpan(retained),
+            body,
+            remainder,
+        );
+    }
+
+    /// Complete a reserved join without sealing its parameter cells early.
+    fn completeDraftJoinPoint(
+        self: *BodyContext,
+        reservation: DraftExprId,
+        params: DraftSpan(DraftTypedLocal),
+        retained: DraftSpan(DraftTypedLocal),
+        body: DraftExprId,
+        remainder: DraftExprId,
+    ) Allocator.Error!void {
         const reserved = &self.draft.exprs.items[@backingInt(reservation)];
         if (reserved.data != .pending_deferred) {
             Common.invariant("compiler-generated join reservation was filled more than once");
         }
         const data: BodyExprData = .{ .join_point = .{
             .id = reservation,
-            .params = try self.addTypedLocalSpan(params),
-            .retained = try self.addTypedLocalSpan(retained),
+            .params = params,
+            .retained = retained,
             .body = body,
             .remainder = remainder,
         } };

@@ -161,6 +161,8 @@ const LocalUseRow = struct { body: u32, expr: Ast.ExprId, next: u32 };
 
 const LoopKey = struct { body: u32, loop: u32 };
 
+const SlotKey = struct { body: u32, local: Ast.LocalId };
+
 /// The program-wide data every query reads. Built once, before any clone or
 /// discovery task runs, and read-only afterwards, so tasks on any thread
 /// share it.
@@ -179,7 +181,10 @@ pub const Index = struct {
     /// Locals bound once by a plain binding, to their value; null for a
     /// local bound more than once or recursively.
     defs: collections.DenseMapUnmanaged(Ast.LocalId, ?Ast.ExprId) = .empty,
-    slots: collections.DenseMapUnmanaged(Ast.LocalId, Slot) = .empty,
+    /// Each function's parameters and captures, by body. A lifted function's
+    /// capture slots are the locals its enclosing body binds, so a local is
+    /// a slot only of a particular body.
+    slots: std.AutoHashMapUnmanaged(SlotKey, Slot) = .empty,
     /// The `return` values of each function.
     returns: []std.ArrayList(Ast.ExprId),
     /// Each function's strongly connected component of the call graph.
@@ -313,9 +318,9 @@ pub const Index = struct {
         const raw_fn = @backingInt(fn_id);
         const f = p.getFn(fn_id);
         const args = p.typedLocalSpan(f.args);
-        for (0..args.len) |i| try self.slots.put(gpa, GuardedList.at(args, i).local, .{ .kind = .arg, .index = @intCast(i) });
+        for (0..args.len) |i| try self.slots.put(gpa, .{ .body = raw_fn, .local = GuardedList.at(args, i).local }, .{ .kind = .arg, .index = @intCast(i) });
         const caps = p.typedLocalSpan(f.captures);
-        for (0..caps.len) |i| try self.slots.put(gpa, GuardedList.at(caps, i).local, .{ .kind = .capture, .index = @intCast(i) });
+        for (0..caps.len) |i| try self.slots.put(gpa, .{ .body = raw_fn, .local = GuardedList.at(caps, i).local }, .{ .kind = .capture, .index = @intCast(i) });
 
         var tasks: std.ArrayList(IndexTask) = .empty;
         defer tasks.deinit(gpa);
@@ -644,11 +649,11 @@ pub const Index = struct {
             const fn_id: Ast.FnId = @fromBackingInt(@as(u32, @intCast(index)));
             if (self.on_cycle[index]) continue;
             if (try WrapperBody.wrapperBody(gpa, program, fn_id) == null) continue;
-            self.wrapper[index] = !try self.bodySpecializesCall(session, body, &stack);
+            self.wrapper[index] = !try self.bodySpecializesCall(session, fn_id, body, &stack);
         }
     }
 
-    fn bodySpecializesCall(self: *const Index, session: *Session, body: Ast.ExprId, stack: *std.ArrayList(Ast.ExprChild)) Allocator.Error!bool {
+    fn bodySpecializesCall(self: *const Index, session: *Session, body_fn: Ast.FnId, body: Ast.ExprId, stack: *std.ArrayList(Ast.ExprChild)) Allocator.Error!bool {
         const gpa = self.gpa;
         const program = session.program;
         stack.clearRetainingCapacity();
@@ -661,13 +666,13 @@ pub const Index = struct {
                     .call_proc => |call| if (Ast.localDirectCallee(call)) |callee| {
                         const args = program.exprSpan(call.args);
                         for (0..args.len) |i| {
-                            var built: BuiltOracle = .{ .session = session, .expr = GuardedList.at(args, i) };
+                            var built: BuiltOracle = .{ .session = session, .body = body_fn, .expr = GuardedList.at(args, i) };
                             if (try session.calleeConsumes(built.oracle(), callee, .{ .kind = .arg, .index = @intCast(i) })) return true;
                         }
                         const ops = program.captureOperandSpan(call.captures);
                         for (0..ops.len) |i| {
                             const op = GuardedList.at(ops, i);
-                            var built: BuiltOracle = .{ .session = session, .expr = op.value };
+                            var built: BuiltOracle = .{ .session = session, .body = body_fn, .expr = op.value };
                             if (try session.calleeConsumes(built.oracle(), callee, .{ .kind = .capture, .index = captureSlot(program, callee, op.id) })) return true;
                         }
                     },
@@ -708,11 +713,12 @@ pub const Oracle = struct {
     known: *const fn (ctx: *anyopaque, path: []const Step, kinds: Consumers) Allocator.Error!bool,
 };
 
-/// A seed that knows exactly the parts an expression builds on every path:
-/// the constructors of the body that holds it, with nothing known about the
+/// A seed that knows exactly the parts an expression of `body` builds on
+/// every path: the constructors of that body, with nothing known about the
 /// body's own parameters.
 const BuiltOracle = struct {
     session: *Session,
+    body: Ast.FnId,
     expr: Ast.ExprId,
 
     fn oracle(self: *BuiltOracle) Oracle {
@@ -721,7 +727,7 @@ const BuiltOracle = struct {
 
     fn known(ctx: *anyopaque, path: []const Step, kinds: Consumers) Allocator.Error!bool {
         const self: *BuiltOracle = @ptrCast(@alignCast(ctx));
-        const built = try self.session.builtExprAt(self.expr, try self.session.pathOf(path));
+        const built = try self.session.builtExprAt(self.body, self.expr, try self.session.pathOf(path));
         return built.kinds.intersectWith(kinds).count() != 0;
     }
 };
@@ -795,7 +801,9 @@ pub const Session = struct {
         return result;
     }
 
-    const BuiltKey = struct { kind: enum(u8) { expr, result }, id: u32, path: PathId };
+    /// An expression's key names the body it is read in: a local reads as
+    /// a slot only of its own body.
+    const BuiltKey = struct { kind: enum(u8) { expr, result }, id: u32, body: u32, path: PathId };
     const BuiltEntry = union(enum) { in_progress, done: Built };
 
     /// What `fn_id` builds at `path` of its result on every path that
@@ -803,13 +811,13 @@ pub const Session = struct {
     /// part builds nothing there: the least fixed point.
     pub fn builtAt(self: *Session, fn_id: Ast.FnId, path: PathId) Allocator.Error!Built {
         if (!self.index.isOriginal(fn_id)) return .{};
-        return self.evalBuilt(.{ .kind = .result, .id = @backingInt(fn_id), .path = path });
+        return self.evalBuilt(resultKey(fn_id, path));
     }
 
-    /// What expression `expr` of a source body builds at `path` on every
-    /// path that produces it.
-    pub fn builtExprAt(self: *Session, expr: Ast.ExprId, path: PathId) Allocator.Error!Built {
-        return self.evalBuilt(.{ .kind = .expr, .id = @backingInt(expr), .path = path });
+    /// What expression `expr` of the source body of `body` builds at `path`
+    /// on every path that produces it.
+    pub fn builtExprAt(self: *Session, body: Ast.FnId, expr: Ast.ExprId, path: PathId) Allocator.Error!Built {
+        return self.evalBuilt(exprKey(@backingInt(body), expr, path));
     }
 
     /// Evaluate `root` and everything it needs on an explicit stack, so
@@ -858,20 +866,25 @@ pub const Session = struct {
         return .{ .kinds = a.kinds.intersectWith(b.kinds), .passes = passes.items };
     }
 
-    fn exprKey(expr: Ast.ExprId, path: PathId) BuiltKey {
-        return .{ .kind = .expr, .id = @backingInt(expr), .path = path };
+    fn exprKey(body: u32, expr: Ast.ExprId, path: PathId) BuiltKey {
+        return .{ .kind = .expr, .id = @backingInt(expr), .body = body, .path = path };
+    }
+
+    fn resultKey(fn_id: Ast.FnId, path: PathId) BuiltKey {
+        return .{ .kind = .result, .id = @backingInt(fn_id), .body = @backingInt(fn_id), .path = path };
     }
 
     /// Compute `key` from finished children, or name a missing child.
     fn computeBuilt(self: *Session, key: BuiltKey, missing: *?BuiltKey) Allocator.Error!Built {
         const p = self.program;
         const path = key.path;
+        const body_fn = key.body;
         switch (key.kind) {
             .result => {
                 const body = self.index.bodies[key.id] orelse return .{};
-                var result = self.child(exprKey(body, path), missing) orelse return .{};
+                var result = self.child(exprKey(body_fn, body, path), missing) orelse return .{};
                 for (self.index.returns[key.id].items) |ret| {
-                    const value = self.child(exprKey(ret, path), missing) orelse return .{};
+                    const value = self.child(exprKey(body_fn, ret, path), missing) orelse return .{};
                     result = try self.meet(result, value);
                 }
                 // A function that never returns normally builds nothing a
@@ -883,31 +896,33 @@ pub const Session = struct {
         const e: Ast.ExprId = @fromBackingInt(key.id);
         const first = self.firstStep(path);
         switch (p.getExpr(e).data) {
-            .typed_boundary => |b| return self.child(exprKey(b.value, path), missing) orelse .{},
-            .row_widen => |w| return self.child(exprKey(w.value, path), missing) orelse .{},
-            .nominal => |b| return self.child(exprKey(b, path), missing) orelse .{},
+            .typed_boundary => |b| return self.child(exprKey(body_fn, b.value, path), missing) orelse .{},
+            .row_widen => |w| return self.child(exprKey(body_fn, w.value, path), missing) orelse .{},
+            .nominal => |b| return self.child(exprKey(body_fn, b, path), missing) orelse .{},
             .static_data_candidate => |c| switch (c.value) {
-                .runtime => |r| return self.child(exprKey(r, path), missing) orelse .{},
+                .runtime => |r| return self.child(exprKey(body_fn, r, path), missing) orelse .{},
                 // A stored candidate is an opaque leaf to the clone.
                 .stored => return .{},
             },
             .local => |local| {
-                if (self.index.defs.get(local)) |maybe_def| {
-                    const def = maybe_def orelse return .{};
-                    return self.child(exprKey(def, path), missing) orelse .{};
+                // A slot of this body is its own value here, even where an
+                // enclosing body binds the same local.
+                if (self.index.slots.get(.{ .body = body_fn, .local = local })) |slot| {
+                    const passes = try self.built_arena.allocator().alloc(Built.Pass, 1);
+                    passes[0] = .{ .slot = slot, .path = path };
+                    return .{ .passes = passes };
                 }
-                const slot = self.index.slots.get(local) orelse return .{};
-                const passes = try self.built_arena.allocator().alloc(Built.Pass, 1);
-                passes[0] = .{ .slot = slot, .path = path };
-                return .{ .passes = passes };
+                const maybe_def = self.index.defs.get(local) orelse return .{};
+                const def = maybe_def orelse return .{};
+                return self.child(exprKey(body_fn, def, path), missing) orelse .{};
             },
-            .let_ => |let_| return self.child(exprKey(let_.rest, path), missing) orelse .{},
-            .block => |block| return self.child(exprKey(block.final_expr, path), missing) orelse .{},
+            .let_ => |let_| return self.child(exprKey(body_fn, let_.rest, path), missing) orelse .{},
+            .block => |block| return self.child(exprKey(body_fn, block.final_expr, path), missing) orelse .{},
             .if_ => |if_| {
-                var result = self.child(exprKey(if_.final_else, path), missing) orelse return .{};
+                var result = self.child(exprKey(body_fn, if_.final_else, path), missing) orelse return .{};
                 const bs = p.ifBranchSpan(if_.branches);
                 for (0..bs.len) |i| {
-                    const value = self.child(exprKey(GuardedList.at(bs, i).body, path), missing) orelse return .{};
+                    const value = self.child(exprKey(body_fn, GuardedList.at(bs, i).body, path), missing) orelse return .{};
                     result = try self.meet(result, value);
                 }
                 return result;
@@ -916,21 +931,21 @@ pub const Session = struct {
                 var result: Built = .{ .diverges = true };
                 const bs = p.branchSpan(m.branches);
                 for (0..bs.len) |i| {
-                    const value = self.child(exprKey(GuardedList.at(bs, i).body, path), missing) orelse return .{};
+                    const value = self.child(exprKey(body_fn, GuardedList.at(bs, i).body, path), missing) orelse return .{};
                     result = try self.meet(result, value);
                 }
                 return result;
             },
             .join_point => |j| {
-                const body = self.child(exprKey(j.body, path), missing) orelse return .{};
-                const remainder = self.child(exprKey(j.remainder, path), missing) orelse return .{};
+                const body = self.child(exprKey(body_fn, j.body, path), missing) orelse return .{};
+                const remainder = self.child(exprKey(body_fn, j.remainder, path), missing) orelse return .{};
                 return self.meet(body, remainder);
             },
             .tag => |tag| {
                 const step = first orelse return .{ .kinds = .initMany(&.{ .match, .loop }) };
                 const ps = p.exprSpan(tag.payloads);
                 for (0..ps.len) |i| {
-                    if (step.isPayload(tag.name, @intCast(i))) return self.child(exprKey(GuardedList.at(ps, i), try self.suffix(path)), missing) orelse .{};
+                    if (step.isPayload(tag.name, @intCast(i))) return self.child(exprKey(body_fn, GuardedList.at(ps, i), try self.suffix(path)), missing) orelse .{};
                 }
                 return .{};
             },
@@ -939,7 +954,7 @@ pub const Session = struct {
                 const fs = p.fieldExprSpan(span);
                 for (0..fs.len) |i| {
                     const fe = GuardedList.at(fs, i);
-                    if (step.isField(fe.name)) return self.child(exprKey(fe.value, try self.suffix(path)), missing) orelse .{};
+                    if (step.isField(fe.name)) return self.child(exprKey(body_fn, fe.value, try self.suffix(path)), missing) orelse .{};
                 }
                 return .{};
             },
@@ -948,7 +963,7 @@ pub const Session = struct {
                 const fs = p.fieldExprSpan(u.fields);
                 for (0..fs.len) |i| {
                     const fe = GuardedList.at(fs, i);
-                    if (step.isField(fe.name)) return self.child(exprKey(fe.value, try self.suffix(path)), missing) orelse .{};
+                    if (step.isField(fe.name)) return self.child(exprKey(body_fn, fe.value, try self.suffix(path)), missing) orelse .{};
                 }
                 // The base's own parts are what the base builds, which this
                 // summary does not see through.
@@ -958,7 +973,7 @@ pub const Session = struct {
                 const step = first orelse return .{ .kinds = .initOne(.project) };
                 const is = p.exprSpan(span);
                 for (0..is.len) |i| {
-                    if (step.isItem(@intCast(i))) return self.child(exprKey(GuardedList.at(is, i), try self.suffix(path)), missing) orelse .{};
+                    if (step.isItem(@intCast(i))) return self.child(exprKey(body_fn, GuardedList.at(is, i), try self.suffix(path)), missing) orelse .{};
                 }
                 return .{};
             },
@@ -966,7 +981,7 @@ pub const Session = struct {
             .call_proc => |call| {
                 const callee = Ast.localDirectCallee(call) orelse return .{};
                 if (!self.index.isOriginal(callee)) return .{};
-                const inner = self.child(.{ .kind = .result, .id = @backingInt(callee), .path = path }, missing) orelse return .{};
+                const inner = self.child(resultKey(callee, path), missing) orelse return .{};
                 var result: Built = .{ .kinds = inner.kinds };
                 var passes: std.ArrayList(Built.Pass) = .empty;
                 const as = p.exprSpan(call.args);
@@ -979,7 +994,7 @@ pub const Session = struct {
                             if (captureSlot(p, callee, op.id) == pass.slot.index) break op.value;
                         } else Common.invariant("direct call supplied no operand for a capture its callee passes through"),
                     };
-                    const value = self.child(exprKey(source, pass.path), missing) orelse return .{};
+                    const value = self.child(exprKey(body_fn, source, pass.path), missing) orelse return .{};
                     result.kinds.setUnion(value.kinds);
                     try passes.appendSlice(self.built_arena.allocator(), value.passes);
                 }
