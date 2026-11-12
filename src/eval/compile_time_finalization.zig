@@ -6428,17 +6428,15 @@ const DevProgram = struct {
 
     /// Where a failure the host located in this program's generated code
     /// or a loaded object's happened. It is reported at the innermost
-    /// statement with a source region among the faulting instruction's and
-    /// those of the generated calls enclosing it, with the meaning of the
-    /// call it came out of.
+    /// statement with a source region among those of the generated calls
+    /// enclosing it, with the meaning of the call it came out of.
     fn failedAt(self: *const DevProgram, point: ?CompileTimeHost.FailurePoint) FailedAt {
         const known = point orelse return .{};
         var failed_at = FailedAt{};
-        if (known.fault == null and known.calls.len != 0) {
+        if (known.calls.len != 0) {
             failed_at.meaning = self.failureMeaningAt(known.calls[0]);
         }
-        const located = if (known.fault) |pc| self.statementAt(pc) else null;
-        const statement = located orelse for (known.calls) |address| {
+        const statement = for (known.calls) |address| {
             // A return address follows its call instruction.
             if (self.statementAt(address - 1)) |line| break line;
         } else null;
@@ -6708,7 +6706,7 @@ fn evalDevProgramRoots(
     });
     if (lowered.boxy_functions) |retained| {
         if (native.linked_images) |images| retained.metadata = .{ .context = images, .get = BoxyLinkedImages.metadataFor };
-        writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result });
+        writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result, .store_module = module.key.digest() });
     }
 
     var had_problem = false;

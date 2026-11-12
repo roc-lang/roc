@@ -19,9 +19,12 @@
 //! follows the `incref` and `decref` statements it is given and does not
 //! reason about reference counting itself.
 //!
-//! `str_literal` is not included and must not be. A string literal longer than
-//! a small string is materialized by `str_from_literal`, which heap-allocates
-//! and writes a refcount of one, so its retains and releases are load-bearing.
+//! A `str_literal` value is the same: one longer than a small string reads its
+//! backing in the image, and a shorter one is held inline with no count at
+//! all. Nearly every program holds one, so counting them means classifying the
+//! locals of nearly every program. `Literals` lets a consumer choose: an
+//! optimized build counts them, and the rest leave their retains and releases
+//! in place and skip the analysis for a program with no other image data.
 //!
 //! A local qualifies only when a static-backed literal is the sole thing that
 //! ever writes it. `writers` marks the writes that are not binders and
@@ -40,10 +43,17 @@ const Allocator = std.mem.Allocator;
 const LocalId = LIR.LocalId;
 const Body = @import("body_clone.zig");
 
+/// Which literals count as image data.
+pub const Literals = enum {
+    /// `static_data` and `bytes_literal` literals, and type table reads.
+    static_data,
+    /// Those and `str_literal` literals.
+    static_data_and_strings,
+};
+
 /// Locals whose every write is a static-backed literal.
 pub const ImmortalLocals = struct {
-    /// Written at least once by a `static_data` or `bytes_literal` literal,
-    /// or a type table read.
+    /// Written at least once by a literal `Literals` counts as image data.
     static_written: std.DynamicBitSetUnmanaged,
     /// Written by anything other than a static-backed literal. A local several
     /// static literals write on different paths still holds image data on every
@@ -70,7 +80,7 @@ pub const ImmortalLocals = struct {
 };
 
 /// Classify every local the store's statements write.
-pub fn compute(allocator: Allocator, store: *const LirStore) Allocator.Error!ImmortalLocals {
+pub fn compute(allocator: Allocator, store: *const LirStore, literals: Literals) Allocator.Error!ImmortalLocals {
     const count = store.localCount();
     var result: ImmortalLocals = .{
         .static_written = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count),
@@ -78,7 +88,7 @@ pub fn compute(allocator: Allocator, store: *const LirStore) Allocator.Error!Imm
     };
     errdefer result.deinit(allocator);
 
-    var pass: Pass = .{ .store = store, .result = &result };
+    var pass: Pass = .{ .store = store, .result = &result, .literals = literals };
     for (0..store.cfStmtCount()) |index| pass.writers(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
     return result;
 }
@@ -86,6 +96,7 @@ pub fn compute(allocator: Allocator, store: *const LirStore) Allocator.Error!Imm
 const Pass = struct {
     store: *const LirStore,
     result: *ImmortalLocals,
+    literals: Literals,
 
     fn markStatic(self: *Pass, local: LocalId) void {
         const index = @backingInt(local);
@@ -108,10 +119,11 @@ const Pass = struct {
             .assign_literal => |s| switch (s.value) {
                 // Image data, refcount word zero.
                 .static_data, .bytes_literal => self.markStatic(s.target),
-                // A string literal longer than a small string is materialized
-                // by `str_from_literal`, which heap-allocates and writes a
-                // refcount of one, so its retains and releases are real.
-                .str_literal,
+                // Image data, or held inline with no count.
+                .str_literal => switch (self.literals) {
+                    .static_data => self.markOther(s.target),
+                    .static_data_and_strings => self.markStatic(s.target),
+                },
                 .i64_literal,
                 .i128_literal,
                 .f64_literal,
@@ -172,12 +184,12 @@ const Pass = struct {
 /// rather than a no-op worth eliding, and removing it would hide that.
 ///
 /// Returns how many statements were dropped.
-pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
-    if (!anyStaticLiteral(store)) {
-        if (@import("builtin").mode == .debug) try verifyNothingToElide(gpa, store);
+pub fn elide(gpa: Allocator, store: *LirStore, literals: Literals) Allocator.Error!usize {
+    if (!anyStaticLiteral(store, literals)) {
+        if (@import("builtin").mode == .debug) try verifyNothingToElide(gpa, store, literals);
         return 0;
     }
-    var immortal = try compute(gpa, store);
+    var immortal = try compute(gpa, store, literals);
     defer immortal.deinit(gpa);
 
     const count = store.cfStmtCount();
@@ -239,11 +251,13 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
     return drop_count;
 }
 
-/// Whether any procedure's shapes record a static-backed literal; without one
-/// no local can be immortal.
-fn anyStaticLiteral(store: *const LirStore) bool {
+/// Whether any procedure's shapes record a literal `literals` counts as image
+/// data; without one no local can be immortal.
+fn anyStaticLiteral(store: *const LirStore, literals: Literals) bool {
     for (0..store.procSpecCount()) |index| {
-        if (store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).shapes.static_literal) return true;
+        const shapes = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).shapes;
+        if (shapes.static_literal) return true;
+        if (literals == .static_data_and_strings and shapes.str_literal) return true;
     }
     return false;
 }
@@ -288,8 +302,8 @@ fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
 /// A store whose procedures record no static-backed literal must give elision
 /// nothing to drop. Statements no procedure reaches are left behind by earlier
 /// rewrites and are not part of the program, so only procedure bodies count.
-fn verifyNothingToElide(gpa: Allocator, store: *LirStore) Allocator.Error!void {
-    var immortal = try compute(gpa, store);
+fn verifyNothingToElide(gpa: Allocator, store: *LirStore, literals: Literals) Allocator.Error!void {
+    var immortal = try compute(gpa, store, literals);
     defer immortal.deinit(gpa);
     for (0..store.procSpecCount()) |index| {
         const body = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).body.get() orelse continue;

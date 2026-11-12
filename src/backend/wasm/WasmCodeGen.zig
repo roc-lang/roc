@@ -11162,17 +11162,63 @@ fn generateStoreAggregateValue(self: *Self, dest: ProcLocalId, value_layout: lay
 /// Generate a discriminant switch expression.
 /// Evaluates the tag union value, loads its discriminant, and generates
 /// cascading if/else branches indexed by discriminant value.
-/// Emit the canonical value for a list of zero-width elements: such a list owns
-/// no allocation, so its data pointer is null and its stored capacity is zero,
-/// and it carries nothing but the length held in `len_local`. Leaves a pointer
-/// to the list value on the operand stack.
+/// The most a wasm32 capacity word encodes, which bounds the capacity a list
+/// of zero-width elements records.
+const max_zst_capacity: u32 = std.math.maxInt(u32) >> capacity_shift;
+
+/// Emit a list of zero-width elements with the length held in `len_local` and
+/// no spare capacity. Such a list owns no allocation, so its data pointer is
+/// null and its capacity is a count alone. Leaves a pointer to the list value
+/// on the operand stack.
 fn emitZstListWithLen(self: *Self, len_local: u32) Allocator.Error!void {
+    try self.emitZstListWithCapacity(len_local, len_local);
+}
+
+/// Emit a list of zero-width elements with the length held in `len_local`
+/// whose capacity is the count in `count_local`, or the length when that is
+/// larger. The count never exceeds `max_zst_capacity`. Leaves a pointer to the
+/// list value on the operand stack.
+fn emitZstListWithCapacity(self: *Self, len_local: u32, count_local: u32) Allocator.Error!void {
     const offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const list_base = try self.emitFpOffsetToNewLocal(offset);
     try self.emitZeroInit(list_base, roc_list_size);
     try self.emitLocalGet(len_local);
     try self.emitStoreToMem(list_base, list_len_offset, .i32);
+    try self.emitLocalGets(.{ count_local, len_local, count_local, len_local });
+    try self.emitOps(.{ Op.i32_gt_u, Op.select });
+    try self.emitI32Const(capacity_shift);
+    try self.emitOps(.{Op.i32_shl});
+    try self.emitStoreToMem(list_base, list_capacity_offset, .i32);
     try self.emitLocalGet(list_base);
+}
+
+/// Read the capacity recorded by the list of zero-width elements pointed to
+/// by `list_local`.
+fn emitZstListCapacityLocal(self: *Self, list_local: u32) Allocator.Error!u32 {
+    try self.emitLoadAt(list_local, .i32, list_capacity_offset);
+    try self.emitI32Const(capacity_shift);
+    try self.emitOps(.{Op.i32_shr_u});
+    return self.emitSetNewLocal(.i32);
+}
+
+/// Emit the list of zero-width elements an operation makes in place of the
+/// list pointed to by `list_local`: the length held in `len_local` and the
+/// capacity that list has. Leaves a pointer to the list value on the operand
+/// stack.
+fn emitZstListKeeping(self: *Self, list_local: u32, len_local: u32) Allocator.Error!void {
+    const count_local = try self.emitZstListCapacityLocal(list_local);
+    try self.emitZstListWithCapacity(len_local, count_local);
+}
+
+/// Bound the `U64` count on the operand stack by `max_zst_capacity` and leave
+/// it there as an i32.
+fn emitBoundZstCapacity(self: *Self) Allocator.Error!void {
+    const count_local = try self.emitSetNewLocal(.i64);
+    try self.emitLocalGet(count_local);
+    try self.emitI64Const(max_zst_capacity);
+    try self.emitLocalGet(count_local);
+    try self.emitI64Const(max_zst_capacity);
+    try self.emitOps(.{ Op.i64_lt_u, Op.select, Op.i32_wrap_i64 });
 }
 
 /// Emit the canonical zero-width list carrying the length currently on the
@@ -11260,9 +11306,8 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     try self.emitI32Const(@intCast(elems.len));
     try self.emitStoreToMem(list_base, list_len_offset, .i32);
 
-    // Store encoded capacity. A list of zero-sized elements holds no
-    // allocation, so its stored capacity is zero however many elements it carries.
-    const encoded_capacity: u32 = if (elem_size == 0) 0 else @as(u32, @intCast(elems.len)) << capacity_shift;
+    // Store encoded capacity.
+    const encoded_capacity: u32 = @as(u32, @intCast(elems.len)) << capacity_shift;
     try self.emitI32Const(@intCast(encoded_capacity));
     try self.emitStoreToMem(list_base, list_capacity_offset, .i32);
 
@@ -11885,10 +11930,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             try self.emitI32Const(0);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            // Zero capacity has no heap refcount and counts as unique.
+            // A list with zero capacity or no data pointer has no heap
+            // refcount and counts as unique. A list of zero-width elements
+            // records a capacity and holds no allocation.
             try self.emitLocalGet(cap_local);
             try self.emitI32Const(capacity_shift);
-            try self.emitOps(.{ Op.i32_shr_u, Op.i32_eqz, Op.@"if" });
+            try self.emitOps(.{ Op.i32_shr_u, Op.i32_eqz });
+            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
+            try self.emitOps(.{ Op.i32_eqz, Op.i32_or, Op.@"if" });
             self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             try self.emitI32Const(1);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
@@ -12253,9 +12302,16 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // list emptied in place when uniquely owned.
         .list_clear => {
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-            // Clearing goes through the sublist builtin, which keeps a uniquely
-            // owned allocation.
+            // Clearing goes through the clear builtin, which keeps a uniquely
+            // owned allocation and the capacity static data records.
             const clear_abi = self.builtinInternalListAbi("wasm.list_clear.builtin_list_abi", ll.ret_layout);
+            // Clearing a list of zero-width elements empties it in place, so
+            // it keeps its capacity.
+            if (clear_abi.elem_size == 0) {
+                const zero_len = try self.emitI32ConstToNewLocal(0);
+                try self.emitZstListKeeping(list_local, zero_len);
+                return;
+            }
             if (self.external_calls == .builtin_relocs and clear_abi.elem_size != 0) {
                 const fields = try self.loadRocListFields(list_local);
                 const callbacks = try self.listElementCallbacks(clear_abi);
@@ -12264,12 +12320,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitRocListFields(fields);
                 try self.emitI32Const(@intCast(clear_abi.elem_align));
                 try self.emitI32Const(@intCast(clear_abi.elem_size));
-                try self.emitI64Const(0);
-                try self.emitI64Const(0);
                 try self.emitI32Const(@intCast(callbacks.elements_refcounted));
                 try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
                 try self.emitI32Const(updateModeImmForArg(ll.unique_args, 0));
-                try self.emitBuiltinCall(.list_sublist);
+                try self.emitBuiltinCall(.list_clear);
                 try self.emitFpOffset(result_offset);
                 return;
             }
@@ -17477,10 +17531,20 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
     try self.emitLocalSet(list_ptr);
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
-    const elem_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    // A zero-width element has no bytes to write, so appending one only bumps
+    // the length.
     if (elem_size == 0) {
-        try self.emitSetI32Local(elem_ptr, 0);
-    } else {
+        const len_local = try self.emitListLenLocal(list_ptr);
+        try self.emitLocalGet(len_local);
+        try self.emitI32Const(1);
+        try self.emitOps(.{Op.i32_add});
+        const grown = try self.emitSetNewLocal(.i32);
+        try self.emitZstListKeeping(list_ptr, grown);
+        return;
+    }
+
+    const elem_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    {
         const target_is_composite = try self.isCompositeLayout(elem_layout_idx);
         if (target_is_composite) {
             const src_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
@@ -17529,7 +17593,8 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx, uni
         try self.emitLocalGet(len_local);
         try self.emitI32Const(1);
         self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-        try self.emitZstListFromStackLen();
+        const grown = try self.emitSetNewLocal(.i32);
+        try self.emitZstListKeeping(list_ptr, grown);
         return;
     }
 
@@ -17740,11 +17805,9 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, uniq
         self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
         try self.emitLocalSet(new_len);
 
-        const zero = try self.emitI32ConstToNewLocal(0);
-
-        // Zero-width elements own no allocation, so the joined list carries a
-        // length and a stored capacity of zero.
-        try self.buildRocListWithCap(zero, new_len, zero);
+        // Zero-width elements have no bytes to join, so the result is the
+        // first list grown in place by the length of the second.
+        try self.emitZstListKeeping(a_ptr, new_len);
         return;
     }
 
@@ -17787,7 +17850,8 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, uniq
         // is exactly the number of elements to remove (zero or one).
         try self.emitLocalGets(.{ len_local, index_local, len_local });
         try self.emitOps(.{ Op.i64_extend_i32_u, Op.i64_lt_u, Op.i32_sub });
-        try self.emitZstListFromStackLen();
+        const kept = try self.emitSetNewLocal(.i32);
+        try self.emitZstListKeeping(list_ptr, kept);
         return;
     }
 
@@ -17841,8 +17905,7 @@ fn emitZstListGrownBy(self: *Self, list_ptr: u32, count_local: u32) Allocator.Er
     try self.emitLocalGet(count_local);
     try self.emitOps(.{ Op.i32_wrap_i64, Op.i32_add });
     try self.emitLocalSet(len);
-    const zero = try self.emitI32ConstToNewLocal(0);
-    try self.buildRocListWithCap(zero, len, len);
+    try self.emitZstListKeeping(list_ptr, len);
 }
 
 /// Build a RocList struct with separate capacity value.
@@ -17874,10 +17937,14 @@ fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx
     const elem_size = list_abi.elem_size;
 
     // Zero-width elements need no storage, so a reservation allocates nothing
-    // and the result is the canonical empty list.
+    // and the capacity alone records it.
     if (elem_size == 0) {
         const zero_len = try self.emitI32ConstToNewLocal(0);
-        try self.emitZstListWithLen(zero_len);
+        try self.emitProcLocal(GuardedList.at(args, 0));
+        try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 0)), .i64);
+        try self.emitBoundZstCapacity();
+        const count_local = try self.emitSetNewLocal(.i32);
+        try self.emitZstListWithCapacity(zero_len, count_local);
         return;
     }
 
@@ -18081,10 +18148,29 @@ fn generateLLListReserve(self: *Self, kind: BuiltinKind, args: anytype, ret_layo
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReserve.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
 
-    // Zero-width elements need no storage, so there is nothing to reserve and
-    // the list passes through unchanged.
+    // Zero-width elements need no storage, so a reservation allocates nothing
+    // and the capacity alone records it: room for `spare` more elements, or
+    // the capacity the list already has when that is larger.
     if (elem_size == 0) {
-        try self.emitProcLocal(GuardedList.at(args, 0));
+        const zst_list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+        const len_local = try self.emitListLenLocal(zst_list_ptr);
+        try self.emitProcLocal(GuardedList.at(args, 1));
+        try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i64);
+        const zst_spare = try self.emitSetNewLocal(.i64);
+        // len + spare cannot wrap a U64 once spare is bounded, since len fits
+        // in 32 bits.
+        try self.emitLocalGet(zst_spare);
+        try self.emitBoundZstCapacity();
+        try self.emitOps(.{Op.i64_extend_i32_u});
+        try self.emitLocalGet(len_local);
+        try self.emitOps(.{ Op.i64_extend_i32_u, Op.i64_add });
+        try self.emitBoundZstCapacity();
+        const wanted = try self.emitSetNewLocal(.i32);
+        const held = try self.emitZstListCapacityLocal(zst_list_ptr);
+        try self.emitLocalGets(.{ wanted, held, wanted, held });
+        try self.emitOps(.{ Op.i32_gt_u, Op.select });
+        const count_local = try self.emitSetNewLocal(.i32);
+        try self.emitZstListWithCapacity(len_local, count_local);
         return;
     }
 
@@ -18189,10 +18275,11 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReleaseExcessCapacity.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
 
-    // A zero-width list holds no allocation, so it has no excess to release and
-    // passes through unchanged.
+    // A zero-width list holds no allocation, so releasing its excess only
+    // brings its capacity down to its length.
     if (elem_size == 0) {
-        try self.emitProcLocal(GuardedList.at(args, 0));
+        const zst_list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+        try self.emitZstListWithLen(try self.emitListLenLocal(zst_list_ptr));
         return;
     }
 
