@@ -31422,20 +31422,20 @@ pub const CheckedModuleArtifact = struct {
     /// null when the artifact is total.
     /// Whether an evidence parameter's dispatcher is the scheme variable in
     /// its slot: that variable itself, or for a requirement a row variable
-    /// holds, the record or tag union whose row ends in it (design.md
-    /// "Methods On Open Rows").
+    /// holds, the record or tag union whose row ends in it, or the variable
+    /// itself when a row's composition left the value as that variable
+    /// (design.md "Methods On Open Rows").
     fn evidenceParamDispatchesSlot(types_view: CheckedTypeStoreView, param: static_dispatch.EvidenceParamRecord, slot_ty: CheckedTypeId) bool {
-        if (param.source != .open_row_value) return param.dispatcher_ty == slot_ty;
+        if (param.dispatcher_ty == slot_ty) return true;
+        if (param.source != .open_row_value) return false;
         var current = param.dispatcher_ty;
-        var first = true;
         while (true) {
             switch (types_view.payload(current)) {
                 .alias => |alias| current = alias.backing,
                 .record => |record| current = record.ext,
                 .tag_union => |tag_union| current = tag_union.ext,
-                else => return !first and current == slot_ty,
+                else => return current == slot_ty,
             }
-            first = false;
         }
     }
 

@@ -367,7 +367,10 @@ pub const Constants = struct {
     ///      list no widening field names, quantified record tails are
     ///      restricted at every use, record pattern tails are marked, and
     ///      nominal declarations record padding.
-    pub const CACHE_VERSION = 185;
+    /// 186: method requirements on open rows are held on the row variable
+    ///      for the whole record or tag union, and snapshots record which
+    ///      value a requirement is about.
+    pub const CACHE_VERSION = 186;
 };
 
 /// Configuration for the Roc cache system.
