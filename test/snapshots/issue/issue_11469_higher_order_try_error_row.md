@@ -173,7 +173,7 @@ NO CHANGE
 															(args
 																(e-lookup-local
 																	(p-assign (ident "#err")))))))))))))))
-				(e-call (constraint-fn-var 351)
+				(e-call (constraint-fn-var 352)
 					(e-lookup-local
 						(p-assign (ident "operation")))
 					(e-empty_record)))))
@@ -182,7 +182,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "execute")))
-			(e-call (constraint-fn-var 423)
+			(e-call (constraint-fn-var 425)
 				(e-lookup-local
 					(p-assign (ident "transaction")))
 				(e-lookup-local
@@ -200,7 +200,7 @@ NO CHANGE
 								(e-match
 									(match
 										(cond
-											(e-call (constraint-fn-var 386)
+											(e-call (constraint-fn-var 387)
 												(e-lookup-local
 													(p-assign (ident "execute")))
 												(e-string
@@ -232,7 +232,7 @@ NO CHANGE
 									(e-empty_record)))))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 445)
+		(e-call (constraint-fn-var 449)
 			(e-lookup-local
 				(p-assign (ident "save")))
 			(e-lambda
@@ -246,7 +246,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "execute")))
-			(e-call (constraint-fn-var 477)
+			(e-call (constraint-fn-var 482)
 				(e-lookup-local
 					(p-assign (ident "transaction")))
 				(e-lookup-local
@@ -258,7 +258,7 @@ NO CHANGE
 						(args
 							(p-record-destructure
 								(destructs)))
-						(e-call (constraint-fn-var 476)
+						(e-call (constraint-fn-var 479)
 							(e-lookup-local
 								(p-assign (ident "execute")))
 							(e-string

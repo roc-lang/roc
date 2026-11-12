@@ -1488,6 +1488,9 @@ instantiated_interpolation_owners: std.ArrayListUnmanaged(InstantiatedInterpolat
 /// that no scheme quantified closes, which decides its requirements against
 /// the plain type; it is read only then, against the settled solved state.
 open_row_holders: std.ArrayListUnmanaged(Var) = .empty,
+/// While a missing method on an annotated row variable is reported, the
+/// record or tag union it was called on (`annotatedOpenRowOf`).
+reporting_annotated_row_value: ?Var = null,
 /// The rank whose definition is deciding the methods of the plain records
 /// and tag unions it built: a method call on one that ends in an
 /// uncommitted tail of this rank or a deeper one is decided, and one whose
@@ -2068,6 +2071,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .open_numeral_literals = .settled,
     .instantiated_interpolation_owners = .keyed,
     .open_row_holders = .settled,
+    .reporting_annotated_row_value = .lexical,
     .deciding_plain_rank = .lexical,
     .plain_decisions_waiting = .settled,
     .open_row_failure_exprs = .keyed,
@@ -14847,7 +14851,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.closeTopLevelValueRows(&env);
     try self.commitUncommittedTails(&env);
     try self.closeOpenRowsHoldingRequirements(&env);
-    self.deciding_plain_rank = .outermost;
     if (try self.anyDeferredDispatchReceiverResolved(&env)) {
         try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
@@ -20783,6 +20786,11 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
     try self.commitUncommittedTails(&env);
+    try self.closeOpenRowsHoldingRequirements(&env);
+    if (try self.anyDeferredDispatchReceiverResolved(&env)) {
+        try self.checkStaticDispatchConstraints(&env, true);
+        try self.checkAllConstraints(&env);
+    }
 
     try self.finalizeExpectEffectSlots();
     // Expression checking suppresses root selection, but constant-condition
@@ -41953,6 +41961,16 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
         }
     }
 
+    // Every definition has reached its boundary, so the methods called on the
+    // plain records and tag unions still waiting are decided now, against
+    // their defaulted types.
+    self.deciding_plain_rank = .outermost;
+    if (self.plain_decisions_waiting) {
+        self.plain_decisions_waiting = false;
+        try self.checkStaticDispatchConstraints(env, true);
+        try self.checkAllConstraints(env);
+    }
+
     if (scope == .module) {
         try self.recordInspectOverrideInstances(env);
         // A recorded instance's result requirements resolve against Str.
@@ -52062,8 +52080,12 @@ inline fn processDeferredDispatchEntry(
     // names carries exactly the requirements that variable's `where` clause
     // states, so the relation is checked against them as for any annotated
     // type variable.
+    var annotated_row_value: ?Var = null;
     if (self.annotatedOpenRowOf(deferred_constraint.var_)) |rigid_row| {
-        if (self.relationsCallMethodsOn(deferred_constraint.constraints, deferred_constraint.var_)) deferred_constraint.var_ = rigid_row;
+        if (self.relationsCallMethodsOn(deferred_constraint.constraints, deferred_constraint.var_)) {
+            annotated_row_value = deferred_constraint.var_;
+            deferred_constraint.var_ = rigid_row;
+        }
     }
     const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
     const dispatcher_content = dispatcher_resolved.desc.content;
@@ -52212,6 +52234,8 @@ inline fn processDeferredDispatchEntry(
                         try self.markStaticDispatchRejected(constraint);
                     }
                 } else {
+                    self.reporting_annotated_row_value = annotated_row_value;
+                    defer self.reporting_annotated_row_value = null;
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -54714,6 +54738,18 @@ fn relationsCallMethodsOn(self: *Self, range: StaticDispatchConstraint.SafeList.
         if (args.len == 0 or self.types.resolveVar(args[0]).var_ != receiver_root) return false;
     }
     return true;
+}
+
+/// The name an annotation wrote for a row variable, or null for an
+/// anonymous `..`.
+fn annotatedRowName(self: *Self, row: Var) ?Ident.Idx {
+    const name = switch (self.types.resolveVar(row).desc.content) {
+        .rigid => |rigid| rigid.name,
+        .flex, .structure, .alias, .err, .field_presence => return null,
+    };
+    const text = self.cir.getIdentText(name);
+    if (text.len == 0 or text[0] == '#') return null;
+    return name;
 }
 
 /// The row variable an annotation names that a record or tag union ends
@@ -62244,6 +62280,17 @@ fn reportConstraintErrorAt(
                     else
                         .none,
                     .local_type_escape = local_type_escape,
+                    .annotated_row = if (self.reporting_annotated_row_value) |value| .{
+                        .value_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, value),
+                        .row_name = self.annotatedRowName(dispatcher_var),
+                        .kind = switch (self.types.resolveThroughAliases(value).desc.content) {
+                            .structure => |flat| switch (flat) {
+                                .tag_union => .tag_union,
+                                .record, .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => .record,
+                            },
+                            .flex, .rigid, .alias, .err, .field_presence => .record,
+                        },
+                    } else null,
                 },
             },
         },

@@ -15323,17 +15323,19 @@ test "methods on open rows - an annotated row variable carries only its where cl
         \\anno_foo = |l, r| l.foo(r)
     , .fail_with,
         \\**Missing Method**
-        \\This `foo` method is being called on a value whose type doesn't have that method.
+        \\This `foo` method can't be called on this value, because its type is a record with `..r` in it.
         \\```roc
         \\anno_foo = |l, r| l.foo(r)
         \\```
         \\                    ^^^
         \\
-        \\The value's type, which does not have a method named `foo`, is:
+        \\The value's type is:
         \\
-        \\    r
+        \\    { id: U64, ..r }
         \\
-        \\**Hint:** Did you forget to specify `foo` in the type annotation?
+        \\The `..r` means a caller can pass any type that has these fields, such as a nominal type, and it doesn't necessarily have a `foo` method.
+        \\
+        \\**Hint:** Require `foo` on `r` in the type annotation's `where` clause.
         \\
         \\
     );

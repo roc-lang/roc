@@ -403,10 +403,10 @@ rejected = take_other(fwd_err(A))
 				(e-tag (name "A")))))
 	(d-let
 		(p-assign (ident "wrapped"))
-		(e-call (constraint-fn-var 549)
+		(e-call (constraint-fn-var 548)
 			(e-lookup-local
 				(p-assign (ident "take_wrap")))
-			(e-call (constraint-fn-var 547)
+			(e-call (constraint-fn-var 546)
 				(e-lookup-local
 					(p-assign (ident "fwd_wrap")))
 				(e-tag (name "A")))))

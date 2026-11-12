@@ -1040,9 +1040,22 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// Set when the dispatcher is a context variable of a body-local type
     /// (`TypeMismatch.local_type_escape`).
     local_type_escape: ?LocalTypeEscapeCause = null,
+    /// Set when the method is called on a record or tag union whose row ends
+    /// in a row variable an annotation names, whose `where` clause lacks it.
+    annotated_row: ?AnnotatedRow = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
+
+    pub const AnnotatedRow = struct {
+        /// The record or tag union the method is called on.
+        value_snapshot: SnapshotContentIdx,
+        /// The row variable's written name; null for an anonymous `..`.
+        row_name: ?Ident.Idx,
+        kind: Kind,
+
+        pub const Kind = enum { record, tag_union };
+    };
 };
 
 /// Error when an anonymous type (record, tuple, tag union) doesn't support equality

@@ -28,7 +28,7 @@ TYPE DOES NOT SUPPORT EQUALITY - derived_eq_open_row_rejects_function_tail.md:3:
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Fn(c -> c)]")
+			(text "[Fn(c -> c), Nope]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -122,7 +122,7 @@ x = same(Fn(|z| z), Fn(|z| z))
 			(e-if
 				(if-branches
 					(if-branch
-						(e-structural-eq (negated "false")
+						(e-method-eq (negated "false")
 							(lhs
 								(e-lookup-local
 									(p-assign (ident "a"))))
@@ -132,7 +132,7 @@ x = same(Fn(|z| z), Fn(|z| z))
 							(e-tag (name "False")))))
 				(if-else
 					(e-block
-						(e-structural-eq (negated "false")
+						(e-method-eq (negated "false")
 							(lhs
 								(e-lookup-local
 									(p-assign (ident "a"))))
@@ -141,7 +141,22 @@ x = same(Fn(|z| z), Fn(|z| z))
 									(p-assign (ident "b"))))))))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-call (constraint-fn-var 269)
+			(e-runtime-error (tag "erroneous_value_expr"))
+			(e-tag (name "Fn")
+				(args
+					(e-lambda
+						(args
+							(p-assign (ident "z")))
+						(e-lookup-local
+							(p-assign (ident "z"))))))
+			(e-tag (name "Fn")
+				(args
+					(e-lambda
+						(args
+							(p-assign (ident "z")))
+						(e-lookup-local
+							(p-assign (ident "z")))))))))
 ~~~
 # TYPES
 ~~~clojure

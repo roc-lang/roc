@@ -2684,11 +2684,134 @@ pub const ReportBuilder = struct {
                 .string_literal_region = data.string_literal_region,
                 .copied = data.copied,
             })) |report| return report;
+        } else if (data.annotated_row) |annotated_row| {
+            return self.buildAnnotatedRowMissingMethod(data, annotated_row);
         }
 
         var report = try self.buildStaticDispatchMissingMethod(data);
         errdefer report.deinit();
         if (data.copied) |copied| try self.addCopiedRequirementNotes(&report, copied);
+        return report;
+    }
+
+    /// A method called on a record or tag union whose row ends in a row
+    /// variable an annotation names, whose `where` clause does not require it:
+    /// a caller can pass any type with these fields or tags, which need not
+    /// have the method.
+    fn buildAnnotatedRowMissingMethod(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+        annotated_row: DispatcherDoesNotImplMethod.AnnotatedRow,
+    ) Allocator.Error!Report {
+        const is_eq = data.method_name.eql(self.can_ir.idents.is_eq);
+        const is_hash = data.method_name.eql(self.can_ir.idents.to_hash);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
+        errdefer report.deinit();
+        const row_kind_text = switch (annotated_row.kind) {
+            .tag_union => "a tag union with",
+            .record => "a record with",
+        };
+        const ext_text = if (annotated_row.row_name) |name| blk: {
+            const text = try std.fmt.allocPrint(self.gpa, "..{s}", .{self.can_ir.getIdentText(name)});
+            defer self.gpa.free(text);
+            break :blk try report.addOwnedString(text);
+        } else "..";
+        if (is_eq or is_hash) {
+            try D.renderSliceInto(&.{
+                D.bytes(if (is_eq)
+                    "This equality check can't compare these values, because their type is"
+                else
+                    "These values can't be hashed, because their type is"),
+                D.bytes(row_kind_text),
+                D.bytes(ext_text).withAnnotation(.inline_code),
+                D.bytes("in it."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method can't be called on this value, because its type is"),
+                D.bytes(row_kind_text),
+                D.bytes(ext_text).withAnnotation(.inline_code),
+                D.bytes("in it."),
+            }, self, &report, &report.headline);
+        }
+
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+
+        const value_str = try report.addOwnedString(try self.getFormattedString(annotated_row.value_snapshot));
+        try D.renderSlice(&.{
+            D.bytes("The value's type is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(value_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const others = switch (annotated_row.kind) {
+            .tag_union => "means a caller can pass any type that has these tags, such as a nominal type, and it doesn't necessarily have",
+            .record => "means a caller can pass any type that has these fields, such as a nominal type, and it doesn't necessarily have",
+        };
+        try D.renderSlice(&.{
+            D.bytes("The"),
+            D.bytes(ext_text).withAnnotation(.inline_code),
+            D.bytes(others),
+            D.bytes(switch (self.can_ir.getIdentText(data.method_name)[0]) {
+                'a', 'e', 'i', 'o', 'u' => "an",
+                else => "a",
+            }),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("method."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const var_name = if (annotated_row.row_name) |name| self.can_ir.getIdentText(name) else "others";
+        const where_text: ?[]const u8 = if (is_eq or is_hash) blk: {
+            const text = if (is_eq)
+                try std.fmt.allocPrint(self.gpa, "where [{s}.is_eq : {s}, {s} -> Bool]", .{ var_name, var_name, var_name })
+            else
+                try std.fmt.allocPrint(self.gpa, "where [{s}.to_hash : {s}, Hasher -> Hasher]", .{ var_name, var_name });
+            defer self.gpa.free(text);
+            break :blk try report.addOwnedString(text);
+        } else null;
+        const where_word = D.bytes("where").withAnnotation(.inline_code);
+        if (annotated_row.row_name != null) {
+            const lead = [_]Doc{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Require"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("on"),
+                D.bytes(var_name).withAnnotation(.inline_code),
+            };
+            if (where_text != null) {
+                try D.renderSlice(&(lead ++ [_]Doc{D.bytes("by adding this to the type annotation:")}), self, &report);
+            } else {
+                try D.renderSlice(&(lead ++ [_]Doc{ D.bytes("in the type annotation's"), where_word, D.bytes("clause.") }), self, &report);
+            }
+        } else {
+            const lead = [_]Doc{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Give the"),
+                D.bytes("..").withAnnotation(.inline_code),
+                D.bytes("a name in the type annotation (for example"),
+                D.bytes("..others").withAnnotation(.inline_code),
+                D.bytes(") and require").withNoPrecedingSpace(),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("on it"),
+            };
+            if (where_text != null) {
+                try D.renderSlice(&(lead ++ [_]Doc{D.bytes("by adding this to the annotation:")}), self, &report);
+            } else {
+                try D.renderSlice(&(lead ++ [_]Doc{ D.bytes("in its"), where_word, D.bytes("clause.") }), self, &report);
+            }
+        }
+        if (where_text) |text| {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(text);
+        }
         return report;
     }
 

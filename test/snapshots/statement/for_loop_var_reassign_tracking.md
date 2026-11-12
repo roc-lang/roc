@@ -196,7 +196,7 @@ NO CHANGE
 								(e-block
 									(e-empty_record)))))
 					(e-empty_record)))
-			(e-dispatch-call (method "plus") (constraint-fn-var 364)
+			(e-dispatch-call (method "plus") (constraint-fn-var 367)
 				(receiver
 					(e-lookup-local
 						(p-var-assign (ident "sum_"))))
