@@ -311,6 +311,26 @@ b : Point
 b = make(1) # ERROR! make returns { x : F64, y : F64 }, which is not a Point.
 ```
 
+The record `make_inferred` returns can become a `Point` because a `Point` has exactly the
+same fields, stored the same way. It can't gain a field where you use it, though, and it
+can't become a nominal record that has [`_` fields](#records-at-the-host-boundary):
+
+```roc
+Labeled := { x : F64, y : F64, label ?: Str }
+
+Packed := { x : F64, _ : U32, y : F64 }
+
+c : Labeled
+c = make_inferred(1) # ERROR! make_inferred built a record with no label field.
+
+d : Packed
+d = make_inferred(1) # ERROR! Packed has more (anonymous) fields than this record.
+```
+
+To get a `Labeled` or a `Packed` from `make_inferred`, have it build one with
+`Labeled.{ x, y: 0 }` or `Packed.{ x, y: 0 }`. That way the record is built with the
+extra fields from the start, so nothing has to rebuild it at each place it's used.
+
 Since a nominal record has a name, it can also have [methods](static-dispatch#methods):
 
 ```roc

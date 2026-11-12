@@ -5106,8 +5106,8 @@ exactly as it is for a closed record. With `U` an uncommitted tail:
 | --- | --- |
 | the empty record | `U` commits: the class is the empty record |
 | another uncommitted tail, or a flex row variable | one flex class, still uncommitted; static-dispatch constraints merge as for any two flex variables |
-| a record row in a construction relation whose fields are all `optional`, or `defaulted` where Defaulted Fields admits the omission, when `U` is not lift-only (below) | `U` absorbs the row: the class becomes that row, and the row's own tail relates to a fresh uncommitted tail, which can absorb again later or commit |
-| a record row in an exact-width relation, a row with a `required` or undetermined field, or any record row with a field when `U` is lift-only | type mismatch |
+| a record row in a construction relation whose fields are all `optional`, or `defaulted` where Defaulted Fields admits the omission, when `U` is not a use's copy (below) | `U` absorbs the row: the class becomes that row, and the row's own tail relates to a fresh uncommitted tail, which can absorb again later or commit |
+| a record row in an exact-width relation, a row with a `required` or undetermined field, or any record row with a field when `U` is a use's copy | type mismatch |
 | a rigid row variable | type mismatch |
 | an alias | `U` relates to the alias's backing |
 | an erroneous type | the error |
@@ -5152,79 +5152,104 @@ U64 }` and `Light := [Red, Green]`:
   row Polarity opens for each call still widens there
   (`c : [Red, Green, Blue] = pick(1)`); it never lifts.
 
-An uncommitted tail is an ordinary variable for rank, generalization, and
-instantiation, but a generalization boundary quantifies a record tail only
-where every value of its record crosses the binding's boundary at a place
-a conversion reaches, and only in a way that conversion can undo. An
-instantiation can give the tail absent optional fields, which changes the
-record's layout, and can lift the record into a nominal type, whose padding
-and field order a conversion rebuilds (Nominal Record Field Order). A value of that
-record that leaves the binding can be rebuilt on its way out with whatever
-fields the use added (`.boxy` does, Sealed Result Rows). A value that enters
-the binding can be rebuilt on its way in only to the record the body was
-compiled at, which is possible when the use's type differs from it by a
-nominal wrapper and padding, and impossible when the use's type has fields
-the body's record lacks, since no conversion narrows.
+A record nobody wrote a type for stays open after its function finishes. An
+uncommitted tail is an ordinary variable for rank, generalization, and
+instantiation: a generalization boundary quantifies every uncommitted record
+tail it owns, wherever the record sits in the binding's type (its result,
+its arguments, a callback's arguments or result, data, a nominal type's
+arguments, a function stored in data, or the type of a static-dispatch
+constraint), exactly as it quantifies any other variable it owns. These
+tails commit instead, to the empty record by ordinary unification, after
+rank adjustment and before quantifying (`Check.generalizeRank`,
+`Check.commitUncommittedTail`):
 
-Whether a value leaves or enters is the polarity of its position in the
-binding's type. The walk starts at a root that is a function: its arguments
-are negative and its result positive. Inside any function type, the
-arguments flip the polarity and the result keeps it. Data (record fields,
-tuple items, tag payloads) keeps the polarity, an alias is walked through
-its backing, and so is the argument of a builtin nominal whose arguments are
-plain data (`List`, `Box`, `Try`). So a function's result is positive, the
-argument it passes to a callback is positive (`apply = |f| f({ a: 1 })`),
-the result of a function it returns is positive
-(`mk = |n| |m| { a: n, b: m }`), its own arguments are negative, and an
-argument of a callback's own callback argument is negative again. A
-position is *unconvertible* when no conversion reaches it: anything inside a
-function type that sits in data (a function in a list, a record field, a tag
-payload), the arguments of any other nominal type (their variance is not
-explicit data), and the types of static-dispatch constraints. A function's
-effect dependencies name functions whose effects it shares, not values it
-exchanges, so the walk does not enter them. A root that is not a function
-is walked as unconvertible: a value binding exchanges no value with its uses.
+- every tail of a definition a `provides` entry names, whose host compiled
+  against its closed rows (Host Symbol ABI);
+- a tail whose own constraints the empty record does not discharge;
+- a tail no binding's type reaches, through its components and the function
+  types of the constraints they carry (`Check.collectReachedVars`): a record
+  local to the body, such as a literal a weak local binding destructures,
+  which no use could close or lift, so it stays the ground record it is and
+  a constant built from it can be hoisted;
+- a tail a derived structural codec reaches, which commits before its
+  boundary generalizes (below).
 
-A boundary quantifies an uncommitted record tail only when instantiating the
-binding reaches it, every occurrence of it is convertible, and its own
-constraints are ones the empty record discharges
-(`Check.collectQuantifiableTails`). A tail it quantifies with a negative
-occurrence is *lift-only* (`DescriptorFlags.uncommitted_lift_only`, which
-copies carry and a merge keeps while the class is a flex variable): a class
-carrying the mark commits, merges with another tail or row variable, and
-lets its record lift into a nominal type whose backing has exactly the
-record's fields (padding aside), but absorbs no field at all, optional or
-defaulted, so its record is never wider at a use than the body made it.
-A definition a `provides` entry names quantifies no record tail: the host
-compiled against its closed rows (Host Symbol ABI). After rank adjustment
-and before quantifying, the generalizer hands the checker every other
-uncommitted tail the boundary owns, and the checker commits each to the
-empty record by ordinary unification (`Check.generalizeRank`,
-`Check.commitUncommittedTail`); rank adjustment then runs again, so
-structure that held only a committed tail is not quantified. After
-quantifying, the checker marks the quantified tails with a negative
-occurrence lift-only.
+Rank adjustment then runs again, so structure that held only a committed
+tail is not quantified.
 
-`make = |n| { count: n }` quantifies its result's tail, so `c : Counter =
-make(1)` lifts its own copy and `p = make(2)` keeps a plain record with no
-methods; two uses of `make = |value| { a: value }` can widen their copies
-with `b ?: U8` and with `b ?: Str`. `apply = |f| f({ count: 1 })` quantifies
-too, so `apply(Counter.describe)` lifts the record it passes and
-`apply(|r| r.count)` keeps it plain, and `mk = |n| |m| { a: n, b: m }` lets
-`reader : U64 -> Row = mk(1)` lift what the returned function builds. A
-custom `parser_for` returns a function whose `Ok` payload is a record
-literal, so the method's uses lift it into the nominal type being decoded.
-`f = |{ x }| x` takes a lift-only record, so `f(point)` with
-`Point := { x : U8 }` passes a `Point` and `f({ x: 1 })` a plain record,
-but `f(wide)` with `Wide := { x : U8, note ?: Str }` is a type mismatch:
-the use would hand the body a record with a field it was not compiled for.
-`keep = |r| if c r else { a: 1 }` holds its tail on both sides, lift-only, so
-`k : Rect = keep(rect)` lifts both, while `x : { a : U8, b ?: U8 } =
-keep(r)` is a type mismatch. `pass = |g, r| g(if c r else { a: 1 })` and
-`feed = |g| g(|{ x }| x)` are lift-only the same way. A tail that only a
-static-dispatch constraint holds commits (`make = |s, n| s.take({ a: n })`),
-and so does one in a function stored in data
-(`fs = |n| [|m| { a: n, b: m }]`).
+Each use of the binding instantiates the tail into a copy
+(`DescriptorFlags.uncommitted_copy`, which later copies keep and a merge
+keeps while the class is still a flex variable), and a use may do exactly
+two things with its copy's record:
+
+1. close it: the copy commits, and the record is the plain record with
+   exactly the fields its binding built or took apart;
+2. make it a nominal type whose record has exactly those fields and is
+   stored the same way: a declaration whose backing has no unnamed field
+   (Nominal Record Field Order), so its values are laid out like the record.
+
+A use may not give the record any field, optional or defaulted, and may not
+make it a padded nominal type, one declared with unnamed fields, whose stored
+layout differs from the record's. Both are type mismatches at the use, in
+every position the record has: a result, a callback's argument, a parameter
+the binding takes apart, a record inside a method's type, a list item, or
+across a module boundary. The unifier refuses them where they arise
+(`Unifier.unifyRecordWithNominal` for a nominal, through
+`NominalDecl.Flags.padded` and the backing's optional or defaulted fields
+the record lacks; `Unifier.unifyUncommittedWithStructure` for a written-out
+structural type), records the refusal (`Scratch.record_tail_refusal`,
+`TypeMismatch.record_tail_refusal`), and the report explains it
+(`ReportBuilder.appendRecordTailRefusal`). A required field the record lacks
+stays the ordinary mismatch it is for any record.
+
+Nothing is ever converted at a call. The value a use receives is the value
+its binding built, and the value a binding takes apart is the one the use
+passed, at the same layout, so no use rebuilds a record on its way out of a
+binding or on its way in. Rejecting the padded case is deliberate: wanting
+to make a function's open record a padded nominal type is an extremely rare
+edge case whose only benefit is slightly more concise code (`Row.{ ... }`
+in the function builds the padded value directly), and it is more globally
+beneficial for the compiler to run faster by not doing the extra work every
+such use would need. Not adding fields at a use follows the same intent: a
+use cannot change what a function it does not own built, and keeping that
+true keeps the rule identical within a module and across modules.
+
+The rule keeps a function from needing an annotation merely because its
+record is later used as a same-fields named type: deleting a type annotation
+does not change whether or how a program compiles, except where deleting it
+creates a static dispatch ambiguity. A record checked directly against a
+known type in the same function is not a use's copy: a literal annotated as
+a nominal (`row : Row = { columns: 3, values: 4 }`), or passed straight to a
+function annotated to take one, is built at that type, padded or not, with
+its optional and defaulted fields filled. `Row.{ ... }` construction is the
+same. A record literal used directly as a method receiver
+(`{ name: s }.greet()`) has no nominal type to dispatch on and is a missing
+method, as for any structural value.
+
+Given `Counter := { count : U64 }`, `Row := { columns : U64, _ : U32,
+values : U64 }`, and `Wide := { a : U8, note ?: Str }`:
+
+- `make = |n| { count: n }`: `c : Counter = make(1)` lifts its own copy,
+  `p = make(2)` keeps a plain record with no methods, and
+  `o : Other = make(3)` lifts a third copy into another same-fields nominal.
+- `apply = |f| f({ count: 1 })`: `apply(Counter.describe)` lifts the record
+  it passes; `mk = |n| |m| { a: n, b: m }` lets `reader : U64 -> T = mk(1)`
+  lift what the returned function builds; `build = |xs| xs.map(|x| { key:
+  x })` lifts the records its unknown receiver's callback builds.
+- `f = |{ x }| x` takes a `Point := { x : U8 }` or a plain record;
+  `keep = |r| if c r else { count: 0 }` returns a `Counter` for a `Counter`.
+- `r : Row = make_row(1, 2)` and `product(row)` with
+  `product = |{ columns, values }| columns * values` are type mismatches:
+  `Row` stores its values with padding the record does not have.
+- `w : Wide = make_a(1)` with `make_a = |n| { a: n }`, and
+  `x : { a : U8, note ?: Str } = make_a(1)`, are type mismatches: the record
+  was built without `note`. `Wide.{ a: n }` in `make_a`, or an annotation
+  on `make_a` whose record has `note`, builds it with that field.
+
+A use's copy that meets a literal's own tail in the same function
+(`if c make(1) else { a: 2 }`) is one class carrying the copy's restriction:
+the literal joins a record its binding did not build, so neither gains a
+field there.
 
 A value binding does not generalize (Value Bindings Generalize By
 Expression), so its uses share its one tail, as they share its tag rows
@@ -5232,25 +5257,19 @@ Expression), so its uses share its one tail, as they share its tag rows
 `q : Point = p` makes `p` a `Point` at every use, and a second use that
 needs a different nominal type is a type mismatch at that use.
 
-Instantiation marks each copy it makes of an uncommitted record tail
-`DescriptorFlags.uncommitted_copy`, which later copies keep and a merge
-keeps while the class is still a flex variable. A class holding such a copy
-absorbs `optional` fields only. A defaulted field's value is materialized by
-the construction that omitted it, and the values a copy's class describes
-were built by a body compiled at its own type, which omits no default.
-
 When a module finishes checking, and when a REPL expression does, every
 uncommitted record or tag tail that no scheme quantifies commits
 (`Check.commitUncommittedTails`, beside `Check.closeTopLevelValueRows`):
-the module's own uses have lifted and widened its value bindings as far as
-they will, nothing outside the module can, and importers and compile-time
-evaluation read closed structure.
+the module's own uses have lifted its value bindings as far as they will,
+nothing outside the module can, and importers and compile-time evaluation
+read closed structure.
 
 A quantified uncommitted record tail stays in its scheme. Checked output
 records it as a flex record tail whose row default is the empty record, with
 `CheckedTypeVariable.uncommitted_record_tail` set, and copies it across
-modules with its flags, lift-only included, so an importer's use lifts or
-widens its own copy as the defining module's uses do.
+modules with its flags, so an importer's use closes or lifts its own copy
+exactly as the defining module's uses do, and a nominal declaration's
+padding (`NominalDecl.Flags.padded`) travels with the declaration.
 `TypeWriter` renders an uncommitted record tail as a closed row: it stands
 for no field a program can read, and `make = |n| { count: n }` reads
 `a -> { count : a }`.
@@ -5265,16 +5284,12 @@ record sits (Derived Structural Codec Record-Row Closure): the codec is a
 requirement, and a requirement never holds a quantified record tail.
 
 Post-check stages see a quantified uncommitted record tail as a scheme
-variable whose instantiations differ from the empty record only by absent
-optional fields of a value leaving the binding, or by nothing at all for a
-lift-only tail. `.lss` specializes
-each use at its committed row, so uses that commit the tail share one
-specialization and pay nothing. `.boxy` seals the tail to the empty record
-in the worker (Sealed Result Rows), converts a padded nominal entering the
-binding to the worker's record order, and rebuilds a value leaving the
-binding at a use that lifted or widened it. A lift changes no layout (a padded nominal's field order is
-rebuilt as it is for every lift, Nominal Record Field Order) and neither
-does a commitment, so neither costs anything at run time.
+variable every instantiation of which stores its record exactly as the
+closed record does. `.lss` specializes each use at its committed row, so uses
+that commit the tail share one specialization. `.boxy` seals the tail to the
+empty record in the worker (Sealed Result Rows), and the worker's
+representation does not depend on the use. Neither a commitment nor a lift
+changes a layout, so neither costs anything at run time.
 
 ### Uncommitted Tag Tails
 
@@ -5326,34 +5341,33 @@ descriptor for it under `.boxy`, and `.lss` specializes nothing for it.
 
 The accepted and rejected sides of both tails are pinned by
 `src/check/test/uncommitted_record_tail_test.zig` (literal, `{}`, and
-pattern tails; lifts and widenings of annotated and unannotated results;
-lifts of a record passed to a callback, of one a returned function
-builds, of a record pattern parameter, and of a both-sides tail; lift-only
-tails refusing optional and defaulted fields and a nominal with an extra
-optional field; constraint-held tails committing; shared value bindings; a call result
-refusing a defaulted field; annotated tag unions that widen but never
-lift; a match-closed union lifting at a call and gaining no tag),
-`src/compile/test/sealed_slots_test.zig` (record tails sealed in results,
-callback arguments, returned functions' results, pattern parameters, a
-fold callback's pattern, and a both-sides tail; none in a function stored
-in a list),
-`test/cli/LiftedUseLeavesOtherUses.roc` and
-`test/cli/lifted_use_leaves_other_uses/` (unannotated functions whose uses
-lift and keep their results, in one module and across modules),
+pattern tails; lifts of results, callback arguments, returned functions'
+results, pattern parameters, both-sides tails, a record a static-dispatch
+constraint holds, a function stored in a list, and a nominal type's
+argument; two uses lifting into two nominal types; refusals of optional and
+defaulted fields at a result, through a nominal, and into a record a
+function takes apart; refusals of padded nominal types in both directions;
+an ordinary mismatch for a missing required field; shared value bindings;
+annotated tag unions that widen but never lift; a match-closed union
+lifting at a call and gaining no tag), `src/compile/test/sealed_slots_test.zig`
+(every record tail sealed, wherever it sits), `test/cli/OpenRecordsAtUses.roc`
+(closing and lifting through results, callbacks, `List`, `Box`, `Try`,
+tuples, returned and stored functions, a user nominal's arguments, a second
+unannotated function, unknown receivers, two nominal types and a plain
+record from one function, and a nominal whose defaulted field the record
+supplies), `test/cli/open_records_imported/` (the same across a module
+boundary, accepted and rejected), `test/cli/OpenRecordsPaddedRejected.roc`
+and `test/cli/OpenRecordsAddedFieldRejected.roc` (each refusal in every
+position, with its report), `test/cli/OptionalFieldsPerUse.roc` (two uses
+refused fields of different types), `test/cli/LiftedUseLeavesOtherUses.roc`
+and `test/cli/lifted_use_leaves_other_uses/` (uses that lift and keep their
+results, in one module and across modules),
 `test/cli/LiftedUseLeavesOtherUsesRejected.roc` (annotated results that do
-not lift, and a method of the lifted nominal called on another use),
-`test/cli/OptionalFieldsPerUse.roc` and
-`test/cli/UncommittedTailsAtDepth.roc` (uses widening returned records at
-depth), `test/cli/UncommittedTailsThroughCallbacks.roc` (a padded nominal
-lifted through a callback argument and through a returned function's
-result, its absent optional field read on the far side, under both
-backends), `test/cli/LiftOnlyRecordTails.roc` (a padded nominal passed to
-lift-only pattern parameters, a fold callback, and a both-sides function,
-through function values, and to generalized locals taking `{}` that read
-enclosing evidence, under both backends), and `test/cli/UncommittedTagTailLocals.roc` (a generalized local
-matching a tag parameter and reading enclosing evidence, returned and called
-at an anonymous union and a nominal), each run under both lowering
-strategies.
+not lift, and a method of the lifted nominal called on another use), and
+`test/cli/UncommittedTagTailLocals.roc` (a generalized local matching a tag
+parameter and reading enclosing evidence, returned and called at an
+anonymous union and a nominal). The CLI tests run under both lowering
+strategies and both backends.
 
 ### Scheme Relations Through Unrooted Variables
 
@@ -11345,8 +11359,7 @@ one rule whether the value is local or top-level:
 
 A value's record follows the same rule through its uncommitted tail
 (Uncommitted Record Tails): every use shares it, a use that lifts the record
-into a nominal type or widens it with an optional field does so for every
-use, and the tail commits to the empty record when the module finishes
+into a nominal type does so for every use, and the tail commits to the empty record when the module finishes
 checking.
 
 A use of a top-level value is therefore never a widening of the value: no
@@ -12036,8 +12049,8 @@ type variable, and the record's unknown part is a row. The program
 destructures the record, which closes it, or annotates it.
 
 An uncommitted record tail (Uncommitted Record Tails) is not such a row:
-its record's fields are known, and a use can add only absent optional fields
-to its own copy. A boundary that owns an uncommitted tail in a codec's value
+its record's fields are known, and a use can only close its own copy or make
+the record a nominal type with exactly those fields. A boundary that owns an uncommitted tail in a codec's value
 shape commits it to the empty record before generalizing, whether or not an
 interface reaches it, since a requirement never holds a quantified record
 tail.
@@ -13031,7 +13044,7 @@ The kind rules:
   take in fields it omits, and a committed row, such as a record type an
   annotation wrote, never does. The checker marks each unification relation
   as construction/inference or exact-width. A construction relation may
-  absorb a row into an uncommitted tail that is not lift-only only when
+  absorb a row into an uncommitted tail that is not a use's copy only when
   every absorbed field already has resolved kind `optional` or `defaulted`; omitted optional
   fields become missing tagged slots and omitted defaulted fields materialize
   their defaults. Calls with committed arguments, nominal construction from an
@@ -13399,10 +13412,10 @@ field-kind axis (see Field Kinds above):
   annotation declared it), and lowering materializes the DEFAULT VALUE into
   the inline slot (where an optional field would materialize the missing
   tag). Undetermined kinds still never absorb, and neither does a class
-  holding a copy instantiation made of an uncommitted tail
-  (`DescriptorFlags.uncommitted_copy`): no construction of the using scope
-  built the values such a copy describes. A lift-only tail absorbs no field
-  of any kind.
+  holding a use's copy of an uncommitted tail
+  (`DescriptorFlags.uncommitted_copy`), which absorbs no field of any kind:
+  no construction of the using scope built the values such a copy describes
+  (Uncommitted Record Tails).
 
 Kind unification treats `optional` as layout-incompatible with the two inline
 kinds and treats a default identity as construction-only information:
@@ -14145,24 +14158,18 @@ Other solved-graph mutations:
   relation reads them. Unification consults the mark under the declared
   rule in Declared Backing Structure (above); the write itself never changes
   content or links classes.
-- `generalizeRank` / `collectQuantifiableTails` / `commitUncommittedTail`—
-  policy: Uncommitted Record Tails and Uncommitted Tag Tails (above). After
-  rank adjustment and before quantifying, a generalization boundary walks
-  the binding's type and the constraints of the variables in it, and commits
-  every uncommitted record tail it would quantify that has an unconvertible
-  occurrence, by ordinary unification with the empty record. After
-  quantifying, it marks each quantified record tail with a negative
-  occurrence lift-only (`Store.markUncommittedLiftOnly`), which only removes
-  the tail's ability to absorb fields. Finalization commits a tag tail by
-  clearing its mark (`Store.commitUncommittedTagTail`), which keeps its
-  content. The accepted side (a returned record literal's tail, a record
-  passed to a callback, one a returned function builds, a record pattern
-  parameter and a both-sides tail lifting, and a matched parameter's tag
-  tail stay quantified, so each use lifts or widens its own copy) and the
-  rejected side (a lift-only tail refusing optional and defaulted fields and
-  a nominal with an extra optional field, and a constraint-held record tail
-  closed, so a call passing a nominal value to it is a type mismatch) are
-  pinned by the tests those sections name.
+- `generalizeRank` / `commitUncommittedTail`—policy: Uncommitted Record
+  Tails and Uncommitted Tag Tails (above). After rank adjustment and before
+  quantifying, a generalization boundary commits, by ordinary unification
+  with the empty record, every uncommitted record tail it owns of a
+  definition a `provides` entry names, and every one whose own constraints
+  the empty record does not discharge, and every one no root reaches
+  (`Generalizer.owned_tails`, `Check.collectReachedVars`). Finalization
+  commits a tag tail by clearing its mark (`Store.commitUncommittedTagTail`),
+  which keeps its content. The accepted side (record tails quantified
+  wherever they sit, each use closing or lifting its own copy, and a matched
+  parameter's tag tail) and the rejected side (a use's copy refusing fields
+  and padded nominal types) are pinned by the tests those sections name.
 - `commitUncommittedTails`—policy: Uncommitted Record Tails (above). When a
   module or REPL expression finishes checking, every uncommitted record or
   tag tail no scheme quantifies commits, beside `closeTopLevelValueRows`.
@@ -14774,38 +14781,13 @@ hidden descriptors.
 
 An uncommitted record tail a scheme quantifies
 (`CheckedTypeVariable.uncommitted_record_tail`, Uncommitted Record Tails) is
-the record counterpart, and seals to the empty record. The checker quantifies
-such a tail only where every occurrence is convertible, and makes it
-lift-only when a value of its record enters the binding, so an instantiation
-can give a value leaving the worker only absent optional fields (a copy
-never absorbs a defaulted one) and a value entering it only a nominal
-wrapper over exactly the record's fields. `SealedSchemeSlots` verifies the
-convertibility from the checked types with the same walk (`sealRecordTails`,
-`RecordTailPosition`): the tail seals when every occurrence is reached
-through data and function types alone, never under a function type held in
-data, in the arguments of a nominal type other than `List`, `Box`, or `Try`,
-or in an evidence callable, and no argument holds a nominal over a callable
-payload; otherwise it keeps its hidden descriptor.
-
-A use whose instantiation lifted or widened the tail converts each value
-crossing the worker's boundary with the conversions that already exist. An
-argument whose type stores the record differently from the worker's
-parameter, such as a padded nominal passed where the worker takes the plain
-record, is rebuilt at the parameter's record order before the call
-(`argsAtParams`). A result is rebuilt after the call through the
-plan-driven `adapt` (`StorageDifference.record_order`, which treats a closed
-record of a different field count, or such a record against the empty
-record, as records stored differently, at any depth), which adds a
-`#Missing` slot for each absent optional field. A function value the use
-passes or receives whose signature stores the record differently, a
-callback, or the worker itself used as a value (`List.map(rects, area)`),
-is wrapped in a function adapter (`WorkerKey.adapter`) whose body converts
-each argument and the result by the same `adapt` (`argsAtParams`,
-`StorageDifference.function`). A function the worker returns is converted
-the same way: the call's result is wrapped in an adapter that rebuilds what
-the returned function takes and produces. A position deeper in the
-signature is converted by nesting these adapters. Every conversion of an
-entering value only reorders fields and drops padding; none narrows.
+the record counterpart, and seals to the empty record whenever its row
+default is the empty record and closing the row discharges its constraints
+(`SealedSchemeSlots.sealRecordTails`). No other condition applies: a use may
+only close the tail or make its record a nominal type stored exactly like
+the record, so every instantiation stores whatever holds the tail as the
+sealed worker does, wherever the tail sits in the worker's interface, and no
+use converts a value crossing the worker's boundary.
 
 Checked-module output computes all of a template's sealed slots together. It first
 collects the bounded candidates, then traverses its current immutable checked
@@ -20791,14 +20773,18 @@ builds its operand at this type rather than at the operand's record row. A
 padded record of no named fields is still such a record: it has storage, where
 the empty record has none.
 
-A structural record can lift into a padded nominal, and a padded nominal can
-reach a parameter written as its record row, open or closed, because a generic
-function has one body, which reads the record by the structural rule. The two
-types are one value in two memory orders, so where a value crosses between them
-it is rebuilt by the plan-driven `adapt` (Coercion Plans), whose plan moves
-each field by offset at any depth: `StorageDifference.record_order` on a
-result or a read, and the check of each explicit argument at a direct call. A
-function value converts by an adapter around it, like one a row widening reaches.
+A record literal checked at a padded nominal is built at it. A record a
+function built or takes apart with an uncommitted tail never becomes a
+padded nominal at a use (Uncommitted Record Tails), so no function's open
+record crosses between the two layouts. A padded nominal can still reach a
+parameter whose row is open, from field uses or a `..` pattern, because a
+generic function has one body, which reads the record by the structural
+rule. The two types are one value in two memory orders, so where such a
+value crosses between them it is rebuilt by the plan-driven `adapt`
+(Coercion Plans), whose plan moves each field by offset at any depth:
+`StorageDifference.record_order` on a result or a read, and the check of
+each explicit argument at a direct call. A function value converts by an
+adapter around it, like one a row widening reaches.
 
 A specialized program specializes each use at its own types, so a call that hands
 a padded nominal to a row parameter gets an instance at that nominal, and the row

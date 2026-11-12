@@ -278,6 +278,15 @@ test "a record a function takes apart gains no field from the nominal passed to 
     , .added_field, true);
 }
 
+test "a literal joined with a use's record keeps the use's restriction" {
+    try expectRefusal(
+        \\make = |n| { a: n }
+        \\pick = |c| if c make(1.U8) else { a: 2 }
+        \\x : { a : U8, b ?: U8 }
+        \\x = pick(Bool.True)
+    , .added_field, false);
+}
+
 test "a nominal whose backing supplies every defaulted field takes the record" {
     try expectOk(
         \\Cfg := { a : U8, b : U8 ?? 7 }

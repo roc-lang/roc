@@ -5865,11 +5865,12 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
 
 /// Generalize the variables of `env`'s current rank, for a boundary whose
 /// bindings have the types `roots`. The boundary quantifies every uncommitted
-/// record tail it owns, except that a definition a `provides` entry names
-/// commits all of them (its host compiled against closed rows), and so does
-/// any tail whose own constraints the empty record does not discharge; those
-/// commit to the empty record before anything is quantified (design.md
-/// "Uncommitted Record Tails").
+/// record tail it owns that instantiating a binding reaches, wherever it sits
+/// in the binding's type. The rest commit to the empty record before anything
+/// is quantified: every tail of a definition a `provides` entry names (its
+/// host compiled against closed rows), any tail whose own constraints the
+/// empty record does not discharge, and any tail no root reaches, which no use
+/// could ever close or lift (design.md "Uncommitted Record Tails").
 fn generalizeRank(self: *Self, env: *Env, roots: []const Var) Allocator.Error!void {
     try self.generalizer.adjust(self.gpa, &env.var_pool, env.rank());
     var committed = false;
@@ -5878,15 +5879,58 @@ fn generalizeRank(self: *Self, env: *Env, roots: []const Var) Allocator.Error!vo
         var tails: std.ArrayListUnmanaged(Var) = .empty;
         defer tails.deinit(self.gpa);
         try tails.appendSlice(self.gpa, self.generalizer.owned_tails.items);
+        var reached: collections.DenseMapUnmanaged(Var, void) = .empty;
+        defer reached.deinit(self.gpa);
+        if (!commit_all) try self.collectReachedVars(roots, &reached);
         for (tails.items) |tail| {
             const resolved = self.types.resolveVar(tail);
             if (resolved.desc.content != .flex or !resolved.desc.flags.uncommitted_record_tail) continue;
-            if (!commit_all and self.rowDefaultDischargesConstraints(resolved.desc.content.flex.constraints)) continue;
+            if (!commit_all and reached.contains(resolved.var_) and
+                self.rowDefaultDischargesConstraints(resolved.desc.content.flex.constraints)) continue;
             try self.commitUncommittedTail(resolved.var_, env);
             committed = true;
         }
     }
     try self.generalizer.quantify(&env.var_pool, env.rank(), committed);
+}
+
+/// Every class instantiating `roots` reaches: their types' components and
+/// the function types of the static-dispatch constraints those components
+/// carry.
+fn collectReachedVars(self: *Self, roots: []const Var, reached: *collections.DenseMapUnmanaged(Var, void)) Allocator.Error!void {
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.appendSlice(self.gpa, roots);
+    while (pending.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        if ((try reached.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .err, .field_presence => {},
+            .flex => |flex| for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| try pending.append(self.gpa, constraint.fn_var),
+            .rigid => |rigid| for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| try pending.append(self.gpa, constraint.fn_var),
+            .alias => |alias| {
+                try pending.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+                try pending.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try pending.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+                    try pending.append(self.gpa, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| try pending.appendSlice(self.gpa, self.types.sliceVars(args));
+                    try pending.append(self.gpa, tag_union.ext);
+                },
+            },
+        }
+    }
 }
 
 /// Commit an uncommitted tail. A record tail commits to the empty record by
