@@ -24040,11 +24040,13 @@ const BodyContext = struct {
 
     /// Materialize a local at its requested graph node. The request relation
     /// either joins the local and request representations, relates a
-    /// generated-private local to a distinct public interface, or leaves an
-    /// exact chain of producer-authored nominal backing edges between them.
-    /// Preserve the producer-owned local at an opaque interface boundary;
-    /// otherwise record every requested nominal layer explicitly in Monotype
-    /// IR.
+    /// generated-private local to a distinct public interface, proves the
+    /// local and the request one backed nominal instance whose classes each
+    /// keep their own representation witness, or leaves an exact chain of
+    /// producer-authored nominal backing edges between them. Preserve the
+    /// producer-owned local at an opaque interface boundary and at its own
+    /// witness; otherwise record every requested nominal layer explicitly in
+    /// Monotype IR.
     fn lowerLocalAtRequestedNode(
         self: *BodyContext,
         local: DraftLocalId,
@@ -24072,6 +24074,11 @@ const BodyContext = struct {
         while (true) {
             current = (try self.constructorRepresentationNode(current));
             if (self.graph.sameClass(source_representation_node, current)) break;
+            // Backed nominal instances keep distinct classes when each holds
+            // its own representation witness, so the relation records their
+            // identity beside the classes. The local is then the requested
+            // nominal's value at its own witness.
+            if (try self.graph.sameRelatedNamedInstance(source_representation_node, current)) break;
             if ((try self.graph.content(current)) != .named) {
                 Common.invariant("related local and request had no exact nominal backing path");
             }

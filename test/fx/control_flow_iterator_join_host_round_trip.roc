@@ -363,6 +363,99 @@ stream_join! = |use| {
 	$digits
 }
 
+Holder := { it : Iter(U8) }.{
+	unwrap : Holder -> Iter(U8)
+	unwrap = |Holder.{ it }| it
+}
+
+# The functions below construct, store and read back a nominal that holds an
+# iterator in one body, so the value read back and the one a branch constructs
+# are the same nominal with two representation witnesses. The last one reads
+# the value back through another function instead.
+
+take_holders! : () => List(Holder)
+take_holders! = || {
+	_state = take!()
+	Host.store_seed!(Box.box([Holder.{ it: [1.U8, 2].iter() }]))
+	taken : Box(List(Holder))
+	taken = Host.take_seed!()
+	Box.unbox(taken)
+}
+
+nominal_match! : Bool => U64
+nominal_match! = |use| {
+	_state = take!()
+	Host.store_seed!(Box.box([Holder.{ it: [1.U8, 2].iter() }]))
+	taken : Box(List(Holder))
+	taken = Host.take_seed!()
+	joined = match Box.unbox(taken) {
+		[first, ..] if use => first
+		_ => Holder.{ it: [9.U8].iter() }
+	}
+	digits(joined.unwrap())
+}
+
+nominal_nested! : Bool => U64
+nominal_nested! = |use| {
+	_state = take!()
+	Host.store_seed!(Box.box([Holder.{ it: [1.U8, 2].iter() }]))
+	taken : Box(List(Holder))
+	taken = Host.take_seed!()
+	joined = match Box.unbox(taken) {
+		[] => Holder.{ it: [9.U8].iter() }
+		[first, ..] => if use {
+			first
+		} else {
+			Holder.{ it: [8.U8].iter().map(|item| item - 1) }
+		}
+	}
+	digits(joined.unwrap())
+}
+
+nominal_early_return! : Bool => U64
+nominal_early_return! = |use| {
+	_state = take!()
+	Host.store_seed!(Box.box([Holder.{ it: [1.U8, 2].iter() }]))
+	taken : Box(List(Holder))
+	taken = Host.take_seed!()
+	pick = |holders| {
+		for holder in holders {
+			if use {
+				return holder
+			}
+		}
+		Holder.{ it: [9.U8].iter() }
+	}
+	digits(pick(Box.unbox(taken)).unwrap())
+}
+
+nominal_list_items! : Bool => U64
+nominal_list_items! = |use| {
+	_state = take!()
+	Host.store_seed!(Box.box([Holder.{ it: [1.U8, 2].iter() }]))
+	taken : Box(List(Holder))
+	taken = Host.take_seed!()
+	var $total = 0.U64
+	match Box.unbox(taken) {
+		[first, ..] if use => {
+			for holder in [first, Holder.{ it: [9.U8].iter() }] {
+				$total = $total * 100 + digits(holder.unwrap())
+			}
+		}
+		_ => {}
+	}
+	$total
+}
+
+nominal_across_functions! : Bool => U64
+nominal_across_functions! = |use| {
+	joined = match take_holders!() {
+		[first, ..] if use => first
+		_ => Holder.{ it: [9.U8].iter() }
+	}
+	digits(joined.unwrap())
+}
+
 report! : Str, (Bool => U64) => {}
 report! = |name, run!| {
 	seed!(Bool.True)
@@ -400,4 +493,9 @@ main! = || {
 	report!("early return two produced", early_return_two_produced!)
 	report!("early return top level", early_return_top_level!)
 	report!("stream join", stream_join!)
+	report!("nominal match", nominal_match!)
+	report!("nominal nested", nominal_nested!)
+	report!("nominal early return", nominal_early_return!)
+	report!("nominal list items", nominal_list_items!)
+	report!("nominal across functions", nominal_across_functions!)
 }

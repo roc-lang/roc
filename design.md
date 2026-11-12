@@ -8170,6 +8170,16 @@ source identity and backing ownership. Main-class merges preserve recorded
 nominal identities, and subject lookup resolves the current main representative;
 retained codec subjects cannot observe stale identity entries after a redirect.
 
+A local lookup lowered at a request consumes the same identity. When the
+request relation proves the local and the request one nominal application whose
+classes each keep a representation witness, the local is that nominal's value
+at its own witness: it lowers as the local at its own type, with no nominal
+layer around it, and the consumer joins the two witnesses the way it joins any
+producer's result with its request. This arises when one body constructs a
+nominal that holds an iterator, reads a value of that nominal back from a
+host-held `Box`, and constructs another: the value read back then meets the new
+one in a list literal or in the branches of a join.
+
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
 or encode failures. Runtime failures are reserved for input/output conditions

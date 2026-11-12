@@ -7,7 +7,9 @@
 //! representation (design.md "Explicit Iterator Representation Tiers"). These
 //! programs pin that the join keeps the private selection, that each lowers
 //! through Lambda Solved and ARC certification, and that an early return names
-//! the output witness its lambda finally selects.
+//! the output witness its lambda finally selects. The fx app adds values that
+//! exist at runtime, including a nominal read back at one representation
+//! witness and constructed at another.
 
 const std = @import("std");
 const lir = @import("lir");
@@ -130,4 +132,11 @@ test "control-flow join: an early return of a public iterator names the private 
         \\    Ok({})
         \\}
     );
+}
+
+test "control-flow join: host-held iterators, bare and inside a nominal, join produced ones in every form" {
+    // The fx platform's hosted `Box(a)` round trip yields public iterators that
+    // exist at runtime. Lowering the app runs every Monotype and Lambda Solved
+    // debug assertion over each join form the fx suite then executes.
+    try harness.expectAppPathLowersToLir("test/fx/control_flow_iterator_join_host_round_trip.roc");
 }
