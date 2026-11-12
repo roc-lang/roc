@@ -5136,4 +5136,26 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"b\"" },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/12878
+        // `same(Ok(found))` constructs no error tags, so the call's own error
+        // row is closed and empty, and `get`'s composed `?` result widens it
+        // to `[Missing]`. `same`'s error row is the variable its argument
+        // shares, so the call keeps its own row rather than requesting
+        // `same` at the wider one.
+        .name = "issue 12878: call to a template whose result row its argument shares keeps its own row under a ? result",
+        .source_kind = .module,
+        .source =
+        \\same : Try(ok, err) -> Try(ok, err)
+        \\same = |result| result
+        \\
+        \\get = |text| {
+        \\    found = (if text == "" Err(Missing) else Ok(text))?
+        \\    same(Ok(found))
+        \\}
+        \\
+        \\main = (get("a"), get(""))
+        ,
+        .expected = .{ .inspect_str = "(Ok(\"a\"), Err(Missing))" },
+    },
 };
