@@ -3537,6 +3537,13 @@ const TypeTable = struct {
 
     /// Strip "Builtin." and "Num." prefixes from type names (mirrors TypeWriter.getDisplayName).
     pub fn getTypeDisplayName(raw_name: []const u8) []const u8 {
+        // A builtin declaration published through an alias is named by the
+        // alias.
+        if (can.CIR.builtinTypePublishedName(raw_name)) |published| {
+            if (published.qualified and published.member_path.len == 0) {
+                return getTypeDisplayName(published.alias_qualified_name);
+            }
+        }
         if (std.mem.startsWith(u8, raw_name, "Builtin.")) {
             const without_builtin = raw_name[8..];
             if (std.mem.startsWith(u8, without_builtin, "Num.")) {

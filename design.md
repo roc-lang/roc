@@ -1769,6 +1769,51 @@ type and stamps no dispatch plan, so it adds no Rewrite Inventory entry
 an alias are found by checking, as for any construction whose nominal type
 canonicalization does not know (Defaulted Fields).
 
+### Builtin Declarations Published Through Aliases
+
+A builtin type's public name can be an alias of a nominal type declared
+elsewhere in the Builtin module: `Str.Utf8Problem`, `Str.Utf16Problem` and
+`Str.Utf32Problem` are aliases of `Builtin.StrUtf8Problem`,
+`Builtin.StrUtf16Problem` and `Builtin.StrUtf32Problem`, which are declared
+beside `Str` rather than inside it so their members do not shadow `Str`'s.
+The alias is the only name Roc code has for such a type. Everything
+user-visible presents the declaration under the alias's name, and everything
+internal (method dispatch, intrinsic identity, layouts) uses the nominal
+declaration.
+
+The builtin type registry (`CIR.builtin_type_specs`) states the relation: the
+nominal declaration's entry is not auto-imported, names its alias in
+`published_as`, and has the alias's name as its `display_name`. Registry
+compilation rejects an entry whose `display_name` is neither its declared name
+nor its publishing alias's. The builtin compiler reads each alias entry's
+solved type from the checked Builtin module and records the nominal
+declaration it resolves to in `BuiltinIndices.alias_targets`; it fails the
+build when a `published_as` entry is not the solved target of the alias it
+names.
+
+- Printed types. Checking maps every registry entry's qualified name to its
+  `display_name`, so the nominal type prints as `Utf8Problem`. A builtin type
+  is stored under its qualified name (`Builtin.StrUtf8Problem`), which no user
+  type can have, so a user type named `StrUtf8Problem` keeps its name. A
+  type writer made without an import mapping (LSP hover, the REPL, snapshot
+  type listings) and glue's type names resolve the same qualified name
+  through the registry and show the alias as they show any builtin type
+  (`Str.Utf8Problem`).
+- Member lookup. Canonicalization finds a builtin member by looking its
+  qualified name up in the Builtin module. A path through a publishing alias
+  (`Utf8Problem.is_eq`, `Str.Utf8Problem.is_eq`) misses that lookup, and only
+  then does canonicalization consult `alias_targets` for the declaration that
+  owns the member and look the member up under the owner's name. A lookup
+  that hits never consults the table. This is specific to the baked Builtin
+  module, which is checked before any module is canonicalized; aliases in
+  other modules use Associated Item Lookup Through Aliases.
+- Construction and patterns through the alias are ordinary Nominal
+  Construction Through Aliases.
+- Documentation. Builtin docs give the alias the declaration's entry (its
+  kind, backing type and members, under the alias's header), give the
+  declaration no entry of its own, and render every reference to the
+  declaration as a reference to the alias.
+
 ### Compile-Time Evaluation And Static Storage
 
 Frontend task completion and checked-value completion are distinct boundaries.

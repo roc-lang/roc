@@ -253,6 +253,10 @@ pub fn extractModuleDocsWithOptions(
         .all = options.public_types,
     };
 
+    // The Builtin module publishes some declarations through aliases; their
+    // docs appear under the alias's name.
+    const documents_builtin = module_env.module_role == .builtin;
+
     const documented_region: ?base.Region = if (documentedRootDecl(module_env, options.public_type)) |root|
         module_env.store.getStatementRegion(root)
     else
@@ -304,6 +308,7 @@ pub fn extractModuleDocsWithOptions(
             if (options.public_type) |projection| {
                 try rebaseEntryForProjection(gpa, module_env, projection, &public_entry);
             }
+            if (documents_builtin) try rebaseEntryForPublishingAlias(gpa, &public_entry);
             // Skip internal Builtin functions
             if (entryIsUndocumented(package_name, module_env.module_name, public_entry.name)) {
                 public_entry.deinit(gpa);
@@ -337,7 +342,15 @@ pub fn extractModuleDocsWithOptions(
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
                 errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, reference_routing, decl.anno);
+                // An alias publishing a builtin declaration documents that
+                // declaration: its kind and its backing type, under the
+                // alias's own header.
+                const published: ?@FieldType(CIR.Statement, "s_nominal_decl") = if (documents_builtin)
+                    publishedBuiltinDecl(module_env, stmt_idx)
+                else
+                    null;
+
+                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, reference_routing, if (published) |nominal| nominal.anno else decl.anno);
                 errdefer if (type_sig) |s| {
                     s.deinit(gpa);
                     gpa.destroy(s);
@@ -348,6 +361,21 @@ pub fn extractModuleDocsWithOptions(
 
                 const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
                 errdefer gpa.free(empty_children);
+
+                if (published) |nominal| {
+                    const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
+                    errdefer gpa.free(type_header);
+                    try entries_list.append(gpa, DocModel.DocEntry{
+                        .name = duped_name,
+                        .type_header = type_header,
+                        .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
+                        .type_signature = type_sig,
+                        .doc_comment = if (doc_extract) |d| d.text else null,
+                        .children = empty_children,
+                        .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
+                    });
+                    continue;
+                }
 
                 try entries_list.append(gpa, DocModel.DocEntry{
                     .name = duped_name,
@@ -368,6 +396,8 @@ pub fn extractModuleDocsWithOptions(
                 if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
                 // Skip internal Builtin types
                 if (entryIsUndocumented(package_name, module_env.module_name, entry_name)) continue;
+                // The alias publishing this declaration documents it.
+                if (documents_builtin and CIR.builtinTypePublishedName(entry_name) != null) continue;
 
                 const region = module_env.store.getStatementRegion(stmt_idx);
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
@@ -625,6 +655,35 @@ fn rebaseEntryForProjection(
     entry.name = rebased;
 }
 
+/// Rename an entry at or under a builtin declaration that an alias publishes
+/// so it sits at or under the alias instead.
+fn rebaseEntryForPublishingAlias(gpa: Allocator, entry: *DocModel.DocEntry) Allocator.Error!void {
+    const published = CIR.builtinTypePublishedName(entry.name) orelse return;
+    const rebased = try std.fmt.allocPrint(gpa, "{s}{s}", .{ published.aliasName(), published.member_path });
+    gpa.free(entry.name);
+    entry.name = rebased;
+}
+
+/// The builtin nominal declaration the alias declaration `alias_stmt`
+/// publishes, read from the alias's solved type, when the registry names
+/// this alias as that declaration's public name.
+fn publishedBuiltinDecl(
+    module_env: *const ModuleEnv,
+    alias_stmt: CIR.Statement.Idx,
+) ?@FieldType(CIR.Statement, "s_nominal_decl") {
+    const alias_var = ModuleEnv.varFrom(alias_stmt);
+    if (@backingInt(alias_var) >= module_env.types.len()) return null;
+    const content = module_env.types.resolveThroughAliases(alias_var).desc.content;
+    if (content != .structure or content.structure != .nominal_type) return null;
+    const nominal = content.structure.nominal_type;
+    if (!nominal.originIsBuiltin()) return null;
+    const nominal_decl = module_env.store.getStatement(@fromBackingInt(@intCast(nominal.statement()))).s_nominal_decl;
+    const published = CIR.builtinTypePublishedName(module_env.getIdentText(module_env.store.getTypeHeader(nominal_decl.header).name)) orelse return null;
+    const alias_header = module_env.store.getTypeHeader(module_env.store.getStatement(alias_stmt).s_alias_decl.header);
+    if (!std.mem.eql(u8, published.alias_qualified_name, module_env.getIdentText(alias_header.name))) return null;
+    return nominal_decl;
+}
+
 fn findProjectedEntryByName(
     entries: []const DocModel.DocEntry,
     module_env: *const ModuleEnv,
@@ -750,8 +809,21 @@ fn annotatedTypeReferenceDisplay(
     errdefer gpa.free(module_path);
     return .{
         .module_path = module_path,
-        .type_name = try gpa.dupe(u8, source_name),
+        .type_name = try gpa.dupe(u8, publishingAliasReferenceName(module_env, base_ref) orelse source_name),
     };
+}
+
+/// The name a reference inside the Builtin module to a declaration that an
+/// alias publishes is documented under: the alias's.
+fn publishingAliasReferenceName(module_env: *const ModuleEnv, base_ref: TypeAnno.LocalOrExternal) ?[]const u8 {
+    if (module_env.module_role != .builtin) return null;
+    const statement = switch (base_ref) {
+        .local => |local| local.decl_idx,
+        .external, .external_identity, .builtin, .pending => return null,
+    };
+    const published = CIR.builtinTypePublishedName(typeDeclName(module_env, statement) orelse return null) orelse return null;
+    if (published.member_path.len != 0) return null;
+    return published.alias_qualified_name[CIR.builtin_module_prefix.len..];
 }
 
 fn projectionContainsIdentityAndStatement(
@@ -2872,6 +2944,14 @@ fn allocDocType(gpa: Allocator, value: DocType) ExtractError!*const DocType {
 /// Parse a full type name (like "Builtin.Str", "Num.U64") into module_path and type_name.
 /// For the structured output, we want to preserve the full module path as-is from the compiler.
 fn getDisplayName(origin_text: []const u8, ident_text: []const u8) []const u8 {
+    // A builtin declaration published through an alias is shown as the alias.
+    if (getModulePath(origin_text).len == 0) {
+        if (CIR.builtinTypePublishedName(ident_text)) |published| {
+            if (published.member_path.len == 0) {
+                return published.alias_qualified_name[CIR.builtin_module_prefix.len..];
+            }
+        }
+    }
     // Strip module prefix from the ident text if it matches the origin
     // e.g., origin="Builtin", ident="Builtin.Str" -> display="Str"
     // e.g., origin="Num", ident="Num.U64" -> display="U64"

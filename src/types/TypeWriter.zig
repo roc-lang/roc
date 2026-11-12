@@ -99,6 +99,8 @@ import_mapping: ?*const import_mapping_mod.ImportMapping,
 /// Optional resolver for rendering a defaulted field's source expression.
 mb_default_source: ?DefaultSourceFn = null,
 default_source_ctx: *const anyopaque = undefined,
+/// Optional resolver for types shown under a name other than their own.
+mb_display_name: ?DisplayNameFn = null,
 /// The polarity of the position currently being written: `.pos` at the root,
 /// flipped through function argument positions and kept through returns.
 /// Tag unions in output positions are implicitly open, so an anonymous
@@ -129,6 +131,16 @@ gpa: std.mem.Allocator,
 
 /// Resolves a defaulted field identity to source text for display.
 pub const DefaultSourceFn = *const fn (ctx: *const anyopaque, id: types_mod.DefaultId) ?[]const u8;
+
+/// Returns the name a type whose identifier text is `name` is shown under,
+/// or null when it is shown under a name derived from its own.
+pub const DisplayNameFn = *const fn (name: []const u8) ?[]const u8;
+
+/// Install the resolver consulted for a type name the import mapping does not
+/// cover.
+pub fn setDisplayNameResolver(self: *TypeWriter, resolver: DisplayNameFn) void {
+    self.mb_display_name = resolver;
+}
 
 /// Install the source resolver used when rendering defaulted record fields.
 pub fn setDefaultSourceResolver(self: *TypeWriter, ctx: *const anyopaque, resolver: DefaultSourceFn) void {
@@ -332,6 +344,7 @@ pub fn initFromParts(
         .import_mapping = import_mapping,
         .mb_default_source = null,
         .default_source_ctx = undefined,
+        .mb_display_name = null,
         .polarity = .pos,
         .gpa = gpa,
     };
@@ -1659,7 +1672,11 @@ fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
         }
     }
 
-    return stripBuiltinQualification(self.idents.getText(idx));
+    const name = self.idents.getText(idx);
+    if (self.mb_display_name) |resolve| {
+        if (resolve(name)) |shown| return shown;
+    }
+    return stripBuiltinQualification(name);
 }
 
 /// Strip the implementation-detail `Builtin.` / `Num.` qualification from a

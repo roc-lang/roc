@@ -5716,7 +5716,18 @@ pub fn getLineStartsAll(self: *const Self) []const u32 {
 pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
     var type_writer = try TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null);
     type_writer.setDefaultSourceResolver(self, typeWriterDefaultSource);
+    type_writer.setDisplayNameResolver(typeWriterPublishedBuiltinName);
     return type_writer;
+}
+
+/// The name a builtin declaration published through an alias is rendered
+/// under: the alias's, spelled the way a writer without an import mapping
+/// spells any builtin type. A builtin type is stored under its qualified
+/// name, so a user type with the declaration's bare name is not renamed.
+fn typeWriterPublishedBuiltinName(name: []const u8) ?[]const u8 {
+    const published = CIR.builtinTypePublishedName(name) orelse return null;
+    if (!published.qualified or published.member_path.len != 0) return null;
+    return TypeWriter.stripBuiltinQualification(published.alias_qualified_name);
 }
 
 /// Resolve a defaulted field's identity to its default's source snippet for

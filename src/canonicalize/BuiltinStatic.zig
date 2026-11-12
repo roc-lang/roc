@@ -78,6 +78,13 @@ pub fn validateBuiltinIndices(env: *const ModuleEnv, indices: CIR.BuiltinIndices
         if (!std.mem.eql(u8, env.getIdentText(ident), spec.qualified_name)) return error.CorruptEmbeddedBuiltins;
     }
 
+    for (indices.alias_targets) |target| {
+        if (!indicesContainStatement(indices, target.alias)) return error.CorruptEmbeddedBuiltins;
+        if (!indicesContainStatement(indices, target.nominal)) return error.CorruptEmbeddedBuiltins;
+        if (env.store.getStatement(target.alias) != .s_alias_decl) return error.CorruptEmbeddedBuiltins;
+        if (env.store.getStatement(target.nominal) != .s_nominal_decl) return error.CorruptEmbeddedBuiltins;
+    }
+
     if (!std.mem.eql(u8, env.getIdentText(indices.ok_ident), "Ok")) return error.CorruptEmbeddedBuiltins;
     if (!std.mem.eql(u8, env.getIdentText(indices.err_ident), "Err")) return error.CorruptEmbeddedBuiltins;
 

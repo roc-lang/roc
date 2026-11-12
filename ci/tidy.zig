@@ -593,9 +593,23 @@ const allowed_builtin_types = [_][]const u8{
     "Str", "Hasher", "Iter", "Stream", "List", "Bool", "Box", "Try", "Dict", "Set", "Num", "Encoding", "Crypto",
 };
 
+/// Declarations directly under `Builtin` that are not exposed: the builtin type
+/// registry (`CIR.builtin_type_specs`) does not auto-import them and publishes each
+/// through an alias nested under an exposed type (its `published_as`), which is the
+/// only name Roc code and the generated docs have for it. They are declared inside
+/// the block rather than below it because a declaration there is named with the
+/// module's qualification (`Builtin.StrUtf8Problem`), a name no user type can have,
+/// and printed types find a builtin type's display name by its name.
+const published_builtin_declarations = [_][]const u8{
+    "StrUtf8Problem", "StrUtf16Problem", "StrUtf32Problem",
+};
+
 fn isAllowedBuiltinType(name: []const u8) bool {
     for (allowed_builtin_types) |allowed| {
         if (std.mem.eql(u8, name, allowed)) return true;
+    }
+    for (published_builtin_declarations) |published| {
+        if (std.mem.eql(u8, name, published)) return true;
     }
     return false;
 }
