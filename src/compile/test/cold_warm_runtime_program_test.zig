@@ -49,7 +49,19 @@ const BuildError = std.mem.Allocator.Error ||
     CoordinatorError ||
     lir.CheckedPipeline.LowerResourceError ||
     lir.DebugPrint.Error ||
-    error{TestUnexpectedResult};
+    error{ TestUnexpectedResult, TestExpectedEqual };
+
+/// Collects a build's stderr writes in memory rather than in the test
+/// process's stderr.
+const StderrCapture = struct {
+    gpa: std.mem.Allocator,
+    bytes: std.ArrayList(u8) = .empty,
+
+    fn write(raw: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioError!void {
+        const self: *StderrCapture = @ptrCast(@alignCast(raw.?));
+        self.bytes.appendSlice(self.gpa, bytes) catch return error.IoError;
+    }
+};
 
 /// What one build of the app produced.
 const Built = struct {
@@ -86,7 +98,11 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
 /// the app's package, so their expects are the build's discovery-only roots,
 /// and the runtime program carries internal static data.
 fn buildWithCacheAndTests(gpa: std.mem.Allocator, cache_dir: []const u8, app_path: []const u8, target: lir.CheckedPipeline.TargetConfig, program_tests: bool) BuildError!Built {
-    const roc_ctx = CoreCtx.os(gpa, gpa, std.testing.io);
+    var stderr_capture: StderrCapture = .{ .gpa = gpa };
+    defer stderr_capture.bytes.deinit(gpa);
+    var roc_ctx = CoreCtx.os(gpa, gpa, std.testing.io);
+    roc_ctx.ctx = &stderr_capture;
+    roc_ctx.vtable.writeStderr = StderrCapture.write;
     var cache_manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
     defer cache_manager.deinit();
     var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
@@ -197,6 +213,14 @@ fn buildWithCacheAndTests(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
             }
         }
     }
+    // A build writes each compile-time `dbg` observation of the app once,
+    // whether it evaluated the root or read its stored value, and nothing
+    // else.
+    var expected_stderr: std.ArrayList(u8) = .empty;
+    defer expected_stderr.deinit(gpa);
+    const debug = coord.appRootCheckedArtifact().compile_time_debug;
+    for (debug.entries) |entry| try expected_stderr.print(gpa, "[dbg] {s}\n", .{debug.message(entry)});
+    try std.testing.expectEqualStrings(expected_stderr.items, stderr_capture.bytes.items);
     facts.program = try out.toOwnedSlice();
     return facts;
 }
