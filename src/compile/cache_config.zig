@@ -352,7 +352,7 @@ pub const Constants = struct {
     /// 177: checked-module entries store reproducible checking and evaluation
     ///      reports beside body-local type context arguments, per-use
     ///      anonymous structure and generated-codec recurrences.
-    pub const CACHE_VERSION = 177;
+    pub const CACHE_VERSION = 178;
 };
 
 /// Configuration for the Roc cache system.

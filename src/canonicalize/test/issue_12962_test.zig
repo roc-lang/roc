@@ -33,6 +33,8 @@ const top_level_before_type =
     \\}
 ;
 
+const Issue12962TestError = std.mem.Allocator.Error || error{TestUnexpectedResult};
+
 const Target = enum { block_member, top_level, other };
 
 const Resolution = struct {
@@ -51,16 +53,24 @@ fn findDefNamed(env: *const ModuleEnv, name: []const u8) ?CIR.Def.Idx {
 }
 
 fn lambdaBody(env: *const ModuleEnv, expr_idx: CIR.Expr.Idx) ?CIR.Expr.Idx {
-    return switch (env.store.getExpr(expr_idx)) {
-        .e_lambda => |lambda| lambda.body,
-        .e_closure => |closure| lambdaBody(env, closure.lambda_idx),
-        else => null,
-    };
+    const expr = env.store.getExpr(expr_idx);
+    if (expr == .e_lambda) return expr.e_lambda.body;
+    if (expr == .e_closure) return lambdaBody(env, expr.e_closure.lambda_idx);
+    return null;
+}
+
+fn lookupTarget(env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, member_pattern: CIR.Pattern.Idx, top_level_pattern: CIR.Pattern.Idx) Target {
+    const expr = env.store.getExpr(expr_idx);
+    if (expr != .e_lookup_local) return .other;
+    const pattern_idx = expr.e_lookup_local.pattern_idx;
+    if (pattern_idx == member_pattern) return .block_member;
+    if (pattern_idx == top_level_pattern) return .top_level;
+    return .other;
 }
 
 /// Canonicalizes `source` and reports which definition the unqualified
 /// `double` called inside the body of the block member `T.double` refers to.
-fn resolveMemberSelfCall(source: []const u8) !Resolution {
+fn resolveMemberSelfCall(source: []const u8) Issue12962TestError!Resolution {
     const allocator = std.testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
@@ -83,19 +93,9 @@ fn resolveMemberSelfCall(source: []const u8) !Resolution {
     const top_level_def = env.store.getDef(top_level_def_idx);
 
     const body = lambdaBody(&env, member_def.expr) orelse return error.TestUnexpectedResult;
-    const call = switch (env.store.getExpr(body)) {
-        .e_call => |call| call,
-        else => return error.TestUnexpectedResult,
-    };
-    const target: Target = switch (env.store.getExpr(call.func)) {
-        .e_lookup_local => |lookup| if (lookup.pattern_idx == member_def.pattern)
-            .block_member
-        else if (lookup.pattern_idx == top_level_def.pattern)
-            .top_level
-        else
-            .other,
-        else => .other,
-    };
+    const body_expr = env.store.getExpr(body);
+    if (body_expr != .e_call) return error.TestUnexpectedResult;
+    const target = lookupTarget(&env, body_expr.e_call.func, member_def.pattern, top_level_def.pattern);
 
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
@@ -126,7 +126,7 @@ test "issue 12962: block member shadowing a top-level definition is reported in 
 }
 
 /// Canonicalizes `source` and counts the shadowing warnings reported for `name`.
-fn countShadowingWarnings(source: []const u8, name: []const u8) !usize {
+fn countShadowingWarnings(source: []const u8, name: []const u8) Issue12962TestError!usize {
     const allocator = std.testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
@@ -208,7 +208,7 @@ test "issue 12962: a nested type's member does not shadow the enclosing type's m
 
 /// Canonicalizes `source` and reports which definition the body of the
 /// non-lambda block member `T.x`, a bare `x`, refers to.
-fn resolveNonLambdaMemberOwnName(source: []const u8) !Target {
+fn resolveNonLambdaMemberOwnName(source: []const u8) Issue12962TestError!Target {
     const allocator = std.testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
@@ -230,15 +230,7 @@ fn resolveNonLambdaMemberOwnName(source: []const u8) !Target {
     const member_def = env.store.getDef(member_def_idx);
     const top_level_def = env.store.getDef(top_level_def_idx);
 
-    return switch (env.store.getExpr(member_def.expr)) {
-        .e_lookup_local => |lookup| if (lookup.pattern_idx == member_def.pattern)
-            .block_member
-        else if (lookup.pattern_idx == top_level_def.pattern)
-            .top_level
-        else
-            .other,
-        else => .other,
-    };
+    return lookupTarget(&env, member_def.expr, member_def.pattern, top_level_def.pattern);
 }
 
 test "issue 12962: a non-lambda block member's own name in its body means the shadowed top-level definition in either order" {
