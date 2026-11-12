@@ -4888,6 +4888,18 @@ the group, and two members' same-named variables are never unified with each
 other. The group's boundary generalizes the holes like any other
 body-inferred variable.
 
+The binding's own scheme therefore quantifies variables the predeclared
+scheme does not enumerate: whatever the body solved a hole to, with that
+type's method requirements and literal requirements. An in-group use shares
+those variables, so its scheme-use record is written even when its
+substitution of the named variables is empty and the predeclared scheme has
+no evidence parameters. The record's substitution maps each variable the use
+did not copy to itself, which gives the use's edge the binding's own evidence
+and literal arguments, as an unannotated member's recursive reference gets
+them. `count_down : U64 -> Try(U64, _)` returning `Err(Seven("seven"))` has a
+literal requirement for `"seven"` at the hole's payload type, and its
+recursive call forwards that literal argument.
+
 Rank adjustment writes a node's enclosing traversal rank before descending
 into its children and marking it visited. In particular, a back-edge in a
 function's directed effect dependencies observes that enclosing rank, not the

@@ -135,3 +135,37 @@ test "a string literal and a number literal of one undetermined type are still a
     defer env.deinit();
     try std.testing.expect(try env.typeProblemCount() >= 1);
 }
+
+test "a rejected value assigned to a variable leaves the variable's waiting literal intact" {
+    // `keep(id)` is rejected, so the reassignment's value is erroneous. The
+    // `""` and the `0` are still waiting for their types then, and each one's
+    // type is its variable's: an erroneous value must not become it.
+    var env = try TestEnv.init("Test",
+        \\keep : U64 -> Str
+        \\keep = |n| n.to_str()
+        \\
+        \\count : U64 -> U64
+        \\count = |n| n
+        \\
+        \\last_name : U32 -> Str
+        \\last_name = |id| {
+        \\    var $name = ""
+        \\    $name = keep(id)
+        \\    $name
+        \\}
+        \\
+        \\last_count : U32 -> U64
+        \\last_count = |id| {
+        \\    var $total = 0
+        \\    $total = count(id)
+        \\    $total
+        \\}
+    );
+    defer env.deinit();
+    try std.testing.expectEqual(@as(usize, 2), try env.typeProblemCount());
+    try std.testing.expectEqual(@as(usize, 2), env.module_env.store.literalDispatchPlans().len);
+    for (env.module_env.store.literalDispatchPlans()) |plan| {
+        try std.testing.expect(plan.fnVar() == null);
+        try std.testing.expectEqual(.builtin_direct, plan.dispatchResolution());
+    }
+}

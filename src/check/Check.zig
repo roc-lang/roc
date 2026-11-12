@@ -21761,8 +21761,14 @@ fn writePredeclaredSchemeUse(
 ) Allocator.Error!void {
     defer self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
+    // An annotation with a `_` hole does not determine the binding's scheme:
+    // the scheme also quantifies whatever the body solves the hole to, with
+    // that type's requirements, and this use shares those variables
+    // (`predeclareHoledAnnotationSchemes`). Its record states that, so it is
+    // written whatever the predeclared scheme enumerates.
     if (policy == .when_needed and
         self.scratch_evidence_pairs.items.len == 0 and
+        !self.cir.store.getAnnotation(annotation_idx).contains_underscore and
         !try self.predeclaredHasEvidenceParams(annotation_idx))
     {
         return;

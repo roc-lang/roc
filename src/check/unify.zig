@@ -1172,6 +1172,14 @@ const Unifier = struct {
         };
     }
 
+    /// Whether a flex states a requirement of its own: a constraint, or the
+    /// conversion a deferred literal's marker stands for (design.md "Deferred
+    /// Literal Conversion"). An erroneous type relates to such a variable
+    /// without replacing it.
+    fn flexStatesRequirement(flex: Flex) bool {
+        return flex.constraints.len() != 0 or flex.literal != .none;
+    }
+
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -1188,8 +1196,11 @@ const Unifier = struct {
         try self.refuseTagsIntoBoundedExt(vars.a, vars.b.var_);
         try self.refuseTagsIntoBoundedExt(vars.b, vars.a.var_);
 
+        // An erroneous type determines nothing: it leaves a marked variable
+        // as it is.
         if (flexLiteral(vars.a.desc.content) != flexLiteral(vars.b.desc.content) and
-            (vars.a.desc.content != .flex or vars.b.desc.content != .flex))
+            (vars.a.desc.content != .flex or vars.b.desc.content != .flex) and
+            vars.a.desc.content != .err and vars.b.desc.content != .err)
         {
             _ = try self.scratch.determined_literals.append(self.scratch.gpa, self.unresolved_b orelse vars.b.var_);
         }
@@ -1212,7 +1223,7 @@ const Unifier = struct {
             },
             .err => switch (vars.b.desc.content) {
                 .flex => |b_flex| {
-                    if (b_flex.constraints.len() != 0) return error.ErroneousType;
+                    if (flexStatesRequirement(b_flex)) return error.ErroneousType;
                     try self.merge(vars, .err);
                 },
                 .rigid, .alias, .field_presence, .structure, .err => return error.ErroneousType,
@@ -1326,7 +1337,7 @@ const Unifier = struct {
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
             },
             .err => {
-                if (a_flex.constraints.len() != 0) return error.ErroneousType;
+                if (flexStatesRequirement(a_flex)) return error.ErroneousType;
                 try self.merge(vars, .err);
             },
         }
