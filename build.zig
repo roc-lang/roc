@@ -319,8 +319,13 @@ fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
 /// fails with "InputSection too large for range extension thunk". Splitting per
 /// function and per datum gives LLD those insertion points, and lets the final
 /// link discard unused compiler code on every target.
+///
+/// COFF skips function sections: a stripped Zig object built with them puts all
+/// of its unwind data in one `.pdata$`/`.xdata$` COMDAT whose key MinGW's libc
+/// objects share, so LLD drops the compiler's unwind tables and
+/// `CompileTimeHost.windowsX64FailurePoint` cannot unwind host frames.
 fn splitCompilerSections(step: *Step.Compile) void {
-    step.link_function_sections = true;
+    if (step.rootModuleTarget().ofmt != .coff) step.link_function_sections = true;
     step.link_data_sections = true;
 }
 
