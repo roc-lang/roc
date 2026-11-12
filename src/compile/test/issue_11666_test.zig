@@ -25,7 +25,7 @@ const ProgramMeasure = struct {
         const self: *ProgramMeasure = @ptrCast(@alignCast(raw));
         const store = &result.store;
         for (store.getProcSpecs()) |proc| {
-            var walk = try lir.BodyClone.ReachableStmts.init(store, proc.body orelse continue);
+            var walk = try lir.BodyClone.ReachableStmts.init(store, proc.body.get() orelse continue);
             defer walk.deinit();
             while (try walk.next()) |stmt| {
                 self.measurement.statements += 1;

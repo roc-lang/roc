@@ -48,7 +48,7 @@ pub const ScalarizeError = std.mem.Allocator.Error;
 
 /// Internal aggregates can be scalarized under any procedure calling convention.
 pub fn rewritableProcBody(store: *const LirStore, proc_id: LIR.LirProcSpecId) ?LIR.CFStmtId {
-    return store.getProcSpecImmediate(proc_id).body;
+    return store.getProcSpecImmediate(proc_id).body.get();
 }
 
 /// Maximum scalarized field count per parameter; wider wrappers keep their
@@ -239,20 +239,28 @@ const TagBuildSite = struct {
     stmt: LIR.CFStmtId,
     variant_index: u32,
     discriminant: u32,
-    payload: ?LIR.LocalId,
+    payload: collections.OptionalId(LIR.LocalId),
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(TagBuildSite) == 16);
+}
 
 const AliasDef = struct {
     stmt: LIR.CFStmtId,
     source: LIR.LocalId,
     /// A local defined by more than one alias statement is never transparent.
     def_count: u32,
-    next_sibling: ?LIR.LocalId = null,
+    next_sibling: collections.OptionalId(LIR.LocalId) = .none,
     root_state: enum { pending, active, complete } = .pending,
     /// Null for a transparent cycle, which cannot reach a constructor or a
     /// join parameter and therefore cannot authorize scalarizing either.
-    root: ?LIR.LocalId = null,
+    root: collections.OptionalId(LIR.LocalId) = .none,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(AliasDef) == 24);
+}
 
 /// Compress the settled alias graph once per collection round. Every
 /// transparent edge is followed once; an active node proves a cycle.
@@ -274,7 +282,7 @@ fn resolveTransparentRoots(
             if (!transparent.contains(current)) break current;
             const def = alias_defs.getPtr(current).?;
             switch (def.root_state) {
-                .complete => break def.root,
+                .complete => break def.root.get(),
                 .active => break null,
                 .pending => {
                     if (metrics) |counts| counts.alias_edges += 1;
@@ -286,7 +294,7 @@ fn resolveTransparentRoots(
         };
         for (path.items) |local| {
             const def = alias_defs.getPtr(local).?;
-            def.root = root;
+            def.root = .of(root);
             def.root_state = .complete;
         }
     }
@@ -569,7 +577,7 @@ const Pass = struct {
             .stmt = stmt,
             .variant_index = assign.variant_index,
             .discriminant = assign.discriminant,
-            .payload = assign.payload,
+            .payload = .of(assign.payload),
         });
     }
 
@@ -618,7 +626,7 @@ const Pass = struct {
             const target = entry.key_ptr.*;
             if (!self.transparent.contains(target)) continue;
             const source = entry.value_ptr.source;
-            entry.value_ptr.next_sibling = self.alias_children.get(source);
+            entry.value_ptr.next_sibling = .of(self.alias_children.get(source));
             try self.alias_children.put(source, target);
             if (self.transparentRoot(source)) |root| {
                 if (self.struct_builds.getPtr(root)) |build| build.uses += 1;
@@ -631,7 +639,7 @@ const Pass = struct {
         if (!self.transparent.contains(source)) return source;
         const def = self.alias_defs.get(source).?;
         std.debug.assert(def.root_state == .complete);
-        return def.root;
+        return def.root.get();
     }
 
     /// The transparent aliases rooted at `param`, in dependency order, plus
@@ -673,7 +681,7 @@ const Pass = struct {
             const def = self.alias_defs.get(target).?;
             try closure.locals.append(self.allocator, target);
             try closure.stmts.append(self.allocator, def.stmt);
-            if (def.next_sibling) |sibling| try self.alias_work.append(self.allocator, sibling);
+            if (def.next_sibling.get()) |sibling| try self.alias_work.append(self.allocator, sibling);
             if (self.alias_children.get(target)) |child| try self.alias_work.append(self.allocator, child);
             if (self.field_reads.get(target)) |reads| {
                 try closure.reads.appendSlice(self.allocator, reads);
@@ -1152,7 +1160,7 @@ const Pass = struct {
         const payload_layout = self.singleVariantPayloadLayout(local) orelse return false;
         const site = sites[0];
         if (self.removed.contains(site.stmt)) return false;
-        const payload = site.payload orelse return false;
+        const payload = site.payload.get() orelse return false;
         if (site.variant_index != 0 or site.discriminant != 0) return false;
         const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
         if (self.store.getLocal(payload).layout_idx != payload_layout) return false;
@@ -1280,7 +1288,7 @@ const Pass = struct {
             if (write.op.source == param or self.singleVariantPayloadLayout(write.op.source) != payload_layout) return false;
         }
         for (direct_builds) |site| {
-            const payload = site.payload orelse return false;
+            const payload = site.payload.get() orelse return false;
             if (site.variant_index != 0 or site.discriminant != 0) return false;
             if (self.store.getLocal(payload).layout_idx != payload_layout) return false;
         }
@@ -1335,7 +1343,7 @@ const Pass = struct {
             const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
             try self.store.replaceCFStmt(site.stmt, .{ .set_local = .{
                 .target = payload_param,
-                .value = site.payload.?,
+                .value = site.payload.get().?,
                 .mode = .initialize_join_param,
                 .next = assign.next,
             } }, scalarizeOrigin(self.store.stmtOrigin(site.stmt)));
@@ -1862,13 +1870,13 @@ const Pass = struct {
     fn patchRemovedEdges(self: *Pass, proc_id: LIR.LirProcSpecId) ScalarizeError!void {
         if (self.removed.count() == 0) return;
         const proc = self.store.getProcSpecPtr(proc_id);
-        if (proc.body) |body| {
-            proc.body = self.resolveRemoved(body);
+        if (proc.body.get()) |body| {
+            proc.body = .some(self.resolveRemoved(body));
         }
 
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
-        try self.stack.append(self.allocator, proc.body.?);
+        try self.stack.append(self.allocator, proc.body.get().?);
         while (self.stack.pop()) |current| {
             if (self.visited.contains(current)) continue;
             try self.visited.put(current, {});
@@ -2276,7 +2284,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(12),
         .args = LIR.LocalSpan.empty(),
-        .body = join,
+        .body = .some(join),
         .ret_layout = .i64,
     }, .none);
 
@@ -2286,7 +2294,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
         .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{noop_arg}),
-        .body = noop_body,
+        .body = .some(noop_body),
         .ret_layout = .i64,
     }, .none);
     if (procedure_local) {
@@ -2298,7 +2306,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     } else {
         try run(store, &f.layouts);
     }
-    try testing.expectEqual(noop_body, store.getProcSpecImmediate(noop).body.?);
+    try testing.expectEqual(noop_body, store.getProcSpecImmediate(noop).body.get().?);
     try testing.expectEqual(noop_arg, store.getCFStmtImmediate(noop_body).ret.value);
 
     // The join now carries two parameters, the field reads are aliases of
@@ -2388,7 +2396,7 @@ test "scalarize keeps parameters with whole-value uses" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(10),
         .args = LIR.LocalSpan.empty(),
-        .body = join,
+        .body = .some(join),
         .ret_layout = .i64,
     }, .none);
 
@@ -2454,7 +2462,7 @@ test "scalarize splits a parameter built directly by a struct literal" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(9),
         .args = LIR.LocalSpan.empty(),
-        .body = join,
+        .body = .some(join),
         .ret_layout = .i64,
     }, .none);
 
@@ -2555,7 +2563,7 @@ test "scalarize sees through pure aliases to field reads" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
-        .body = join,
+        .body = .some(join),
         .ret_layout = .i64,
     }, .none);
 
@@ -2572,7 +2580,7 @@ test "scalarize sees through pure aliases to field reads" {
     const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.source);
     try testing.expectEqual(read_n, store.getCFStmtImmediate(join).join.body);
-    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body);
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.get().?);
 }
 
 test "scalarize keeps parameters whose alias escapes whole" {
@@ -2634,7 +2642,7 @@ test "scalarize keeps parameters whose alias escapes whole" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
-        .body = join,
+        .body = .some(join),
         .ret_layout = f.pair,
     }, .none);
 
@@ -2698,7 +2706,7 @@ test "scalarize seeds field parameters from a non-literal initializer" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
-        .body = join,
+        .body = .some(join),
         .ret_layout = .i64,
     }, .none);
 
@@ -2800,7 +2808,7 @@ test "scalarize splits a parameter shared by two joins" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
-        .body = outer,
+        .body = .some(outer),
         .ret_layout = .i64,
     }, .none);
 
@@ -2860,7 +2868,7 @@ test "scalarize batches independent constructors without recollecting each one" 
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{ number, text }),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .i64,
     }, .none);
     var metrics = Metrics{};
@@ -2906,7 +2914,7 @@ test "scalarize dissolves nested wrappers in one round" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
         .args = try store.addLocalSpan(wrappers[0..1]),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .i64,
     }, .none);
     var metrics = Metrics{};
@@ -2914,7 +2922,7 @@ test "scalarize dissolves nested wrappers in one round" {
     // One eliminating round and one confirming round, each collecting the
     // proc's statements twice.
     try testing.expect(metrics.collected_statements <= 4 * (2 * depth + 1));
-    const final_body = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, 0)))).body.?;
+    const final_body = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, 0)))).body.get().?;
     const first = store.getCFStmt(final_body);
     try testing.expect(first == .assign_ref);
     try testing.expectEqual(reads[0], first.assign_ref.target);
@@ -2941,13 +2949,13 @@ test "scalarize propagates escaping alias chains in linear work" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(aliases[0..1]),
-        .body = body,
+        .body = .some(body),
         .ret_layout = fixture.pair,
     }, .none);
     var metrics = Metrics{};
     try runMeasured(store, &fixture.layouts, &metrics);
     try testing.expect(metrics.alias_edges <= aliases.len);
-    try testing.expectEqual(body, store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, 0)))).body.?);
+    try testing.expectEqual(body, store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, 0)))).body.get().?);
 }
 
 test "scalarize keeps a constructor with an alias definition and its source" {
@@ -2985,11 +2993,11 @@ test "scalarize keeps a constructor with an alias definition and its source" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ first, second, text }),
-        .body = original,
+        .body = .some(original),
         .ret_layout = .i64,
     }, .none);
     try run(store, &fixture.layouts);
-    try testing.expectEqual(original, store.getProcSpecImmediate(proc).body.?);
+    try testing.expectEqual(original, store.getProcSpecImmediate(proc).body.get().?);
     try testing.expect(store.getCFStmtImmediate(read).assign_ref.op.kind == .field);
     try testing.expectEqual(alias, store.getCFStmtImmediate(read).assign_ref.op.source);
 }
@@ -3019,11 +3027,11 @@ test "scalarize propagates an escaping whole value through a long alias chain" {
     }
     body = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = .field(record, 0), .next = body } }, .test_fixture);
     const build = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{ num, text }), .next = body } }, .test_fixture);
-    const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{ num, text }), .body = build, .ret_layout = f.pair }, .none);
+    const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{ num, text }), .body = .some(build), .ret_layout = f.pair }, .none);
     try run(store, &f.layouts);
     // The field read does not justify deleting the constructor: the last
     // alias returns the entire record, so that use must reach its producer.
-    try testing.expectEqual(build, store.getProcSpecImmediate(proc_id).body.?);
+    try testing.expectEqual(build, store.getProcSpecImmediate(proc_id).body.get().?);
     try testing.expect(store.getCFStmtImmediate(build).* == .assign_struct);
     try testing.expectEqual(result, store.getCFStmtImmediate(ret).ret.value);
 }
@@ -3052,11 +3060,11 @@ test "scalarize alias roots share resolved tails and identify cycles explicitly"
     for (0..10_000) |index| {
         const def = aliases.get(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).?;
         try testing.expectEqual(.complete, def.root_state);
-        try testing.expectEqual(@as(LIR.LocalId, @fromBackingInt(@intCast(10_000))), def.root.?);
+        try testing.expectEqual(@as(LIR.LocalId, @fromBackingInt(@intCast(10_000))), def.root.get().?);
     }
     for (10_001..10_004) |index| {
         const def = aliases.get(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).?;
         try testing.expectEqual(.complete, def.root_state);
-        try testing.expectEqual(null, def.root);
+        try testing.expectEqual(null, def.root.get());
     }
 }

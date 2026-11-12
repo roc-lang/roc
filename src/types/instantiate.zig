@@ -734,7 +734,7 @@ pub const Instantiator = struct {
                     arg_span.dropFirstElem();
                     var i: u32 = 0;
                     while (i < arg_span.count) : (i += 1) {
-                        try self.visitReachChild(parent, self.store.vars.items.items[@backingInt(arg_span.start) + i]);
+                        try self.visitReachChild(parent, self.store.vars.items[@backingInt(arg_span.start) + i]);
                     }
                     try self.visitReachChild(parent, self.store.getAliasBackingVar(alias));
                 },
@@ -800,7 +800,7 @@ pub const Instantiator = struct {
     fn visitReachVars(self: *Self, parent: Var, vars: Var.SafeList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < vars.count) : (i += 1) {
-            try self.visitReachChild(parent, self.store.vars.items.items[@backingInt(vars.start) + i]);
+            try self.visitReachChild(parent, self.store.vars.items[@backingInt(vars.start) + i]);
         }
     }
 
@@ -1642,7 +1642,7 @@ pub const Instantiator = struct {
                 continue;
             }
             if (arrived <= frame.args_count) {
-                const arg_var = self.store.vars.items.items[frame.args_start + arrived - 1];
+                const arg_var = self.store.vars.items[frame.args_start + arrived - 1];
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
@@ -1670,7 +1670,7 @@ pub const Instantiator = struct {
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.elems_count) {
-                const elem_var = self.store.vars.items.items[frame.elems_start + arrived];
+                const elem_var = self.store.vars.items[frame.elems_start + arrived];
                 self.current_reach = .nested;
                 if (!try self.requestVar(elem_var, false)) return false;
                 continue;
@@ -1689,7 +1689,7 @@ pub const Instantiator = struct {
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.args_count) {
-                const arg_var = self.store.vars.items.items[frame.args_start + arrived];
+                const arg_var = self.store.vars.items[frame.args_start + arrived];
                 const position: NominalArgumentPosition = if (self.nominal_argument_position) |provider|
                     (try provider.resolve(provider.context, frame.nominal, arrived, frame.saved_polarity)) orelse {
                         machine.value_stack.items.len = frame.vars_base;
@@ -1733,7 +1733,7 @@ pub const Instantiator = struct {
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
-                const arg_var = self.store.vars.items.items[@backingInt(frame.func.args.start) + arrived];
+                const arg_var = self.store.vars.items[@backingInt(frame.func.args.start) + arrived];
                 // Argument positions flip the surrounding polarity, and no
                 // row inside an argument is one a use may widen: a use widens
                 // the result, never a row inside a function that result
@@ -1751,7 +1751,7 @@ pub const Instantiator = struct {
                 continue;
             }
             if (arrived < args_count + 1 + deps_count) {
-                const dep_var = self.store.vars.items.items[@backingInt(frame.func.effect_deps.start) + (arrived - args_count - 1)];
+                const dep_var = self.store.vars.items[@backingInt(frame.func.effect_deps.start) + (arrived - args_count - 1)];
                 self.current_polarity = frame.saved_polarity;
                 self.current_reach = .nested;
                 if (!try self.requestVar(dep_var, false)) return false;
@@ -1896,7 +1896,7 @@ pub const Instantiator = struct {
                     if (arrived < tag.args.count) {
                         // Indexing through tag.args.start only happens when the
                         // tag has payloads; an empty run's start addresses no row.
-                        const arg_var = self.store.vars.items.items[@backingInt(tag.args.start) + arrived];
+                        const arg_var = self.store.vars.items[@backingInt(tag.args.start) + arrived];
                         self.current_reach = .nested;
                         if (!try self.requestVar(arg_var, false)) return false;
                         continue;

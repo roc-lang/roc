@@ -61,7 +61,7 @@ fn countShapes(store: *const lir.LirStore, _: *const layout.Store) harness.Lower
 fn checkRankProcShape(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
     var found_multiway_proc = false;
     for (store.getProcSpecs()) |proc| {
-        const body = proc.body orelse continue;
+        const body = proc.body.get() orelse continue;
         var work = std.ArrayList(lir.LIR.CFStmtId).empty;
         defer work.deinit(store.allocator);
         var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(store.allocator);

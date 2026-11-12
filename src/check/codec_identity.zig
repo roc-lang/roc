@@ -39,8 +39,8 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
             std.hash.autoHash(&hash, std.meta.activeTag(call.resolution));
             hash.update(&(try types.rootKey(call.dispatcher_ty)).bytes);
             hash.update(&(try types.rootKey(call.callable_ty)).bytes);
-            std.hash.autoHash(&hash, call.subject_ty != null);
-            if (call.subject_ty) |subject| hash.update(&(try types.rootKey(subject)).bytes);
+            std.hash.autoHash(&hash, call.subject_ty != .none);
+            if (call.subject_ty.get()) |subject| hash.update(&(try types.rootKey(subject)).bytes);
         }
         const key = hash.final();
         var candidate = buckets.get(key);
@@ -88,8 +88,9 @@ pub fn digestContents(
     for (derivations) |*derivation| derivation.content = own[@backingInt(derivation.identity)];
 }
 
-/// No component assigned yet.
-const unassigned = std.math.maxInt(u32);
+/// No component or visit index assigned yet. Both are issued from one, so
+/// their tables start cleared to zero.
+const unassigned: u32 = 0;
 
 /// A depth-first canonical encoding of one contract's proof graph. Contracts
 /// and evidence nodes are numbered by first visit, so shared and recursive
@@ -167,8 +168,8 @@ const ContentDigester = struct {
         self.visit_index = try self.allocator.alloc(u32, count);
         @memset(self.visit_index, unassigned);
         self.low_link = try self.allocator.alloc(u32, count);
-        var next_index: u32 = 0;
-        var next_component: u32 = 0;
+        var next_index: u32 = 1;
+        var next_component: u32 = 1;
         for (0..count) |start| {
             if (self.visit_index[start] != unassigned) continue;
             try self.enterComponentFrame(@intCast(start), &next_index);
@@ -231,7 +232,7 @@ const ContentDigester = struct {
             .evidence => |id| {
                 if ((try self.evidence_ordinals.getOrPut(self.allocator, id)).found_existing) continue;
                 const node = self.table.evidence_nodes[id];
-                if (node.generated_codec_derivation) |nested| try self.appendNestedCodec(@backingInt(nested));
+                if (node.generated_codec_derivation.get()) |nested| try self.appendNestedCodec(@backingInt(nested));
                 switch (node.nested) {
                     .from_callable => {},
                     .resolved, .through_alias => |span| try self.tasks.append(self.allocator, .{ .refs = span }),
@@ -309,7 +310,7 @@ const ContentDigester = struct {
             self.writeU32(call.method_role);
             try self.writeType(call.dispatcher_ty);
             try self.writeType(call.callable_ty);
-            try self.writeOptionalType(call.subject_ty);
+            try self.writeOptionalType(call.subject_ty.get());
             self.writeU8(@backingInt(std.meta.activeTag(call.resolution)));
             switch (call.resolution) {
                 .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
@@ -324,7 +325,7 @@ const ContentDigester = struct {
         if (!try self.firstVisit(&self.evidence_ordinals, id)) return;
         const node = self.table.evidence_nodes[id];
         self.writeTarget(node.target);
-        try self.writeOptionalType(node.dispatcher_ty);
+        try self.writeOptionalType(node.dispatcher_ty.get());
         self.writeU8(@backingInt(std.meta.activeTag(node.instantiation)));
         switch (node.instantiation) {
             .monomorphic => {},
@@ -333,8 +334,8 @@ const ContentDigester = struct {
         const subst = self.table.site_substitutions[node.subst.start..][0..node.subst.len];
         self.writeU32(@intCast(subst.len));
         for (subst) |ty| try self.writeType(ty);
-        self.writeU8(@intFromBool(node.generated_codec_derivation != null));
-        if (node.generated_codec_derivation) |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) });
+        self.writeU8(@intFromBool(node.generated_codec_derivation != .none));
+        if (node.generated_codec_derivation.get()) |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) });
         self.writeU8(@backingInt(std.meta.activeTag(node.nested)));
         switch (node.nested) {
             .from_callable => {},
@@ -492,7 +493,7 @@ pub fn callsEquivalent(
     if (left.method != right.method or std.meta.activeTag(left.resolution) != std.meta.activeTag(right.resolution)) return false;
     try comparer.typesPair(left.dispatcher_ty, right.dispatcher_ty);
     try comparer.typesPair(left.callable_ty, right.callable_ty);
-    if (!try comparer.optionalTypes(left.subject_ty, right.subject_ty)) return false;
+    if (!try comparer.optionalTypes(left.subject_ty.get(), right.subject_ty.get())) return false;
     switch (left.resolution) {
         .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before calls are compared
         .checked_error => {},
@@ -619,7 +620,7 @@ const Comparer = struct {
                         if (ac.method != bc.method or ac.method_role != bc.method_role or std.meta.activeTag(ac.resolution) != std.meta.activeTag(bc.resolution)) return false;
                         try self.typesPair(ac.dispatcher_ty, bc.dispatcher_ty);
                         try self.typesPair(ac.callable_ty, bc.callable_ty);
-                        if (!try self.optionalTypes(ac.subject_ty, bc.subject_ty)) return false;
+                        if (!try self.optionalTypes(ac.subject_ty.get(), bc.subject_ty.get())) return false;
                         switch (ac.resolution) {
                             .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
                             .checked_error => {},
@@ -632,8 +633,8 @@ const Comparer = struct {
                     const a = self.table.evidence_nodes[pair.left];
                     const b = self.table.evidence_nodes[pair.right];
                     if (!std.meta.eql(a.target, b.target) or std.meta.activeTag(a.instantiation) != std.meta.activeTag(b.instantiation) or std.meta.activeTag(a.nested) != std.meta.activeTag(b.nested) or a.subst.len != b.subst.len) return false;
-                    if (!try self.optionalTypes(a.dispatcher_ty, b.dispatcher_ty)) return false;
-                    if (!try self.codecs(a.generated_codec_derivation, b.generated_codec_derivation)) return false;
+                    if (!try self.optionalTypes(a.dispatcher_ty.get(), b.dispatcher_ty.get())) return false;
+                    if (!try self.codecs(a.generated_codec_derivation.get(), b.generated_codec_derivation.get())) return false;
                     switch (a.instantiation) {
                         .monomorphic => {},
                         .callable => |ty| try self.typesPair(ty, b.instantiation.callable),

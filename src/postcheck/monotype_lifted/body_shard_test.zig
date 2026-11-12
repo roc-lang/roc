@@ -212,13 +212,13 @@ fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32
     const segments = try p.addFieldAccessSegmentSpan(&.{.{ .field = ids.field }});
     const destructs = try p.addRecordDestructSpan(&.{.{ .name = ids.field, .pattern = bind }});
     const steps = try p.addStrPatternStepSpan(&.{
-        .{ .capture = bind, .delimiter = text },
-        .{ .capture = null, .delimiter = ids.string },
+        .{ .capture = .some(bind), .delimiter = text },
+        .{ .capture = .none, .delimiter = ids.string },
     });
     _ = try p.addPat(.{ .ty = ty, .data = .{ .record = destructs } });
     _ = try p.addPat(.{ .ty = ty, .data = .{ .str_pattern = .{ .prefix = text, .steps = steps, .end = .tail } } });
     _ = try p.addPat(.{ .ty = ty, .data = .{ .as = .{ .pattern = bind, .local = other } } });
-    _ = try p.addPat(.{ .ty = ty, .data = .{ .list = .{ .patterns = pats, .rest = .{ .index = 100, .pattern = bind } } } });
+    _ = try p.addPat(.{ .ty = ty, .data = .{ .list = .{ .patterns = pats, .rest = .some(.{ .index = 100, .pattern = .some(bind) }) } } });
     _ = try p.addPat(.{ .ty = ty, .data = .{ .tag = .{ .name = ids.tag, .payloads = pats } } });
     _ = try p.addPat(.{ .ty = ty, .data = .{ .nominal = bind } });
     _ = try p.addPat(.{ .ty = ty, .data = .{ .str_lit = text } });
@@ -294,7 +294,7 @@ fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32
         .body = loop,
         .remainder = value,
     } });
-    const branches = try p.addBranchSpan(&.{.{ .pat = bind, .bindings = statements, .guard = frozen, .body = joined }});
+    const branches = try p.addBranchSpan(&.{.{ .pat = bind, .bindings = statements, .guard = .some(frozen), .body = joined }});
     _ = try expr(p, ty, .{ .match_ = .{ .scrutinee = value, .branches = branches } });
     const ifs = try p.addIfBranchSpan(&.{.{ .cond = frozen, .body = value }});
     _ = try expr(p, ty, .{ .if_ = .{ .branches = ifs, .final_else = joined } });

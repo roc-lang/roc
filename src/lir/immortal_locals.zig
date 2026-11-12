@@ -240,7 +240,7 @@ pub fn elide(gpa: Allocator, store: *LirStore, literals: Literals) Allocator.Err
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const proc = store.getProcSpecPtr(proc_id);
-        if (proc.body) |body| proc.body = resolve(successor, body);
+        if (proc.body.get()) |body| proc.body = .some(resolve(successor, body));
         const joins = store.getJoinPointSpanMut(proc.join_points);
         for (0..joins.len) |join_index| {
             const join = GuardedList.atPtr(joins, join_index);
@@ -306,7 +306,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *LirStore, literals: Literals) Al
     var immortal = try compute(gpa, store, literals);
     defer immortal.deinit(gpa);
     for (0..store.procSpecCount()) |index| {
-        const body = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).body orelse continue;
+        const body = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).body.get() orelse continue;
         var walk = try Body.ReachableStmts.initWithAllocator(store, body, gpa);
         defer walk.deinit();
         while (try walk.next()) |stmt_id| {

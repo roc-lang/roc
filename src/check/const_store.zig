@@ -122,15 +122,18 @@ pub const TypeDef = struct {
     type_name: names.TypeNameId,
     /// Declaring statement: within-module discriminator for same-named
     /// block-local declarations.
-    source_decl: ?u32 = null,
+    source_decl: collections.OptionalU32 = .none,
     /// Compiler-generated specialization identity for internal nominals minted
     /// after checking while preserving the public declaration identity.
     generated: ?names.TypeDigest = null,
     iterator_representation: IteratorRepresentation = .none,
     iterator_kind: IteratorKind = .none,
     iterator_depth: u8 = 0,
-    iterator_topology: ?IteratorTopology = null,
+    iterator_topology: OptionalIteratorTopology = .none,
 };
+
+/// An optional `IteratorTopology` at its own size.
+pub const OptionalIteratorTopology = collections.OptionalStruct(IteratorTopology, "len_field");
 
 /// Target-independent Monotype iterator tier preserved across constant storage.
 pub const IteratorRepresentation = enum(u8) {
@@ -161,6 +164,9 @@ pub const TypeBacking = struct {
     authority: TypeBackingAuthority = .checked_public,
 };
 
+/// An optional `TypeBacking` at its own size.
+pub const OptionalTypeBacking = collections.OptionalStruct(TypeBacking, "ty");
+
 /// Kind of stored named type.
 pub const TypeNamedKind = enum {
     nominal,
@@ -177,12 +183,15 @@ pub const TypeFieldDefault = struct {
     expr_node: u32,
 };
 
+/// An optional `TypeFieldDefault` at its own size.
+pub const OptionalTypeFieldDefault = collections.OptionalStruct(TypeFieldDefault, "expr_node");
+
 /// Record field entry for stored monomorphic type evidence.
 pub const TypeField = struct {
     name: names.RecordFieldNameId,
     ty: ConstTypeId,
-    value_ty: ?ConstTypeId = null,
-    default: ?TypeFieldDefault,
+    value_ty: collections.OptionalId(ConstTypeId) = .none,
+    default: OptionalTypeFieldDefault,
 };
 
 /// Tag-union variant entry for stored monomorphic type evidence.
@@ -205,9 +214,9 @@ pub const ConstType = union(enum) {
         named_type: NamedType,
         def: TypeDef,
         kind: TypeNamedKind,
-        builtin_owner: ?static_dispatch.BuiltinOwner = null,
+        builtin_owner: collections.OptionalEnum(static_dispatch.BuiltinOwner) = .none,
         args: ConstRange,
-        backing: ?TypeBacking = null,
+        backing: OptionalTypeBacking = .none,
         declared_order: ConstRange = .{},
     },
     record: ConstRange,
@@ -376,9 +385,13 @@ pub const RecordedStructuralEdge = struct {
     dispatcher_ty: checked_ids.CheckedTypeId,
     callable_key: names.CanonicalTypeKey,
     callable_ty: checked_ids.CheckedTypeId,
-    generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
+    generated_codec_derivation: collections.OptionalId(static_dispatch.GeneratedCodecDerivationId),
     generated_codec_content: ?static_dispatch.GeneratedCodecContentDigest,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(RecordedStructuralEdge) == 144);
+}
 
 /// A codec edge named by its contract's identity across checked modules and
 /// the checked keys of its dispatcher and callable types.
@@ -534,18 +547,22 @@ pub const ConstFnEvidenceScope = union(enum(u8)) {
 /// flat evidence vector; parent indexes address its `evidence_frames` slice.
 pub const ConstFnEvidenceFrame = struct {
     scope_id: ConstFnEvidenceScope,
-    parent: ?u32,
+    parent: collections.OptionalU32,
     roots_start: u32,
     roots_len: u32,
 
     pub fn init(scope_id: ConstFnEvidenceScope, parent: ?u32, roots_start: u32, roots_len: u32) ConstFnEvidenceFrame {
-        return .{ .scope_id = scope_id, .parent = parent, .roots_start = roots_start, .roots_len = roots_len };
+        return .{ .scope_id = scope_id, .parent = .of(parent), .roots_start = roots_start, .roots_len = roots_len };
     }
 
     pub fn scope(self: ConstFnEvidenceFrame) ConstFnEvidenceScope {
         return self.scope_id;
     }
 };
+
+comptime {
+    std.debug.assert(@sizeOf(ConstFnEvidenceFrame) == 20);
+}
 
 /// Function value stored by compile-time evaluation.
 pub const ConstFn = struct {
@@ -733,14 +750,18 @@ const StoredFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
-    owner_fn_ty: ?ConstTypeId = null,
+    owner_fn_ty: collections.OptionalId(ConstTypeId) = .none,
     captures: ConstRange = .{},
     evidence: ConstRange = .{},
     evidence_targets: ConstRange = .{},
     evidence_structurals: ConstRange = .{},
     evidence_frames: ConstRange = .{},
-    evidence_frame_head: ?u32 = null,
+    evidence_frame_head: collections.OptionalU32 = .none,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(StoredFn) == 232);
+}
 
 /// A type node as `ConstTypeStore` keeps it: `ConstType` with its two large
 /// payloads, `named` and `erased`, held out of line by index, so a node takes
@@ -760,6 +781,12 @@ pub const StoredConstType = union(enum) {
 
 /// Payload of a `named` const type node.
 pub const ConstNamedType = @FieldType(ConstType, "named");
+
+comptime {
+    std.debug.assert(@sizeOf(TypeDef) == 88);
+    std.debug.assert(@sizeOf(ConstNamedType) == 148);
+    std.debug.assert(@sizeOf(TypeField) == 20);
+}
 
 /// Store of monomorphic type evidence attached to compile-time constants.
 pub const ConstTypeStore = struct {
@@ -1003,8 +1030,8 @@ pub const ConstTypeStore = struct {
             .record => |span| for (source.fieldSpan(span)) |field| {
                 try ops.append(self.allocator, .{ .field_name = field.name });
                 try ops.append(self.allocator, .{ .child = field.ty });
-                if (field.value_ty) |value_ty| try ops.append(self.allocator, .{ .child = value_ty });
-                try ops.append(self.allocator, .{ .default = field.default });
+                if (field.value_ty.get()) |value_ty| try ops.append(self.allocator, .{ .child = value_ty });
+                try ops.append(self.allocator, .{ .default = field.default.get() });
             },
             .tag_union => |span| {
                 var cloned: u32 = 0;
@@ -1026,7 +1053,7 @@ pub const ConstTypeStore = struct {
                 };
                 try ops.append(self.allocator, .{ .def = named.def });
                 try ops.append(self.allocator, .{ .span = .{ .start = 0, .len = @intCast(args.len) } });
-                if (named.backing) |backing| try ops.append(self.allocator, .{ .child = backing.ty });
+                if (named.backing.get()) |backing| try ops.append(self.allocator, .{ .child = backing.ty });
             },
         }
         try frames.append(self.allocator, frame);
@@ -1051,15 +1078,15 @@ pub const ConstTypeStore = struct {
                 for (fields, 0..) |field, i| {
                     const field_ty = types[type_cursor];
                     type_cursor += 1;
-                    const value_ty: ?ConstTypeId = if (field.value_ty != null) value: {
+                    const value_ty: ?ConstTypeId = if (field.value_ty.get() != null) value: {
                         defer type_cursor += 1;
                         break :value types[type_cursor];
                     } else null;
                     cloned_fields[i] = .{
                         .name = frame.field_names.items[i],
                         .ty = field_ty,
-                        .value_ty = value_ty,
-                        .default = frame.defaults.items[i],
+                        .value_ty = .of(value_ty),
+                        .default = .of(frame.defaults.items[i]),
                     };
                 }
                 break :blk .{ .record = try self.appendFieldSpan(cloned_fields) };
@@ -1100,11 +1127,11 @@ pub const ConstTypeStore = struct {
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
                     .args = frame.spans.items[0],
-                    .backing = if (named.backing) |backing| .{
+                    .backing = .of(if (named.backing.get()) |backing| .{
                         .ty = types[type_cursor],
                         .use = backing.use,
                         .authority = backing.authority,
-                    } else null,
+                    } else null),
                     .declared_order = try self.appendDeclaredFieldSpan(cloned_declared),
                 } };
             },
@@ -1141,7 +1168,7 @@ pub const ConstTypeStore = struct {
             .iterator_representation = def.iterator_representation,
             .iterator_kind = def.iterator_kind,
             .iterator_depth = def.iterator_depth,
-            .iterator_topology = if (def.iterator_topology) |topology| .{
+            .iterator_topology = .of(if (def.iterator_topology.get()) |topology| .{
                 .len_field = try translateRecordFieldName(name_translation, topology.len_field),
                 .step_field = try translateRecordFieldName(name_translation, topology.step_field),
                 .ok_tag = try translateTagName(name_translation, topology.ok_tag),
@@ -1152,7 +1179,7 @@ pub const ConstTypeStore = struct {
                 .skip_tag = try translateTagName(name_translation, topology.skip_tag),
                 .item_field = try translateRecordFieldName(name_translation, topology.item_field),
                 .rest_field = try translateRecordFieldName(name_translation, topology.rest_field),
-            } else null,
+            } else null),
         };
     }
 
@@ -1353,13 +1380,13 @@ pub const ConstStore = struct {
             .fn_def = fn_value.fn_def,
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
-            .owner_fn_ty = fn_value.owner_fn_ty,
+            .owner_fn_ty = .of(fn_value.owner_fn_ty),
             .captures = captures_range,
             .evidence = evidence_range,
             .evidence_targets = evidence_targets,
             .evidence_structurals = evidence_structurals,
             .evidence_frames = evidence_frames,
-            .evidence_frame_head = fn_value.evidence_frame_head,
+            .evidence_frame_head = .of(fn_value.evidence_frame_head),
         });
         return id;
     }
@@ -1393,13 +1420,14 @@ pub const ConstStore = struct {
         var cursor: usize = 0;
         for (fn_value.evidence_frames, 0..) |frame, index| {
             if (index == 0 or index == head + 1) {
-                if (frame.scope() != .root or frame.parent != null) return false;
+                if (frame.scope() != .root or frame.parent != .none) return false;
             } else {
                 switch (frame.scope()) {
                     .root => return false,
                     .generalized => {},
                 }
-                if (frame.parent == null or frame.parent.? != index - 1) return false;
+                const parent = frame.parent.get() orelse return false;
+                if (parent != index - 1) return false;
             }
             if (frame.roots_start != cursor) return false;
             cursor = try evidenceVectorEnd(allocator, fn_value.evidence, cursor, frame.roots_len) orelse return false;
@@ -1578,7 +1606,7 @@ pub const ConstStore = struct {
             .fn_def = stored.fn_def,
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
-            .owner_fn_ty = stored.owner_fn_ty,
+            .owner_fn_ty = stored.owner_fn_ty.get(),
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
             .evidence = .{
                 .nodes = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
@@ -1586,7 +1614,7 @@ pub const ConstStore = struct {
                 .structurals = self.evidence_structural_pool.items[stored.evidence_structurals.start .. stored.evidence_structurals.start + stored.evidence_structurals.len],
             },
             .evidence_frames = self.evidence_frame_pool.items[stored.evidence_frames.start .. stored.evidence_frames.start + stored.evidence_frames.len],
-            .evidence_frame_head = stored.evidence_frame_head,
+            .evidence_frame_head = stored.evidence_frame_head.get(),
         };
     }
 
@@ -1634,13 +1662,15 @@ pub const ConstStore = struct {
     /// bytes, children in order, and named types by declaring module. A named
     /// type's checked occurrence (`named_type.ty`) is provenance, not value
     /// identity. Function values are never equal; no compared graph holds one.
-    pub fn graphEql(self: *const ConstStore, root: ConstNodeId, other: *const ConstStore, other_root: ConstNodeId) Allocator.Error!bool {
+    /// The walk's own tables live in `scratch`, never in either store's
+    /// allocator, for the reason `hashGraph` gives.
+    pub fn graphEql(self: *const ConstStore, scratch: Allocator, root: ConstNodeId, other: *const ConstStore, other_root: ConstNodeId) Allocator.Error!bool {
         const Pair = struct { left: ConstNodeId, right: ConstNodeId };
-        var seen = std.AutoHashMap(Pair, void).init(self.allocator);
+        var seen = std.AutoHashMap(Pair, void).init(scratch);
         defer seen.deinit();
         var pending = std.ArrayList(Pair).empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .left = root, .right = other_root });
+        defer pending.deinit(scratch);
+        try pending.append(scratch, .{ .left = root, .right = other_root });
         while (pending.pop()) |pair| {
             const entry = try seen.getOrPut(pair);
             if (entry.found_existing) continue;
@@ -1653,17 +1683,17 @@ pub const ConstStore = struct {
                     const right_function = right.boxy_fn;
                     if (!sameBytes(self.blobData(function.recipe), other.blobData(right_function.recipe))) return false;
                     if (function.captures.len != right_function.captures.len) return false;
-                    for (function.captures, right_function.captures) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                    for (function.captures, right_function.captures) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
                 },
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
                 .str => |str| if (str.capacity != right.str.capacity or !sameBytes(self.blobData(str.bytes), other.blobData(right.str.bytes))) return false,
                 .crash => |str| if (!sameBytes(self.blobData(str), other.blobData(right.crash))) return false,
                 .checked_error => |str| if (!sameBytes(self.blobData(str), other.blobData(right.checked_error))) return false,
-                .box => |payload| try pending.append(self.allocator, .{ .left = payload, .right = right.box }),
+                .box => |payload| try pending.append(scratch, .{ .left = payload, .right = right.box }),
                 .nominal => |nominal| {
                     if (!std.meta.eql(nominal.named_type.module.bytes, right.nominal.named_type.module.bytes)) return false;
-                    try pending.append(self.allocator, .{ .left = nominal.backing, .right = right.nominal.backing });
+                    try pending.append(scratch, .{ .left = nominal.backing, .right = right.nominal.backing });
                 },
                 .list => |list| {
                     const right_list = right.list;
@@ -1672,7 +1702,7 @@ pub const ConstStore = struct {
                     switch (list.items) {
                         .nodes => |items| {
                             if (items.len != right_list.items.nodes.len) return false;
-                            for (items, right_list.items.nodes) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                            for (items, right_list.items.nodes) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
                         },
                         .packed_bytes => |packed_list| {
                             const r = right_list.items.packed_bytes;
@@ -1685,11 +1715,11 @@ pub const ConstStore = struct {
                 inline .tuple, .record => |items, tag| {
                     const right_items = @field(right, @tagName(tag));
                     if (items.len != right_items.len) return false;
-                    for (items, right_items) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                    for (items, right_items) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
                 },
                 .tag => |tag| {
                     if (!base.Ident.textEql(tag.tag_name, right.tag.tag_name) or tag.payloads.len != right.tag.payloads.len) return false;
-                    for (tag.payloads, right.tag.payloads) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                    for (tag.payloads, right.tag.payloads) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
                 },
             }
         }
@@ -1712,18 +1742,23 @@ pub const ConstStore = struct {
     /// values built the same way feed equal bytes whatever their node ids.
     /// `context.moduleDigest` gives the bytes naming a nominal type's module,
     /// and `context.fnValueDigest` the bytes naming a stored function.
+    /// The walk's own tables live in `scratch`, never in the store's
+    /// allocator: a completed store is read from any thread, while its
+    /// allocator can be a single-threaded arena owned by its module (a
+    /// reopened cache entry's evaluation columns, a pairing overlay).
     pub fn hashGraph(
         self: *const ConstStore,
+        scratch: Allocator,
         root: ConstNodeId,
         hasher: *base.Sha256,
         context: anytype,
     ) Allocator.Error!void {
-        var ordinals = collections.DenseMap(ConstNodeId, u32).init(self.allocator);
+        var ordinals = collections.DenseMap(ConstNodeId, u32).init(scratch);
         defer ordinals.deinit();
         var next_ordinal: u32 = 0;
         var pending = std.ArrayList(ConstNodeId).empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, root);
+        defer pending.deinit(scratch);
+        try pending.append(scratch, root);
         while (pending.pop()) |node| {
             const entry = try ordinals.getOrPut(node);
             if (entry.found_existing) {
@@ -1745,16 +1780,16 @@ pub const ConstStore = struct {
                     hashBytes(hasher, self.blobData(str.bytes));
                 },
                 inline .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
-                .box => |payload| try pending.append(self.allocator, payload),
+                .box => |payload| try pending.append(scratch, payload),
                 .nominal => |nominal| {
                     hasher.update(&context.moduleDigest(nominal.named_type.module));
-                    try pending.append(self.allocator, nominal.backing);
+                    try pending.append(scratch, nominal.backing);
                 },
                 .list => |list| switch (list.items) {
                     .nodes => |items| {
                         hasher.update(std.mem.asBytes(&list.capacity));
                         hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
-                        try pending.appendSlice(self.allocator, items);
+                        try pending.appendSlice(scratch, items);
                     },
                     .packed_bytes => |packed_list| {
                         hasher.update(std.mem.asBytes(&list.capacity));
@@ -1767,7 +1802,7 @@ pub const ConstStore = struct {
                 },
                 inline .tuple, .record => |items| {
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
-                    try pending.appendSlice(self.allocator, items);
+                    try pending.appendSlice(scratch, items);
                 },
                 .boxy_fn => |function| {
                     // The recipe names its modules by checked key; the
@@ -1778,12 +1813,12 @@ pub const ConstStore = struct {
                     for (keys) |key| hasher.update(&context.moduleDigest(.{ .bytes = key }));
                     hashBytes(hasher, recipeBody(recipe));
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(function.captures.len))));
-                    try pending.appendSlice(self.allocator, function.captures);
+                    try pending.appendSlice(scratch, function.captures);
                 },
                 .tag => |tag| {
                     hashBytes(hasher, tag.tag_name);
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(tag.payloads.len))));
-                    try pending.appendSlice(self.allocator, tag.payloads);
+                    try pending.appendSlice(scratch, tag.payloads);
                 },
             }
         }
@@ -2013,11 +2048,11 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         .def = .{ .module = @fromBackingInt(@intCast(9)), .type_name = @fromBackingInt(@intCast(10)) },
         .kind = .@"opaque",
         .args = .{},
-        .backing = .{
+        .backing = .some(.{
             .ty = private_backing_ty,
             .use = .runtime_layout_only,
             .authority = .generated_private,
-        },
+        }),
     } });
     var recursive_module: names.CheckedModuleDigest = .{};
     recursive_module.bytes[0] = 0x5A;
@@ -2127,7 +2162,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);
     try std.testing.expectEqual(capture_ty, loaded_fn.captures[0].ty);
     try std.testing.expectEqual(ConstType{ .primitive = .u64 }, loaded.type_store.get(loaded_fn.captures[0].ty));
-    try std.testing.expectEqual(TypeBackingAuthority.generated_private, loaded.type_store.get(private_named_ty).named.backing.?.authority);
+    try std.testing.expectEqual(TypeBackingAuthority.generated_private, loaded.type_store.get(private_named_ty).named.backing.get().?.authority);
     try std.testing.expectEqual(a, loaded_fn.captures[0].value);
     try std.testing.expectEqual(a, loaded_fn.captures[1].value);
     try std.testing.expect(loaded_fn.captures[0].kind.eql(.lexical));
@@ -2181,7 +2216,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_head));
 
     var corrupt_parent_frames = evidence_frames;
-    corrupt_parent_frames[1].parent = 1;
+    corrupt_parent_frames[1].parent = .some(1);
     var corrupt_parent = loaded_fn;
     corrupt_parent.evidence_frames = &corrupt_parent_frames;
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_parent));
@@ -2287,6 +2322,40 @@ fn hashScalar(hasher: *base.Sha256, scalar: ConstScalar) void {
     switch (scalar) {
         inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| hasher.update(std.mem.asBytes(&value)),
     }
+}
+
+test "ConstStore.hashGraph: walks in the caller's scratch, not the store's allocator" {
+    // A completed store is hashed from several threads at once while its own
+    // allocator can be a single-threaded arena owned by its module. The store
+    // here keeps an allocator that fails every request, so the hash succeeds
+    // only when every table of the walk comes from `scratch`.
+    const gpa = std.testing.allocator;
+    var store = ConstStore.init(gpa);
+    defer store.deinit();
+    const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
+    const b = try store.append(.{ .box = a });
+    const payloads = [_]ConstNodeId{ a, b };
+    const tag = try store.append(.{ .tag = .{ .tag_name = "Pair", .payloads = &payloads } });
+    const root = try store.append(.{ .record = &.{ tag, a } });
+
+    const Context = struct {
+        pub fn moduleDigest(_: @This(), _: names.CheckedModuleDigest) [32]u8 {
+            return @splat(0);
+        }
+        pub fn fnValueDigest(_: @This(), _: ConstFnId) [32]u8 {
+            return @splat(0);
+        }
+    };
+
+    var expected = base.Sha256.init(.{});
+    try store.hashGraph(gpa, root, &expected, Context{});
+
+    const owning = store.allocator;
+    store.allocator = std.testing.failing_allocator;
+    defer store.allocator = owning;
+    var hasher = base.Sha256.init(.{});
+    try store.hashGraph(gpa, root, &hasher, Context{});
+    try std.testing.expectEqual(expected.finalResult(), hasher.finalResult());
 }
 
 fn sameBytes(a: []const u8, b: []const u8) bool {

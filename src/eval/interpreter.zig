@@ -389,7 +389,7 @@ pub const Interpreter = struct {
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
     /// Direct slot lookup per entered procedure: a frame local's slot is
-    /// `slot_of[id - base]`, and ids outside the frame hold `FrameSlotIndex.none`.
+    /// `slot_of.get(id - base)`, absent for ids outside the frame.
     /// An index is built the first time a procedure is entered and is checked
     /// against the frame-local span it was built from, so a procedure whose
     /// frame locals are rewritten gets a fresh index.
@@ -553,7 +553,7 @@ pub const Interpreter = struct {
     }
 
     const LocalSlot = struct {
-        /// `unassigned_value` until the local is assigned.
+        /// Runtime-safety builds use `unassigned_value` until the local is assigned.
         val: Value = unassigned_value,
 
         /// No allocation and no zero-sized sentinel offset is ever at this
@@ -566,10 +566,13 @@ pub const Interpreter = struct {
     };
 
     /// See `frame_slot_indexes`.
+    const FrameSlotId = enum(u32) { _ };
+    const FrameSlotColumn = collections.OptionalIndexColumn(FrameSlotId);
+
     const FrameSlotIndex = struct {
         span: LIR.LocalSpan,
         base: u32,
-        slot_of: []u32,
+        slot_of: FrameSlotColumn,
         /// The slots of the frame's zero-sized locals.
         zst_slots: []u32 = &.{},
         /// Per slot: where the local's bytes live in the frame's storage, and
@@ -582,10 +585,8 @@ pub const Interpreter = struct {
         /// bytes the procedure's `frame_alloc` places.
         dyn_frame_slots: []u32 = &.{},
 
-        const none = std.math.maxInt(u32);
-
-        fn deinit(self: FrameSlotIndex, allocator: Allocator) void {
-            allocator.free(self.slot_of);
+        fn deinit(self: *FrameSlotIndex, allocator: Allocator) void {
+            self.slot_of.deinit(allocator);
             allocator.free(self.zst_slots);
             allocator.free(self.dyn_frame_slots);
             allocator.free(self.storage_offsets);
@@ -603,7 +604,7 @@ pub const Interpreter = struct {
         locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
         /// The proc's slot index (see `frame_slot_indexes`).
         slot_base: u32,
-        slot_of: []const u32,
+        slot_of: FrameSlotColumn.View,
         /// The proc's join points, sorted by id.
         join_points: LirStore.StoreSpanBorrow(LIR.JoinPoint, "join_points"),
         slots: []LocalSlot,
@@ -625,9 +626,8 @@ pub const Interpreter = struct {
             const id = @backingInt(local_id);
             if (id < self.slot_base) return null;
             const offset = id - self.slot_base;
-            if (offset >= self.slot_of.len) return null;
-            const slot = self.slot_of[offset];
-            return if (slot == FrameSlotIndex.none) null else slot;
+            if (offset >= self.slot_of.len()) return null;
+            return if (self.slot_of.get(offset)) |slot| @backingInt(slot) else null;
         }
 
         fn joinPoint(self: *const Frame, join_point_id: LIR.JoinPointId) ?LIR.JoinPoint {
@@ -1510,7 +1510,7 @@ pub const Interpreter = struct {
 
     fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
         const slot = frame.slots[frame.slotIndex(local_id)];
-        if (!slot.assigned()) {
+        if (std.debug.runtime_safety and !slot.assigned()) {
             if (comptime builtin.target.os.tag != .freestanding) {
                 const proc = self.store.getProcSpec(frame.proc_id);
                 debugPrint(
@@ -2030,7 +2030,7 @@ pub const Interpreter = struct {
     ) Error!ProcStep {
         const dyn_result = self.pending_dyn_result;
         self.pending_dyn_result = null;
-        if ((proc_spec.dyn_result != null) != (dyn_result != null)) {
+        if ((proc_spec.dyn_result != .none) != (dyn_result != null)) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} dynamic result storage presence differed from its caller's",
                 .{@backingInt(proc_id)},
@@ -2052,7 +2052,7 @@ pub const Interpreter = struct {
             );
         }
 
-        if (proc_spec.hosted) |hosted| {
+        if (proc_spec.hosted.get()) |hosted| {
             const param_layouts = try self.localLayouts(self.store.getLocalSpan(proc_spec.args));
             if (args.len != param_layouts.len) {
                 return self.invariantFailedError(
@@ -2087,7 +2087,7 @@ pub const Interpreter = struct {
         defer self.frame_stack.restore(frame.stack_mark);
         frame.caller_drives = self.erased_caller_drives;
         self.erased_caller_drives = false;
-        if (proc_spec.dyn_result) |result_local| {
+        if (proc_spec.dyn_result.get()) |result_local| {
             frame.dyn_result = dyn_result;
             bindDynAddress(&frame, result_local, dyn_result.?);
         }
@@ -2104,7 +2104,7 @@ pub const Interpreter = struct {
                 for (arg_layouts, 0..) |arg_layout, i| {
                     debugPrint("{d}:{d} ", .{ i, @backingInt(arg_layout) });
                 }
-                debugPrint(" abi={s} hosted={}\n", .{ @tagName(proc_spec.abi), proc_spec.hosted != null });
+                debugPrint(" abi={s} hosted={}\n", .{ @tagName(proc_spec.abi), proc_spec.hosted.get() != null });
                 self.debugDumpProc(proc_id);
             }
             return self.invariantFailedError(
@@ -2123,7 +2123,7 @@ pub const Interpreter = struct {
             const arg = args[i];
             const arg_layout = arg_layouts[i];
             const param_layout = self.store.getLocal(param).layout_idx;
-            const is_erased_reuse_arg = proc_spec.erased_reuse_arg == param;
+            const is_erased_reuse_arg = proc_spec.erased_reuse_arg.get() == param;
             if (proc_spec.abi == .erased_callable and i + 2 == params.len) {
                 if (param_layout != .opaque_ptr or arg_layout != .opaque_ptr) {
                     return self.invariantFailedError(
@@ -2199,7 +2199,7 @@ pub const Interpreter = struct {
                     // A procedure that left a call pending returns no value.
                     const returned = try self.localBytes(&frame, ret_local);
                     if (returned != result_storage and !self.hasPendingCall()) {
-                        boxy.walk.copy(try self.localDesc(&frame, proc_spec.dyn_result.?), result_storage, returned);
+                        boxy.walk.copy(try self.localDesc(&frame, proc_spec.dyn_result.get().?), result_storage, returned);
                     }
                     break :blk .{ .result = .{ .value = Value.zst, .layout = proc_spec.ret_layout } };
                 }
@@ -2253,7 +2253,7 @@ pub const Interpreter = struct {
             .of(LocalSlot),
         )));
         const slots = slots_ptr[0..locals.len];
-        @memset(slots, .{});
+        if (std.debug.runtime_safety) @memset(slots, .{});
         // A zero-sized local holds its only value from the start.
         for (slot_index.zst_slots) |slot| slots[slot].val = Value.zst;
         const storage = try self.frame_stack.alloc(
@@ -2266,7 +2266,7 @@ pub const Interpreter = struct {
             .ret_layout = proc_spec.ret_layout,
             .locals = locals,
             .slot_base = slot_index.base,
-            .slot_of = slot_index.slot_of,
+            .slot_of = slot_index.slot_of.view(),
             .join_points = self.store.getJoinPointSpan(proc_spec.join_points),
             .slots = slots,
             .storage = storage,
@@ -2292,21 +2292,20 @@ pub const Interpreter = struct {
         }
         // Until the index is built, the entry names a span no procedure has,
         // so a failed build is rebuilt on the next entry.
-        entry.value_ptr.* = .{ .span = .{ .start = std.math.maxInt(u32), .len = std.math.maxInt(u32) }, .base = 0, .slot_of = &.{} };
+        entry.value_ptr.* = .{ .span = .{ .start = std.math.maxInt(u32), .len = std.math.maxInt(u32) }, .base = 0, .slot_of = .{} };
         if (locals.len == 0) {
             entry.value_ptr.span = span;
             return entry.value_ptr.*;
         }
         const base_id = @backingInt(GuardedList.at(locals, 0));
         const last_id = @backingInt(GuardedList.at(locals, locals.len - 1));
-        const slot_of = try self.allocator.alloc(u32, @as(usize, last_id - base_id) + 1);
-        errdefer self.allocator.free(slot_of);
-        @memset(slot_of, FrameSlotIndex.none);
+        var slot_of = try FrameSlotColumn.initFilled(self.allocator, @as(usize, last_id - base_id) + 1);
+        errdefer slot_of.deinit(self.allocator);
         var zst_count: usize = 0;
         var dyn_frame_count: usize = 0;
         for (0..locals.len) |slot| {
             const local_id = GuardedList.at(locals, slot);
-            slot_of[@backingInt(local_id) - base_id] = @intCast(slot);
+            slot_of.set(@backingInt(local_id) - base_id, @fromBackingInt(@intCast(slot)));
             const local = self.store.getLocal(local_id);
             if (self.layout_store.getLayout(local.layout_idx).tag == .zst) zst_count += 1;
             if (local.dyn) |dyn| {
@@ -2360,7 +2359,7 @@ pub const Interpreter = struct {
     }
 
     fn requireProcBody(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) CFStmtId {
-        return proc_spec.body orelse self.invariantFailed(
+        return proc_spec.body.get() orelse self.invariantFailed(
             "LIR/interpreter invariant violated: non-hosted proc {d} missing statement body",
             .{@backingInt(proc_id)},
         );
@@ -2435,14 +2434,14 @@ pub const Interpreter = struct {
                             .proc = assign.proc,
                             .args = arg_values,
                             .arg_layouts = arg_layouts,
-                            .dyn_result = if (callee.dyn_result == null) null else frame.dyn_result orelse return self.invariantFailedError(
+                            .dyn_result = if (callee.dyn_result == .none) null else frame.dyn_result orelse return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: proc {d} replaces its frame with a dynamic-result call but has no result storage",
                                 .{@backingInt(frame.proc_id)},
                             ),
                             .relocations = call_args.relocations,
                         } };
                     }
-                    const result_storage: ?[*]u8 = if (callee.dyn_result == null) null else try self.callResultStorage(frame, assign.target);
+                    const result_storage: ?[*]u8 = if (callee.dyn_result == .none) null else try self.callResultStorage(frame, assign.target);
                     const call_loc = self.activeStmtLoc();
                     const call_region = self.activeStmtRegion();
                     const call_inline_scope = self.activeStmtInlineScope();
@@ -3571,7 +3570,7 @@ pub const Interpreter = struct {
         const explicit_arg_count = proc_arg_locals.len - 2;
         var proc_args = try self.evalAllocator().alloc(Value, proc_arg_locals.len);
         var proc_arg_layouts = try self.evalAllocator().alloc(layout_mod.Idx, proc_arg_locals.len);
-        const arg_plan = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args orelse {
+        const arg_plan = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args.get() orelse {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased callable proc {d} has no argument plan",
                 .{@backingInt(proc_id)},
@@ -3684,13 +3683,13 @@ pub const Interpreter = struct {
                     .{@backingInt(proc_id)},
                 );
             }
-            const capture_param = proc_spec.erased_capture_arg orelse {
+            const capture_param = proc_spec.erased_capture_arg.get() orelse {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} had no capture parameter metadata",
                     .{@backingInt(proc_id)},
                 );
             };
-            const explicit_arg_count = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args.?).offsets.len;
+            const explicit_arg_count = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args.get().?).offsets.len;
             if (proc_params.len != explicit_arg_count + 2) {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} had {d} parameters for {d} explicit arguments plus capture/reuse",
@@ -3729,7 +3728,7 @@ pub const Interpreter = struct {
             proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
 
             const reuse_index = explicit_arg_count + 1;
-            const reuse_param = proc_spec.erased_reuse_arg orelse return self.invariantFailedError(
+            const reuse_param = proc_spec.erased_reuse_arg.get() orelse return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased callable proc had no reuse parameter metadata",
                 .{},
             );
@@ -8270,7 +8269,7 @@ pub const Interpreter = struct {
         reuse: ?[*]u8,
     ) Error!void {
         const params = self.store.getLocalSpan(proc_spec.args);
-        const capture_param = proc_spec.erased_capture_arg orelse return self.invariantFailedError(
+        const capture_param = proc_spec.erased_capture_arg.get() orelse return self.invariantFailedError(
             "LIR/interpreter invariant violated: erased_record proc {d} has no capture parameter",
             .{@backingInt(proc_id)},
         );
@@ -8287,7 +8286,7 @@ pub const Interpreter = struct {
                 proc_args[i] = cell;
                 continue;
             }
-            if (proc_spec.erased_reuse_arg != null and param_id == proc_spec.erased_reuse_arg.?) {
+            if (proc_spec.erased_reuse_arg != .none and param_id == proc_spec.erased_reuse_arg.get().?) {
                 const cell = try self.alloc(param.layout_idx);
                 cell.write(usize, @intFromPtr(reuse));
                 proc_args[i] = cell;
@@ -8314,7 +8313,7 @@ pub const Interpreter = struct {
                 .{ @backingInt(proc_id), explicit_count },
             );
         }
-        if (proc_spec.dyn_result != null) {
+        if (proc_spec.dyn_result != .none) {
             self.pending_dyn_result = ret orelse boxy.walk.zeroSizedPtr();
             _ = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
             return;
@@ -8765,7 +8764,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
-        .body = f32_body,
+        .body = .some(f32_body),
         .ret_layout = .f32,
         .frame_locals = try store.addLocalSpan(&.{f32_local}),
     }, .none);
@@ -8781,7 +8780,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = f64_body,
+        .body = .some(f64_body),
         .ret_layout = .f64,
         .frame_locals = try store.addLocalSpan(&.{f64_local}),
     }, .none);
@@ -8826,7 +8825,7 @@ test "interpreter evaluates explicit static data by compact id" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u64,
         .frame_locals = frame_locals,
     }, .none);
@@ -8870,7 +8869,7 @@ test "interpreter turns a compiler host allocation failure into a Roc crash" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = list_layout,
         .frame_locals = try store.addLocalSpan(&.{ capacity, list }),
     }, .none);

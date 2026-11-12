@@ -31,15 +31,30 @@ pub fn RekeyingHashMap(
             value: V,
         };
 
-        const Entry = struct {
-            hash: u64,
+        /// A slot. An occupied slot's `tagged_hash` is its key's hash with
+        /// `occupied_bit` set, so an all-zero slot is empty and a table
+        /// starts from zeroed memory. Only the low bits address a slot, and
+        /// a table never has `occupied_bit` slots, so the tag never moves
+        /// an entry.
+        pub const Entry = struct {
+            tagged_hash: u64,
             key: K,
             value: V,
+
+            pub fn occupied(self: *const Entry) bool {
+                return self.tagged_hash != 0;
+            }
         };
+
+        const occupied_bit: u64 = 1 << 63;
+
+        fn tagged(hash: u64) u64 {
+            return hash | occupied_bit;
+        }
 
         allocator: Allocator,
         context: Context,
-        slots: []?Entry,
+        slots: []Entry,
         size: usize,
 
         pub fn init(allocator: Allocator, context: Context) Self {
@@ -66,8 +81,14 @@ pub fn RekeyingHashMap(
 
         /// Remove every entry while retaining the allocated probe table.
         pub fn clearRetainingCapacity(self: *Self) void {
-            @memset(self.slots, null);
+            clearSlots(self.slots);
             self.size = 0;
+        }
+
+        /// Empty every slot. An empty slot's key and value are never read,
+        /// so the whole slot is zeroed.
+        fn clearSlots(slots: []Entry) void {
+            @memset(std.mem.sliceAsBytes(slots), 0);
         }
 
         /// Clear, keeping the slots only while the use being cleared filled
@@ -104,7 +125,7 @@ pub fn RekeyingHashMap(
             std.debug.assert(self.size < usableCount(self.slots.len));
             std.debug.assert(self.get(key) == null);
             self.insertEntry(.{
-                .hash = self.context.hash(key),
+                .tagged_hash = tagged(self.context.hash(key)),
                 .key = key,
                 .value = value,
             });
@@ -116,12 +137,12 @@ pub fn RekeyingHashMap(
 
         pub fn getAdapted(self: *const Self, key: anytype, context: anytype) ?V {
             const index = self.getIndexAdapted(key, context) orelse return null;
-            return self.slots[index].?.value;
+            return self.slots[index].value;
         }
 
         pub fn fetchRemove(self: *Self, key: K) ?KV {
             const index = self.getIndexAdapted(key, self.context) orelse return null;
-            const removed = self.slots[index].?;
+            const removed = self.slots[index];
             self.removeAt(index);
             return .{ .key = removed.key, .value = removed.value };
         }
@@ -142,13 +163,14 @@ pub fn RekeyingHashMap(
         fn getIndexAdapted(self: *const Self, key: anytype, context: anytype) ?usize {
             if (self.size == 0) return null;
 
-            const hash = context.hash(key);
+            const hash = tagged(context.hash(key));
             const mask = self.slots.len - 1;
             var index = slotIndex(hash, mask);
             var remaining = self.slots.len;
             while (remaining != 0) : (remaining -= 1) {
-                const entry = self.slots[index] orelse return null;
-                if (entry.hash == hash and context.eql(key, entry.key)) return index;
+                const entry = &self.slots[index];
+                if (!entry.occupied()) return null;
+                if (entry.tagged_hash == hash and context.eql(key, entry.key)) return index;
                 index = (index + 1) & mask;
             }
             return null;
@@ -156,8 +178,8 @@ pub fn RekeyingHashMap(
 
         fn insertEntry(self: *Self, entry: Entry) void {
             const mask = self.slots.len - 1;
-            var index = slotIndex(entry.hash, mask);
-            while (self.slots[index] != null) {
+            var index = slotIndex(entry.tagged_hash, mask);
+            while (self.slots[index].occupied()) {
                 index = (index + 1) & mask;
             }
             self.slots[index] = entry;
@@ -169,8 +191,9 @@ pub fn RekeyingHashMap(
             var hole = removed_index;
             var scan = (hole + 1) & mask;
 
-            while (self.slots[scan]) |entry| {
-                const ideal = slotIndex(entry.hash, mask);
+            while (self.slots[scan].occupied()) {
+                const entry = self.slots[scan];
+                const ideal = slotIndex(entry.tagged_hash, mask);
                 if (probeDistance(ideal, hole, mask) < probeDistance(ideal, scan, mask)) {
                     self.slots[hole] = entry;
                     hole = scan;
@@ -178,23 +201,24 @@ pub fn RekeyingHashMap(
                 scan = (scan + 1) & mask;
             }
 
-            self.slots[hole] = null;
+            clearSlots(self.slots[hole..][0..1]);
             self.size -= 1;
         }
 
         fn resize(self: *Self, new_capacity: usize) Allocator.Error!void {
             std.debug.assert(std.math.isPowerOfTwo(new_capacity));
+            std.debug.assert(new_capacity <= occupied_bit);
             std.debug.assert(new_capacity > self.size);
 
-            const new_slots = try self.allocator.alloc(?Entry, new_capacity);
-            @memset(new_slots, null);
+            const new_slots = try self.allocator.alloc(Entry, new_capacity);
+            clearSlots(new_slots);
 
             const old_slots = self.slots;
             const old_size = self.size;
             self.slots = new_slots;
             self.size = 0;
             for (old_slots) |slot| {
-                if (slot) |entry| self.insertEntry(entry);
+                if (slot.occupied()) self.insertEntry(slot);
             }
             std.debug.assert(self.size == old_size);
             if (old_slots.len != 0) self.allocator.free(old_slots);
@@ -241,6 +265,11 @@ const WideLookupContext = struct {
         return left == right;
     }
 };
+
+test "rekeying hash map slots carry no presence tag beyond the entry" {
+    const Map = RekeyingHashMap(u32, u32, TestContext, 80);
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(Map.Entry));
+}
 
 test "rekeying hash map preserves wrapped collision clusters after deletion" {
     const Map = RekeyingHashMap(u32, u32, CollisionContext, 80);

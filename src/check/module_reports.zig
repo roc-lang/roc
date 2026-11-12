@@ -121,7 +121,14 @@ pub fn appendStored(
         defer snapshots.deinit();
         var regions = base.Region.List{};
         defer regions.deinit(gpa);
-        try stored.instantiateRendering(gpa, &snapshots, &regions);
+        // Snapshots render with the names, import display names and default
+        // sources the checker's type writer rendered them with.
+        try stored.instantiateRendering(gpa, &snapshots, &regions, .{
+            .idents = env.getIdentStoreConst(),
+            .import_mapping = import_mapping,
+            .default_source = ModuleEnv.typeWriterDefaultSource,
+            .default_source_ctx = env,
+        });
         var builder = try report.ReportBuilder.init(
             gpa,
             env,

@@ -30,7 +30,7 @@ pub const CompletedErasedMembers = struct {
     };
 
     fn keyOf(template: Program.FnTemplate) Key {
-        return .{ .frozen_fn = template.frozen_fn, .frozen_worker = template.frozen_worker, .frozen_context = template.frozen_context };
+        return .{ .frozen_fn = template.frozen_fn.get(), .frozen_worker = template.frozen_worker, .frozen_context = template.frozen_context };
     }
 
     /// Records every erased callable a completed value in `program`'s frozen
@@ -62,8 +62,8 @@ pub const CompletedErasedMembers = struct {
                     }
                 },
             }
-            if (relocation.callable_capture_offset == null) continue;
-            const proc = relocation.procedure orelse Common.invariant("frozen erased callable lacked its procedure");
+            if (relocation.callable_capture_offset == .none) continue;
+            const proc = relocation.procedure.get() orelse Common.invariant("frozen erased callable lacked its procedure");
             var found = false;
             for (program.erased_fns.items) |set| for (set.entries) |entry| {
                 if (entry.entry != proc) continue;

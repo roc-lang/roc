@@ -87,7 +87,7 @@ pub fn collectReferencedProcs(
 
     for (exports) |data_export| {
         for (data_export.relocations) |relocation| {
-            const proc = relocation.procedure orelse continue;
+            const proc = relocation.procedure.get() orelse continue;
             const gop = try seen.getOrPut(@backingInt(proc));
             if (gop.found_existing) continue;
             try result.append(allocator, proc);
@@ -200,7 +200,7 @@ const StaticInitializerMachine = struct {
     allocations: std.ArrayList(*SymbolicAllocation),
     static_roots: []?*SymbolicValue,
     static_active: []bool,
-    frozen_roots: []?StaticDataSymbolId,
+    frozen_roots: collections.OptionalIndexColumn(StaticDataSymbolId),
     string_backings: std.AutoHashMapUnmanaged(@import("base").StringLiteral.Idx, SymbolicAllocationId),
     /// Frames for initializers that are running, followed by released frames
     /// kept for reuse. An initializer reading a static value evaluates that
@@ -222,14 +222,13 @@ const StaticInitializerMachine = struct {
         @memset(static_roots, null);
         const static_active = try arena_allocator.alloc(bool, static_count);
         @memset(static_active, false);
-        const frozen_roots = try arena_allocator.alloc(?StaticDataSymbolId, static_count);
-        @memset(frozen_roots, null);
+        var frozen_roots = try collections.OptionalIndexColumn(StaticDataSymbolId).initFilled(arena_allocator, static_count);
         if (lowered.frozen_static_data) |frozen| {
             for (frozen.exports, 0..) |item, index| {
                 if (item.value_id) |id| {
                     const raw = @backingInt(id);
-                    if (raw >= static_count or frozen_roots[raw] != null) staticDataInvariant("frozen static slot identity is missing or duplicated");
-                    frozen_roots[raw] = @fromBackingInt(@intCast(index));
+                    if (raw >= static_count or frozen_roots.isPresent(raw)) staticDataInvariant("frozen static slot identity is missing or duplicated");
+                    frozen_roots.set(raw, @fromBackingInt(@as(u32, @intCast(index))));
                 }
             }
         }
@@ -397,7 +396,7 @@ const StaticInitializerMachine = struct {
                 _ = pending.pop();
                 continue;
             }
-            const initializer = definition.initializer orelse
+            const initializer = definition.initializer.get() orelse
                 staticDataInvariant("static value has neither frozen data nor an initializer");
             if (try self.unevaluatedStaticRead(initializer)) |dependency| {
                 if (self.static_active[@backingInt(dependency)]) staticDataInvariant("static initializer data dependency graph contained a cycle");
@@ -424,13 +423,13 @@ const StaticInitializerMachine = struct {
             self.static_roots[raw] = root;
             return root;
         }
-        if (value.callable) |procedure| {
+        if (value.callable.get()) |procedure| {
             const allocation = try self.erasedCallableAllocation(value.layout_idx, procedure, 0);
             const root = try self.pointerValue(value.layout_idx, allocation.id, 0);
             self.static_roots[raw] = root;
             return root;
         }
-        if (self.frozen_roots[raw]) |symbol| {
+        if (self.frozen_roots.get(raw)) |symbol| {
             const root = try self.readFrozenValue(symbol, self.lowered.lir_result.static_data_values.items[raw].layout_idx);
             self.static_roots[raw] = root;
             return root;
@@ -445,13 +444,13 @@ const StaticInitializerMachine = struct {
     /// The first static value an initializer reads whose own initializer has
     /// not run yet.
     fn unevaluatedStaticRead(self: *StaticInitializerMachine, proc_id: lir.LIR.LirProcSpecId) MaterializationError!?lir.LIR.StaticDataId {
-        var current = self.store().getProcSpecImmediate(proc_id).body orelse staticDataInvariant("static initializer procedure had no body");
+        var current = self.store().getProcSpecImmediate(proc_id).body.get() orelse staticDataInvariant("static initializer procedure had no body");
         while (true) {
             current = switch (self.store().getCFStmt(current)) {
                 .assign_literal => |assign| blk: {
                     switch (assign.value) {
                         .static_data => |dependency| if (self.static_roots[@backingInt(dependency.id)] == null and
-                            self.frozen_roots[@backingInt(dependency.id)] == null)
+                            !self.frozen_roots.isPresent(@backingInt(dependency.id)))
                         {
                             if (try self.readyStatic(dependency.id) == null) return dependency.id;
                         },
@@ -980,7 +979,7 @@ const StaticInitializerMachine = struct {
             if (relocation.offset < start or relocation.offset >= end) continue;
             const target: SymbolicRelocation.Target = switch (relocation.target) {
                 .data_symbol => |id| .{ .frozen_symbol = id },
-                .named => if (relocation.procedure) |proc|
+                .named => if (relocation.procedure.get()) |proc|
                     .{ .procedure = proc }
                 else if (relocation.rc_helper) |helper|
                     .{ .rc_helper = helper }
@@ -992,7 +991,7 @@ const StaticInitializerMachine = struct {
                 .target = target,
                 .addend = relocation.addend,
                 .kind = relocation.kind,
-                .callable_capture_offset = relocation.callable_capture_offset,
+                .callable_capture_offset = relocation.callable_capture_offset.get(),
             });
         }
         return value;
@@ -1007,8 +1006,8 @@ const StaticInitializerMachine = struct {
             staticDataInvariant("static materializer was asked to execute a runtime procedure");
         }
         if (!proc.args.isEmpty()) staticDataInvariant("static initializer procedure had runtime arguments");
-        if (proc.hosted != null) staticDataInvariant("static initializer procedure was hosted");
-        const body = proc.body orelse staticDataInvariant("static initializer procedure had no body");
+        if (proc.hosted.get() != null) staticDataInvariant("static initializer procedure was hosted");
+        const body = proc.body.get() orelse staticDataInvariant("static initializer procedure had no body");
         const frame = try self.pushFrame();
         defer self.popFrame();
         const locals = frame.slots;
@@ -2164,7 +2163,7 @@ const StaticDataBuilder = struct {
 
     fn buildRequestedExports(self: *StaticDataBuilder) MaterializationError!void {
         for (self.lowered.lir_result.requested_layouts.items, 0..) |request, index| {
-            const initializer = request.initializer orelse continue;
+            const initializer = request.initializer.get() orelse continue;
             if (request.const_locator == null) continue;
 
             self.beginOwner(requestedOwner(self.lowered, index));
@@ -2197,7 +2196,7 @@ const StaticDataBuilder = struct {
             self.beginOwner(self.providedOwner(provided_index));
 
             const request = self.requestedLayout(data.const_ref);
-            const initializer = request.initializer orelse
+            const initializer = request.initializer.get() orelse
                 staticDataInvariant("provided static data export had no closed LIR initializer");
             const entrypoint_name = self.root.module.canonical_names.externalSymbolNameText(data.ffi_symbol);
             const symbol_name = try self.allocator.dupe(u8, entrypoint_name);
@@ -2223,7 +2222,7 @@ const StaticDataBuilder = struct {
 
     fn buildInternalStaticValues(self: *StaticDataBuilder) MaterializationError!void {
         for (0..self.lowered.lir_result.static_data_values.items.len) |index| {
-            if (self.initializer_machine.frozen_roots[index] != null) continue;
+            if (self.initializer_machine.frozen_roots.isPresent(index)) continue;
             const static_data_id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, static_data_id);
             errdefer self.allocator.free(symbol_name);
@@ -2277,7 +2276,7 @@ const StaticDataBuilder = struct {
     fn requestedLayout(self: *StaticDataBuilder, const_locator: CheckedModule.ConstLocator) lir.Program.RequestedLayout {
         for (self.lowered.lir_result.requested_layouts.items) |request| {
             const request_locator = request.const_locator orelse continue;
-            if (std.meta.eql(request_locator, const_locator) and request.initializer != null) return request;
+            if (std.meta.eql(request_locator, const_locator) and request.initializer != .none) return request;
         }
         staticDataInvariant("provided data export had no initialized LIR layout request");
     }
@@ -2378,7 +2377,7 @@ const StaticDataBuilder = struct {
                     .target = .{ .data_symbol = symbol },
                     .addend = source.addend,
                     .kind = source.kind,
-                    .callable_capture_offset = source.callable_capture_offset,
+                    .callable_capture_offset = .of(source.callable_capture_offset),
                 };
                 return null;
             },
@@ -2394,7 +2393,7 @@ const StaticDataBuilder = struct {
                     .target = .{ .data_symbol = target.symbol },
                     .addend = target.addend + source.addend,
                     .kind = source.kind,
-                    .callable_capture_offset = source.callable_capture_offset,
+                    .callable_capture_offset = .of(source.callable_capture_offset),
                 };
                 return reserved;
             },
@@ -2408,8 +2407,8 @@ const StaticDataBuilder = struct {
                     .target_symbol_name = name,
                     .addend = source.addend,
                     .kind = .function_pointer,
-                    .callable_capture_offset = source.callable_capture_offset,
-                    .procedure = proc_id,
+                    .callable_capture_offset = .of(source.callable_capture_offset),
+                    .procedure = .some(proc_id),
                     .owns_target_symbol_name = cached_name == null,
                 };
                 return null;
@@ -2424,7 +2423,7 @@ const StaticDataBuilder = struct {
                     .target_symbol_name = name,
                     .addend = source.addend,
                     .kind = .function_pointer,
-                    .callable_capture_offset = source.callable_capture_offset,
+                    .callable_capture_offset = .of(source.callable_capture_offset),
                     .rc_helper = helper,
                     .owns_target_symbol_name = cached_name == null,
                 };
@@ -2577,7 +2576,7 @@ fn addCompletedValueForTest(program: *lir.Program.Result, layout_idx: layout.Idx
     errdefer allocator.free(owned);
     const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{
-        .initializer = null,
+        .initializer = .none,
         .layout_idx = layout_idx,
         .parts = .{ .kind = kind, .children = owned },
     });
@@ -2608,14 +2607,15 @@ test "completed value parts encode shared nested lists and callables at both tar
             .args = .empty(),
             .frame_locals = try program.store.addLocalSpan(&.{local_id}),
             .join_points = .empty(),
-            .body = ret,
+            .body = .some(ret),
             .ret_layout = .zst,
             .abi = .roc,
         }, .none);
         const word_id = try addCompletedValueForTest(program, .opaque_ptr, .{ .word = 7 }, &.{});
         const inner_id = try addCompletedValueForTest(program, item_layout, .{ .list = 1 }, &.{word_id});
         const outer_id = try addCompletedValueForTest(program, outer_layout, .{ .list = 2 }, &.{ inner_id, inner_id });
-        const callable_id = try addCompletedValueForTest(program, callable_layout, .{ .callable = .{ .proc = proc } }, &.{outer_id});
+        const on_drop: lir.LIR.ErasedCallableOnDrop = .{ .rc_helper = .{ .op = .host_drop, .layout_idx = outer_layout } };
+        const callable_id = try addCompletedValueForTest(program, callable_layout, .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{outer_id});
         var machine = try StaticInitializerMachine.init(allocator, &lowered, .{}, width);
         defer machine.deinit();
         const callable = try machine.evaluateStatic(callable_id);
@@ -2628,7 +2628,11 @@ test "completed value parts encode shared nested lists and callables at both tar
         try std.testing.expectEqual(outer_backing.relocations.items[0].target.allocation, outer_backing.relocations.items[1].target.allocation);
         const captured = machine.allocations.items[@backingInt(callable.relocations.items[0].target.allocation)].payload;
         try std.testing.expectEqual(proc, captured.relocations.items[0].target.procedure);
-        try std.testing.expectEqual(builtins.erased_callable.captureOffset(width.size()), captured.relocations.items[1].offset);
+        try std.testing.expectEqual(on_drop.rc_helper, captured.relocations.items[1].target.rc_helper);
+        try std.testing.expectEqual(@as(u32, width.size()), captured.relocations.items[1].offset);
+        try std.testing.expectEqual(layout.RcHelperKey{ .op = .incref, .layout_idx = outer_layout }, captured.relocations.items[2].target.rc_helper);
+        try std.testing.expectEqual(@as(u32, 2 * width.size()), captured.relocations.items[2].offset);
+        try std.testing.expectEqual(builtins.erased_callable.captureOffset(width.size()), captured.relocations.items[3].offset);
         try std.testing.expectEqual(callable, try machine.evaluateStatic(callable_id));
         try std.testing.expectEqual(@as(usize, 3), machine.allocations.items.len);
     }
