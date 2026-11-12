@@ -629,7 +629,6 @@ test "CrashBoundary.run recovers from a crash raised through roc_ops by the guar
     defer env.deinit();
 
     var outer_buf: JmpBuf = undefined;
-    defer env.active_jmp_buf = null;
 
     // Crashing and returning runs alternate through the same boundary type.
     const crash_plan = [_]bool{ true, false, true, true, false };
@@ -639,6 +638,9 @@ test "CrashBoundary.run recovers from a crash raised through roc_ops by the guar
 
         var callback: CrashingCallback = .{ .ops = env.get_ops(), .should_crash = should_crash };
         var crash_boundary = env.enterCrashBoundary();
+        // A failed check below must still unregister the boundary's
+        // thread-wide stack overflow recovery before later tests run.
+        errdefer crash_boundary.deinit();
         const jumped = try crash_boundary.run(CrashingCallback, &callback, CrashingCallback.run);
 
         try std.testing.expect(callback.entered);
