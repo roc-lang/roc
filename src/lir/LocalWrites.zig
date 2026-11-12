@@ -1,16 +1,11 @@
-//! How often each local of a procedure is written, for a backend deciding
-//! whether an `assign_ref.local` may share its source's bytes instead of
-//! copying them.
+//! Local write counts and the shared classification of in-place definitions.
+//! Backends use these facts to reject mutable address-alias candidates.
 //!
-//! A one-definition `ref.local` whose source has at most one definition and
-//! is never written in place names the same bytes for the rest of the
-//! procedure, so a backend that keeps aggregates in memory may bind the
-//! target to the source's address: nothing can change those bytes after the
-//! alias is made, and a later source definition that would change them is
-//! exactly what the counts rule out. The native dev backend proves the same
-//! rule through its stack plan ("Dev Backend Register Lifetimes"); this
-//! inventory is the part of that proof the wasm backend needs, from the same
-//! shared definition walk (`body_clone.forEachStmtDef`), without lifetimes.
+//! Counts alone are not an alias proof: a single syntactic definition may
+//! execute again around a back edge while a snapshot remains live. The native
+//! and wasm stack planners validate those lifetimes before sharing bytes.
+//! A caller already walking its CFG can consume the classification without
+//! building another inventory.
 //!
 //! A local written by a statement that reuses its storage (`set_local`,
 //! `init_uninitialized`, a join parameter, a string-match capture, a dynamic
@@ -72,7 +67,7 @@ pub fn collect(self: *Self, store: *const LirStore, root: CFStmtId) Allocator.Er
 
 /// Whether a statement's definitions write into storage the local already
 /// has rather than giving it a fresh value.
-fn reusesStorage(stmt: LIR.CFStmt) bool {
+pub fn reusesStorage(stmt: LIR.CFStmt) bool {
     return switch (stmt) {
         .set_local, .init_uninitialized, .join, .str_match, .str_match_set, .dyn => true,
         .assign_ref,
@@ -121,9 +116,9 @@ const Noter = struct {
     }
 };
 
-/// Whether `target = ref.local source` may name the source's bytes for the
-/// rest of the procedure. A parameter has no definition and is never
-/// written, so it qualifies as a source.
+/// Whether write counts admit `target = ref.local source` as an alias
+/// candidate. The caller must also exclude snapshots crossing the owner's
+/// next runtime definition. An unwritten parameter qualifies as a source.
 pub fn immutableAlias(self: *const Self, target: LocalId, source: LocalId) bool {
     const t = self.writes.get(target) orelse return false;
     const s = self.writes.get(source) orelse Writes{};
