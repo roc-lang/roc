@@ -18474,6 +18474,8 @@ test "ARC erased argument products take fields and preserve prefix and scalar re
         const scalar = try d.f.local(.u64);
         const product = try d.f.store.addStmtRow(LIR.ProductShape, .{
             .layouts = try d.f.store.addU32Span(&.{ @backingInt(layout_mod.Idx.opaque_ptr), @backingInt(layout_mod.Idx.u64), @backingInt(d.dynamic), @backingInt(d.dynamic) }),
+            // The ABI prefix has no ownership slot; the scalar field has
+            // one (non-refcounted) slot, as productShapeFields publishes.
             .slots = try d.f.store.addU32Span(&.{ 0, 0, 1, 2, 3 }),
             .descriptors = try d.f.span(&.{ word_desc, scalar_desc, field_desc, field_desc }),
         });

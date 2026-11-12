@@ -2360,7 +2360,16 @@ const Lowerer = struct {
             const data = l.solved.lifted.getExpr(id).data;
             const view = l.solved.lifted.view();
             switch (data) {
-                .static_data_candidate, .comptime_value, .comptime_exhaustiveness_failed => {
+                .static_data_candidate => |candidate| {
+                    if (l.staticDataCandidateIsImmediate(candidate, try l.layoutOfType(ty))) {
+                        switch (candidate.value) {
+                            .runtime => |runtime| try self.add(.{ .expr = runtime }),
+                            .stored => Common.invariant("a stored-list candidate has an immediate layout"),
+                        }
+                    } else self.admissible = false;
+                    return;
+                },
+                .comptime_value, .comptime_exhaustiveness_failed => {
                     self.admissible = false;
                     return;
                 },
@@ -7370,6 +7379,19 @@ const Lowerer = struct {
         return .{ .tail = exprTask(where, cond, child, null, expect_stmt) };
     }
 
+    /// Immediate candidates touch no shared static-data inventory, so the
+    /// same rule governs worker admission and actual expression lowering.
+    fn staticDataCandidateIsImmediate(self: *Lowerer, candidate: Mono.StaticDataCandidate, layout_idx: layout.Idx) bool {
+        const candidate_layout = self.result.layouts.getLayout(layout_idx);
+        return switch (candidate_layout.tag) {
+            .scalar => candidate_layout.getScalar().tag != .str or !candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()),
+            // Bool has the ordinary two-nullary-enum layout, not scalar's
+            // tag. Discriminant-only enums have no payload to materialize.
+            .tag_union => self.result.layouts.getTagUnionInfo(candidate_layout).discriminant_offset == 0,
+            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr, .hole, .dynamic => false,
+        };
+    }
+
     fn staticDataCandidateStep(
         self: *Lowerer,
         where: LowerSite,
@@ -7381,10 +7403,12 @@ const Lowerer = struct {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
         const in_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
-        // Aggregate expressions describe data to the compile-time encoder
-        // only. Bool and inline strings are immediates, matching reads of
-        // values completed in this compilation.
-        if (in_initializer or layout_idx == .bool or !candidate.storage.needsTargetStorage(self.result.layouts.targetUsize())) switch (candidate.value) {
+        const immediate = self.staticDataCandidateIsImmediate(candidate, layout_idx);
+        // Scalars, enums and small strings retain their immediate representation
+        // (design.md "Compile-Time Evaluation"), so optimizers see the same
+        // constants and CTFE/dev consumers emit the same code. Aggregates,
+        // including empty or subsequently mutated ones, read finished data.
+        if (in_initializer or immediate) switch (candidate.value) {
             .runtime => |runtime| return .{ .tail = exprTask(where, target, runtime, ty, next) },
             .stored => {},
         };
