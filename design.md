@@ -11577,6 +11577,16 @@ checked module data records for flex and rigid variables alike).
 Specialization therefore never meets a request wider than a template
 that cannot take it.
 
+A direct call is lowered at the wider row only when its template takes
+one by these two rules: the template's OWN root has a closed result row or
+a request-determined result row variable
+(`Builder.templateTakesWiderResultRow`). The call's instantiated type is
+not enough. A template whose result row variable it shares with an
+argument, like `same : Try(ok, err) -> Try(ok, err)`, is closed at a call
+whose argument builds no error tags (`same(Ok(x))`), yet its request's
+result row is its argument's, which the request does not widen. Such a
+call keeps its own row and is widened by a `row_widen`.
+
 The set of positions a use may WIDEN is kept within the row coercion's reach
 by construction rather than by a second rule that could drift: polarity's
 per-use opening is withheld at generation time from every position outside

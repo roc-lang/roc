@@ -6747,17 +6747,7 @@ const Builder = struct {
         subst: SpecSubstitution,
     ) Allocator.Error!SpecSubstitution {
         if (subst.len == 0) return subst;
-        const address = checkedTypeAddress(view, template.checked_fn_root);
-        const known = self.request_determined_result_rows.get(address) orelse known: {
-            const found: RequestDeterminedResultRow = if (try requestDeterminedResultRowVariable(
-                self.allocator,
-                view,
-                template.checked_fn_root,
-            )) |variable| .{ .variable = variable } else .none;
-            try self.request_determined_result_rows.put(self.allocator, address, found);
-            break :known found;
-        };
-        const variable = switch (known) {
+        const variable = switch (try self.requestDeterminedResultRow(view, template.checked_fn_root)) {
             .none => return subst,
             .variable => |variable| variable,
         };
@@ -6777,6 +6767,45 @@ const Builder = struct {
             row_variable.row_default,
         ) }) };
         return released;
+    }
+
+    /// `requestDeterminedResultRowVariable` for a checked function type,
+    /// memoized per compilation.
+    fn requestDeterminedResultRow(
+        self: *Builder,
+        view: ModuleView,
+        checked_fn_root: checked.CheckedTypeId,
+    ) Allocator.Error!RequestDeterminedResultRow {
+        const address = checkedTypeAddress(view, checked_fn_root);
+        if (self.request_determined_result_rows.get(address)) |known| return known;
+        const found: RequestDeterminedResultRow = if (try requestDeterminedResultRowVariable(
+            self.allocator,
+            view,
+            checked_fn_root,
+        )) |variable| .{ .variable = variable } else .none;
+        try self.request_determined_result_rows.put(self.allocator, address, found);
+        return found;
+    }
+
+    /// Whether specializing `template` at a request whose result row is
+    /// wider than the template's own takes the request's row: the template's
+    /// root has a closed result row (`widenClosedResultRowToRequest`) or a
+    /// request-determined result row variable
+    /// (`requestDeterminedSubstitution`). Any other result row is shared with
+    /// another position of the template's type, so the request's result row
+    /// is the template's own (design.md "Closed Result Rows At Template
+    /// Boundaries").
+    fn templateTakesWiderResultRow(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+    ) Allocator.Error!bool {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = view.templates.get(template_ref.template);
+        if (closedResultRowOrNull(view, template.checked_fn_root) != null) return true;
+        return switch (try self.requestDeterminedResultRow(view, template.checked_fn_root)) {
+            .none => false,
+            .variable => true,
+        };
     }
 
     /// The slot of `variable` among a scheme's quantified variables. Small
@@ -37993,9 +38022,12 @@ const BodyContext = struct {
     /// `expected_node`'s row includes, so the call is requested at the
     /// expected result and the callee specialized there (design.md "Closed
     /// Result Rows At Template Boundaries"). Only a procedure template takes
-    /// a wider row. A local procedure's request relates its instance exactly,
-    /// and a closed row in that instance belongs to the enclosing body, so a
-    /// call to one keeps its own row.
+    /// a wider row, and only one whose own result row is closed or
+    /// request-determined (`Builder.templateTakesWiderResultRow`): the
+    /// call's instance can close a row that the template shares with an
+    /// argument, which the request cannot widen. A local procedure's request
+    /// relates its instance exactly, and a closed row in that instance
+    /// belongs to the enclosing body, so a call to one keeps its own row.
     fn directCallWidensClosedResult(
         self: *BodyContext,
         call_expr: ExprSite,
@@ -38006,6 +38038,13 @@ const BodyContext = struct {
         if (self.directCallTargetIsLocalProc(target)) return false;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
         const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
+        const proc: checked.ProcedureUseTemplate = switch (self.finalDirectTarget(target).record.ref) {
+            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| proc,
+            .platform_required_proc => |required| required.procedure,
+            .local_proc => return false,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("checked direct call target was not a procedure"),
+        };
+        if (!try self.builder.templateTakesWiderResultRow(self.builder.templateRefForProcedureUse(proc))) return false;
         const call_ret_node = try self.instNode(checkedExpr(self.view, call_expr).ty);
         return (try resultRowWideningOrNull(self.graph, declared_row, call_ret_node, expected_node)) != null;
     }
