@@ -12364,11 +12364,28 @@ twice and never field by field at the call site of the method:
 - a row variable an annotation names (`..r`, a rigid) carries exactly the
   requirements its `where` clause states, as every annotated type variable
   does: a method call needing one the annotation lacks is reported against the
-  annotation.
+  annotation. The clause is restated, when the annotation is generated, as a
+  requirement on each record or tag union ending in `r` (Rewrite Inventory),
+  so a use reads it as it reads an inferred one.
 
 A value binding's open row closes when its module finishes checking (Value
 Rows: Uses Share One Row), which decides the requirements still pending on
-it against the plain type.
+it against the plain type. So does any open row holding requirements that no
+use can supply a type for: at a definition's generalization boundary, an open
+row of the definition's rank that no binding of the boundary reaches (the
+row of an argument a body passes, `is_red(Fn(|x| x + 1))` inside `check`)
+closes and is decided there, and an open row no scheme quantified (in an
+`expect`, or a top-level value) closes when the module finishes. A
+requirement keeps the expression it was first held with as the place its
+failure is reported: for one a use copied from a scheme, that use.
+
+A requirement a row variable holds is a method call on the value: its
+method takes the value as its first argument. A literal's conversion
+(`from_quote : Str -> a`) is not one, and a record or tag union never
+converts from a literal, so such a relation is decided against the plain
+type at once. A row's composition can leave the value and its row variable
+the same variable (a `?` error row); its requirement is then the variable's
+own and is published as such.
 
 A derivation of `is_eq` or `to_hash` for a value whose type contains such a
 record or tag union as a component (a `List` of them, a field, a payload) asks
@@ -12384,8 +12401,11 @@ A row variable that joins such a record makes it no less plain: in
 meets the literal's uncommitted tail, the merged class is that uncommitted
 tail, and `keep`'s type has no row variable to carry a requirement, so a
 method call on it is decided at the definition and comparing or hashing it
-commits the tail. A method call on it is decided where the binding is
-checked, against the plain type: `is_eq` and `to_hash` are derived, and any other method is the
+commits the tail. A method call on it is decided at the boundary of the definition that built
+it, against the plain type, once everything in that definition, its
+annotation included, has said what the value is (a function annotated to
+return `Tagged` makes the record it builds and compares a `Tagged` first):
+`is_eq` and `to_hash` are derived, and any other method is the
 missing-method error it is for any structural value. A requirement a generic
 callee's scheme carries (`generic_foo(r, r)` with `generic_foo = |x, y|
 x.foo(y)`) is decided the same way when it lands on such a value. Deriving
@@ -14297,6 +14317,22 @@ Other solved-graph mutations:
   before returning. The write is to the class itself, a frozen class included,
   since the view is of the whole class and the rollback restores it. No solved
   type, dispatch decision, or plan metadata observes it.
+- `stateRowVariableRequirementsOnTheirValues`—policy: Methods On Open Rows
+  (above). After an annotation's type is generated and before anything is
+  related to it, each `where` requirement on a row variable the annotation
+  writes as an extension is replaced, on that rigid, by one requirement per
+  record or tag union ending in it, whose signature is a copy with that value
+  where the variable was (`Store.setVarContent` on the annotation's own
+  rigid). Tests pin the accepted side (a call on the annotated value checks
+  against the clause, and each use decides it) and the rejected side (a body
+  method call the clause lacks is reported against the annotation).
+- `commitComparedRowTail` / `Store.markComparedPlain`—policy: Methods On Open
+  Rows (above). Comparing or hashing a record or tag union that ends in an
+  uncommitted tail, at its definition's boundary, commits the tail by
+  ordinary unification and marks the empty row it commits to, and
+  unification reads the mark only to report a later lift to a nominal type
+  with the reason. Tests pin the comparison's plain result and the reported
+  lift.
 - `markNominalBackingStructure`—mechanism: provenance on vars an opening
   of a nominal declaration backing has just minted below its root, written before any
   relation reads them. Unification consults the mark under the declared
