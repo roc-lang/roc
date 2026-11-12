@@ -14,6 +14,11 @@ payload semantics without enumerating shared paths. Row-only cycles provide no
 constructor witness. General, constructor-payload, and known-absent queries retain
 distinct leaf and open-row policies; only settled answers are memoized.
 
+Diagnostic snapshots freeze type evidence before error poisoning. They preserve
+sharing, recursive identities, and display policy, but render only requested
+roots and tags. Cached checking outcomes retain this frozen evidence so warm and
+cold diagnostics follow the same presentation path.
+
 Host-boundary validation uses the same scoped read-only views so generic user
 types cannot hide an unboxed callable or lose a parameter's boxing position.
 Only directly boxed functions and opaque iterator handles cross that boundary.

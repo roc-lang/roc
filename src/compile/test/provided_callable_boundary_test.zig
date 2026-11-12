@@ -21,7 +21,7 @@ fn expectHostAbiCallablesUseErasedRepresentation(
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const args = store.getLocalSpan(proc.args);
 
-        if (proc.hosted != null and args.len == 1) {
+        if (proc.hosted.get() != null and args.len == 1) {
             const arg = collections.GuardedList.at(args, 0);
             const arg_layout = store.getLocal(arg).layout_idx;
             const arg_tag = layouts.getLayout(arg_layout).tag;
@@ -99,7 +99,7 @@ fn expectContextOutcomeContainsErasedCallable(
     for (store.getProcSpecs()) |proc| {
         const args = store.getLocalSpan(proc.args);
 
-        if (proc.abi == .erased_callable and proc.body != null and proc.ret_layout == .u64 and args.len >= 1) {
+        if (proc.abi == .erased_callable and proc.body != .none and proc.ret_layout == .u64 and args.len >= 1) {
             const first_arg = collections.GuardedList.at(args, 0);
             if (store.getLocal(first_arg).layout_idx == .u64) found_step = true;
         }
@@ -170,18 +170,18 @@ fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
     var matching_repack_count: usize = 0;
 
     for (store.getProcSpecs(), 0..) |proc, index| {
-        if (proc.abi != .roc or proc.body == null or proc.erased_reuse_arg == null) continue;
+        if (proc.abi != .roc or proc.body == .none or proc.erased_reuse_arg == .none) continue;
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "from_state")) continue;
 
         specialized_count += 1;
-        const reuse_arg = proc.erased_reuse_arg.?;
+        const reuse_arg = proc.erased_reuse_arg.get().?;
         var work = std.ArrayList(lir.LIR.CFStmtId).empty;
         defer work.deinit(store.allocator);
         var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(store.allocator);
         defer visited.deinit();
-        try work.append(store.allocator, proc.body.?);
+        try work.append(store.allocator, proc.body.get().?);
         while (work.pop()) |stmt_id| {
             const entry = try visited.getOrPut(stmt_id);
             if (entry.found_existing) continue;
@@ -213,7 +213,7 @@ fn expectParallelRecursiveBoxedCallablesForwardReuse(
     var matching_repack_count: usize = 0;
 
     for (store.getProcSpecs(), 0..) |proc, index| {
-        if (proc.abi != .roc or proc.body == null or proc.erased_reuse_arg == null) continue;
+        if (proc.abi != .roc or proc.body == .none or proc.erased_reuse_arg == .none) continue;
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "from_first_state") and
@@ -223,12 +223,12 @@ fn expectParallelRecursiveBoxedCallablesForwardReuse(
         }
 
         specialized_count += 1;
-        const reuse_arg = proc.erased_reuse_arg.?;
+        const reuse_arg = proc.erased_reuse_arg.get().?;
         var work = std.ArrayList(lir.LIR.CFStmtId).empty;
         defer work.deinit(store.allocator);
         var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(store.allocator);
         defer visited.deinit();
-        try work.append(store.allocator, proc.body.?);
+        try work.append(store.allocator, proc.body.get().?);
         while (work.pop()) |stmt_id| {
             const entry = try visited.getOrPut(stmt_id);
             if (entry.found_existing) continue;
@@ -270,7 +270,7 @@ fn expectNoDestinationSpecializedFromState(
 ) harness.LowerToLirHarnessError!void {
     var specialized_count: usize = 0;
     for (store.getProcSpecs(), 0..) |proc, index| {
-        if (proc.abi != .roc or proc.erased_reuse_arg == null) continue;
+        if (proc.abi != .roc or proc.erased_reuse_arg == .none) continue;
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (std.mem.eql(u8, name, "from_state")) specialized_count += 1;

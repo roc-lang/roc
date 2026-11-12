@@ -11,7 +11,13 @@ pub const SemanticAuditStep = struct {
         const inputs = b.addWriteFiles();
         _ = inputs.addCopyDirectory(b.path("src"), "src", .{ .include_extensions = &.{".zig"} });
         _ = inputs.addCopyFile(b.path("ci/semantic_audit.pl"), "ci/semantic_audit.pl");
+        _ = inputs.addCopyFile(b.path("ci/storage_lint.pl"), "ci/storage_lint.pl");
+        _ = inputs.addCopyFile(b.path("ci/storage_lint_test.pl"), "ci/storage_lint_test.pl");
+        const tests = b.addSystemCommand(&.{ "perl", "ci/storage_lint_test.pl" });
+        tests.setCwd(inputs.getDirectory());
+        tests.expectExitCode(0);
         const run = b.addSystemCommand(&.{ "perl", "ci/semantic_audit.pl" });
+        run.step.dependOn(&tests.step);
         run.setCwd(inputs.getDirectory());
         run.expectExitCode(0);
         return &run.step;

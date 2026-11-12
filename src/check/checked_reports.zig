@@ -74,6 +74,8 @@ pub fn captureChecking(allocator: Allocator, checker: anytype) Allocator.Error!C
         .status = captured.status,
         .regions = try allocator.dupe(base.Region, captured.regions),
         .contents = try allocator.dupe(snapshot.SnapshotContent, captured.contents),
+        .node_formats = try allocator.dupe(snapshot.NodeFormat, captured.node_formats),
+        .captures = try allocator.dupe(snapshot.Capture, captured.captures),
         .content_indexes = try allocator.dupe(snapshot.SnapshotContentIdx, captured.content_indexes),
         .record_fields = captured.record_fields,
         .tags = captured.tags,
@@ -101,6 +103,8 @@ pub fn fromStore(
             .missing_patterns = try allocator.dupe(problem.ExtraStringIdx, store.missing_patterns_backing.items),
             .regions = try allocator.dupe(base.Region, checking.regions),
             .contents = try allocator.dupe(snapshot.SnapshotContent, checking.contents),
+            .node_formats = try allocator.dupe(snapshot.NodeFormat, checking.node_formats),
+            .captures = try allocator.dupe(snapshot.Capture, checking.captures),
             .content_indexes = try allocator.dupe(snapshot.SnapshotContentIdx, checking.content_indexes),
             .record_fields = try allocator.dupe(snapshot.SnapshotRecordField, checking.record_fields),
             .tags = try allocator.dupe(CheckingOutcome.Tag, checking.tags),
@@ -144,9 +148,16 @@ pub fn instantiateProblems(self: *const Self, allocator: Allocator) Allocator.Er
     return store;
 }
 
-/// The snapshots and regions checking's problems render with.
-pub fn instantiateRendering(self: *const Self, allocator: Allocator, snapshots: *snapshot.Store, regions: *base.Region.List) Allocator.Error!void {
-    try self.outcome.installRendering(allocator, snapshots, regions);
+/// The snapshots and regions checking's problems render with, rendering on
+/// demand with `format_context`.
+pub fn instantiateRendering(
+    self: *const Self,
+    allocator: Allocator,
+    snapshots: *snapshot.Store,
+    regions: *base.Region.List,
+    format_context: snapshot.FormatContext,
+) Allocator.Error!void {
+    try self.outcome.installRendering(allocator, snapshots, regions, format_context);
 }
 
 test "checked reports keep every problem, its strings and the import names across serialization" {

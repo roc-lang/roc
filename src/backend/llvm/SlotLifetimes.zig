@@ -18,6 +18,7 @@
 //! prologue writes, and every local that takes part in a deferred string-match
 //! capture, which the backend materializes lazily.
 const std = @import("std");
+const collections = @import("collections");
 const lir = @import("lir");
 
 const Allocator = std.mem.Allocator;
@@ -26,7 +27,7 @@ const LocalId = lir.LocalId;
 const LirStore = lir.LirStore;
 const GuardedList = LirStore.GuardedList;
 const StackPlan = lir.StackPlan;
-const none = std.math.maxInt(u32);
+const OptionalU32 = collections.OptionalU32;
 const Self = @This();
 
 /// One lifetime intrinsic to emit on a local's slot.
@@ -62,7 +63,10 @@ planned: std.ArrayList(CFStmtId) = .empty,
 entries: std.ArrayList(Entry) = .empty,
 markers: std.ArrayList(Marker) = .empty,
 by_stmt: std.AutoHashMapUnmanaged(u32, Span) = .empty,
-node_stmts: std.ArrayList(u32) = .empty,
+/// The planned statement of each stack-plan node of the current procedure,
+/// absent for a node with none. Read per boundary node, so it starts
+/// cleared to absent (zero) for each procedure.
+node_stmts: std.ArrayList(OptionalU32) = .empty,
 boundaries: std.ArrayList(StackPlan.Boundary) = .empty,
 
 pub fn init(allocator: Allocator) Self {
@@ -222,8 +226,8 @@ fn noteDeferredCaptures(self: *Self, store: *const LirStore, source: LocalId, st
 
 fn placeMarkers(self: *Self, stack_plan: *const StackPlan, root: CFStmtId) Allocator.Error!void {
     try self.node_stmts.resize(self.allocator, stack_plan.nodes.items.len);
-    @memset(self.node_stmts.items, none);
-    for (self.planned.items) |stmt| self.node_stmts.items[self.indexes.nodeOf(stmt).?] = @backingInt(stmt);
+    @memset(self.node_stmts.items, .none);
+    for (self.planned.items) |stmt| self.node_stmts.items[self.indexes.nodeOf(stmt).?] = .some(@backingInt(stmt));
     self.boundaries.clearRetainingCapacity();
     try stack_plan.appendLifetimeBoundaries(self.indexes.nodeOf(root).?, &self.boundaries);
 
@@ -231,10 +235,9 @@ fn placeMarkers(self: *Self, stack_plan: *const StackPlan, root: CFStmtId) Alloc
     for (self.boundaries.items) |boundary| {
         const local = stack_plan.values.items[boundary.value].local;
         const stmt = switch (boundary.kind) {
-            .start => self.node_stmts.items[boundary.node],
+            .start => self.node_stmts.items[boundary.node].get().?,
             .end => self.statementEntry(stack_plan, boundary.node),
         };
-        std.debug.assert(stmt != none);
         try self.entries.append(self.allocator, .{ .stmt = stmt, .marker = .{ .kind = boundary.kind, .local = local } });
     }
 
@@ -256,12 +259,11 @@ fn placeMarkers(self: *Self, stack_plan: *const StackPlan, root: CFStmtId) Alloc
 /// node accesses no slot that has markers and has its arm's body as its only
 /// successor, so its entry is that body's.
 fn statementEntry(self: *const Self, stack_plan: *const StackPlan, node: u32) u32 {
-    const stmt = self.node_stmts.items[node];
-    if (stmt != none) return stmt;
+    if (self.node_stmts.items[node].get()) |stmt| return stmt;
     var successors = stack_plan.nodeSuccessors(node);
     const body = successors.next().?;
     std.debug.assert(successors.next() == null);
-    return self.node_stmts.items[body];
+    return self.node_stmts.items[body].get().?;
 }
 
 test "issue 12505 projected call arguments extend their storage owner's lifetime" {
