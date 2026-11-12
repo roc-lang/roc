@@ -13611,6 +13611,11 @@ test "issue 11376: mixed-width products survive Boxy boundaries and copy-on-writ
             }
         }
         try std.testing.expect(found_packed_local);
+        // The product's packing metadata and the shared list live in the
+        // frozen image, not a two-byte LIR literal. Execute that image through
+        // both strategies and verify the original shared list stays unchanged.
+        try std.testing.expect(result.static_data_values.items.len != 0);
+        try std.testing.expect(lowered.lowered.frozen_static_data.?.exports.len != 0);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {

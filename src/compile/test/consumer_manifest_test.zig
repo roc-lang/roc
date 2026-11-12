@@ -304,7 +304,8 @@ test "one evaluated root has one completed-value slot however many places read i
         \\main! = |args| {
         \\    Echo.line!(Str.inspect(Helper.base_value))
         \\    Echo.line!(Str.inspect(Helper.doubled))
-        \\    Echo.line!(Str.inspect((Helper.offset, args.len())))
+        \\    Echo.line!(Str.inspect(Helper.offset))
+        \\    Echo.line!(Str.inspect(args.len()))
         \\    Ok({})
         \\}
     });
@@ -343,10 +344,10 @@ test "one evaluated root has one completed-value slot however many places read i
     try std.testing.expectEqual(@as(usize, 4), helper_roots.len);
     const value_roots = [_]CheckedArtifact.RootRequest{ try rootWithOrder(helper_roots, 1), try rootWithOrder(helper_roots, 2), try rootWithOrder(helper_roots, 3) };
 
-    // Every one of these values is computed, read at runtime, and
-    // materialized for the runtime consumer; `base_value` is additionally
-    // read by `doubled`, at compile time. No program has two slots for one
-    // concrete value, however many places in it read the value.
+    // Every one of these values is computed and read by a constant `main!`
+    // hoists, so it is materialized for the stage evaluating that constant;
+    // `base_value` is additionally read by `doubled`. No program has two
+    // slots for one concrete value, however many places in it read the value.
     for (value_roots) |request| {
         const root = try rootIdentity(request);
         try std.testing.expect(materializingStage(stages, helper.key.digest(), root) != null);
