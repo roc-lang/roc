@@ -197,7 +197,7 @@ const Walker = struct {
         }
         const visited = try walkStamps(allocator, modules, struct {
             fn count(module: checked.ImportedModuleView) usize {
-                return module.checked_procedure_templates.templates.items.len;
+                return module.checked_procedure_templates.templates.items().len;
             }
         }.count);
         errdefer freeStamps(allocator, visited);

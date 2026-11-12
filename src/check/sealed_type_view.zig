@@ -365,10 +365,10 @@ pub const SealedConstraintRows = struct {
 /// The columns a module's sealed checked types are read through, owned by
 /// its checked type store.
 pub const SealedTypeColumns = struct {
-    names: *std.ArrayList(SealedNameRow),
-    origins: *std.ArrayList(SealedOriginRow),
-    nominals: *std.ArrayList(SealedNominalRow),
-    var_facts: *std.ArrayList(SealedVarFacts),
+    names: *collections.SafeList(SealedNameRow),
+    origins: *collections.SafeList(SealedOriginRow),
+    nominals: *collections.SafeList(SealedNominalRow),
+    var_facts: *collections.SafeList(SealedVarFacts),
 };
 
 /// Fill `columns` for `env`, whose solver store checking sealed: intern the
@@ -423,7 +423,7 @@ pub fn buildColumns(
             .source = declaration.source,
         };
         const builtin = try builder.origins.builtinNominal(env, imports, application);
-        columns.nominals.appendAssumeCapacity(.{
+        _ = columns.nominals.appendAssumeCapacity(.{
             .builtin = builtin,
             .representation = try checked_artifact.checkedNominalRepresentationIfAvailable(
                 env,
@@ -447,8 +447,8 @@ const ColumnBuilder = struct {
 
     fn row(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!*SealedNameRow {
         const index: usize = ident.idx;
-        if (index >= self.columns.names.items.len) try self.columns.names.appendNTimes(self.allocator, .{}, index + 1 - self.columns.names.items.len);
-        return &self.columns.names.items[index];
+        if (index >= self.columns.names.items().len) try self.columns.names.appendNTimes(self.allocator, .{}, index + 1 - self.columns.names.items().len);
+        return &self.columns.names.items()[index];
     }
 
     fn typeName(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
@@ -477,8 +477,8 @@ const ColumnBuilder = struct {
 
     fn origin(self: *ColumnBuilder, origin_module: base.ModuleIdentity.Idx) Allocator.Error!void {
         const index: usize = @backingInt(origin_module);
-        if (index >= self.columns.origins.items.len) try self.columns.origins.appendNTimes(self.allocator, .{}, index + 1 - self.columns.origins.items.len);
-        const origin_row = &self.columns.origins.items[index];
+        if (index >= self.columns.origins.items().len) try self.columns.origins.appendNTimes(self.allocator, .{}, index + 1 - self.columns.origins.items().len);
+        const origin_row = &self.columns.origins.items()[index];
         if (origin_row.identity != SealedNameRow.none) return;
         origin_row.identity = @backingInt(try self.names.internModuleIdentity(self.env.moduleIdentityHash(origin_module)));
         if (try self.origins.ownerIfAvailable(self.env, self.imports, origin_module)) |owner| {

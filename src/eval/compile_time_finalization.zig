@@ -4160,7 +4160,7 @@ const RootCompletionState = struct {
             request_index_by_root[raw] = @intCast(i);
         }
 
-        const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.items.len);
+        const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.items().len);
         errdefer allocator.free(visited_templates);
         @memset(visited_templates, 0);
 

@@ -8512,7 +8512,7 @@ fn compileAppRootIdentityExpecting(
         }
     }
     var forwarded_callable_count: usize = 0;
-    for (root.callable_eval_templates.templates.items) |template| {
+    for (root.callable_eval_templates.templates.items()) |template| {
         if (template.forwarded_lookup != null) forwarded_callable_count += 1;
     }
     return .{
@@ -8807,7 +8807,7 @@ test "prepared checked imports finalize after frontend and release abandoned dia
         try std.testing.expectEqual(.prepared, artifact.evaluation_state);
         try std.testing.expect(helper_mod.pending_evaluation != null);
         try std.testing.expect(artifact.root_requests.compile_time_requests.len > 0);
-        try std.testing.expectEqual(@as(usize, 0), artifact.const_store.values.items.len);
+        try std.testing.expectEqual(@as(usize, 0), artifact.const_store.values.items().len);
         const imported = CheckedArtifact.importedView(artifact);
         try std.testing.expect(imported.exported_const_templates.templates.len > 0);
         try std.testing.expect(imported.exported_const_templates.templates[0].template.state == .eval_template);
@@ -8821,7 +8821,7 @@ test "prepared checked imports finalize after frontend and release abandoned dia
             try std.testing.expectEqual(.finalized, artifact.evaluation_state);
             try std.testing.expect(helper_mod.pending_evaluation == null);
             try std.testing.expectEqualSlices(u8, &key.bytes, &artifact.key.bytes);
-            try std.testing.expect(artifact.const_store.values.items.len > 0);
+            try std.testing.expect(artifact.const_store.values.items().len > 0);
             try artifact.verifyComplete();
             const bytes = try serializedCheckedArtifactBytes(allocator, artifact);
             defer allocator.free(bytes);
@@ -9475,7 +9475,7 @@ fn checkNominalIdentityFixture(
 
     const app = coord.appRootCheckedArtifact();
     var count: usize = 0;
-    for (app.checked_types.nominal_declarations.items) |declaration| {
+    for (app.checked_types.nominal_declarations.items()) |declaration| {
         const name = app.canonical_names.typeNameText(app.checked_types.nominalDeclarationName(declaration));
         if (!std.mem.eql(u8, name, type_name)) continue;
         out[count] = .{

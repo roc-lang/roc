@@ -2827,8 +2827,8 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     module_kind = info.kind;
                     module_name = info.name;
                     callable_name = defName(info, proc_base);
-                    if (callable_kind_is_template and sub < info.templates.templates.items.len) {
-                        const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
+                    if (callable_kind_is_template and sub < info.templates.templates.items().len) {
+                        const source_fn_ty = info.templates.templates.items()[sub].checked_fn_root;
                         if (info.types.containsId(source_fn_ty)) {
                             poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
                         }

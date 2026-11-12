@@ -1212,7 +1212,7 @@ test "computed callable aliases retain evaluation requests while proven forwards
         const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
         var evaluated: usize = 0;
         var forwarded: usize = 0;
-        for (artifact.callable_eval_templates.templates.items) |template| {
+        for (artifact.callable_eval_templates.templates.items()) |template| {
             const requested = for (artifact.root_requests.compile_time_requests) |request| {
                 if (request.compile_time_root == template.root) break true;
             } else false;

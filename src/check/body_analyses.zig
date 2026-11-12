@@ -2473,7 +2473,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     const module = tables.module orelse invariant("single-source calls were computed without the module's identity");
     const env = bodies.env;
 
-    const count = templates.templates.items.len;
+    const count = templates.templates.items().len;
     const eligible = try allocator.alloc(bool, count);
     defer allocator.free(eligible);
     @memset(eligible, false);
@@ -2508,7 +2508,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
         const id = local.template(entry.template) orelse continue;
         eligible[@backingInt(id)] = true;
     }
-    for (templates.templates.items, eligible) |template, *is_eligible| {
+    for (templates.templates.items(), eligible) |template, *is_eligible| {
         if (template.target != .roc or template.body != .checked_body) is_eligible.* = false;
     }
 

@@ -421,6 +421,32 @@ pub fn SafeList(comptime T: type) type {
             self.length = @intCast(new_len);
         }
 
+        /// Set the length to `new_len`, which must not exceed the length, and
+        /// release the owned capacity past it. A borrowed list only shortens:
+        /// its memory is not the allocator's. When a smaller allocation cannot
+        /// be made, the list keeps its larger one.
+        pub fn shrinkAndFree(self: *SafeList(T), gpa: Allocator, new_len: usize) void {
+            std.debug.assert(new_len <= self.length);
+            self.length = @intCast(new_len);
+            if (self.capacity == 0 or new_len == self.capacity) return;
+            const old_memory = self.ptr[0..self.capacity];
+            if (new_len == 0) {
+                gpa.free(old_memory);
+                self.* = .{};
+                return;
+            }
+            if (gpa.remap(old_memory, new_len)) |new_memory| {
+                self.ptr = new_memory.ptr;
+                self.capacity = @intCast(new_len);
+                return;
+            }
+            const new_memory = gpa.alloc(T, new_len) catch return;
+            @memcpy(new_memory, self.items());
+            gpa.free(old_memory);
+            self.ptr = new_memory.ptr;
+            self.capacity = @intCast(new_len);
+        }
+
         /// Remove every item, keeping the capacity and so the list's ownership.
         pub fn clearRetainingCapacity(self: *SafeList(T)) void {
             self.length = 0;

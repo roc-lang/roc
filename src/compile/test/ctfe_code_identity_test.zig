@@ -138,12 +138,12 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
     // Identify the worker from the checked declaration, independently of the
     // lowering's export inventory. Its generic argument also requires a table
     // contract in producer mode, even though no root calls it.
-    const unrelated_template = for (library.checked_procedure_templates.templates.items) |template| {
+    const unrelated_template = for (library.checked_procedure_templates.templates.items()) |template| {
         const name = library.canonical_names.procBase(template.proc_base).export_name orelse continue;
         if (std.mem.eql(u8, library.canonical_names.exportNameText(name), "unrelated")) break template.template_id;
     } else return error.TestUnexpectedResult;
     const unrelated_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), unrelated_template);
-    const used_template = for (library.checked_procedure_templates.templates.items) |template| {
+    const used_template = for (library.checked_procedure_templates.templates.items()) |template| {
         const name = library.canonical_names.procBase(template.proc_base).export_name orelse continue;
         if (std.mem.eql(u8, library.canonical_names.exportNameText(name), "used")) break template.template_id;
     } else return error.TestUnexpectedResult;

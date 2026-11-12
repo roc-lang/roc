@@ -776,6 +776,26 @@ violation is a cache miss. The checks are constant time and read no cell, so a
 corrupt table whose occupied cells outnumber its count, or a cell naming an
 entry that does not exist, is not detected.
 
+The stores of a checked artifact relocated beside its env, and of a pairing
+entry, load over the entry's bytes the same way. A store's list fields are
+`SafeList`s loaded borrowing the entry, so growth copies and `deinit` frees
+nothing borrowed; `SliceStoreSerde` rejects a `std.ArrayList` field at compile
+time, since one over loaded bytes would hand them to an allocator on growth or
+`deinit`. A store's plain slice fields have no growth operation; a loaded
+artifact frees only its own buffer (`serialized_backing`), never a sub-store's
+slices, which alias it. A loaded store whose build-only dedup tables are not
+stored (a checked type store's interning tables, a const store's blob index)
+takes no new entries.
+
+A LirImage view loads the same way. Every list of its LIR store (a
+`GuardedList`, whose backing is a `SafeList`) and every plain column of its
+layout store borrows the image; the compact layout columns, whose image form
+is portable typed columns, are rebuilt with the view's allocator. The image
+stores the string-literal dedup table beside the string bytes, so a viewed
+store deduplicates exactly as the store it was copied from. A view is released
+with the stores' ordinary `deinit`. Nothing writes through a view of an image
+in shared memory: the interpreter only reads it.
+
 The compiler's embedded Builtin module is viewed the same way, with a sealed
 type store, over the executable's static data. Every compilation in the process
 shares those bytes, so nothing writes through the view: it has no imports and

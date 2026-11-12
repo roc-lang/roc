@@ -51,33 +51,6 @@ pub fn releaseThrough(self: *SupersededBackings, allocator: Allocator, generatio
 }
 
 /// Ensure `list` can hold `additional` more items. When it must grow, its
-/// items move to a new backing and the old backing is held here instead of
-/// being freed. Returns whether the items moved.
-pub fn ensureUnusedCapacity(
-    self: *SupersededBackings,
-    comptime T: type,
-    list: *std.ArrayList(T),
-    allocator: Allocator,
-    additional: usize,
-) Allocator.Error!bool {
-    const needed = std.math.add(usize, list.items.len, additional) catch return error.OutOfMemory;
-    if (needed <= list.capacity) return false;
-    try self.backings.ensureUnusedCapacity(allocator, 1);
-    const capacity = std.ArrayList(T).growCapacity(needed);
-    const memory = try allocator.alloc(T, capacity);
-    @memcpy(memory[0..list.items.len], list.items);
-    const old = list.allocatedSlice();
-    if (old.len != 0) self.backings.appendAssumeCapacity(.{
-        .bytes = std.mem.sliceAsBytes(old),
-        .alignment = .of(T),
-        .generation = self.generation,
-    });
-    list.items = memory[0..list.items.len];
-    list.capacity = capacity;
-    return true;
-}
-
-/// Ensure `list` can hold `additional` more items. When it must grow, its
 /// items move to a new backing; an owned old backing is held here instead of
 /// being freed, and a borrowed one is left to its owner. Returns whether the
 /// items moved.
@@ -109,21 +82,21 @@ test "growth keeps every superseded backing readable until it is released" {
     const gpa = std.testing.allocator;
     var superseded: SupersededBackings = .{};
     defer superseded.deinit(gpa);
-    var list: std.ArrayList(u32) = .empty;
+    var list: SafeList(u32) = .{};
     defer list.deinit(gpa);
 
-    _ = try superseded.ensureUnusedCapacity(u32, &list, gpa, 1);
-    list.appendAssumeCapacity(7);
-    const first_view: []const u32 = list.items;
+    _ = try superseded.ensureUnusedSafeListCapacity(u32, &list, gpa, 1);
+    _ = list.appendAssumeCapacity(7);
+    const first_view: []const u32 = list.items();
 
     superseded.generation = 1;
-    try std.testing.expect(try superseded.ensureUnusedCapacity(u32, &list, gpa, list.capacity));
-    for (0..list.capacity - list.items.len) |i| list.appendAssumeCapacity(@intCast(i));
-    try std.testing.expect(first_view.ptr != list.items.ptr);
+    try std.testing.expect(try superseded.ensureUnusedSafeListCapacity(u32, &list, gpa, list.capacity));
+    for (0..list.capacity - list.length) |i| _ = list.appendAssumeCapacity(@intCast(i));
+    try std.testing.expect(first_view.ptr != list.items().ptr);
     try std.testing.expectEqualSlices(u32, &.{7}, first_view);
 
     superseded.generation = 2;
-    try std.testing.expect(try superseded.ensureUnusedCapacity(u32, &list, gpa, 1));
+    try std.testing.expect(try superseded.ensureUnusedSafeListCapacity(u32, &list, gpa, 1));
     try std.testing.expectEqual(@as(usize, 2), superseded.count());
 
     // The first growth replaced no backing: the list was empty.
@@ -132,7 +105,20 @@ test "growth keeps every superseded backing readable until it is released" {
     // Only the backing superseded at generation 1 is released.
     superseded.releaseThrough(gpa, 1);
     try std.testing.expectEqual(@as(usize, 1), superseded.count());
-    try std.testing.expectEqual(@as(u32, 7), list.items[0]);
+    try std.testing.expectEqual(@as(u32, 7), list.items()[0]);
     superseded.releaseThrough(gpa, 2);
     try std.testing.expectEqual(@as(usize, 0), superseded.count());
+}
+
+test "growth of a borrowed list leaves its borrowed backing to its owner" {
+    const gpa = std.testing.allocator;
+    var superseded: SupersededBackings = .{};
+    defer superseded.deinit(gpa);
+    var backing = [_]u32{ 1, 2 };
+    var list = SafeList(u32).fromBorrowedSlice(&backing);
+    defer list.deinit(gpa);
+
+    try std.testing.expect(try superseded.ensureUnusedSafeListCapacity(u32, &list, gpa, 1));
+    try std.testing.expectEqual(@as(usize, 0), superseded.count());
+    try std.testing.expectEqualSlices(u32, &.{ 1, 2 }, list.items());
 }

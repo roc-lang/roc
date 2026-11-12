@@ -112,7 +112,7 @@ pub const Store = struct {
 
     layouts: collections.SafeList(Layout),
     /// The list layout each layout resolves to through boxes, or `Idx.none`.
-    resolved_list_layouts: std.ArrayList(Idx),
+    resolved_list_layouts: collections.SafeList(Idx),
     tuple_elems: collections.SafeList(Idx),
     struct_fields: StructField.SafeMultiList,
     /// Each committed struct field's byte offset for both pointer widths,
@@ -193,7 +193,7 @@ pub const Store = struct {
         var self = Self{
             .allocator = allocator,
             .layouts = .{},
-            .resolved_list_layouts = .empty,
+            .resolved_list_layouts = .{},
             .tuple_elems = .{},
             .struct_fields = .{},
             .struct_field_offsets = .{},
@@ -353,7 +353,7 @@ pub const Store = struct {
         try self.rememberScratchInternKey(.bool);
         try self.resolved_list_layouts.ensureTotalCapacity(allocator, num_primitives);
         for (0..num_primitives) |_| {
-            self.resolved_list_layouts.appendAssumeCapacity(.none);
+            _ = self.resolved_list_layouts.appendAssumeCapacity(.none);
         }
         return self;
     }
@@ -573,7 +573,7 @@ pub const Store = struct {
         if (self.layouts.len() >= @backingInt(Idx.none)) return error.OutOfMemory;
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
         const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
-        try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
+        _ = try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
         return idx;
     }
 
@@ -2311,7 +2311,7 @@ pub const Store = struct {
         const layouts_end: usize = @intCast(self.layouts.len());
         for (@as(usize, @intCast(layouts_start))..layouts_end) |i| {
             const idx: Idx = @fromBackingInt(@intCast(i));
-            self.resolved_list_layouts.items[i] = self.computeResolvedListLayoutIdx(idx) orelse .none;
+            self.resolved_list_layouts.items()[i] = self.computeResolvedListLayoutIdx(idx) orelse .none;
         }
 
         return value_layouts;
@@ -3073,7 +3073,7 @@ pub const Store = struct {
         const ptr = self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx))));
         ptr.* = layout;
         self.digest_cache.invalidateLayout(idx);
-        self.resolved_list_layouts.items[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx) orelse .none;
+        self.resolved_list_layouts.items()[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx) orelse .none;
     }
 
     /// Overwrite a layout that the running graph commit reserved. The commit
@@ -3102,7 +3102,7 @@ pub const Store = struct {
     }
 
     pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
-        const resolved = self.resolved_list_layouts.items[@backingInt(layout_idx)];
+        const resolved = self.resolved_list_layouts.items()[@backingInt(layout_idx)];
         return if (resolved == Idx.none) null else resolved;
     }
 };

@@ -4565,7 +4565,7 @@ fn collectModuleTypeInfo(
 ) TypeTableError!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
     errdefer gpa.free(main_type_str);
-    for (artifact.checked_types.nominal_declarations.items) |declaration| {
+    for (artifact.checked_types.nominal_declarations.items()) |declaration| {
         const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(artifact.checked_types.nominalDeclarationName(declaration)));
         if (std.mem.eql(u8, type_name, module_name)) {
             gpa.free(main_type_str);
