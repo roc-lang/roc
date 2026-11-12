@@ -9389,7 +9389,7 @@ test "ARC retains an erased callable whose repack input is used later" {
 const RcKind = enum { incref, decref, free };
 const RcStopKind = enum { ret, crash };
 
-fn setupUnusedBinding(layout_idx: layout_mod.Idx) Allocator.Error!struct { fixture: ArcTest, value: LIR.LocalId } {
+fn setupUnusedBinding(layout_idx: layout_mod.Idx) Allocator.Error!struct { fixture: ArcTest, value: LIR.LocalId, proc: LIR.LirProcSpecId } {
     var f = try ArcTest.init(testing.allocator);
     errdefer f.deinit();
     const value = try f.local(layout_idx);
@@ -9399,9 +9399,9 @@ fn setupUnusedBinding(layout_idx: layout_mod.Idx) Allocator.Error!struct { fixtu
         try f.assignStr(value, "tmp", ret)
     else
         try f.assignList(value, &.{}, ret);
-    _ = try f.addProc(&.{}, body, .i64);
+    const proc = try f.addProc(&.{}, body, .i64);
     try f.run();
-    return .{ .fixture = f, .value = value };
+    return .{ .fixture = f, .value = value, .proc = proc };
 }
 
 fn setupSwitchUse(use_branch: bool, use_default: bool, use_twice_in_branch: bool, use_after: bool) Allocator.Error!struct { fixture: ArcTest, value: LIR.LocalId, branch_local: LIR.LocalId, default_local: LIR.LocalId } {
@@ -18526,7 +18526,7 @@ test "only a consumer that counts string literals as image data drops their rele
 
     try testing.expectEqual(@as(usize, 1), try immortal_locals.elide(testing.allocator, &f.store, .static_data_and_strings));
     // The dropped statement stays in the store, unlinked from the body.
-    var walk = try body_clone.ReachableStmts.initWithAllocator(&f.store, f.store.getProcSpec(@fromBackingInt(0)).body.?, testing.allocator);
+    var walk = try body_clone.ReachableStmts.initWithAllocator(&f.store, f.store.getProcSpec(setup.proc).body.?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| switch (f.store.getCFStmt(stmt_id)) {
         .incref, .decref, .decref_if_initialized, .free => return error.TestUnexpectedResult,
