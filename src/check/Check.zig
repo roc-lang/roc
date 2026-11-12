@@ -1506,10 +1506,6 @@ plain_decisions_waiting: bool = false,
 /// variable keeps it there, so its failure is reported at that use when the
 /// row is later decided.
 open_row_failure_exprs: collections.DenseMapUnmanaged(Var, StaticDispatchConstraint.Provenance.OptExprIdx) = .empty,
-/// Each `is_eq`/`to_hash` obligation a derivation gave a row's extension, with
-/// the row whose extension it is, so a rejected one is reported as being about
-/// the tags or fields the extension stands for.
-row_extension_derivations: std.ArrayListUnmanaged(RowExtensionDerivation) = .empty,
 /// Numeral literals interpolated into a still-open interpolation when literal
 /// defaulting began, each with a snapshot of its type at that point. Defaulting
 /// decides each literal independently, so such an interpolation can default to
@@ -2071,7 +2067,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .instantiated_literal_conversion_uses = .keyed,
     .open_numeral_literals = .settled,
     .instantiated_interpolation_owners = .keyed,
-    .row_extension_derivations = .keyed,
     .open_row_holders = .settled,
     .deciding_plain_rank = .lexical,
     .plain_decisions_waiting = .settled,
@@ -2508,8 +2503,8 @@ const AmbiguityCandidate = struct {
 
     /// Where the receiver stands in the type that produced it. A row tail is a
     /// record or tag union's extension: when nothing pins it, its row default
-    /// closes it to the empty row, which discharges `is_eq` and `to_hash`
-    /// (design.md "Derived Equality And Hashing Over Open Rows").
+    /// closes it to the empty row, which decides the requirements it holds
+    /// against the plain type (design.md "Methods On Open Rows").
     const Position = enum(u8) { value, row_tail };
 
     const Source = enum(u8) {
@@ -8405,14 +8400,6 @@ const InterpolationPartNumeral = struct {
     /// The numeral's type before literal defaulting.
     snapshot: SnapshotContentIdx,
     defaulted: bool,
-};
-
-const RowExtensionDerivation = struct {
-    /// The obligation's constraint function var.
-    fn_var: Var,
-    /// The record or tag union whose extension carries the obligation.
-    row: Var,
-    kind: problem.DispatcherDoesNotImplMethod.RowExtension.Kind,
 };
 
 const PendingTupleAccess = struct {
@@ -14859,7 +14846,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
     try self.commitUncommittedTails(&env);
-    try self.closeValueRowTailsCarryingDerivations(&env);
     try self.closeOpenRowsHoldingRequirements(&env);
     self.deciding_plain_rank = .outermost;
     if (try self.anyDeferredDispatchReceiverResolved(&env)) {
@@ -40031,7 +40017,6 @@ const Probe = struct {
     open_literal_vars_len: usize,
     open_numeral_literals_len: usize,
     instantiated_interpolation_owners_len: usize,
-    row_extension_derivations_len: usize,
     open_row_holders_len: usize,
     instantiated_literal_conversion_uses_len: usize,
     pending_tuple_accesses_len: usize,
@@ -40096,7 +40081,6 @@ const Probe = struct {
         self.check.open_literal_vars.shrinkRetainingCapacity(self.open_literal_vars_len);
         self.check.open_numeral_literals.shrinkRetainingCapacity(self.open_numeral_literals_len);
         self.check.instantiated_interpolation_owners.shrinkRetainingCapacity(self.instantiated_interpolation_owners_len);
-        self.check.row_extension_derivations.shrinkRetainingCapacity(self.row_extension_derivations_len);
         self.check.open_row_holders.shrinkRetainingCapacity(self.open_row_holders_len);
         self.check.instantiated_literal_conversion_uses.shrinkRetainingCapacity(self.instantiated_literal_conversion_uses_len);
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
@@ -40190,7 +40174,6 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const open_literal_vars_len = self.open_literal_vars.items.len;
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
     const instantiated_interpolation_owners_len = self.instantiated_interpolation_owners.items.len;
-    const row_extension_derivations_len = self.row_extension_derivations.items.len;
     const open_row_holders_len = self.open_row_holders.items.len;
     const instantiated_literal_conversion_uses_len = self.instantiated_literal_conversion_uses.items.len;
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
@@ -40234,7 +40217,6 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .open_literal_vars_len = open_literal_vars_len,
         .open_numeral_literals_len = open_numeral_literals_len,
         .instantiated_interpolation_owners_len = instantiated_interpolation_owners_len,
-        .row_extension_derivations_len = row_extension_derivations_len,
         .open_row_holders_len = open_row_holders_len,
         .instantiated_literal_conversion_uses_len = instantiated_literal_conversion_uses_len,
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
@@ -45786,14 +45768,7 @@ fn varIsConflictedDefaultLiteral(self: *const Self, var_: Var) bool {
     return false;
 }
 
-/// Whether the constraint range carries any obligation besides literal-conversion
-/// provenance—i.e. whether defaulting must consult the candidate probe at all.
-/// Whether a record or tag row's tail leaves a constraint unresolved. A flex
-/// tail is closed by its row default, and the empty row derives `is_eq` and
-/// `to_hash`, so the derived obligations an open row's tail carries (see
-/// design.md "Derived Equality And Hashing Over Open Rows") are discharged by
-/// that closing.
-/// Whether closing a row satisfies every constraint in `range` on its tail
+/// Whether closing a row decides every constraint in `range` on its tail
 /// (vacuously so when there are none).
 fn rowDefaultDischargesConstraints(self: *Self, range: StaticDispatchConstraint.SafeList.Range) bool {
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
@@ -45802,114 +45777,10 @@ fn rowDefaultDischargesConstraints(self: *Self, range: StaticDispatchConstraint.
     return true;
 }
 
-/// A top-level value is computed once, at one type. An open row in its data
-/// whose tail carries only the obligations deriving `is_eq` or `to_hash` gives
-/// it (design.md "Derived Equality And Hashing Over Open Rows") is grounded to
-/// the empty row once the module solves, as a value binding's implicit open row
-/// is; unifying the tail with the empty row discharges those obligations.
-fn closeValueRowTailsCarryingDerivations(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    var tails = std.ArrayList(RowTail).empty;
-    defer tails.deinit(self.gpa);
-    var visited = collections.DenseMap(Var, void).init(self.gpa);
-    defer visited.deinit();
-    for (0..self.cir.all_defs.span.len) |def_offset| {
-        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        const def = self.cir.store.getDef(def_idx);
-        if (self.erroneous_value_patterns.contains(def.pattern)) continue;
-        const def_var = ModuleEnv.varFrom(def_idx);
-        if (self.varIsFunctionType(def_var)) continue;
-        tails.clearRetainingCapacity();
-        visited.clearRetainingCapacity();
-        try self.collectDataRowTails(def_var, &visited, &tails);
-        for (tails.items) |tail| {
-            const resolved = self.types.resolveVar(tail.var_);
-            const flex = switch (resolved.desc.content) {
-                .flex => |flex| flex,
-                .rigid, .alias, .structure, .err, .field_presence => continue,
-            };
-            if (flex.constraints.len() == 0 or !self.rowDefaultDischargesConstraints(flex.constraints)) continue;
-            if (resolved.desc.rank == .generalized) continue;
-            const region = self.getRegionAt(resolved.var_);
-            const empty_row = try self.freshFromContent(.{ .structure = switch (tail.kind) {
-                .tag => .empty_tag_union,
-                .record => .empty_record,
-            } }, env, region);
-            _ = try self.unify(resolved.var_, empty_row, env);
-        }
-    }
-}
-
-const RowTail = struct { var_: Var, kind: enum { tag, record } };
-
-/// The row tails reachable through `var_`'s data positions (not function
-/// parameters or results), each with the kind of row it ends. Walks an
-/// explicit stack, since data types nest as deeply as the source; children
-/// are pushed in reverse so tails are found in depth-first source order.
-fn collectDataRowTails(self: *Self, var_: Var, visited: *collections.DenseMap(Var, void), out: *std.ArrayList(RowTail)) std.mem.Allocator.Error!void {
-    var stack = std.ArrayList(DataRowItem).empty;
-    defer stack.deinit(self.gpa);
-    try stack.append(self.gpa, .{ .data = var_ });
-    while (stack.pop()) |item| {
-        const current = switch (item) {
-            .data => |data| data,
-            .tail => |tail| {
-                const resolved = self.types.resolveVar(tail.var_);
-                switch (resolved.desc.content) {
-                    .flex => try out.append(self.gpa, .{ .var_ = resolved.var_, .kind = tail.kind }),
-                    .rigid, .field_presence, .err => {},
-                    .alias, .structure => try stack.append(self.gpa, .{ .data = tail.var_ }),
-                }
-                continue;
-            },
-        };
-        const resolved = self.types.resolveVar(current);
-        if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
-        switch (resolved.desc.content) {
-            .alias => |alias| try stack.append(self.gpa, .{ .data = self.types.getAliasBackingVar(alias) }),
-            .structure => |flat| switch (flat) {
-                .tuple => |tuple| try appendDataItemsReversed(self.gpa, &stack, self.types.sliceVars(tuple.elems)),
-                .nominal_type => |nominal| try appendDataItemsReversed(self.gpa, &stack, self.types.sliceNominalArgs(nominal)),
-                .fn_pure, .fn_effectful, .fn_unbound => {},
-                .record => |record| {
-                    try stack.append(self.gpa, .{ .tail = .{ .var_ = record.ext, .kind = .record } });
-                    const presences = self.types.getRecordFieldsSlice(record.fields).items(.presence);
-                    var index = presences.len;
-                    while (index > 0) {
-                        index -= 1;
-                        try stack.append(self.gpa, .{ .data = presences[index].typeVar() });
-                    }
-                },
-                .tag_union => |tag_union| {
-                    try stack.append(self.gpa, .{ .tail = .{ .var_ = tag_union.ext, .kind = .tag } });
-                    const tag_args = self.types.getTagsSlice(tag_union.tags).items(.args);
-                    var index = tag_args.len;
-                    while (index > 0) {
-                        index -= 1;
-                        try appendDataItemsReversed(self.gpa, &stack, self.types.sliceVars(tag_args[index]));
-                    }
-                },
-                .empty_record, .empty_tag_union => {},
-            },
-            .flex, .rigid, .field_presence, .err => {},
-        }
-    }
-}
-
-const DataRowItem = union(enum) {
-    data: Var,
-    tail: RowTail,
-};
-
-fn appendDataItemsReversed(gpa: std.mem.Allocator, stack: *std.ArrayList(DataRowItem), vars: []const Var) std.mem.Allocator.Error!void {
-    var index = vars.len;
-    while (index > 0) {
-        index -= 1;
-        try stack.append(gpa, .{ .data = vars[index] });
-    }
-}
-
-/// Whether `constraint` on a row's tail is satisfied by closing the row: the
-/// empty row derives `is_eq` and `to_hash`.
+/// Whether closing a row decides `constraint` on its tail rather than
+/// leaving it unanswered: a requirement on the record or tag union the row
+/// ends is decided against the closed plain type, whose derived `is_eq` and
+/// `to_hash` answer those two (design.md "Methods On Open Rows").
 fn rowDefaultDischargesConstraint(self: *Self, constraint: StaticDispatchConstraint) bool {
     return constraint.fn_name.eql(self.cir.idents.is_eq) or constraint.fn_name.eql(self.cir.idents.to_hash);
 }
@@ -53764,7 +53635,6 @@ fn varDeriveComponentObligations(
     const Item = struct {
         var_: Var,
         admit_rigids: bool,
-        row_extension: ?struct { row: Var, kind: problem.DispatcherDoesNotImplMethod.RowExtension.Kind } = null,
     };
     var pending: std.ArrayList(Item) = .empty;
     defer pending.deinit(self.gpa);
@@ -53844,8 +53714,7 @@ fn varDeriveComponentObligations(
             },
             .flex, .rigid => {
                 if (!admit_rigids) {
-                    const fn_var = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner, if (item.row_extension != null) .row_tail else .value);
-                    if (item.row_extension) |row| try self.row_extension_derivations.append(self.gpa, .{ .fn_var = fn_var, .row = row.row, .kind = row.kind });
+                    _ = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner, .value);
                 }
             },
             .alias => |alias| try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .admit_rigids = admit_rigids }),
@@ -53864,31 +53733,9 @@ fn varDeriveComponentObligations(
 /// requirement on the enclosing scheme at generalization, a rigid component
 /// discharges it against the receiver's where clauses (or reports a missing
 /// method), and a nominal component instantiates its method and checks that
-/// method's own where clause.
-/// An extension is a component like any other; a type-variable extension's
-/// obligation is also recorded against `row` (`row_extension_derivations`).
-/// The name a row extension variable was written with, or null for an
-/// anonymous `..`.
-fn rowExtensionSourceName(self: *Self, ext: Var) ?Ident.Idx {
-    const name = switch (self.types.resolveVar(ext).desc.content) {
-        .rigid => |rigid| rigid.name,
-        .flex => |flex| flex.name orelse return null,
-        .structure, .alias, .err, .field_presence => return null,
-    };
-    if (name.eql(self.cir.idents.open_ext)) return null;
-    return name;
-}
-
-/// The row whose extension a derivation gave this obligation, if it did
-/// (`row_extension_derivations`).
-fn rowExtensionDerivation(self: *Self, constraint: StaticDispatchConstraint) ?RowExtensionDerivation {
-    const fn_root = self.types.resolveVar(constraint.fn_var).var_;
-    for (self.row_extension_derivations.items) |entry| {
-        if (self.types.resolveVar(entry.fn_var).var_ == fn_root) return entry;
-    }
-    return null;
-}
-
+/// method's own where clause. A record or tag union whose row ends in a row
+/// variable is one component, answered as a whole (design.md "Methods On
+/// Open Rows").
 /// Returns the new obligation's constraint function var.
 fn mkDerivedComponentConstraint(
     self: *Self,
@@ -62396,11 +62243,6 @@ fn reportConstraintErrorAt(
                         try self.numeralDispatcherStrConversion(dispatcher_var)
                     else
                         .none,
-                    .row_extension_of = if (self.rowExtensionDerivation(constraint)) |entry| .{
-                        .row_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, entry.row),
-                        .ext_name = self.rowExtensionSourceName(dispatcher_var),
-                        .kind = entry.kind,
-                    } else null,
                     .local_type_escape = local_type_escape,
                 },
             },

@@ -447,7 +447,7 @@ pub const Instantiator = struct {
     /// When set, the resolved fresh copy of every row extension whose source
     /// is a constrained flex or rigid is added here: the copy stands in a row's
     /// tail position, where the row default closes it to the empty row
-    /// (design.md "Derived Equality And Hashing Over Open Rows").
+    /// (design.md "Methods On Open Rows").
     constrained_row_tail_copies: ?*DenseMap(Var, void) = null,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.

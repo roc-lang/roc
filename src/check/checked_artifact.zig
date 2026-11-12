@@ -2792,10 +2792,9 @@ fn CheckedTypeVariableOf(comptime Constraints: type) type {
         constraints: Constraints = if (Constraints == CheckedConstraints) .empty else &.{},
         numeric_default_phase: ?NumericDefaultPhase = null,
         row_default: ?RowDefault = null,
-        /// A variable whose every constraint is an `is_eq` or `to_hash`: the
-        /// obligations deriving those methods over an open row give its tail.
-        /// Closing the row satisfies them, so a flex tail still seals to its row
-        /// default (design.md "Derived Equality And Hashing Over Open Rows"), and
+        /// A variable whose every constraint is an `is_eq` or `to_hash` closing
+        /// its row decides against the plain type, so a flex tail still seals
+        /// to its row default (design.md "Methods On Open Rows"), and
         /// a result row ending in the variable may still be determined by its
         /// request (design.md "Closed Result Rows At Template Boundaries").
         row_default_discharges_constraints: bool = false,
