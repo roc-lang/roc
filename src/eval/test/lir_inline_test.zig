@@ -4992,6 +4992,51 @@ test "LIR locals carry source-level names" {
     try std.testing.expect(found_second);
 }
 
+test "a capture slot of a lifted closure reads as a slot only of the closure's body" {
+    const allocator = std.testing.allocator;
+    // Each closure's capture slot is the enclosing function's parameter
+    // local, which the enclosing body must keep reading as its own parameter.
+    const source =
+        \\get : U64 -> U64
+        \\get = |x| {
+        \\    var $out = 0.U64
+        \\    if x > 3 {
+        \\        $out = x * 2
+        \\    }
+        \\    $out = $out + (|| x)()
+        \\    $out
+        \\}
+        \\pick : U64 -> U64
+        \\pick = |x| match x {
+        \\    0 => (|| x)()
+        \\    _ => (|| x)()
+        \\}
+        \\main : U64 -> U64
+        \\main = |n| get(n) + get(n + 1) + pick(n) + pick(n + 2)
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+            defer interpreter.deinit();
+            var n: u64 = 5;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&n),
+            });
+            try std.testing.expectEqual(@as(u64, 45), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
 test "issue 11317 or-pattern captures reuse one closure with and without specialization" {
     const allocator = std.testing.allocator;
     const source =

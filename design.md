@@ -9570,8 +9570,11 @@ one pass over the source bodies, every use of every expression and local (a
 lifted body may share an expression node between parents, and bodies may share
 nodes with each other, so a node keeps one list of uses per body), each body's
 loops, its single definitions and slots, and the strongly connected components
-of the call graph over direct calls and function values. The index is
-read-only afterwards. Each task owns a `Session` with its own memo tables, so
+of the call graph over direct calls and function values. Slots are keyed by
+body: a lifted closure's capture slots are the very locals its enclosing body
+binds, so a local reads as a parameter or capture only within the body that
+declares that slot, and a summary memoizes an expression per body that reads
+it. The index is read-only afterwards. Each task owns a `Session` with its own memo tables, so
 queries share no mutable state and take no locks.
 
 A query walks forward from the crossing value: from the callee's parameter or
