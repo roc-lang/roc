@@ -12,9 +12,13 @@ reach, and which ones it reports depends on how the garbage happens to
 align.
 
 This keeps only the instructions that lie inside a sized function symbol,
-which is the part of `.text` that is known to be code. Padding after a
-function and data between functions are left out; an above-baseline
+which is the part of an executable section that is known to be code. Padding
+after a function and data between functions are left out; an above-baseline
 instruction in a function body is still reported.
+
+Every executable section is scanned, not just `.text`: a fast dev link places
+the Roc program's code in its own `.text.roc` section beside the host's
+`.text`.
 
 An optional second argument restricts the scan to function symbols whose names
 start with it, such as `roc__` for the procedures the Roc compiler emitted.
@@ -72,7 +76,8 @@ def main() -> None:
     starts = [start for start, _ in ranges]
 
     mnemonics = set()
-    listing = run("objdump", "-d", "--no-show-raw-insn", "--section=.text", binary)
+    # `-d` disassembles every section flagged as code.
+    listing = run("objdump", "-d", "--no-show-raw-insn", binary)
     for line in listing.splitlines():
         match = INSTRUCTION_LINE.match(line)
         if match is None:
