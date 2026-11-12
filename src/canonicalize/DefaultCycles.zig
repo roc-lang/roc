@@ -18,12 +18,19 @@
 //!
 //! Value references only point down the import DAG, so a path that returns
 //! to its origin default can never leave the declaring module: this pass is
-//! module-local without losing any name-resolvable cycle. Edges that only
-//! exist after type checking—method/dispatch call targets, FOREIGN nominal
-//! constructions' omissions, and constructions through an alias whose
-//! annotation is anything but such a local reference (an alias of another
-//! module's type, or one that reaches its nominal type through a type
-//! argument)—terminate here by principle and are the checker's residue (`defaultMaterializationIsRecursive` in
+//! module-local without losing any name-resolvable cycle. An alias never
+//! changes which pass owns a construction: a construction through an alias
+//! is handled exactly as the same construction written through the name of
+//! the type the alias stands for, whichever module declares that type. A
+//! construction of another module's nominal type, written through its name
+//! or through an alias of it, contributes no edge here, because that type's
+//! defaults live in a module that cannot reference this one; its omitted
+//! defaults are filled in by checking. Edges that only exist after type
+//! checking—method/dispatch call targets, and a construction through an
+//! alias that reaches its nominal type through a type argument (`C :
+//! Same(Cfg)` with `Same(a) : a`), which names its type only once the
+//! argument is substituted—terminate here by principle and are the checker's
+//! residue (`defaultMaterializationIsRecursive` in
 //! src/check/Check.zig). A plain call through a function PARAMETER needs no
 //! edge of its own: the function value reached the parameter as an argument
 //! of some walked call, where the conservative argument rule (below) already
