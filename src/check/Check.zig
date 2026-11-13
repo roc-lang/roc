@@ -37248,9 +37248,8 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
-                return;
-            }
+            const operand_method = try self.lookupBinopMethod(lhs_var, rhs_var, expr_var, method_name, env, expr_region);
+            if (operand_method == .missing) return;
 
             // An arithmetic operator's operands and result are one type
             // (design.md "Static Dispatch At The Checked Boundary"): either
@@ -37261,7 +37260,7 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (!try self.resolveClosedOperator(expr_idx, lhs_var, method_name, .operand, expr_region)) {
+            if (!try self.resolveClosedOperator(expr_idx, lhs_var, operand_method, method_name, .operand, expr_region)) {
                 // The operator's method: operand.method(operand) -> operand.
                 _ = try self.mkBinopConstraint(
                     lhs_var,
@@ -37299,9 +37298,8 @@ fn finishBinopExpr(
                     => unreachable, // the enclosing prong matches only ordering operators
                 };
 
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
-                return;
-            }
+            const operand_method = try self.lookupBinopMethod(lhs_var, rhs_var, expr_var, method_name, env, expr_region);
+            if (operand_method == .missing) return;
 
             // For comparison binops, lhs and rhs must have the same type.
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
@@ -37313,7 +37311,7 @@ fn finishBinopExpr(
 
             const arg_var = rhs_var;
 
-            if (try self.resolveClosedOperator(expr_idx, arg_var, method_name, .bool, expr_region)) {
+            if (try self.resolveClosedOperator(expr_idx, arg_var, operand_method, method_name, .bool, expr_region)) {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
@@ -37355,7 +37353,7 @@ fn finishBinopExpr(
                 => unreachable, // the enclosing prong matches only range operators
             };
 
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
+            if (try self.lookupBinopMethod(lhs_var, rhs_var, expr_var, method_name, env, expr_region) == .missing) {
                 return;
             }
 
@@ -37392,9 +37390,8 @@ fn finishBinopExpr(
             _ = try self.unify(expr_var, ret_var, env);
         },
         .eq => {
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region)) {
-                return;
-            }
+            const operand_method = try self.lookupBinopMethod(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region);
+            if (operand_method == .missing) return;
 
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
             if (!arg_unify_result.isEstablished()) {
@@ -37402,7 +37399,7 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region)) {
+            if (try self.resolveClosedOperator(expr_idx, rhs_var, operand_method, self.cir.idents.is_eq, .bool, expr_region)) {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
@@ -37425,9 +37422,8 @@ fn finishBinopExpr(
             // `a != b` is `a.is_eq(b)` negated. The `is_eq` dispatch carries
             // the negation, which lowering applies to its `Bool` result, so
             // the negation is no dispatch of its own.
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region)) {
-                return;
-            }
+            const operand_method = try self.lookupBinopMethod(lhs_var, rhs_var, expr_var, self.cir.idents.is_eq, env, expr_region);
+            if (operand_method == .missing) return;
 
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
             if (!arg_unify_result.isEstablished()) {
@@ -37435,7 +37431,7 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (try self.resolveClosedOperator(expr_idx, rhs_var, self.cir.idents.is_eq, .bool, expr_region)) {
+            if (try self.resolveClosedOperator(expr_idx, rhs_var, operand_method, self.cir.idents.is_eq, .bool, expr_region)) {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
@@ -37575,18 +37571,27 @@ fn resolveClosedOperator(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
     operand_var: Var,
+    operand_method: BinopMethod,
     method_name: Ident.Idx,
     result: OperatorResult,
     region: Region,
 ) Allocator.Error!bool {
     const nominal = self.types.resolveVar(operand_var).desc.content.unwrapNominalType() orelse return false;
     if (nominal.args.len() != 0) return false;
-    const method_lookup = self.lookupStaticDispatchMethodBinding(
-        self.getNominalOriginEnv(nominal),
-        nominal.sourceDeclOptional(),
-        self.cir,
-        method_name,
-    ) orelse return false;
+    const method_lookup = switch (operand_method) {
+        // The operands share one type, so the left operand's method is
+        // this operand's.
+        .found => |found| found,
+        .missing => unreachable, // a missing method was reported and the operator retired
+        // The left operand had no nominal type before the operands were
+        // related; the right one may have given it one.
+        .not_nominal => self.lookupStaticDispatchMethodBinding(
+            self.getNominalOriginEnv(nominal),
+            nominal.sourceDeclOptional(),
+            self.cir,
+            method_name,
+        ) orelse return false,
+    };
     if (method_lookup.is_this_module) return false;
 
     const scheme_var = try self.importedMethodScheme(method_lookup);
@@ -37717,7 +37722,21 @@ fn builtinBoolContent(self: *const Self) Content {
     return .{ .structure = .{ .nominal_type = nominal } };
 }
 
-fn reportMissingNominalMethodForBinop(
+/// An operator's method as its left operand's type declares it, looked up
+/// before the operands are related.
+const BinopMethod = union(enum) {
+    /// The left operand's type is not a nominal type.
+    not_nominal,
+    /// The left operand's nominal type declares no such method; the operator
+    /// was reported and retired.
+    missing,
+    found: StaticDispatchMethodBinding,
+};
+
+/// Look up an operator's method on its left operand's nominal type, reporting
+/// a missing method before the operands are related: relating them first
+/// would report `Foo < 5` as a mismatch between `Foo` and a number.
+fn lookupBinopMethod(
     self: *Self,
     lhs_var: Var,
     rhs_var: Var,
@@ -37725,22 +37744,19 @@ fn reportMissingNominalMethodForBinop(
     method_name: Ident.Idx,
     env: *Env,
     region: Region,
-) Allocator.Error!bool {
+) Allocator.Error!BinopMethod {
     const resolved_lhs = self.types.resolveVar(lhs_var);
-    if (resolved_lhs.desc.content == .err) return false;
-
     if (resolved_lhs.desc.content != .structure or resolved_lhs.desc.content.structure != .nominal_type) {
-        return false;
+        return .not_nominal;
     }
 
     const nominal_type = resolved_lhs.desc.content.structure.nominal_type;
     const original_env = self.getNominalOriginEnv(nominal_type);
-    if (self.lookupStaticDispatchMethodBinding(original_env, nominal_type.sourceDeclOptional(), self.cir, method_name) == null) {
-        try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
-        return true;
+    if (self.lookupStaticDispatchMethodBinding(original_env, nominal_type.sourceDeclOptional(), self.cir, method_name)) |found| {
+        return .{ .found = found };
     }
-
-    return false;
+    try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
+    return .missing;
 }
 
 fn reportMissingNominalMethodForBinopConstraint(
