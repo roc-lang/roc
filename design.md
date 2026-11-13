@@ -1798,9 +1798,10 @@ the same omission edges as one written through the nominal type's own name
 
 A builtin type's public name can be an alias of a nominal type declared
 elsewhere in the Builtin module: `Str.Utf8Problem`, `Str.Utf16Problem` and
-`Str.Utf32Problem` are aliases of `Builtin.StrUtf8Problem`,
-`Builtin.StrUtf16Problem` and `Builtin.StrUtf32Problem`, which are declared
-beside `Str` rather than inside it so their members do not shadow `Str`'s.
+`Str.Utf32Problem` are aliases of `StrUtf8Problem`, `StrUtf16Problem` and
+`StrUtf32Problem`, which are declared below the `Builtin` type's block, so
+their members do not shadow `Str`'s and they are private to the module the
+way any type declared beside a type module's main type is.
 The alias is the only name Roc code has for such a type. Everything
 user-visible presents the declaration under the alias's name, and everything
 internal (method dispatch, intrinsic identity, layouts) uses the nominal
@@ -1810,20 +1811,27 @@ The builtin type registry (`CIR.builtin_type_specs`) states the relation: the
 nominal declaration's entry is not auto-imported, names its alias in
 `published_as`, and has the alias's name as its `display_name`. Registry
 compilation rejects an entry whose `display_name` is neither its declared name
-nor its publishing alias's. The builtin compiler reads each alias entry's
+nor its publishing alias's, and one whose name carries the `Builtin.`
+qualification although an alias publishes it, or lacks it although none does. The builtin compiler reads each alias entry's
 solved type from the checked Builtin module and records the nominal
 declaration it resolves to in `BuiltinIndices.alias_targets`; it fails the
 build when a `published_as` entry is not the solved target of the alias it
 names.
 
-- Printed types. Checking maps every registry entry's qualified name to its
-  `display_name`, so the nominal type prints as `Utf8Problem`. A builtin type
-  is stored under its qualified name (`Builtin.StrUtf8Problem`), which no user
-  type can have, so a user type named `StrUtf8Problem` keeps its name. A
-  type writer made without an import mapping (LSP hover, the REPL, snapshot
-  type listings) and glue's type names resolve the same qualified name
-  through the registry and show the alias as they show any builtin type
-  (`Str.Utf8Problem`).
+- Printed types. A published declaration's name (`StrUtf8Problem`) is an
+  ordinary one that a user type can share, so nothing recognizes it by name
+  alone: every renaming first establishes that the Builtin module declares
+  the type. A nominal type records that in its source bits
+  (`NominalType.originIsBuiltin`), error snapshots keep it
+  (`SnapshotNominalType.builtin_origin`), and the type writer consults its
+  display-name resolver only for such a type, after the import mapping
+  misses. The import mapping has no entry for a published declaration. The
+  checker's writer shows the registry `display_name` (`Utf8Problem`), as it
+  shows every builtin type; a type writer made without an import mapping
+  (LSP hover, the REPL, snapshot type listings) shows the alias as it shows
+  any builtin type (`Str.Utf8Problem`). Glue compares a nominal type's origin
+  with the Builtin module's identity before renaming it. A user type named
+  `StrUtf8Problem` keeps its name everywhere.
 - Member lookup. Canonicalization finds a builtin member by looking its
   qualified name up in the Builtin module. A path through a publishing alias
   (`Utf8Problem.is_eq`, `Str.Utf8Problem.is_eq`) misses that lookup, and only
@@ -1845,11 +1853,11 @@ names.
   may be declared in the alias's module or in a module the package does
   not expose, and a renamed type can rename further types through aliases
   nested in it. `roc bump` applies the same rule to a package's public API
-  (`adoptRenamedNominals` in src/bump/extract.zig). The registry's only
-  part in the Builtin docs is to say that a published declaration has no
-  public name of its own, since it is declared inside the `Builtin` block.
-  Another package's docs show a published builtin declaration under the
-  alias's name, read from the registry as printed types read it.
+  (`adoptRenamedNominals` in src/bump/extract.zig). The Builtin docs need
+  no registry lookup for this: a published declaration is private by its
+  position, below the `Builtin` block. Another package's docs show a
+  published builtin declaration under the alias's name, read from the
+  registry for a type whose origin is the Builtin module.
 
 ### Compile-Time Evaluation And Static Storage
 

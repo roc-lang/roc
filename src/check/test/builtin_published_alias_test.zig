@@ -1,7 +1,7 @@
 //! Tests for builtin declarations published through an alias.
 //!
 //! `Str.Utf8Problem`, `Str.Utf16Problem` and `Str.Utf32Problem` are aliases of
-//! nominal types declared elsewhere in the Builtin module. Roc code names only
+//! nominal types declared below the Builtin module's block, private to it. Roc code names only
 //! the aliases: types print under the alias's name, members and tags resolve
 //! through either spelling of the alias, and the declarations' own names stay
 //! free for user code.
@@ -314,10 +314,15 @@ test "the registry names every builtin type the way its declaration does" {
         };
         const header = builtin_env.store.getTypeHeader(header_idx);
         try std.testing.expectEqualStrings(spec.qualified_name, builtin_env.getIdentText(header.name));
-        // Printed types look a builtin type up by the one name it is stored
-        // under, which is qualified and so never a name user code declares.
         try std.testing.expectEqualStrings(spec.qualified_name, builtin_env.getIdentText(header.relative_name));
-        try std.testing.expect(std.mem.startsWith(u8, spec.qualified_name, CIR.builtin_module_prefix));
+        // A type declared inside the Builtin block carries the module's
+        // qualification, which no user type can have. One published through
+        // an alias is declared below the block under a bare name, and is
+        // recognized by its origin instead.
+        try std.testing.expectEqual(
+            spec.published_as == null,
+            std.mem.startsWith(u8, spec.qualified_name, CIR.builtin_module_prefix),
+        );
         // Only a declaration published through an alias is shown under a
         // name other than the one it is declared with.
         try std.testing.expectEqual(

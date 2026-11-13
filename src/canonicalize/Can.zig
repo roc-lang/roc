@@ -8828,7 +8828,10 @@ fn builtinAliasMemberNode(
         if (target.alias == type_stmt) break target.nominal;
     } else return null;
     const owner_header = info.env.store.getTypeHeader(info.env.store.getStatement(owner_stmt).s_nominal_decl.header);
-    const member_name = try appendQualifiedText(&self.qualified_ident_bytes, info.env.getIdentText(owner_header.name), member);
+    // The owner is declared beside the Builtin type, so its own name is bare
+    // while its members are named under the module's name.
+    const owner_name = try appendQualifiedText(&self.qualified_ident_bytes, info.env.module_name, info.env.getIdentText(owner_header.name));
+    const member_name = try appendQualifiedText(&self.qualified_ident_bytes, owner_name, member);
     const member_ident = info.env.common.findIdent(member_name) orelse return null;
     return info.env.getExposedValueNodeIndexById(member_ident);
 }

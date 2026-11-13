@@ -198,7 +198,9 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         try artifacts_by_key.put(artifact.key.digest(), artifact);
     }
 
-    var type_table = TypeTable.init(gpa, &artifacts_by_key);
+    const builtin_identity = build_env.builtin_modules.builtin_module.env.contentIdentityHash() orelse
+        glueInvariant("the Builtin module has no content identity", .{});
+    var type_table = TypeTable.init(gpa, &artifacts_by_key, builtin_identity);
     defer type_table.deinit();
 
     for (modules) |mod| {
@@ -1413,6 +1415,8 @@ const TypeTable = struct {
     /// Lookup from checked artifact key to artifact. Borrowed; not owned by the
     /// type table.
     artifacts_by_key: *const ArtifactKeyMap,
+    /// Content identity of the compiler's Builtin module.
+    builtin_identity: *const [32]u8,
     /// User-facing message for the first glue-visible type found to have no
     /// committed memory layout because it holds an unresolved (flex/rigid) type
     /// variable by value. Set alongside `error.UnresolvedByValue`; owned here
@@ -1482,6 +1486,7 @@ const TypeTable = struct {
     fn init(
         gpa: std.mem.Allocator,
         artifacts_by_key: *const ArtifactKeyMap,
+        builtin_identity: *const [32]u8,
     ) TypeTable {
         return .{
             .entries = std.ArrayList(CollectedTypeInfo).empty,
@@ -1494,6 +1499,7 @@ const TypeTable = struct {
             .roots = .empty,
             .box_wrappers = .empty,
             .artifacts_by_key = artifacts_by_key,
+            .builtin_identity = builtin_identity,
         };
     }
 
@@ -1798,7 +1804,7 @@ const TypeTable = struct {
         buf: *std.ArrayList(u8),
         active: *std.AutoHashMap(TypeTableKey, void),
     ) Allocator.Error!void {
-        const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+        const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name), nominalOriginIsBuiltin(artifact, self.builtin_identity, nominal));
         try buf.appendSlice(self.gpa, name);
         if (nominal.args.len == 0) return;
         try buf.append(self.gpa, '(');
@@ -3080,7 +3086,7 @@ const TypeTable = struct {
         nominal: CheckedArtifact.CheckedNominalType,
         position: ValuePosition,
     ) TypeTableError!CollectedTypeRepr {
-        const display_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+        const display_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name), nominalOriginIsBuiltin(artifact, self.builtin_identity, nominal));
 
         if (nominal.builtin) |builtin_nominal| {
             switch (builtin_nominal) {
@@ -3536,12 +3542,16 @@ const TypeTable = struct {
     }
 
     /// Strip "Builtin." and "Num." prefixes from type names (mirrors TypeWriter.getDisplayName).
-    pub fn getTypeDisplayName(raw_name: []const u8) []const u8 {
+    /// `origin_is_builtin` says whether the Builtin module declares the type.
+    pub fn getTypeDisplayName(raw_name: []const u8, origin_is_builtin: bool) []const u8 {
         // A builtin declaration published through an alias is named by the
-        // alias.
-        if (can.CIR.builtinTypePublishedName(raw_name)) |published| {
-            if (published.qualified and published.member_path.len == 0) {
-                return getTypeDisplayName(published.alias_qualified_name);
+        // alias. Another module can declare a type with the same name, so
+        // only the Builtin module's own is.
+        if (origin_is_builtin) {
+            if (can.CIR.builtinTypePublishedName(raw_name)) |published| {
+                if (published.member_path.len == 0) {
+                    return getTypeDisplayName(published.alias_qualified_name, false);
+                }
             }
         }
         if (std.mem.startsWith(u8, raw_name, "Builtin.")) {
@@ -4391,22 +4401,33 @@ fn appendTagRowTags(
     }
 }
 
+/// Whether the Builtin module declares `nominal`.
+fn nominalOriginIsBuiltin(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    builtin_identity: *const [32]u8,
+    nominal: CheckedArtifact.CheckedNominalType,
+) bool {
+    return std.mem.eql(u8, artifact.canonical_names.moduleIdentityBytes(nominal.origin_module), builtin_identity);
+}
+
 fn typeStringAlloc(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    builtin_identity: *const [32]u8,
     checked_type: CheckedArtifact.CheckedTypeId,
 ) Allocator.Error![]const u8 {
     var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(gpa);
     var active = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
     defer active.deinit();
-    try writeTypeString(gpa, artifact, checked_type, &buf, &active);
+    try writeTypeString(gpa, artifact, builtin_identity, checked_type, &buf, &active);
     return buf.toOwnedSlice(gpa);
 }
 
 fn writeTypeString(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    builtin_identity: *const [32]u8,
     checked_type: CheckedArtifact.CheckedTypeId,
     buf: *std.ArrayList(u8),
     active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
@@ -4423,13 +4444,13 @@ fn writeTypeString(
         .field_kind, .err => glueInvariant("erroneous checked type reached glue type string", .{}),
         .flex => try buf.appendSlice(gpa, "flex"),
         .rigid => try buf.appendSlice(gpa, "rigid"),
-        .alias => |alias| try writeTypeString(gpa, artifact, alias.backing, buf, active),
-        .record => |record| try writeRecordTypeString(gpa, artifact, record.fields, record.ext, buf, active),
-        .tuple => |items| try writeTupleTypeString(gpa, artifact, items, buf, active),
-        .nominal => |nominal| try writeNominalTypeString(gpa, artifact, nominal, buf, active),
-        .function => |func| try writeFunctionTypeString(gpa, artifact, func, buf, active),
+        .alias => |alias| try writeTypeString(gpa, artifact, builtin_identity, alias.backing, buf, active),
+        .record => |record| try writeRecordTypeString(gpa, artifact, builtin_identity, record.fields, record.ext, buf, active),
+        .tuple => |items| try writeTupleTypeString(gpa, artifact, builtin_identity, items, buf, active),
+        .nominal => |nominal| try writeNominalTypeString(gpa, artifact, builtin_identity, nominal, buf, active),
+        .function => |func| try writeFunctionTypeString(gpa, artifact, builtin_identity, func, buf, active),
         .empty_record => try buf.appendSlice(gpa, "{}"),
-        .tag_union => |tag_union| try writeTagUnionTypeString(gpa, artifact, tag_union.tags, tag_union.ext, buf, active),
+        .tag_union => |tag_union| try writeTagUnionTypeString(gpa, artifact, builtin_identity, tag_union.tags, tag_union.ext, buf, active),
         .empty_tag_union => try buf.appendSlice(gpa, "[]"),
     }
 }
@@ -4437,17 +4458,18 @@ fn writeTypeString(
 fn writeNominalTypeString(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    builtin_identity: *const [32]u8,
     nominal: CheckedArtifact.CheckedNominalType,
     buf: *std.ArrayList(u8),
     active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
 ) Allocator.Error!void {
-    const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+    const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name), nominalOriginIsBuiltin(artifact, builtin_identity, nominal));
     try buf.appendSlice(gpa, name);
     if (nominal.args.len == 0) return;
     try buf.append(gpa, '(');
     for (nominal.args, 0..) |arg, i| {
         if (i > 0) try buf.appendSlice(gpa, ", ");
-        try writeTypeString(gpa, artifact, arg, buf, active);
+        try writeTypeString(gpa, artifact, builtin_identity, arg, buf, active);
     }
     try buf.append(gpa, ')');
 }
@@ -4455,6 +4477,7 @@ fn writeNominalTypeString(
 fn writeFunctionTypeString(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    builtin_identity: *const [32]u8,
     func: CheckedArtifact.CheckedFunctionType,
     buf: *std.ArrayList(u8),
     active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
@@ -4464,16 +4487,17 @@ fn writeFunctionTypeString(
     } else {
         for (func.args, 0..) |arg, i| {
             if (i > 0) try buf.appendSlice(gpa, ", ");
-            try writeTypeString(gpa, artifact, arg, buf, active);
+            try writeTypeString(gpa, artifact, builtin_identity, arg, buf, active);
         }
     }
     try buf.appendSlice(gpa, if (func.kind == .effectful) " => " else " -> ");
-    try writeTypeString(gpa, artifact, func.ret, buf, active);
+    try writeTypeString(gpa, artifact, builtin_identity, func.ret, buf, active);
 }
 
 fn writeRecordTypeString(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    builtin_identity: *const [32]u8,
     fields: CheckedArtifact.CheckedRecordFields,
     ext: CheckedArtifact.CheckedTypeId,
     buf: *std.ArrayList(u8),
@@ -4513,7 +4537,7 @@ fn writeRecordTypeString(
         // An optional field renders its kind (`name ?: T`), mirroring the
         // solver-side TypeWriter (design.md "Field Kinds").
         try buf.appendSlice(gpa, if (field.kind.tag == .optional) " ?: " else " : ");
-        try writeTypeString(gpa, artifact, field.ty, buf, active);
+        try writeTypeString(gpa, artifact, builtin_identity, field.ty, buf, active);
     }
     try buf.appendSlice(gpa, " }");
 }
@@ -4521,6 +4545,7 @@ fn writeRecordTypeString(
 fn writeTupleTypeString(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    builtin_identity: *const [32]u8,
     items: []const CheckedArtifact.CheckedTypeId,
     buf: *std.ArrayList(u8),
     active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
@@ -4528,7 +4553,7 @@ fn writeTupleTypeString(
     try buf.append(gpa, '(');
     for (items, 0..) |item, i| {
         if (i > 0) try buf.appendSlice(gpa, ", ");
-        try writeTypeString(gpa, artifact, item, buf, active);
+        try writeTypeString(gpa, artifact, builtin_identity, item, buf, active);
     }
     try buf.append(gpa, ')');
 }
@@ -4536,6 +4561,7 @@ fn writeTupleTypeString(
 fn writeTagUnionTypeString(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    builtin_identity: *const [32]u8,
     tags: CheckedArtifact.CheckedTags,
     ext: CheckedArtifact.CheckedTypeId,
     buf: *std.ArrayList(u8),
@@ -4554,7 +4580,7 @@ fn writeTagUnionTypeString(
             try buf.append(gpa, '(');
             for (tag_args, 0..) |arg, arg_i| {
                 if (arg_i > 0) try buf.appendSlice(gpa, ", ");
-                try writeTypeString(gpa, artifact, arg, buf, active);
+                try writeTypeString(gpa, artifact, builtin_identity, arg, buf, active);
             }
             try buf.append(gpa, ')');
         }
@@ -4573,10 +4599,11 @@ fn collectModuleTypeInfo(
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
     errdefer gpa.free(main_type_str);
     for (artifact.checked_types.nominal_declarations.items) |declaration| {
-        const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(artifact.checked_types.nominalDeclarationName(declaration)));
+        // A platform module declares its own types, never the Builtin module's.
+        const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(artifact.checked_types.nominalDeclarationName(declaration)), false);
         if (std.mem.eql(u8, type_name, module_name)) {
             gpa.free(main_type_str);
-            main_type_str = try typeStringAlloc(gpa, artifact, declaration.declaration_root);
+            main_type_str = try typeStringAlloc(gpa, artifact, type_table.builtin_identity, declaration.declaration_root);
             break;
         }
     }
@@ -4638,7 +4665,7 @@ fn collectModuleTypeInfo(
         defer gpa.free(local_name);
 
         const checked_type = checkedTypeRootForScheme(artifact, entry.source_scheme);
-        const type_str = try typeStringAlloc(gpa, artifact, checked_type);
+        const type_str = try typeStringAlloc(gpa, artifact, type_table.builtin_identity, checked_type);
         errdefer gpa.free(type_str);
 
         if (hosted_proc_for_entry) |hosted_proc| {
@@ -4750,7 +4777,7 @@ test "issue 12760: boundary layout requirements survive memoization and callable
     // Signature conversion visits the result first. Both kinds of procedure
     // boundary reject an unresolved result, before registering any arguments.
     for ([_]bool{ false, true }) |hosted| {
-        var result_table = TypeTable.init(gpa, &artifacts);
+        var result_table = TypeTable.init(gpa, &artifacts, &@as([32]u8, @splat(0xff)));
         defer result_table.deinit();
         result_table.boundary_value_name = "probe";
         if (hosted) {
@@ -4767,7 +4794,7 @@ test "issue 12760: boundary layout requirements survive memoization and callable
     for (signature.args[0..3]) |ty| {
         for ([_]u32{ 0, 1 }) |open_ctx| {
             for ([_]bool{ false, true }) |opaque_first| {
-                var table = TypeTable.init(gpa, &artifacts);
+                var table = TypeTable.init(gpa, &artifacts, &@as([32]u8, @splat(0xff)));
                 defer table.deinit();
                 table.open_ctx = open_ctx;
                 table.next_open_ctx = open_ctx;
@@ -4794,7 +4821,7 @@ test "issue 12760: boundary layout requirements survive memoization and callable
         }
     }
 
-    var table = TypeTable.init(gpa, &artifacts);
+    var table = TypeTable.init(gpa, &artifacts, &@as([32]u8, @splat(0xff)));
     defer table.deinit();
     // The same unknown type can still be carried behind a real box. A
     // directly boxed callable stays representable, but a callable over the

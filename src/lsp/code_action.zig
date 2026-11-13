@@ -51,6 +51,9 @@ const builtin_module_prefix = "Builtin.";
 /// are all in use at once: `Builtin.Str` came off an annotation in the same
 /// file that gave `List` its bare name.
 fn specHasName(spec: CIR.BuiltinTypeSpec, name: []const u8) bool {
+    // A declaration published through an alias has no name Roc code can
+    // write; its alias's entry carries the name.
+    if (spec.published_as != null) return false;
     std.debug.assert(std.mem.startsWith(u8, spec.qualified_name, builtin_module_prefix));
     if (std.mem.eql(u8, name, spec.qualified_name)) return true;
     if (std.mem.eql(u8, name, spec.qualified_name[builtin_module_prefix.len..])) return true;

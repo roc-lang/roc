@@ -23765,25 +23765,25 @@ Builtin :: [].{
 
 		}
 	}
+}
 
-	StrUtf8Problem := [
-		InvalidStartByte,
-		UnexpectedEndOfSequence,
-		ExpectedContinuation,
-		OverlongEncoding,
-		CodepointTooLarge,
-		EncodesSurrogateHalf,
-	].{
-		is_eq : StrUtf8Problem, StrUtf8Problem -> Bool
-	}
+StrUtf8Problem := [
+	InvalidStartByte,
+	UnexpectedEndOfSequence,
+	ExpectedContinuation,
+	OverlongEncoding,
+	CodepointTooLarge,
+	EncodesSurrogateHalf,
+].{
+	is_eq : StrUtf8Problem, StrUtf8Problem -> Bool
+}
 
-	StrUtf16Problem := [UnpairedHighSurrogate, UnpairedLowSurrogate, UnexpectedEndOfSequence].{
-		is_eq : StrUtf16Problem, StrUtf16Problem -> Bool
-	}
+StrUtf16Problem := [UnpairedHighSurrogate, UnpairedLowSurrogate, UnexpectedEndOfSequence].{
+	is_eq : StrUtf16Problem, StrUtf16Problem -> Bool
+}
 
-	StrUtf32Problem := [CodePointTooLarge, SurrogateCodePoint, UnexpectedEndOfSequence].{
-		is_eq : StrUtf32Problem, StrUtf32Problem -> Bool
-	}
+StrUtf32Problem := [CodePointTooLarge, SurrogateCodePoint, UnexpectedEndOfSequence].{
+	is_eq : StrUtf32Problem, StrUtf32Problem -> Bool
 }
 
 hasher_start : U64 -> Hasher

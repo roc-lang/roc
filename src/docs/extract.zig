@@ -356,8 +356,6 @@ fn namespaceIncludes(namespace: PublicNamespace, statement: CIR.Statement.Idx) b
     const env = namespace.env;
     const name = typeDeclName(env, statement) orelse return false;
     if (entryIsUndocumented(namespace.package_name, env.module_name, name)) return false;
-    const is_renamed = if (namespace.projection) |projection| projection.renamed_by != null else false;
-    if (!is_renamed and env.module_role == .builtin and CIR.builtinTypePublishedName(name) != null) return false;
     if (namespace.exposed_names) |exposed_names| {
         const root_name = if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
         for (exposed_names) |exposed_name| {
@@ -783,10 +781,6 @@ fn collectScopeEntries(
     else
         null;
 
-    // A builtin declaration published through an alias has no entry of its
-    // own in the Builtin page: the alias's namespace documents it.
-    const hides_published = renamed_root == null and module_env.module_role == .builtin;
-
     var exposed_names: std.StringHashMapUnmanaged(void) = .empty;
     defer exposed_names.deinit(gpa);
     if (scope.exposed_names) |names_to_expose| {
@@ -818,11 +812,6 @@ fn collectScopeEntries(
         }
         if (documented_region) |root_region| {
             if (!regionEncloses(root_region, module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def_idx)))) continue;
-        }
-        if (hides_published) {
-            if (defEntryName(module_env, def_idx)) |source_name| {
-                if (CIR.builtinTypePublishedName(source_name) != null) continue;
-            }
         }
         if (try extractDefEntry(gpa, module_env, local_module_path, reference_routing, def_idx, source, line_index)) |entry| {
             var public_entry = entry;
@@ -913,7 +902,6 @@ fn collectScopeEntries(
                 if (findProjectedEntryByName(entries_list.items, module_env, scope.projection, entry_name)) continue;
                 // Skip internal Builtin types
                 if (entryIsUndocumented(scope.package_name, module_env.module_name, entry_name)) continue;
-                if (hides_published and CIR.builtinTypePublishedName(entry_name) != null) continue;
                 if (renamed_root == stmt_idx) continue;
 
                 const region = module_env.store.getStatementRegion(stmt_idx);

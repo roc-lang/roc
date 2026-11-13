@@ -202,9 +202,11 @@ pub const BuiltinTypeSpec = struct {
     /// owner to point at the corresponding public constraint.
     internal_kind: ?InternalBuiltinTypeKind = null,
     /// The qualified name of the public builtin alias that publishes this
-    /// declaration. Roc code cannot name the declaration itself; it names the
-    /// alias, and diagnostics and generated docs present the declaration and
-    /// its members under the alias's name. The builtin compiler verifies that
+    /// declaration, which is private to the Builtin module: it is declared
+    /// beside the `Builtin` type, so `qualified_name` is its bare name. Roc
+    /// code cannot name the declaration itself; it names the alias, and
+    /// diagnostics and generated docs present the declaration and its
+    /// members under the alias's name. The builtin compiler verifies that
     /// the alias's solved type is this declaration.
     published_as: ?[]const u8 = null,
 };
@@ -217,9 +219,10 @@ pub const BuiltinPublishedName = struct {
     /// What follows the declaration's name: empty, or a member path with its
     /// leading dot (`.is_eq`).
     member_path: []const u8,
-    /// Whether the name was spelled fully qualified rather than
-    /// module-relative.
+    /// Whether the name carried the `Builtin.` module qualification.
     qualified: bool,
+    /// The name diagnostics show for the declaration.
+    display_name: []const u8,
 
     /// The alias's name in the spelling the name was given in.
     pub fn aliasName(self: BuiltinPublishedName) []const u8 {
@@ -228,19 +231,19 @@ pub const BuiltinPublishedName = struct {
 };
 
 /// The published form of `name` when it is at or under a builtin declaration
-/// that has a `published_as` alias. Accepts the fully qualified
-/// (`Builtin.StrUtf8Problem.is_eq`) and module-relative
-/// (`StrUtf8Problem.is_eq`) spellings.
+/// that has a `published_as` alias. Accepts the bare (`StrUtf8Problem.is_eq`)
+/// and module-qualified (`Builtin.StrUtf8Problem.is_eq`) spellings.
+///
+/// `name` must be the name of something the Builtin module declares. Such a
+/// declaration's name is an ordinary one that another module's type can
+/// share, so the caller establishes the origin before asking.
 pub fn builtinTypePublishedName(name: []const u8) ?BuiltinPublishedName {
+    const qualified = std.mem.startsWith(u8, name, builtin_module_prefix);
+    const bare = if (qualified) name[builtin_module_prefix.len..] else name;
     for (builtin_type_specs) |spec| {
         const alias = spec.published_as orelse continue;
-        std.debug.assert(std.mem.startsWith(u8, spec.qualified_name, builtin_module_prefix));
-        if (nameIsAtOrUnder(name, spec.qualified_name)) {
-            return .{ .alias_qualified_name = alias, .member_path = name[spec.qualified_name.len..], .qualified = true };
-        }
-        const relative = spec.qualified_name[builtin_module_prefix.len..];
-        if (nameIsAtOrUnder(name, relative)) {
-            return .{ .alias_qualified_name = alias, .member_path = name[relative.len..], .qualified = false };
+        if (nameIsAtOrUnder(bare, spec.qualified_name)) {
+            return .{ .alias_qualified_name = alias, .member_path = bare[spec.qualified_name.len..], .qualified = qualified, .display_name = spec.display_name };
         }
     }
     return null;
@@ -329,11 +332,11 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "HttpHeaderEncoding", .qualified_name = "Builtin.Encoding.HttpHeaderEncoding", .type_field = "http_header_encoding_type", .ident_field = "http_header_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderEncoding" }, .auto_import = false, .internal_kind = .http_header },
     .{ .display_name = "HttpHeader", .qualified_name = "Builtin.Encoding.HttpHeader", .type_field = "http_header_type", .ident_field = "http_header_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "HttpHeader" } }, .auto_import = false },
     .{ .display_name = "Utf8Problem", .qualified_name = "Builtin.Str.Utf8Problem", .type_field = "utf8_problem_type", .ident_field = "utf8_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf8Problem" } } },
-    .{ .display_name = "Utf8Problem", .qualified_name = "Builtin.StrUtf8Problem", .type_field = "str_utf8_problem_type", .ident_field = "str_utf8_problem_ident", .lookup = .{ .qualified = "Builtin.StrUtf8Problem" }, .auto_import = false, .published_as = "Builtin.Str.Utf8Problem" },
+    .{ .display_name = "Utf8Problem", .qualified_name = "StrUtf8Problem", .type_field = "str_utf8_problem_type", .ident_field = "str_utf8_problem_ident", .lookup = .{ .qualified = "StrUtf8Problem" }, .auto_import = false, .published_as = "Builtin.Str.Utf8Problem" },
     .{ .display_name = "Utf16Problem", .qualified_name = "Builtin.Str.Utf16Problem", .type_field = "utf16_problem_type", .ident_field = "utf16_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf16Problem" } } },
-    .{ .display_name = "Utf16Problem", .qualified_name = "Builtin.StrUtf16Problem", .type_field = "str_utf16_problem_type", .ident_field = "str_utf16_problem_ident", .lookup = .{ .qualified = "Builtin.StrUtf16Problem" }, .auto_import = false, .published_as = "Builtin.Str.Utf16Problem" },
+    .{ .display_name = "Utf16Problem", .qualified_name = "StrUtf16Problem", .type_field = "str_utf16_problem_type", .ident_field = "str_utf16_problem_ident", .lookup = .{ .qualified = "StrUtf16Problem" }, .auto_import = false, .published_as = "Builtin.Str.Utf16Problem" },
     .{ .display_name = "Utf32Problem", .qualified_name = "Builtin.Str.Utf32Problem", .type_field = "utf32_problem_type", .ident_field = "utf32_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf32Problem" } } },
-    .{ .display_name = "Utf32Problem", .qualified_name = "Builtin.StrUtf32Problem", .type_field = "str_utf32_problem_type", .ident_field = "str_utf32_problem_ident", .lookup = .{ .qualified = "Builtin.StrUtf32Problem" }, .auto_import = false, .published_as = "Builtin.Str.Utf32Problem" },
+    .{ .display_name = "Utf32Problem", .qualified_name = "StrUtf32Problem", .type_field = "str_utf32_problem_type", .ident_field = "str_utf32_problem_ident", .lookup = .{ .qualified = "StrUtf32Problem" }, .auto_import = false, .published_as = "Builtin.Str.Utf32Problem" },
     .{ .display_name = "Range", .qualified_name = "Builtin.Num.Range", .type_field = "range_type", .ident_field = "range_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Range" } } },
     .{ .display_name = "RawOrder", .qualified_name = "Builtin.Num.RawOrder", .type_field = "raw_order_type", .ident_field = "raw_order_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "RawOrder" } }, .auto_import = false },
     .{ .display_name = "U8", .qualified_name = "Builtin.Num.U8", .type_field = "u8_type", .ident_field = "u8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8" } }, .num_kind = .u8 },
@@ -398,6 +401,9 @@ comptime {
         }
         if (spec.published_as != null and spec.auto_import) {
             @compileError("builtin type spec '" ++ spec.qualified_name ++ "' is published through an alias, so its own name must not be auto-imported");
+        }
+        if ((spec.published_as != null) == std.mem.startsWith(u8, spec.qualified_name, builtin_module_prefix)) {
+            @compileError("builtin type spec '" ++ spec.qualified_name ++ "' must be declared beside the Builtin type exactly when an alias publishes it");
         }
     }
 }

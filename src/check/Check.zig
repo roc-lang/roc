@@ -4798,6 +4798,7 @@ pub fn fixupTypeWriter(self: *Self) void {
     // Defaulted fields render their default's source snippet when it was
     // declared in this module (design.md "Defaulted Fields").
     self.type_writer.setDefaultSourceResolver(self.cir, ModuleEnv.typeWriterDefaultSource);
+    self.type_writer.setDisplayNameResolver(ModuleEnv.typeWriterPublishedBuiltinDisplayName);
 }
 
 /// Struct-typed field types that own no memory, so `deinit` releases nothing.
@@ -62051,11 +62052,13 @@ pub fn createImportMapping(
     errdefer mapping.deinit();
 
     // Step 1: Map each builtin type's qualified name to its registry display
-    // name. A builtin type is stored under its qualified name, which no user
-    // type can have, so a user type keeps its own name whatever a builtin
-    // declaration is called.
+    // name. A qualified name carries the `Builtin.` module qualification,
+    // which no user type can have. A declaration published through an alias
+    // has a bare name a user type can share, so it has no entry here: the
+    // type writer renames it by its origin instead.
     if (builtin_module != null and builtin_indices != null) {
         inline for (CIR.builtin_type_specs) |spec| {
+            if (spec.published_as != null) continue;
             const display_ident = try idents.insert(gpa, Ident.for_text(spec.display_name));
             const qualified_ident = try idents.insert(gpa, Ident.for_text(spec.qualified_name));
             try putBetterDisplayName(&mapping, idents, qualified_ident, display_ident);
