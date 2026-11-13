@@ -105,7 +105,7 @@ const ThreadSafeHost = struct {
 ///
 /// `Scenario` provides `prepare(*RocOps) Value`, which builds a value holding
 /// two references, and `release(Value)`, which drops one of them.
-fn countLeakedRounds(comptime Scenario: type) !usize {
+fn countLeakedRounds(comptime Scenario: type) std.Thread.SpawnError!usize {
     const Value = @typeInfo(@TypeOf(Scenario.prepare)).@"fn".return_type.?;
 
     const Shared = struct {
