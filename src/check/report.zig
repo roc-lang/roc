@@ -165,9 +165,6 @@ pub const ReportBuilder = struct {
     other_modules: []const *const ModuleEnv,
     platform_requirement_source: ?PlatformRequirementSource,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
-    /// The checker's full region list, which includes regions for type variables
-    /// created during type checking that don't have corresponding CIR nodes.
-    checker_regions: *const Region.List,
     diff_fields: SnapshotRecordFieldSafeList,
     diff_tags: SnapshotTagSafeList,
     typo_suggestions: diff.TypoSuggestion.ArrayList,
@@ -195,7 +192,6 @@ pub const ReportBuilder = struct {
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
-        checker_regions: *const Region.List,
         platform_requirement_source: ?PlatformRequirementSource,
     ) Allocator.Error!Self {
         return .{
@@ -206,7 +202,6 @@ pub const ReportBuilder = struct {
             .snapshots = snapshots,
             .problems = problems,
             .import_mapping = import_mapping,
-            .checker_regions = checker_regions,
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
@@ -226,7 +221,7 @@ pub const ReportBuilder = struct {
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
     ) Allocator.Error!Self {
-        return init(gpa, module_env, module_env, null, problems, filename, other_modules, import_mapping, &module_env.store.regions, null);
+        return init(gpa, module_env, module_env, null, problems, filename, other_modules, import_mapping, null);
     }
 
     /// Deinit report builder, only fields it owns
@@ -249,15 +244,6 @@ pub const ReportBuilder = struct {
     }
 
     // Helpers
-
-    /// Look up a region by index using the checker's full region list.
-    /// The checker's regions include both CIR node regions and regions for type variables
-    /// created during type checking. Returns null only if the index is beyond even
-    /// the checker's region list (shouldn't happen in normal operation).
-    fn getRegionSafe(self: *const Self, region_idx: Region.Idx) ?*Region {
-        if (@backingInt(region_idx) >= self.checker_regions.len()) return null;
-        return self.checker_regions.get(region_idx);
-    }
 
     /// Add source code highlighting for a region.
     /// The declaration region of a defaulted field's default expression,
@@ -360,12 +346,6 @@ pub const ReportBuilder = struct {
     }
 
     // Generic Reports
-
-    /// Convert a type into a type var
-    pub fn regionIdxFrom(idx: anytype) Region.Idx {
-        std.debug.assert(@TypeOf(idx) == Var or @TypeOf(idx) == CIR.Expr.Idx or @TypeOf(idx) == CIR.Pattern.Idx or @TypeOf(idx) == CIR.Node.Idx);
-        return @fromBackingInt(@intCast(@backingInt(idx)));
-    }
 
     const ProblemRegion = union(enum) {
         direct: Region,

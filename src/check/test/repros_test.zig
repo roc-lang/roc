@@ -1248,8 +1248,7 @@ test "check - repro - issue 11398 - annotated lambda return mismatch points at t
     try test_env.assertOneTypeError("Type Mismatch");
 
     const problem = test_env.checker.problems.problems.items[0];
-    const actual_var = problem.type_mismatch.types.actual_var;
-    const region = test_env.checker.regions.get(@fromBackingInt(@intCast(@backingInt(actual_var)))).*;
+    const region = problem.type_mismatch.actual_region;
     try std.testing.expectEqualStrings("{}", test_env.module_env.getSource(region));
 }
 
@@ -1260,8 +1259,7 @@ fn expectOneMismatchAt(src: []const u8, expected_region_text: []const u8) TestEn
     try test_env.assertOneTypeError("Type Mismatch");
 
     const problem = test_env.checker.problems.problems.items[0];
-    const actual_var = problem.type_mismatch.types.actual_var;
-    const region = test_env.checker.regions.get(@fromBackingInt(@intCast(@backingInt(actual_var)))).*;
+    const region = problem.type_mismatch.actual_region;
     try std.testing.expectEqualStrings(expected_region_text, test_env.module_env.getSource(region));
 }
 
