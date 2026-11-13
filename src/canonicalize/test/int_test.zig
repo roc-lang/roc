@@ -438,7 +438,7 @@ test "invalid literal payload does not schedule imported suffix resolution" {
     defer testing.allocator.free(diagnostics);
     try testing.expectEqual(@as(usize, 1), diagnostics.len);
     try testing.expect(diagnostics[0] == .invalid_num_literal);
-    for (env.deferred_import_refs.items.items) |entry| {
+    for (env.deferred_import_refs.items()) |entry| {
         try testing.expect(entry.kind != .numeric_suffix);
     }
 }

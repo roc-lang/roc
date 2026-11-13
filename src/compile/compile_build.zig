@@ -2453,7 +2453,7 @@ pub const BuildEnv = struct {
             try self.remapSyntheticRootDocumentElement(
                 &report.document,
                 element,
-                original_line_starts.items.items,
+                original_line_starts.items(),
             );
         }
     }
@@ -2669,7 +2669,7 @@ pub const BuildEnv = struct {
         source_dir: []const u8,
         env: *const ModuleEnv,
     ) Allocator.Error!void {
-        for (env.file_dependencies.items.items) |dep| {
+        for (env.file_dependencies.items()) |dep| {
             const relative_path = env.fileDependencyRelativePath(dep);
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
             defer self.gpa.free(full_path);
@@ -2752,7 +2752,7 @@ pub const BuildEnv = struct {
             while (coordinator_packages.next()) |pkg| {
                 for (pkg.*.modules.items) |*mod| {
                     try Owned.append(allocator, &inputs, mod.path, mod.source_file_state.?);
-                    if (mod.moduleEnv()) |env| for (env.file_dependencies.items.items) |dep| {
+                    if (mod.moduleEnv()) |env| for (env.file_dependencies.items()) |dep| {
                         const path = try std.fs.path.resolve(allocator, &.{ mod.canonicalSourceDir(), env.fileDependencyRelativePath(dep) });
                         defer allocator.free(path);
                         const state: watch_inputs.State = switch (dep.state) {
@@ -3692,7 +3692,7 @@ pub const BuildEnv = struct {
                         );
                         const region_info = base.RegionInfo.position(
                             original_source,
-                            line_starts.items.items,
+                            line_starts.items(),
                             mapped_region.start.offset,
                             mapped_region.end.offset,
                         ) catch |err| base.invariant(
@@ -3706,7 +3706,7 @@ pub const BuildEnv = struct {
                             .warning_highlight,
                             owned_path,
                             original_source,
-                            line_starts.items.items,
+                            line_starts.items(),
                         );
                         return;
                     }

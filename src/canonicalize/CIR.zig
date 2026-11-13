@@ -960,8 +960,12 @@ pub const Import = struct {
     };
 
     pub const Store = struct {
-        /// Map from interned string idx to Import.Idx for deduplication
-        map: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, Import.Idx) = .{},
+        /// Open-addressed table from an import's interned name to its
+        /// `Import.Idx`, for deduplication. Its length is zero or a power of
+        /// two; a cell holds an `Import.Idx` or `empty_lookup_cell`, and a name
+        /// probes linearly from `lookupSlot`. It is serialized as it is, so a
+        /// loaded store looks names up without rebuilding anything.
+        lookup: collections.SafeList(Import.Idx) = .{},
         /// List of interned string IDs indexed by Import.Idx
         imports: collections.SafeList(base.StringLiteral.Idx) = .{},
         /// List of interned ident IDs indexed by Import.Idx (parallel to imports)
@@ -975,35 +979,73 @@ pub const Import = struct {
             return .{};
         }
 
+        /// The cell value of an unused `lookup` slot.
+        pub const empty_lookup_cell: Import.Idx = @fromBackingInt(std.math.maxInt(u32));
+
+        const initial_lookup_len: usize = 8;
+
         pub fn deinit(self: *Store, allocator: std.mem.Allocator) void {
-            self.map.deinit(allocator);
+            self.lookup.deinit(allocator);
             self.imports.deinit(allocator);
             self.import_idents.deinit(allocator);
             self.resolved_modules.deinit(allocator);
         }
 
         pub fn clone(self: *const Store, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
-            var result = Store{
-                .map = .{},
-                .imports = try self.imports.clone(allocator),
-                .import_idents = try self.import_idents.clone(allocator),
-                .resolved_modules = try self.resolved_modules.clone(allocator),
-            };
+            var result = Store{};
             errdefer result.deinit(allocator);
-
-            for (result.imports.items.items, 0..) |string_idx, i| {
-                const import_idx = @as(Import.Idx, @fromBackingInt(@intCast(i)));
-                try result.map.put(allocator, string_idx, import_idx);
-            }
-
+            result.lookup = try self.lookup.clone(allocator);
+            result.imports = try self.imports.clone(allocator);
+            result.import_idents = try self.import_idents.clone(allocator);
+            result.resolved_modules = try self.resolved_modules.clone(allocator);
             return result;
         }
 
-        /// Deinit only the hash map, not the SafeLists.
-        /// Used for cached modules where the SafeLists point into the cache buffer
-        /// but the map was heap-allocated during deserialization.
-        pub fn deinitMapOnly(self: *Store, allocator: std.mem.Allocator) void {
-            self.map.deinit(allocator);
+        /// The import whose interned name is `string_idx`, if there is one.
+        pub fn find(self: *const Store, string_idx: base.StringLiteral.Idx) ?Import.Idx {
+            const cells = self.lookup.items();
+            if (cells.len == 0) return null;
+            const mask = cells.len - 1;
+            var slot = lookupSlot(string_idx, mask);
+            while (true) : (slot = (slot + 1) & mask) {
+                const cell = cells[slot];
+                if (cell == empty_lookup_cell) return null;
+                if (self.imports.items()[@backingInt(cell)] == string_idx) return cell;
+            }
+        }
+
+        /// The first slot `string_idx` probes in a table of `mask + 1` cells.
+        fn lookupSlot(string_idx: base.StringLiteral.Idx, mask: usize) usize {
+            var h: u32 = @backingInt(string_idx) *% 0x9E3779B1;
+            h ^= h >> 15;
+            return @as(usize, h) & mask;
+        }
+
+        /// Grow `lookup` when one more import would make it more than half full.
+        fn ensureLookupCapacity(self: *Store, allocator: std.mem.Allocator) Allocator.Error!void {
+            const needed = (@as(usize, @intCast(self.imports.len())) + 1) * 2;
+            if (needed > self.lookup.len()) {
+                var new_len: usize = @max(initial_lookup_len, @as(usize, @intCast(self.lookup.len())));
+                while (new_len < needed) new_len *= 2;
+                var table = try collections.SafeList(Import.Idx).initCapacity(allocator, new_len);
+                table.appendNTimesAssumeCapacity(empty_lookup_cell, new_len);
+                const old = self.lookup;
+                self.lookup = table;
+                for (old.items()) |cell| {
+                    if (cell != empty_lookup_cell) self.placeLookup(cell);
+                }
+                var old_table = old;
+                old_table.deinit(allocator);
+            }
+        }
+
+        /// Put `import_idx` in the first empty cell its name probes.
+        fn placeLookup(self: *Store, import_idx: Import.Idx) void {
+            const cells = self.lookup.items();
+            const mask = cells.len - 1;
+            var slot = lookupSlot(self.imports.items()[@backingInt(import_idx)], mask);
+            while (cells[slot] != empty_lookup_cell) slot = (slot + 1) & mask;
+            cells[slot] = import_idx;
         }
 
         /// Get or create an Import.Idx for the given module name in a fresh CommonEnv.
@@ -1018,11 +1060,11 @@ pub const Import = struct {
         pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8, ident_idx: ?base.Ident.Idx) Allocator.Error!Import.Idx {
             const string_idx = try common.insertString(allocator, module_name);
 
-            if (self.map.get(string_idx)) |idx| {
+            if (self.find(string_idx)) |idx| {
                 if (ident_idx) |ident| {
                     const i = @backingInt(idx);
-                    if (i < self.import_idents.len() and self.import_idents.items.items[i].isNone()) {
-                        self.import_idents.items.items[i] = ident;
+                    if (i < self.import_idents.len() and self.import_idents.items()[i].isNone()) {
+                        self.import_idents.items()[i] = ident;
                     }
                 }
 
@@ -1031,14 +1073,18 @@ pub const Import = struct {
 
             const idx = @as(Import.Idx, @fromBackingInt(@intCast(self.imports.len())));
 
-            // Add to both the list and the map, with unresolved module initially
-            const imports_idx = try self.imports.append(allocator, string_idx);
+            // Add to the lists and the lookup table, with unresolved module initially
+            try self.imports.ensureUnusedCapacity(allocator, 1);
+            try self.import_idents.ensureUnusedCapacity(allocator, 1);
+            try self.resolved_modules.ensureUnusedCapacity(allocator, 1);
+            try self.ensureLookupCapacity(allocator);
+            const imports_idx = self.imports.appendAssumeCapacity(string_idx);
             std.debug.assert(@backingInt(imports_idx) == @backingInt(idx));
-            const ident_idx_added = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
+            const ident_idx_added = self.import_idents.appendAssumeCapacity(ident_idx orelse base.Ident.Idx.NONE);
             std.debug.assert(@backingInt(ident_idx_added) == @backingInt(idx));
-            const resolved_idx = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
+            const resolved_idx = self.resolved_modules.appendAssumeCapacity(ResolvedModuleIdx.none);
             std.debug.assert(@backingInt(resolved_idx) == @backingInt(idx));
-            try self.map.put(allocator, string_idx, idx);
+            self.placeLookup(idx);
 
             return idx;
         }
@@ -1047,7 +1093,7 @@ pub const Import = struct {
         pub fn getIdentIdx(self: *const Store, import_idx: Import.Idx) ?base.Ident.Idx {
             const idx = @backingInt(import_idx);
             if (idx >= self.import_idents.len()) return null;
-            const ident = self.import_idents.items.items[idx];
+            const ident = self.import_idents.items()[idx];
             if (ident.isNone()) return null;
             return ident;
         }
@@ -1056,7 +1102,7 @@ pub const Import = struct {
         pub fn getResolvedModule(self: *const Store, import_idx: Import.Idx) ?u32 {
             const idx = @backingInt(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
-            const resolved = self.resolved_modules.items.items[idx];
+            const resolved = self.resolved_modules.items()[idx];
             if (!resolved.isResolved()) return null;
             return @backingInt(resolved);
         }
@@ -1067,14 +1113,14 @@ pub const Import = struct {
         pub fn importFailedBeforeChecking(self: *const Store, import_idx: Import.Idx) bool {
             const idx = @backingInt(import_idx);
             if (idx >= self.resolved_modules.len()) return false;
-            return self.resolved_modules.items.items[idx].isFailedBeforeChecking();
+            return self.resolved_modules.items()[idx].isFailedBeforeChecking();
         }
 
         /// Set the resolved module index for an import
         pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
             const idx = @backingInt(import_idx);
             if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = @fromBackingInt(@intCast(module_idx));
+                self.resolved_modules.items()[idx] = @fromBackingInt(@intCast(module_idx));
             }
         }
 
@@ -1082,14 +1128,14 @@ pub const Import = struct {
         /// imports have been reported. This makes that state explicit instead of
         /// leaving imports in the pre-resolution state.
         pub fn markUnresolvedImportsFailedBeforeChecking(self: *Store) void {
-            for (self.resolved_modules.items.items) |*resolved| {
+            for (self.resolved_modules.items()) |*resolved| {
                 if (resolved.isNone()) resolved.* = .failed_before_checking;
             }
         }
 
         /// Clear all resolved module indices.
         pub fn clearResolvedModules(self: *Store) void {
-            for (self.resolved_modules.items.items) |*resolved| {
+            for (self.resolved_modules.items()) |*resolved| {
                 resolved.* = .none;
             }
         }
@@ -1130,9 +1176,9 @@ pub const Import = struct {
 
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @fromBackingInt(@intCast(i));
-                const current = self.resolved_modules.items.items[i];
+                const current = self.resolved_modules.items()[i];
                 if (!current.isNone()) continue;
-                const str_idx = self.imports.items.items[i];
+                const str_idx = self.imports.items()[i];
                 const import_name = env.common.getString(str_idx);
 
                 if (Import.isCompilerBuiltinImportName(import_name)) {
@@ -1150,9 +1196,7 @@ pub const Import = struct {
 
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
-            // Placeholder to match Store size - not serialized
-            // Reserve space for hashmap (3 pointers for unmanaged hashmap internals)
-            map: [3]u64,
+            lookup: collections.SafeList(Import.Idx).Serialized,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
             import_idents: collections.SafeList(base.Ident.Idx).Serialized,
             resolved_modules: collections.SafeList(Import.ResolvedModuleIdx).Serialized,
@@ -1164,42 +1208,29 @@ pub const Import = struct {
                 allocator: std.mem.Allocator,
                 writer: *CompactWriter,
             ) std.mem.Allocator.Error!void {
-                // Serialize the imports SafeList
+                try self.lookup.serialize(&store.lookup, allocator, writer);
                 try self.imports.serialize(&store.imports, allocator, writer);
-                // Serialize the import_idents SafeList
                 try self.import_idents.serialize(&store.import_idents, allocator, writer);
-                // Serialize the resolved_modules SafeList
                 try self.resolved_modules.serialize(&store.resolved_modules, allocator, writer);
-
-                // Set map to all zeros; the space needs to be here,
-                // but the map will be rebuilt during deserialization.
-                self.map = .{ 0, 0, 0 };
-                // Note: The map is not serialized as it's only used for deduplication during insertion
             }
 
-            /// Deserialize into a Store value (no in-place modification of cache buffer).
-            /// The base parameter is the base address of the serialized buffer in memory.
-            /// Note: The map is freshly allocated and populated from the deserialized imports.
-            pub fn deserializeInto(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
-                var store = Store{
-                    .map = .{}, // Will be repopulated below
+            /// Reject parallel lists of different lengths, or a lookup table a
+            /// probe could walk forever. Constant time: no cell is read.
+            pub fn validateShape(self: *const Serialized) error{CorruptArtifact}!void {
+                if (self.import_idents.len != self.imports.len) return error.CorruptArtifact;
+                if (self.resolved_modules.len != self.imports.len) return error.CorruptArtifact;
+                if (!collections.serde_validation.probeTableShapeValid(self.lookup.len, self.imports.len)) return error.CorruptArtifact;
+            }
+
+            /// A store whose lists, the lookup table included, borrow the
+            /// serialized lists at `base_addr`.
+            pub fn deserializeInto(self: *const Serialized, base_addr: usize) Store {
+                return .{
+                    .lookup = self.lookup.deserializeInto(base_addr),
                     .imports = self.imports.deserializeInto(base_addr),
                     .import_idents = self.import_idents.deserializeInto(base_addr),
                     .resolved_modules = self.resolved_modules.deserializeInto(base_addr),
                 };
-
-                // Pre-allocate the exact capacity needed for the map
-                const import_count = store.imports.items.items.len;
-                try store.map.ensureTotalCapacity(allocator, @intCast(import_count));
-
-                // Repopulate the map - we know there's enough capacity since we
-                // are deserializing from a Serialized struct
-                for (store.imports.items.items, 0..) |string_idx, i| {
-                    const import_idx = @as(Import.Idx, @fromBackingInt(@intCast(i)));
-                    store.map.putAssumeCapacityNoClobber(string_idx, import_idx);
-                }
-
-                return store;
             }
         };
     };

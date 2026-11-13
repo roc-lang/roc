@@ -4255,7 +4255,7 @@ const RootCompletionState = struct {
             request_index_by_root.set(raw, @fromBackingInt(@as(u32, @intCast(i))));
         }
 
-        var visited_templates = try collections.EpochSet(u32, .stamps, .internal).init(allocator, module.checked_procedure_templates.templates.items.len);
+        var visited_templates = try collections.EpochSet(u32, .stamps, .internal).init(allocator, module.checked_procedure_templates.templates.items().len);
         errdefer visited_templates.deinit(allocator);
 
         return .{

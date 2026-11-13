@@ -16,13 +16,16 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
+const SafeList = @import("safe_list.zig").SafeList;
 const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
 
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates
 pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
     return struct {
-        entries: std.ArrayList(Entry) = .empty,
+        /// The entries, which a loaded builder borrows from the serialized
+        /// bytes until its first growth copies them.
+        entries: SafeList(Entry) = .{},
         sorted: bool = true,
         deduplicated: bool = true,
 
@@ -105,7 +108,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         pub fn deinit(self: *Self, allocator: Allocator) void {
             if (K == []const u8) {
                 // Free string keys
-                for (self.entries.items) |entry| {
+                for (self.entries.items()) |entry| {
                     allocator.free(entry.key);
                 }
             }
@@ -116,13 +119,13 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
             var cloned = Self.init();
             errdefer cloned.deinit(allocator);
-            try cloned.entries.ensureTotalCapacity(allocator, self.entries.items.len);
-            for (self.entries.items) |entry| {
+            try cloned.entries.ensureTotalCapacity(allocator, self.entries.items().len);
+            for (self.entries.items()) |entry| {
                 const cloned_key = if (K == []const u8)
                     try allocator.dupe(u8, entry.key)
                 else
                     entry.key;
-                cloned.entries.appendAssumeCapacity(.{
+                _ = cloned.entries.appendAssumeCapacity(.{
                     .key = cloned_key,
                     .value = entry.value,
                 });
@@ -137,8 +140,8 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             const new_key = if (K == []const u8) try allocator.dupe(u8, key) else key;
 
             // Check if we need to maintain sorted order
-            if (self.sorted and self.entries.items.len > 0) {
-                const last = self.entries.items[self.entries.items.len - 1];
+            if (self.sorted and self.entries.items().len > 0) {
+                const last = self.entries.items()[self.entries.items().len - 1];
                 const is_less_than = keyOrder(last.key, new_key) == .lt;
 
                 if (!is_less_than) {
@@ -147,7 +150,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 }
             }
 
-            try self.entries.append(allocator, .{ .key = new_key, .value = value });
+            _ = try self.entries.append(allocator, .{ .key = new_key, .value = value });
         }
 
         /// Get value by key (requires sorting first if not already sorted)
@@ -164,16 +167,17 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 std.debug.assert(self.deduplicated);
             }
             var left: usize = 0;
-            var right: usize = self.entries.items.len;
+            const entries = self.entries.items();
+            var right: usize = entries.len;
 
             while (left < right) {
                 const mid = left + (right - left) / 2;
-                const mid_key = self.entries.items[mid].key;
+                const mid_key = entries[mid].key;
 
                 const cmp = keyOrder(mid_key, key);
 
                 switch (cmp) {
-                    .eq => return self.entries.items[mid].value,
+                    .eq => return entries[mid].value,
                     .lt => left = mid + 1,
                     .gt => right = mid,
                 }
@@ -184,7 +188,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         /// Ensure the array is sorted and deduplicate any duplicate entries
         pub fn ensureSorted(self: *Self, allocator: Allocator) void {
             if (!self.sorted) {
-                std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
+                std.sort.pdq(Entry, self.entries.items(), {}, Entry.lessThan);
                 self.sorted = true;
             }
 
@@ -199,13 +203,14 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         /// been rejected by the producing stage instead of being silently merged.
         pub fn ensureSortedUnique(self: *Self) void {
             if (!self.sorted) {
-                std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
+                std.sort.pdq(Entry, self.entries.items(), {}, Entry.lessThan);
                 self.sorted = true;
             }
 
             var i: usize = 1;
-            while (i < self.entries.items.len) : (i += 1) {
-                if (!keyEql(self.entries.items[i - 1].key, self.entries.items[i].key)) continue;
+            const entries = self.entries.items();
+            while (i < entries.len) : (i += 1) {
+                if (!keyEql(entries[i - 1].key, entries[i].key)) continue;
                 if (builtin.mode == .debug) {
                     collectionsInvariant("SortedArrayBuilder invariant violated: duplicate key reached unique finalization", .{});
                 }
@@ -218,7 +223,8 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         /// Check for duplicates, report them, and remove duplicates keeping the last occurrence.
         /// Since the array is sorted, duplicates are adjacent - this is O(n).
         fn deduplicateAndReport(self: *Self, allocator: Allocator) void {
-            if (self.entries.items.len <= 1) {
+            const entries = self.entries.items();
+            if (entries.len <= 1) {
                 self.deduplicated = true;
                 return;
             }
@@ -228,16 +234,16 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             // Single pass: for each entry, check if the NEXT entry has the same key.
             // If so, skip current entry (keep the later one).
             var write_index: usize = 0;
-            const len = self.entries.items.len;
+            const len = entries.len;
 
             for (0..len) |read_index| {
-                const entry = self.entries.items[read_index];
+                const entry = entries[read_index];
 
                 // Check if next entry has the same key (bounds check first)
                 const has_duplicate_after: bool = blk: {
                     const next_index = read_index + 1;
-                    if (next_index >= self.entries.items.len) break :blk false;
-                    const next_entry = self.entries.items[next_index];
+                    if (next_index >= entries.len) break :blk false;
+                    const next_entry = entries[next_index];
                     break :blk keyEql(entry.key, next_entry.key);
                 };
 
@@ -249,7 +255,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 } else {
                     // Keep this entry
                     if (write_index != read_index) {
-                        self.entries.items[write_index] = entry;
+                        entries[write_index] = entry;
                     }
                     write_index += 1;
                 }
@@ -262,7 +268,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
         /// Get the number of entries
         pub fn count(self: *const Self) usize {
-            return self.entries.items.len;
+            return self.entries.items().len;
         }
 
         /// Serialized representation of SortedArrayBuilder
@@ -288,6 +294,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             /// reaches outside the `backing_len`-byte buffer, before `deserializeInto`
             /// dereferences it.
             pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
+                if (self.entries_len > std.math.maxInt(u32)) return error.CorruptArtifact;
                 const span_bytes = std.math.mul(u64, self.entries_len, @sizeOf(Entry)) catch return error.CorruptArtifact;
                 try validateRelocatedSpan(@alignOf(Entry), self.entries_offset, span_bytes, backing_len);
             }
@@ -299,7 +306,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 allocator: Allocator,
                 writer: *CompactWriter,
             ) Allocator.Error!void {
-                const entries_slice = builder.entries.items;
+                const entries_slice = builder.entries.items();
 
                 // Padding inside `Entry` is zeroed so the serialized bytes are
                 // deterministic; the offset is an integer so zero is representable.
@@ -312,42 +319,19 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 self.deduplicated = builder.deduplicated;
             }
 
-            /// Deserialize into a SortedArrayBuilder value (no in-place modification of cache buffer).
-            /// The base_addr parameter is the base address of the serialized buffer in memory.
-            /// WARNING: The returned SortedArrayBuilder points into the cache buffer and CANNOT be grown.
+            /// A builder whose entries borrow the serialized entries at
+            /// `base_addr`: it reads and writes them in place, copies them on
+            /// its first growth, and never frees them.
             pub fn deserializeInto(self: *const Serialized, base_addr: usize) SortedArrayBuilder(K, V) {
-                // Handle empty array case
                 if (self.entries_len == 0) {
-                    return SortedArrayBuilder(K, V){
-                        .entries = .empty,
-                        .sorted = self.sorted,
-                        .deduplicated = self.deduplicated,
-                    };
+                    return .{ .sorted = self.sorted, .deduplicated = self.deduplicated };
                 }
-
-                // Apply the base address to convert from serialized offset to actual pointer
                 const entries_ptr: [*]Entry = @ptrFromInt(base_addr +% @as(usize, @intCast(self.entries_offset)));
-
-                return SortedArrayBuilder(K, V){
-                    .entries = .{
-                        .items = entries_ptr[0..@intCast(self.entries_len)],
-                        .capacity = @intCast(self.entries_capacity),
-                        .pointer_stability = .{},
-                    },
+                return .{
+                    .entries = .fromBorrowedSlice(entries_ptr[0..@intCast(self.entries_len)]),
                     .sorted = self.sorted,
                     .deduplicated = self.deduplicated,
                 };
-            }
-
-            /// Deserialize into a SortedArrayBuilder that owns its entries.
-            /// The returned builder can be grown and must be released with `deinit`.
-            pub fn deserializeWithCopy(
-                self: *const Serialized,
-                base_addr: usize,
-                allocator: Allocator,
-            ) Allocator.Error!SortedArrayBuilder(K, V) {
-                const frozen = self.deserializeInto(base_addr);
-                return frozen.clone(allocator);
             }
         };
     };

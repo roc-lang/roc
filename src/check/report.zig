@@ -242,8 +242,8 @@ pub const ReportBuilder = struct {
     /// Reset report builder, only fields it owns
     pub fn reset(self: *Self) void {
         self.bytes_buf.clearRetainingCapacity();
-        self.diff_fields.items.clearRetainingCapacity();
-        self.diff_tags.items.clearRetainingCapacity();
+        self.diff_fields.clearRetainingCapacity();
+        self.diff_tags.clearRetainingCapacity();
         self.typo_suggestions.clearRetainingCapacity();
         self.record_pattern_hint = null;
         self.method_conflict = null;
@@ -1363,7 +1363,7 @@ pub const ReportBuilder = struct {
         // pattern would have absorbed the extra fields rather than mismatching.
         if (!self.snapshots.?.isClosedRecord(pattern_snapshot)) return false;
 
-        self.diff_fields.items.clearRetainingCapacity();
+        self.diff_fields.clearRetainingCapacity();
 
         const pattern_range: ?SnapshotRecordFieldSafeList.Range =
             switch (try self.snapshots.?.gatherRecordFields(pattern_snapshot, self.gpa, &self.diff_fields)) {
@@ -2655,7 +2655,7 @@ pub const ReportBuilder = struct {
     fn isPlainForLoopOverStream(self: *Self, data: DispatcherDoesNotImplMethod) bool {
         const types_store = &self.module_env.types;
         const failed_fn = types_store.resolveVar(data.fn_var).var_;
-        for (self.module_env.for_loop_dispatch_plans.items.items) |plan| {
+        for (self.module_env.for_loop_dispatch_plans.items()) |plan| {
             if (types_store.resolveVar(@fromBackingInt(@intCast(plan.iter_fn_var))).var_ != failed_fn) continue;
             const nominal = types_store.resolveVar(data.dispatcher_var).desc.content.unwrapNominalType() orelse return false;
             return nominal.ident.ident_idx.eql(self.module_env.idents.builtin_stream);
@@ -4363,7 +4363,7 @@ pub const ReportBuilder = struct {
         evidence: TypeMismatchEvidence,
         ctx: Context.RecordAccessContext,
     ) Allocator.Error!Report {
-        self.diff_fields.items.clearRetainingCapacity();
+        self.diff_fields.clearRetainingCapacity();
 
         const actual_snapshot = switch (evidence) {
             .record => |record| record.actual_snapshot,
@@ -4435,7 +4435,7 @@ pub const ReportBuilder = struct {
         evidence: TypeMismatchEvidence,
         ctx: Context.RecordUpdateContext,
     ) Allocator.Error!Report {
-        self.diff_fields.items.clearRetainingCapacity();
+        self.diff_fields.clearRetainingCapacity();
 
         const expected_snapshot = switch (evidence) {
             .record => |record| record.expected_snapshot,

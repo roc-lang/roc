@@ -1529,7 +1529,7 @@ test "Node.List: serialization round-trips full-width payloads and ignores alloc
     defer grown.nodes.deinit(gpa);
     var oversized = try Build.list(gpa, 4096);
     defer oversized.nodes.deinit(gpa);
-    try std.testing.expect(grown.nodes.items.capacity != oversized.nodes.items.capacity);
+    try std.testing.expect(grown.nodes.capacity() != oversized.nodes.capacity());
 
     const grown_bytes = try Build.serialize(gpa, &grown.nodes);
     defer gpa.free(grown_bytes);

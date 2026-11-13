@@ -649,7 +649,7 @@ pub const ModuleIndex = struct {
         fn indexDeclarations(self: *Builder) Allocator.Error!void {
             const env = self.env;
             const store = &env.store;
-            for (env.method_defs.entries.items) |entry| {
+            for (env.method_defs.entries.items()) |entry| {
                 if (store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
                 const statement: StatementId = @fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)));
                 const decl = store.getStatement(statement).s_decl;
@@ -659,7 +659,7 @@ pub const ModuleIndex = struct {
 
             var recursively_referenced = collections.DenseMap(u32, void).init(self.allocator);
             defer recursively_referenced.deinit();
-            for (env.scheme_uses.items.items) |record| {
+            for (env.scheme_uses.items()) |record| {
                 if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_value_reference)) continue;
                 const node: CIR.Node.Idx = @fromBackingInt(@intCast(record.node_idx));
                 if (store.nodes.get(node).tag != .expr_var) continue;
@@ -2032,7 +2032,7 @@ pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: Diagn
     defer allocator.free(states);
     var erroneous = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     defer erroneous.deinit(allocator);
-    for (bodies.env.erroneous_nodes.items.items) |entry| erroneous.set(entry.node_idx);
+    for (bodies.env.erroneous_nodes.items()) |entry| erroneous.set(entry.node_idx);
     var scan = DiagnosticScan{
         .allocator = allocator,
         .bodies = bodies,
@@ -2480,7 +2480,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     const module = tables.module orelse invariant("single-source calls were computed without the module's identity");
     const env = bodies.env;
 
-    const count = templates.templates.items.len;
+    const count = templates.templates.items().len;
     const eligible = try allocator.alloc(bool, count);
     defer allocator.free(eligible);
     @memset(eligible, false);
@@ -2506,7 +2506,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     var public_defs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
     defer public_defs.deinit();
     for (tables.exported_defs) |def| try public_defs.put(def, {});
-    for (env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
+    for (env.method_defs.entries.items()) |entry| try public_defs.put(entry.value.def_idx, {});
     for (templates.by_def) |entry| {
         const id = local.template(entry.template) orelse continue;
         if (!public_defs.contains(entry.def)) eligible[@backingInt(id)] = true;
@@ -2515,7 +2515,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
         const id = local.template(entry.template) orelse continue;
         eligible[@backingInt(id)] = true;
     }
-    for (templates.templates.items, eligible) |template, *is_eligible| {
+    for (templates.templates.items(), eligible) |template, *is_eligible| {
         if (template.target != .roc or template.body != .checked_body) is_eligible.* = false;
     }
 

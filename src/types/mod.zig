@@ -57,6 +57,7 @@ pub const Slot = store.Slot;
 pub const ResolvedVarDesc = store.ResolvedVarDesc;
 pub const ResolvedVarDescs = store.ResolvedVarDescs;
 pub const Store = store.Store;
+pub const LoadedAccess = store.LoadedAccess;
 pub const DescStoreIdx = store.DescStoreIdx;
 
 pub const Polarity = types.Polarity;

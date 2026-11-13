@@ -147,7 +147,7 @@ test "issue 11236: independent valid code still lowers alongside a rejected bind
 
 fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArtifact) error{ TestUnexpectedResult, TestExpectedEqual }!void {
     var rejected: usize = 0;
-    for (artifact.top_level_procedure_bindings.bindings.items) |binding| {
+    for (artifact.top_level_procedure_bindings.bindings.items()) |binding| {
         if (binding.body != .checked_error) continue;
         rejected += 1;
         const expr = binding.body.checked_error;
@@ -155,7 +155,7 @@ fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArt
         for (artifact.compile_time_roots.roots) |root| try std.testing.expect(root.expr.get() != expr);
     }
     try std.testing.expectEqual(@as(usize, 1), rejected);
-    try std.testing.expectEqual(@as(usize, 0), artifact.callable_eval_templates.templates.items.len);
+    try std.testing.expectEqual(@as(usize, 0), artifact.callable_eval_templates.templates.items().len);
     var exported_rejected: usize = 0;
     var exported_valid: usize = 0;
     for (artifact.exported_procedure_bindings.bindings) |binding| {

@@ -2448,8 +2448,8 @@ pub const StaticDispatchPlanTable = struct {
         defer role_candidate_pool.deinit(allocator);
         var next_role_by_method = collections.DenseMap(canonical.MethodNameId, u32).init(allocator);
         defer next_role_by_method.deinit();
-        for (module_env.generated_codec_derivations.items.items) |derivation| {
-            const source_calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
+        for (module_env.generated_codec_derivations.items()) |derivation| {
+            const source_calls = module_env.generated_codec_calls.items()[derivation.calls_start..][0..derivation.calls_len];
             const calls_start: u32 = @intCast(generated_codec_calls.items.len);
             role_candidates.clearRetainingCapacity();
             role_candidate_pool.clearRetainingCapacity();
@@ -2637,7 +2637,7 @@ pub const StaticDispatchPlanTable = struct {
             try by_node.append(allocator, .{ .key = @intCast(raw), .val = @backingInt(plan_id) });
         }
 
-        for (module_env.for_loop_dispatch_plans.items.items) |for_plan| {
+        for (module_env.for_loop_dispatch_plans.items()) |for_plan| {
             const for_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(for_plan.node_idx));
             const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(for_plan.pattern_idx));
             const iterable_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(for_plan.iterable_idx));
@@ -2961,7 +2961,7 @@ const StaticDispatchConstraintIndex = struct {
         }
 
         var index = StaticDispatchConstraintIndex{
-            .constraints = store.static_dispatch_constraints.items.items,
+            .constraints = store.static_dispatch_constraints.items(),
         };
         errdefer index.deinit(allocator);
 

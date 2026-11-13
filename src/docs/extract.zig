@@ -1905,14 +1905,14 @@ fn resolveModulePathFromBase(
             module_env.module_name,
         .external => |ext| blk: {
             const idx = @backingInt(ext.module_idx);
-            if (idx >= module_env.imports.imports.items.items.len) break :blk "";
-            const str_idx = module_env.imports.imports.items.items[idx];
+            if (idx >= module_env.imports.imports.items().len) break :blk "";
+            const str_idx = module_env.imports.imports.items()[idx];
             break :blk getModulePath(module_env.common.getString(str_idx));
         },
         .pending => |pend| blk: {
             const idx = @backingInt(pend.module_idx);
-            if (idx >= module_env.imports.imports.items.items.len) break :blk "";
-            const str_idx = module_env.imports.imports.items.items[idx];
+            if (idx >= module_env.imports.imports.items().len) break :blk "";
+            const str_idx = module_env.imports.imports.items()[idx];
             break :blk getModulePath(module_env.common.getString(str_idx));
         },
         .external_identity => |ext| module_env.moduleIdentityDisplayText(ext.module_identity),

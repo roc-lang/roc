@@ -336,7 +336,7 @@ pub const Digests = struct {
     fn hashConsts(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         const exported_consts = artifact.exported_const_templates.templates;
         for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
-        for (artifact.const_templates.templates.items) |template| switch (template.owner) {
+        for (artifact.const_templates.templates.items()) |template| switch (template.owner) {
             .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),
             .hoisted_root => {},
         };
@@ -350,7 +350,7 @@ pub const Digests = struct {
         hasher.update(std.mem.asBytes(&@as(u32, @backingInt(ref.template))));
         if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
         const templates = &artifact.checked_procedure_templates;
-        const template = templates.templates.items[@backingInt(ref.template)];
+        const template = templates.templates.items()[@backingInt(ref.template)];
         hasher.update(std.mem.asBytes(&template.scheme_vars.len));
         for (templates.evidence_params_pool[template.evidence_params.start..][0..template.evidence_params.len]) |param| {
             hashBytes(hasher, artifact.canonical_names.methodNameText(param.method));

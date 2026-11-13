@@ -1267,11 +1267,11 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
 
 /// Name the node a worklist entry resolves.
 fn setDeferredRefNode(self: *Self, idx: ModuleEnv.DeferredImportRef.Idx, node_idx: u32) void {
-    self.env.deferred_import_refs.items.items[@backingInt(idx)].node_idx = node_idx;
+    self.env.deferred_import_refs.items()[@backingInt(idx)].node_idx = node_idx;
 }
 
 fn setDeferredTagMemberAccessNode(self: *Self, idx: ModuleEnv.DeferredImportRef.Idx, expr_idx: Expr.Idx) void {
-    self.env.deferred_import_refs.items.items[@backingInt(idx)].tag_member_access_node = @backingInt(expr_idx);
+    self.env.deferred_import_refs.items()[@backingInt(idx)].tag_member_access_node = @backingInt(expr_idx);
 }
 
 /// The deferred reference an external type binding names. Its path is the
@@ -1410,7 +1410,7 @@ fn retargetDeferredRefToApply(
     ref: ModuleEnv.DeferredImportRef.Idx,
     apply_anno_idx: TypeAnno.Idx,
 ) void {
-    const entry = &self.env.deferred_import_refs.items.items[@backingInt(ref)];
+    const entry = &self.env.deferred_import_refs.items()[@backingInt(ref)];
     entry.node_idx = @backingInt(apply_anno_idx);
     entry.kind = .type_anno_apply;
 }
@@ -6390,7 +6390,7 @@ fn resolvePlatformHosted(
 ) std.mem.Allocator.Error!void {
     if (self.env.module_kind != .platform) return;
 
-    for (self.env.hosted_entries.items.items, 0..) |*entry, entry_index| {
+    for (self.env.hosted_entries.items(), 0..) |*entry, entry_index| {
         const module_alias = entry.module_ident orelse {
             // An entry written without a module names a declaration in this
             // platform module. Such a target has no import, so a resolved entry
@@ -6539,7 +6539,7 @@ fn resolvePlatformProvides(
         });
         if (local_def != null) continue;
 
-        for (self.env.requires_types.items.items) |required| {
+        for (self.env.requires_types.items()) |required| {
             if (entry.ident.eql(required.ident)) {
                 _ = self.exposed_ident_texts.remove(self.env.getIdent(entry.ident));
                 try self.env.pushDiagnostic(.{ .provided_value_is_required = .{
@@ -6722,7 +6722,7 @@ fn builtinTypeAnnoForBinding(self: *const Self, external: Scope.ExternalTypeBind
 }
 
 fn importIsCompilerBuiltin(self: *const Self, import_idx: CIR.Import.Idx) bool {
-    const import_name_idx = self.env.imports.imports.items.items[@backingInt(import_idx)];
+    const import_name_idx = self.env.imports.imports.items()[@backingInt(import_idx)];
     return CIR.Import.isCompilerBuiltinImportName(self.env.common.getString(import_name_idx));
 }
 
@@ -8930,7 +8930,7 @@ fn canonicalizeUnboundUnqualifiedIdentExpr(
         }
     }
 
-    const requires_items = self.env.requires_types.items.items;
+    const requires_items = self.env.requires_types.items();
     for (requires_items, 0..) |req, idx| {
         if (req.ident.eql(ident)) {
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
@@ -10798,9 +10798,9 @@ fn isBuiltinBoolExternalNominal(self: *const Self, module: Expr.NominalExternalM
     if (target_node_idx != bool_target_node_idx) return false;
 
     const module_idx_int = @backingInt(module_idx);
-    if (module_idx_int >= self.env.imports.imports.items.items.len) return false;
+    if (module_idx_int >= self.env.imports.imports.items().len) return false;
 
-    const string_lit_idx = self.env.imports.imports.items.items[module_idx_int];
+    const string_lit_idx = self.env.imports.imports.items()[module_idx_int];
     const module_name = self.env.common.strings.get(string_lit_idx);
     if (bool_info.env.module_role == .builtin) {
         return std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name);
