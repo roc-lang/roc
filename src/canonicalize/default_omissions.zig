@@ -15,6 +15,13 @@
 //! (`e_nominal_external`) never enumerate here: their declarations' defaults
 //! live in the foreign module and are that module's own roots (the checker's
 //! residue walk owns those edges).
+//!
+//! A construction written through a local alias names an alias declaration.
+//! The default-cycle graph follows an alias whose annotation is a resolved
+//! reference to a local type declaration to the nominal declaration it names
+//! (`omittedDefaultsThroughLocalAliases`), so a cycle reads the same however
+//! the construction spells the type. Checking alone decides everything else
+//! about such a construction, including the defaults it materializes.
 
 const base = @import("base");
 const CIR = @import("CIR.zig");
@@ -37,7 +44,13 @@ pub fn backingRecordFields(
     env: *const ModuleEnv,
     decl_stmt: CIR.Statement.Idx,
 ) ?CIR.TypeAnno.RecordField.Span {
-    const stmt = env.store.getStatement(decl_stmt);
+    return statementBackingRecordFields(env, env.store.getStatement(decl_stmt));
+}
+
+fn statementBackingRecordFields(
+    env: *const ModuleEnv,
+    stmt: CIR.Statement,
+) ?CIR.TypeAnno.RecordField.Span {
     if (stmt != .s_nominal_decl) return null;
     // A forward reference prepares a nominal declaration as a placeholder
     // statement; when the real declaration is then never registered (its
@@ -107,8 +120,106 @@ pub fn omittedDefaults(
     decl_stmt: CIR.Statement.Idx,
     backing_expr: CIR.Expr.Idx,
 ) Iterator {
+    return statementOmittedDefaults(env, env.store.getStatement(decl_stmt), backing_expr);
+}
+
+/// `omittedDefaults` for a construction that may name its nominal declaration
+/// through local aliases: when `decl_stmt` is an alias declaration, the
+/// omissions are those of the local nominal declaration it names (see
+/// `aliasNamedLocalNominalDecl`), and nothing when it names none.
+pub fn omittedDefaultsThroughLocalAliases(
+    env: *const ModuleEnv,
+    decl_stmt: CIR.Statement.Idx,
+    backing_expr: CIR.Expr.Idx,
+) Iterator {
+    const stmt = env.store.getStatement(decl_stmt);
+    if (stmt != .s_alias_decl) return statementOmittedDefaults(env, stmt, backing_expr);
+    const nominal_decl = aliasNamedLocalNominalDecl(env, decl_stmt) orelse
+        return .{ .env = env, .declared_fields = &.{}, .supplied = null };
+    return omittedDefaults(env, nominal_decl, backing_expr);
+}
+
+/// The local nominal declaration the local alias declaration `alias_stmt`
+/// names: its annotation is a reference canonicalization resolved to a local
+/// type declaration (bare or applied to arguments), which is that nominal
+/// declaration or another alias naming one the same way.
+///
+/// This reads only resolved name references. An alias whose annotation is
+/// anything else (a structural type, a type variable, a reference to another
+/// module's type) names no local nominal declaration here; which type such an
+/// alias stands for is a solved-type question that checking answers.
+pub fn aliasNamedLocalNominalDecl(env: *const ModuleEnv, alias_stmt: CIR.Statement.Idx) ?CIR.Statement.Idx {
+    var current = alias_stmt;
+    // Brent's cycle detection: an alias whose annotation names itself, alone
+    // or through other aliases, names no nominal declaration.
+    var checkpoint = alias_stmt;
+    var steps_since_checkpoint: usize = 0;
+    var steps_until_checkpoint: usize = 1;
+    while (true) {
+        const anno_idx = switch (env.store.getStatement(current)) {
+            .s_nominal_decl => return current,
+            .s_alias_decl => |alias| alias.anno,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => return null,
+        };
+        // A never-filled forward placeholder has no annotation.
+        if (anno_idx == .placeholder) return null;
+        var anno = env.store.getTypeAnno(anno_idx);
+        while (anno == .parens) anno = env.store.getTypeAnno(anno.parens.anno);
+        const base_ref = switch (anno) {
+            .lookup => |lookup| lookup.base,
+            .apply => |apply| apply.base,
+            .rigid_var,
+            .rigid_var_lookup,
+            .underscore,
+            .tag_union,
+            .tag,
+            .tuple,
+            .record,
+            .@"fn",
+            .parens,
+            .malformed,
+            => return null,
+        };
+        current = switch (base_ref) {
+            .local => |local| local.decl_idx,
+            .builtin, .external, .external_identity, .pending => return null,
+        };
+        if (current == checkpoint) return null;
+        steps_since_checkpoint += 1;
+        if (steps_since_checkpoint == steps_until_checkpoint) {
+            checkpoint = current;
+            steps_since_checkpoint = 0;
+            steps_until_checkpoint *= 2;
+        }
+    }
+}
+
+fn statementOmittedDefaults(
+    env: *const ModuleEnv,
+    decl: CIR.Statement,
+    backing_expr: CIR.Expr.Idx,
+) Iterator {
     const none = Iterator{ .env = env, .declared_fields = &.{}, .supplied = null };
-    const declared = backingRecordFields(env, decl_stmt) orelse return none;
+    const declared = statementBackingRecordFields(env, decl) orelse return none;
     switch (env.store.getExpr(backing_expr)) {
         .e_record => |record| {
             // A record UPDATE omits nothing: unmentioned fields come from

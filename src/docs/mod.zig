@@ -19,6 +19,7 @@ test "docs tests" {
     std.testing.refAllDecls(@import("render_html.zig"));
     std.testing.refAllDecls(@import("render_markdown.zig"));
     std.testing.refAllDecls(@import("render_type.zig"));
+    std.testing.refAllDecls(@import("test/builtin_docs_test.zig"));
 }
 
 const std = @import("std");

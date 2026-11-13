@@ -478,6 +478,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "type_module_missing_matching_type", .tag = .diag_type_module_missing_matching_type, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
     .{ .cir = "type_module_has_alias_not_nominal", .tag = .diag_type_module_has_alias_not_nominal, .payload = "diag_single_ident", .names = &.{"module_name"} },
     .{ .cir = "default_app_missing_main", .tag = .diag_default_app_missing_main, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
+    .{ .cir = "module_name_reserved", .tag = .diag_module_name_reserved, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
     .{ .cir = "default_app_wrong_arity", .tag = .diag_default_app_wrong_arity, .payload = "diag_single_value", .names = &.{"arity"} },
     .{ .cir = "cannot_import_default_app", .tag = .diag_cannot_import_default_app, .payload = "diag_single_ident", .names = &.{"module_name"} },
     .{ .cir = "type_name_case_mismatch", .tag = .diag_type_name_case_mismatch, .payload = "diag_two_idents", .names = &.{ "module_name", "type_name" } },
@@ -733,6 +734,7 @@ const DiagnosticNodeTag = enum {
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
+    diag_module_name_reserved,
     diag_default_app_wrong_arity,
     diag_cannot_import_default_app,
     diag_type_name_case_mismatch,
@@ -1247,7 +1249,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 95;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 96;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -1946,7 +1948,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
 
             return CIR.Expr{
                 .e_nominal_external = .{
-                    .module_idx = @fromBackingInt(@intCast(p.module_idx)),
+                    .module = decodeNominalExternalModule(p.module_kind, p.module_idx),
                     .target_node_idx = @intCast(p.target_node_idx),
                     .backing_expr = @fromBackingInt(@intCast(backing.start)),
                     .backing_type = @fromBackingInt(@intCast(backing.len)),
@@ -2262,7 +2264,49 @@ pub fn resolveDeferredExprToAssociatedLookup(
 pub fn resolveDeferredExprToNominalExternal(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
-    module_idx: CIR.Import.Idx,
+    module: CIR.Expr.NominalExternalModule,
+    target_node_idx: u32,
+    backing_expr: CIR.Expr.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
+) Allocator.Error!void {
+    try store.setExprNominalExternal(expr_idx, module, target_node_idx, backing_expr, backing_type);
+}
+
+/// Replaces a nominal construction that names an alias with a construction of
+/// the nominal type checking resolved the alias to, declared in this module.
+pub fn replaceExprWithLocalNominal(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    nominal_type_decl: CIR.Statement.Idx,
+    backing_expr: CIR.Expr.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
+) void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    store.nodes.set(node_idx, copiedNode(&copied_expr_shapes, .e_nominal, @FieldType(CIR.Expr, "e_nominal"){
+        .nominal_type_decl = nominal_type_decl,
+        .backing_expr = backing_expr,
+        .backing_type = backing_type,
+    }));
+}
+
+/// Replaces a nominal construction that names an alias with a construction of
+/// the nominal type checking resolved the alias to, declared in another
+/// module.
+pub fn replaceExprWithExternalNominal(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    module_identity: base.ModuleIdentity.Idx,
+    target_node_idx: u32,
+    backing_expr: CIR.Expr.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
+) Allocator.Error!void {
+    try store.setExprNominalExternal(expr_idx, .{ .identity = module_identity }, target_node_idx, backing_expr, backing_type);
+}
+
+fn setExprNominalExternal(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    module: CIR.Expr.NominalExternalModule,
     target_node_idx: u32,
     backing_expr: CIR.Expr.Idx,
     backing_type: CIR.Expr.NominalBackingType,
@@ -2273,13 +2317,34 @@ pub fn resolveDeferredExprToNominalExternal(
         .start = @backingInt(backing_expr),
         .len = @backingInt(backing_type),
     });
+    const encoded = encodeNominalExternalModule(module);
     var node = Node.init(.expr_nominal_external);
     node.setPayload(.{ .expr_nominal_external = .{
-        .module_idx = @backingInt(module_idx),
+        .module_idx = encoded.idx,
         .target_node_idx = target_node_idx,
         .backing_span2_idx = backing_span2_idx,
+        .module_kind = encoded.kind,
     } });
     store.nodes.set(node_idx, node);
+}
+
+const EncodedNominalExternalModule = struct {
+    kind: Node.Payload.NominalExternalModuleKind,
+    idx: u32,
+};
+
+fn encodeNominalExternalModule(module: CIR.Expr.NominalExternalModule) EncodedNominalExternalModule {
+    return switch (module) {
+        .import => |import_idx| .{ .kind = .import, .idx = @backingInt(import_idx) },
+        .identity => |identity| .{ .kind = .identity, .idx = @backingInt(identity) },
+    };
+}
+
+fn decodeNominalExternalModule(kind: Node.Payload.NominalExternalModuleKind, idx: u32) CIR.Expr.NominalExternalModule {
+    return switch (kind) {
+        .import => .{ .import = @fromBackingInt(@intCast(idx)) },
+        .identity => .{ .identity = @fromBackingInt(@intCast(idx)) },
+    };
 }
 
 /// Rewrites a deferred import reference pattern into an imported nominal type
@@ -2287,7 +2352,48 @@ pub fn resolveDeferredExprToNominalExternal(
 pub fn resolveDeferredPatternToNominalExternal(
     store: *NodeStore,
     pattern_idx: CIR.Pattern.Idx,
-    module_idx: CIR.Import.Idx,
+    module: CIR.Expr.NominalExternalModule,
+    target_node_idx: u32,
+    backing_pattern: CIR.Pattern.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
+) Allocator.Error!void {
+    try store.setPatternNominalExternal(pattern_idx, module, target_node_idx, backing_pattern, backing_type);
+}
+
+/// Replaces a nominal pattern that names an alias with a pattern of the
+/// nominal type checking resolved the alias to, declared in this module.
+pub fn replacePatternWithLocalNominal(
+    store: *NodeStore,
+    pattern_idx: CIR.Pattern.Idx,
+    nominal_type_decl: CIR.Statement.Idx,
+    backing_pattern: CIR.Pattern.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
+) void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
+    store.nodes.set(node_idx, copiedNode(&copied_pattern_shapes, .nominal, @FieldType(CIR.Pattern, "nominal"){
+        .nominal_type_decl = nominal_type_decl,
+        .backing_pattern = backing_pattern,
+        .backing_type = backing_type,
+    }));
+}
+
+/// Replaces a nominal pattern that names an alias with a pattern of the
+/// nominal type checking resolved the alias to, declared in another module.
+pub fn replacePatternWithExternalNominal(
+    store: *NodeStore,
+    pattern_idx: CIR.Pattern.Idx,
+    module_identity: base.ModuleIdentity.Idx,
+    target_node_idx: u32,
+    backing_pattern: CIR.Pattern.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
+) Allocator.Error!void {
+    try store.setPatternNominalExternal(pattern_idx, .{ .identity = module_identity }, target_node_idx, backing_pattern, backing_type);
+}
+
+fn setPatternNominalExternal(
+    store: *NodeStore,
+    pattern_idx: CIR.Pattern.Idx,
+    module: CIR.Expr.NominalExternalModule,
     target_node_idx: u32,
     backing_pattern: CIR.Pattern.Idx,
     backing_type: CIR.Expr.NominalBackingType,
@@ -2298,11 +2404,13 @@ pub fn resolveDeferredPatternToNominalExternal(
         .start = @backingInt(backing_pattern),
         .len = @backingInt(backing_type),
     });
+    const encoded = encodeNominalExternalModule(module);
     var node = Node.init(.pattern_nominal_external);
     node.setPayload(.{ .pattern_nominal_external = .{
-        .module_idx = @backingInt(module_idx),
+        .module_idx = encoded.idx,
         .target_node_idx = target_node_idx,
         .backing_span2_idx = backing_span2_idx,
+        .module_kind = encoded.kind,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2884,7 +2992,7 @@ fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
 
             return CIR.Pattern{
                 .nominal_external = .{
-                    .module_idx = @fromBackingInt(@intCast(p.module_idx)),
+                    .module = decodeNominalExternalModule(p.module_kind, p.module_idx),
                     .target_node_idx = @intCast(p.target_node_idx),
                     .backing_pattern = @fromBackingInt(@intCast(backing.start)),
                     .backing_type = @fromBackingInt(@intCast(backing.len)),
@@ -3459,10 +3567,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .start = @backingInt(e.backing_expr),
                 .len = @backingInt(e.backing_type),
             });
+            const encoded = encodeNominalExternalModule(e.module);
             node.setPayload(.{ .expr_nominal_external = .{
-                .module_idx = @backingInt(e.module_idx),
+                .module_idx = encoded.idx,
                 .target_node_idx = @intCast(e.target_node_idx),
                 .backing_span2_idx = backing_span2_idx,
+                .module_kind = encoded.kind,
             } });
         },
         .e_field_access => |e| {
@@ -3856,10 +3966,12 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
                 .start = @backingInt(n.backing_pattern),
                 .len = @backingInt(n.backing_type),
             });
+            const encoded = encodeNominalExternalModule(n.module);
             node.setPayload(.{ .pattern_nominal_external = .{
-                .module_idx = @backingInt(n.module_idx),
+                .module_idx = encoded.idx,
                 .target_node_idx = @intCast(n.target_node_idx),
                 .backing_span2_idx = backing_span2_idx,
+                .module_kind = encoded.kind,
             } });
         },
         .deferred_import_ref => |p| {
@@ -5361,6 +5473,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .type_module_missing_matching_type,
         .type_module_has_alias_not_nominal,
         .default_app_missing_main,
+        .module_name_reserved,
         .default_app_wrong_arity,
         .cannot_import_default_app,
         .type_name_case_mismatch,
@@ -5533,6 +5646,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_type_module_missing_matching_type,
         .diag_type_module_has_alias_not_nominal,
         .diag_default_app_missing_main,
+        .diag_module_name_reserved,
         .diag_default_app_wrong_arity,
         .diag_cannot_import_default_app,
         .diag_type_name_case_mismatch,
