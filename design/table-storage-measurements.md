@@ -502,6 +502,69 @@ Storage work for cold roc-pg runs of the measured tree, from the
 `bytes_filled` counts only fills made through the shared primitives, so it
 rises as tables move onto them.
 
+## In-place cache loading and stored interning tables, 2026-11-13
+
+Two changes are measured separately, each against the tree it was merged
+into. "Borrowing lists" is the merge of the 16-byte borrowing `SafeList` and
+in-place cache loading (89b6621022) against its first parent (8cadec594e).
+"Stored tables" is the checked-artifact change (every store field a borrowed
+`SafeList`, interning tables stored in the artifact, reopening without
+copying) at 18fbca38ea against main at d3fb2429af, which that tree contains.
+
+ReleaseFast, `--opt=dev --specialize=no`, pinned to the performance cores,
+user-mode instructions from `perf stat` and peak resident memory from
+`/usr/bin/time`. Each workload runs three rounds on each compiler in rotated
+order. A round is a fresh compiler cache (cold), one repeat (warm), and one
+run after a new top-level `expect` is appended to one mid-level module
+(post-edit: `Lex.roc`, `KernelDeflate.roc`, `Pazepo.roc`, and Observatory's
+`Format.roc`); values are medians of three. The corpora are the ported copies
+of roc-pg, roc-pdf, randomized-spa and roc-gui's Observatory used above. They
+compile with zero errors on all four compilers; on the two newer trees they
+report duplicate-definition warnings and exit 2, with every test passing.
+Observatory is measured with `roc check` only. The largest spread between the
+three samples of a cell is 0.5% of instructions, except warm and post-edit
+roc-pdf build (12% and 2.3%, from one sample each).
+
+Change in instructions, borrowing lists / stored tables:
+
+| Workload | Cold | Warm | Post-edit |
+| --- | ---: | ---: | ---: |
+| roc-pg check | +0.05% / -0.03% | -0.03% / +0.29% | +0.24% / -0.06% |
+| roc-pg test | +0.09% / -0.03% | -0.06% / +0.14% | +0.65% / -0.02% |
+| roc-pdf check | -0.02% / -0.04% | -0.08% / +0.30% | +0.00% / -0.03% |
+| roc-pdf test | +0.00% / -0.00% | -0.05% / +0.18% | -0.01% / +0.03% |
+| roc-pdf build | -0.03% / -0.03% | +0.48% / -0.29% | +0.00% / -0.17% |
+| randomized-spa check | -0.00% / -0.01% | -0.02% / +0.80% | +0.01% / +0.02% |
+| randomized-spa build | +0.02% / -0.01% | -0.04% / +0.17% | +0.06% / -0.00% |
+| Observatory check | +0.03% / -0.01% | -0.10% / +0.49% | +0.03% / -0.03% |
+
+Neither change moves the instruction count of a cold or post-edit run. Warm
+runs are 0.06 to 1.0 billion instructions, so the stored-tables increase is a
+few hundred thousand instructions per run.
+
+Peak resident memory of a warm run, in MB:
+
+| Workload | Before borrowing lists | After | Main before stored tables | After |
+| --- | ---: | ---: | ---: | ---: |
+| roc-pg check | 70.0 | 53.8 | 66.2 | 69.8 |
+| roc-pg test | 71.5 | 55.6 | 67.9 | 71.7 |
+| roc-pdf check | 117.0 | 100.0 | 112.2 | 116.7 |
+| roc-pdf test | 119.6 | 104.4 | 117.3 | 120.8 |
+| roc-pdf build | 377.8 | 360.5 | 374.1 | 376.4 |
+| randomized-spa check | 83.6 | 67.8 | 81.1 | 84.2 |
+| randomized-spa build | 171.3 | 157.8 | 169.0 | 170.8 |
+| Observatory check | 74.7 | 59.2 | 71.0 | 73.9 |
+
+Borrowing lists lowers warm peak memory by 13 to 17 MB in every row (5% to
+23%), and post-edit peak memory by 3% to 6%; cold peak memory is within 3.3%.
+Stored tables raises warm peak memory by 2 to 4.5 MB in every row (0.6% to
+5.6%); its cold and post-edit rows are within 1.5%, except cold roc-pg test
+(+3.4%). The cause of that warm increase is not identified. Main between the
+two measured pairs raises warm peak memory by 11 to 14 MB and warm
+instructions by up to 12% (Observatory check, 68.9 to 77.4 million; roc-pdf
+check, 222 to 239 million); that change belongs to neither measured pair and
+is not attributed.
+
 ## Lifecycle audit
 
 | Area | Decision and reason |
