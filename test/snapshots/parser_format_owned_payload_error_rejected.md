@@ -333,7 +333,7 @@ expect {
 			(e-block
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 558)
+					(e-call (constraint-fn-var 560)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -411,7 +411,7 @@ expect {
 															(p-assign (ident "#interp_0"))
 															(e-lookup-local
 																(p-assign (ident "message"))))
-														(e-interpolation (constraint-fn-var 594) (dispatcher-var 83)
+														(e-interpolation (constraint-fn-var 596) (dispatcher-var 83)
 															(first
 																(e-literal (string "caught ")))
 															(parts
@@ -488,7 +488,7 @@ expect {
 			(e-match
 				(match
 					(cond
-						(e-call (constraint-fn-var 670)
+						(e-call (constraint-fn-var 672)
 							(e-lookup-local
 								(p-assign (ident "parse")))
 							(e-string
