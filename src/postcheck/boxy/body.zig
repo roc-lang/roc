@@ -193,6 +193,9 @@ pub const Task = union(enum) {
     value_part,
     /// Pop a static data slot and push a read of it.
     read_static_part,
+    /// Pop the static data slot of a stored discriminant-only tag `name` of
+    /// `ty` and push the tag's construction (`Builder.enumConstant`).
+    read_static_enum: struct { ty: TypeId, name: types.NameId },
     /// Pop the slots of a stored product's parts and push the product's.
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     /// Pop the slots of a stored tag's payloads and push the tag's.
@@ -595,6 +598,14 @@ pub const Builder = struct {
     /// The destination each row-coerced result's own value is built at: the
     /// type its coercion produces (`lowerRowCoercion`).
     coerced_destinations: collections.DenseMapUnmanaged(ExprId, TypeId) = .empty,
+    /// The join value parameter each branch value of a joined construct
+    /// flows to. A tag expression in that position is constructed in the
+    /// parameter itself, so the parameter's definition on that path is the
+    /// tag construction (design.md "Outcome-Conditioned Argument
+    /// Restitution" reads a result discriminant from exactly that shape).
+    /// An expression whose value is converted on its way to the join has no
+    /// entry.
+    value_destinations: collections.DenseMapUnmanaged(ExprId, LocalId) = .empty,
     /// The expressions whose value is the procedure's result, as their
     /// parents read them.
     tail_exprs: collections.DenseMapUnmanaged(ExprId, void) = .empty,
@@ -722,6 +733,7 @@ pub const Builder = struct {
         self.join_infos.deinit(self.allocator);
         self.destination_types.deinit(self.allocator);
         self.coerced_destinations.deinit(self.allocator);
+        self.value_destinations.deinit(self.allocator);
         self.tail_exprs.deinit(self.allocator);
         self.tail_calls.deinit();
         self.merges.deinit(self.allocator);
@@ -872,6 +884,45 @@ pub const Builder = struct {
     pub fn isTail(self: *Builder, expr: ExprId) bool {
         if (self.bodies().rowCoercion(expr) != null) return false;
         return self.tail_exprs.contains(expr);
+    }
+
+    /// Whether tail `if` or `match` expression `construct` returns a closed
+    /// tag that every one of its branches constructs. Such a construct joins
+    /// its branches and returns the join's value parameter, as `.lss` lowers
+    /// it, so the procedure returns one local whose definition on each path
+    /// is that path's tag construction (design.md "Outcome-Conditioned
+    /// Argument Restitution"). No branch ends in a call, so no tail call is
+    /// given up.
+    fn returnsConstructedTag(self: *Builder, construct: ExprId) Allocator.Error!bool {
+        if (self.result_local != null) return false;
+        switch (self.bodies().exprData(construct)) {
+            .if_ => |if_| {
+                for (if_.branches) |branch| if (!self.constructsTag(self.bodies().ifBranch(branch).body)) return false;
+                if (!self.constructsTag(if_.final_else)) return false;
+            },
+            .match_ => |match| for (match.branches) |branch| {
+                if (!self.constructsTag(self.bodies().matchBranch(branch).value)) return false;
+            },
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only an `if` or a `match` asks how its branches return
+        }
+        const ty = try self.exprType(construct);
+        if (!try self.closed(ty)) return false;
+        return self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty)).tag == .tag_union;
+    }
+
+    /// Whether the value of `expr` is a tag expression's own construction:
+    /// a tag, a nominal constructed from one, or a block ending in either.
+    fn constructsTag(self: *Builder, expr: ExprId) bool {
+        var current = expr;
+        while (true) switch (self.bodies().exprData(current)) {
+            .tag, .zero_argument_tag => return true,
+            .block => |block| current = block.final_expr,
+            .nominal => |nominal| return switch (self.bodies().exprData(nominal.backing_expr)) {
+                .tag, .zero_argument_tag => true,
+                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+            },
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+        };
     }
 
     /// The destination a value of expression `expr` (of its own type `own`)
@@ -1160,7 +1211,9 @@ pub const Builder = struct {
         const info: JoinInfo = if (index < self.join_infos.items.len) self.join_infos.items[index] else .{ .value = .none, .merge = .none };
         if (info.value.get()) |param| {
             const source = value orelse invariant("a jump to a value join carried no value");
-            try self.emitLinear(.{ .set_local = .{ .target = param, .value = source, .mode = .initialize_join_param, .next = undefined } });
+            // A value constructed in the parameter itself is already there
+            // (`value_destinations`).
+            if (source != param) try self.emitLinear(.{ .set_local = .{ .target = param, .value = source, .mode = .initialize_join_param, .next = undefined } });
         }
         if (info.merge.get()) |merge| {
             const m = self.merges.items[merge];
@@ -3193,6 +3246,7 @@ pub const Builder = struct {
             .restore_part => |restore| try self.restorePartStep(restore.source, restore.node, restore.ty),
             .value_part => try self.static_parts.append(self.allocator, try self.constantSlot(self.popValue())),
             .read_static_part => try self.pushValue(try self.staticRead(self.popStaticPart())),
+            .read_static_enum => |read| try self.pushValue(try self.enumConstant(read.ty, read.name, self.popStaticPart())),
             .finish_restore_struct => |restore| try self.finishStaticParts(restore.ty, restore.count, .product),
             .finish_restore_tag => |restore| {
                 const structural = try self.structuralType(restore.ty);
@@ -3297,7 +3351,14 @@ pub const Builder = struct {
     }
 
     pub fn boolValue(self: *Builder, value: bool) Allocator.Error!LocalId {
-        const local = try self.closedLocal(.bool);
+        return self.boolValueInto(value, null);
+    }
+
+    /// `boolValue` constructed in `into` when given, a `Bool` local this
+    /// construction defines.
+    fn boolValueInto(self: *Builder, value: bool, into: ?LocalId) Allocator.Error!LocalId {
+        const local = into orelse try self.closedLocal(.bool);
+        if (self.store.getLocal(local).layout_idx != .bool) invariant("a Bool is constructed in a local of another layout");
         const discriminant = @import("../common.zig").boolDiscriminant(value);
         try self.emitLinear(.{ .assign_tag = .{ .target = local, .variant_index = discriminant, .discriminant = discriminant, .payload = null, .next = undefined } });
         return local;
@@ -3429,7 +3490,10 @@ pub const Builder = struct {
         self.region = self.nodeRegion(@backingInt(expr_id));
         if (self.destination_types.get(expr_id)) |destination| if (!try self.program.hasError(self.module, wide)) {
             const own = try self.convert(wide);
-            if (try self.retagInto(own, destination)) |to| try self.push(.{ .retag = .{ .from = own, .to = to } });
+            if (try self.retagInto(own, destination)) |to| {
+                _ = self.value_destinations.remove(expr_id);
+                try self.push(.{ .retag = .{ .from = own, .to = to } });
+            }
         };
         try self.coerced_destinations.put(self.allocator, expr_id, try self.valueType(expr_id));
         try self.push(.{ .own_expr = expr_id });
@@ -3441,7 +3505,10 @@ pub const Builder = struct {
         self.region = expr.source_region;
         if (self.ownDestination(expr_id) != null and !try self.program.hasError(self.module, expr.ty)) {
             const own = try self.convert(expr.ty);
-            if (try self.retagTarget(expr_id, own)) |destination| try self.push(.{ .retag = .{ .from = own, .to = destination } });
+            if (try self.retagTarget(expr_id, own)) |destination| {
+                _ = self.value_destinations.remove(expr_id);
+                try self.push(.{ .retag = .{ .from = own, .to = destination } });
+            }
         }
         // An expression compile-time evaluation hoisted and stored is read
         // (design.md "Runtime Programs Read Stored Values").
@@ -3462,6 +3529,7 @@ pub const Builder = struct {
             .lookup_required => try self.lowerLookupExternal(expr_id, self.bodies().resolvedRef(expr_id) orelse invariant("a platform requirement lookup had no resolved reference")),
             .block => |block| {
                 if (self.isTail(expr_id)) try self.tail_exprs.put(self.allocator, block.final_expr, {});
+                if (self.value_destinations.get(expr_id)) |into| try self.value_destinations.put(self.allocator, block.final_expr, into);
                 // A divergent statement leaves the rest of the block
                 // unreachable: nothing after it is lowered, and the block's
                 // value is never produced.
@@ -3536,10 +3604,14 @@ pub const Builder = struct {
                     .tag => |tag| {
                         const nominal_ty = try self.exprType(expr_id);
                         try self.passDestination(backing, nominal_ty);
+                        if (self.value_destinations.get(expr_id)) |into| try self.value_destinations.put(self.allocator, nominal.backing_expr, into);
                         try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = nominal_ty } });
                         try self.pushExprsReversed(tag.args);
                     },
-                    .zero_argument_tag => try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } }),
+                    .zero_argument_tag => {
+                        if (self.value_destinations.get(expr_id)) |into| try self.value_destinations.put(self.allocator, nominal.backing_expr, into);
+                        try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } });
+                    },
                     .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
                         // The operand is the nominal's own backing, which a
                         // padded declaration lays out differently from the
@@ -3585,7 +3657,7 @@ pub const Builder = struct {
             },
             .if_ => |if_| {
                 const first_cond = self.bodies().ifBranch(if_.branches[0]).cond;
-                if (self.isTail(expr_id)) {
+                if (self.isTail(expr_id) and !try self.returnsConstructedTag(expr_id)) {
                     for (if_.branches) |branch| try self.tail_exprs.put(self.allocator, self.bodies().ifBranch(branch).body, {});
                     try self.tail_exprs.put(self.allocator, if_.final_else, {});
                     // Each branch returns; nothing reads the construct's
@@ -3602,6 +3674,8 @@ pub const Builder = struct {
                 const join = self.freshJoin();
                 const merge = try self.beginMerge(try self.bodies().stateMergeBinders(expr_id), .joined);
                 const after = try self.declareMergeJoin(join, result, merge);
+                for (if_.branches) |branch| try self.value_destinations.put(self.allocator, self.bodies().ifBranch(branch).body, result);
+                try self.value_destinations.put(self.allocator, if_.final_else, result);
                 try self.push(.{ .push_value = result });
                 if (merge) |m| try self.push(.{ .enter_merge = m });
                 try self.push(.{ .resume_at = after });
@@ -5728,7 +5802,12 @@ pub const Builder = struct {
         const ty = try self.structuralType(raw_ty);
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
         const data = const_store.get(node);
-        if (data != .scalar) if (self.program.stored_value_slots.get(key)) |slot| return self.pushValue(try self.staticRead(slot));
+        // A discriminant-only tag is a scalar value: its read is its
+        // construction (design.md "Compile-Time Evaluation").
+        const enum_tag = try self.storedEnumTag(source, node, raw_ty);
+        if (data != .scalar) if (self.program.stored_value_slots.get(key)) |slot| {
+            return self.pushValue(if (enum_tag) |name| try self.enumConstant(raw_ty, name, slot) else try self.staticRead(slot));
+        };
         // A value built from parts is remembered where its parts are
         // restored (`restorePartStep`), and a failed value has no slot.
         const remembered_here = switch (data) {
@@ -5782,11 +5861,39 @@ pub const Builder = struct {
             // The body reads the whole value once: its parts are static
             // data, never values of this body.
             .box, .tuple, .record, .tag, .list => {
-                try self.push(.read_static_part);
+                try self.push(if (enum_tag) |name| .{ .read_static_enum = .{ .ty = raw_ty, .name = name } } else .read_static_part);
                 try self.restorePartStep(source, node, raw_ty);
             },
             .fn_value => |fn_id| try self.restoreFn(source, fn_id, raw_ty),
         }
+    }
+
+    /// The tag name of stored constant `node` when it is a payload-free tag,
+    /// possibly inside nominal wrappers, of a closed `ty` whose committed
+    /// tag union stores its discriminant alone.
+    fn storedEnumTag(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!?types.NameId {
+        const const_store = self.program.constStore(source);
+        var current = node;
+        const tag = while (true) switch (const_store.get(current)) {
+            .nominal => |nominal| current = nominal.backing,
+            .tag => |tag| break tag,
+            .pending, .scalar, .zst, .str, .boxy_fn, .fn_value, .crash, .checked_error, .box, .tuple, .record, .list => return null,
+        };
+        if (tag.payloads.len != 0) return null;
+        const layouts = &self.program.result.layouts;
+        const committed = layouts.getLayout(try self.program.layouts.layoutOf(ty));
+        if (committed.tag != .tag_union or layouts.getTagUnionInfo(committed).discriminant_offset != 0) return null;
+        return try self.program.store.internName(tag.tag_name);
+    }
+
+    /// The stored discriminant-only tag `name` of `ty` as its construction,
+    /// which keeps the constant visible to the passes that read a tag's
+    /// discriminant; `slot` is the value's immutable data for a use that
+    /// stores it in other static data.
+    fn enumConstant(self: *Builder, ty: TypeId, name: types.NameId, slot: LIR.StaticDataId) Allocator.Error!LocalId {
+        const local = try self.buildTag(ty, name, &.{});
+        try self.constant_slots.put(self.allocator, local, slot);
+        return local;
     }
 
     /// Restore stored constant `node` of `source` at `raw_ty` as static data
@@ -9217,12 +9324,18 @@ pub const Builder = struct {
         const values = try self.popValues(@intCast(arg_count));
         defer self.allocator.free(values);
         const name = try self.program.store.internName(self.view.nameStore().tagLabelText(self.bodies().tagLabel(label)));
-        try self.pushValue(try self.buildTag(ty, name, values));
+        try self.pushValue(try self.buildTagInto(ty, name, values, self.value_destinations.get(expr_id)));
     }
 
     /// The tag `name` of the tag union `ty` (through nominal wrappers) with
     /// `values` as its payloads.
     pub fn buildTag(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId) Allocator.Error!LocalId {
+        return self.buildTagInto(ty, name, values, null);
+    }
+
+    /// `buildTag` whose closed result is constructed in `into` when given:
+    /// a local of the tag's own layout that this construction defines.
+    fn buildTagInto(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId, into: ?LocalId) Allocator.Error!LocalId {
         if (!try self.closed(ty)) {
             const target = try self.localOf(ty, .frame);
             const union_ty = try self.structuralType(ty);
@@ -9233,13 +9346,14 @@ pub const Builder = struct {
             .tag_union => {},
             .primitive => |primitive| {
                 if (primitive != .bool) invariant("a tag expression's type is a non-Bool primitive");
-                return try self.boolValue(std.mem.eql(u8, self.program.store.nameText(name), "True"));
+                return try self.boolValueInto(std.mem.eql(u8, self.program.store.nameText(name), "True"), into);
             },
             .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag expression's type is not a tag union"),
         }
         const selected = try self.selectVariant(try self.structuralType(ty), self.ownTag(try self.structuralType(ty), name, values.len));
         const variant = selected.index;
-        const target = try self.localOf(ty, .frame);
+        const target = into orelse try self.localOf(ty, .frame);
+        if (self.store.getLocal(target).layout_idx != try self.program.layouts.layoutOf(ty)) invariant("a tag is constructed in a local of another layout");
         const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
         const payload: ?LocalId = if (values.len == 0 or committed.tag != .tag_union) null else blk: {
             const payload_layout = try self.variantPayloadLayout(try self.structuralType(ty), variant);
@@ -9332,7 +9446,7 @@ pub const Builder = struct {
         const scrutinee = self.popValue();
         const match = self.bodies().exprData(expr_id).match_;
         const scrutinee_ty = try self.valueType(match.cond);
-        const tail = self.isTail(expr_id);
+        const tail = self.isTail(expr_id) and !try self.returnsConstructedTag(expr_id);
         const state = try self.program.arena.allocator().create(Match.State);
         state.* = .{
             .arena = std.heap.ArenaAllocator.init(self.allocator),
@@ -9354,6 +9468,7 @@ pub const Builder = struct {
             const result = try self.localOf(try self.exprType(expr_id), .frame);
             state.merge = try self.beginMerge(merge_binders, .joined);
             const after = try self.declareMergeJoin(state.done, result, state.merge);
+            for (match.branches) |branch| try self.value_destinations.put(self.allocator, self.bodies().matchBranch(branch).value, result);
             try self.push(.{ .push_value = result });
             if (state.merge) |m| try self.push(.{ .enter_merge = m });
             try self.push(.{ .resume_at = after });

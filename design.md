@@ -15749,6 +15749,14 @@ an ordinary layout, lowered with the same statements `.lss` emits. The
 dynamic statements appear only where a type variable is involved, so a generic
 body is ordinary LIR with a dynamic island per variable-typed value.
 
+A closed tag expression that is the value of an `if` or `match` branch is
+constructed in the construct's join value parameter itself, as `.lss`
+constructs it, rather than in a temporary the jump then copies: the
+parameter's definition on that path is the `assign_tag`, which is the result
+discriminant witness outcome restitution reads (Outcome-Conditioned Argument
+Restitution). A branch value converted on its way to the join (a re-tagged
+read or call result) is written to the parameter by the jump.
+
 Pattern matching in a generic body follows the same statements: a tag pattern
 on a dynamic union compares the read discriminant with the tag's
 discriminant (an immediate or a `tag_index` table word), then addresses the
@@ -23196,11 +23204,16 @@ solved base signature
 (it keeps its ownership of a borrowed position, selects no outcome span, and
 seeds no uniqueness). The specialized lowering puts every procedure in the
 one `program` unit, so its behavior is unchanged. `.boxy` gives each
-template worker, lambda worker, and conversion worker its module's unit, and
-every worker that is not one module's (a structural method, an adapter, a
-field default, a dictionary entry, a root wrapper, a static data
+template worker, lambda worker, conversion worker, and template dictionary
+entry its module's unit, and every worker that is not one module's (a
+structural method, an adapter, a field default, a root wrapper, a static data
 initializer, a crash dictionary, a codec derivation) the `isolated` unit,
-which shares with nothing, not even itself. A module's object therefore
+which shares with nothing, not even itself. A template's dictionary entry is
+the procedure a function value or dictionary slot naming the template calls;
+it owns every argument it unpacks and its one direct call is of the template,
+in the template's own module, so that call demands the template's owned
+field-take variant exactly as a direct call written in the module does. A function value therefore hands its arguments to its target
+with the ownership a direct call would. A module's object therefore
 carries only the variants its own calls demanded, and a procedure's solved
 base signature and uniqueness data—functions of its body and its
 callees—are the whole of what another module compiles against (Per-Module

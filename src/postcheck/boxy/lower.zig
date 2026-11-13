@@ -2982,7 +2982,10 @@ pub const Program = struct {
             try self.worker_ids.put(self.allocator, key, id);
             return id;
         }
-        const id = try self.addErasedWorkerWithIdentity(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, identity);
+        // The entry is its target module's own, emitted with the target, so
+        // it shares that module's emission unit and its call demands the
+        // target's ownership variants as any call inside the module does.
+        const id = try self.addErasedWorkerWithIdentity(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, identity, LIR.EmissionUnit.module(@backingInt(target_worker.module)));
         // The entry runs in its target's scopes, whose descriptors,
         // dictionaries, and literal arguments it captures.
         const entry = self.worker(id);
@@ -3066,15 +3069,15 @@ pub const Program = struct {
             .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .codec, .convert, .callable_eval_entry => try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{}),
             .template, .lambda, .default, .method_entry, .root, .static_data => invariant("a worker a module's object defines is no generated erased worker"),
         };
-        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, identity);
+        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, identity, .isolated);
     }
 
-    fn addErasedWorkerWithIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, identity: LIR.ProcIdentity) Allocator.Error!WorkerId {
+    fn addErasedWorkerWithIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, identity: LIR.ProcIdentity, emission_unit: LIR.EmissionUnit) Allocator.Error!WorkerId {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = identity,
-            .emission_unit = .isolated,
+            .emission_unit = emission_unit,
             .args = .empty(),
             .ret_layout = .zst,
             .abi = .erased_record,
