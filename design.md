@@ -7229,8 +7229,8 @@ operands and the result to be one type, calling `plus`, `minus`, `times`,
 `div_by`, `div_trunc_by`, and `rem_by` at `a, a -> a`. A method of one of those
 names whose second parameter or result is another type, such as
 `times : Duration, I64 -> Duration`, is callable only as an ordinary method
-call (`duration.times(3)`); `duration * 3` is a type mismatch between the
-operands.
+call (`duration.times(3)`); `duration * 3` is an error, reported once as the
+method having an incompatible type (Closed Operator Rejection, below).
 
 These contracts let inference propagate information before a method has been
 selected. Either operand of a comparison or arithmetic operator determines the
@@ -7310,6 +7310,31 @@ has, an effectful method, a derived method, and a declaration with no
 callable value or an erroneous annotation. The checked node is consumed
 exactly as a closed operator's is. Accepted and rejected sides are pinned in
 `closed_method_call_test.zig`.
+
+Closed operator rejection is the same mechanism for an operator whose method
+can never meet its contract. When an arithmetic or ordering operator's left
+operand has resolved to a nominal type that takes no arguments, and that
+type's method has a final signature (declared in another module, or annotated
+in this one, whose annotation is predeclared as its scheme before any body is
+checked) that is a pure function over nominal types taking no arguments other
+than the operator's contract at that type (`T, T -> T`, or `T, T -> Bool`),
+the operator is rejected where it is checked, before its operands are related
+(`reportOperatorMethodSignatureMismatch`). Such a signature has no type
+variables, so relating an instance of it to the contract fails whatever the
+right operand is; the rejection relates a fresh copy of the signature to the
+contract at the left operand's type, reports the failure exactly as the drain
+reports a failed operator constraint, and retires the operator exactly as the
+drain does. It accepts nothing the ordinary path rejects and rejects nothing
+the ordinary path accepts: the only difference is that the right operand is
+never related to the left, so `duration * 3` reports the method's signature
+and not also the literal `3` as a `Duration`. Every other operator keeps its
+ordinary path: a left operand that is not yet a nominal type or takes
+arguments, a defaulted left operand, an unannotated method of this module,
+a signature with type variables or of any other shape, an effectful method, a
+derived method, a declaration with no callable value or an erroneous
+annotation, and any operator checked inside a probe. The accepted (contract)
+side is pinned in `closed_operator_test.zig`, the rejected side in
+`custom_num_type_test.zig` and `test/cli/OperatorMethodMismatch.roc`.
 
 A where alias (`a.Sortable : where [...]`) is a source-level abbreviation for a
 set of method constraints, not a type. Its declaration solves to its receiver: a

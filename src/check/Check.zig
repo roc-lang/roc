@@ -37291,6 +37291,7 @@ fn finishBinopExpr(
 
             const operand_method = try self.lookupBinopMethod(lhs_var, rhs_var, expr_var, method_name, env, expr_region);
             if (operand_method == .missing) return;
+            if (try self.reportOperatorMethodSignatureMismatch(expr_idx, expr_var, lhs_var, rhs_var, operand_method, method_name, .operand, env, expr_region)) return;
 
             // An arithmetic operator's operands and result are one type
             // (design.md "Static Dispatch At The Checked Boundary"): either
@@ -37341,6 +37342,7 @@ fn finishBinopExpr(
 
             const operand_method = try self.lookupBinopMethod(lhs_var, rhs_var, expr_var, method_name, env, expr_region);
             if (operand_method == .missing) return;
+            if (try self.reportOperatorMethodSignatureMismatch(expr_idx, expr_var, lhs_var, rhs_var, operand_method, method_name, .bool, env, expr_region)) return;
 
             // For comparison binops, lhs and rhs must have the same type.
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
@@ -37695,6 +37697,117 @@ fn varIsClosedNominalFunction(store: *const types_mod.Store, var_: Var, param_co
         if (closedNominalOf(store, param) == null) return false;
     }
     return closedNominalOf(store, func.ret) != null;
+}
+
+/// Report an operator whose method's declared signature can never be the
+/// operator's contract, before the operands are related, and retire the
+/// operator. Returns whether it was reported.
+///
+/// This applies when the left operand's type is a nominal type taking no
+/// arguments and its method's signature is final (declared in another
+/// module, or annotated in this one, whose annotation is its scheme before
+/// any body is checked) and is a pure function over nominal types taking no
+/// arguments that is not `T, T -> T` (`T, T -> Bool` for `.bool`) at the
+/// left operand's type `T`. Such a signature has no type variables, so
+/// relating it to the operator's contract fails whatever the right operand
+/// is: the operator is rejected once, as the drain would reject its
+/// constraint, and the right operand is never related to the left (relating
+/// them first would also report `3` in `duration * 3`).
+fn reportOperatorMethodSignatureMismatch(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    lhs_var: Var,
+    rhs_var: Var,
+    operand_method: BinopMethod,
+    method_name: Ident.Idx,
+    result: OperatorResult,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    const method_lookup = switch (operand_method) {
+        .found => |found| found,
+        .not_nominal => return false,
+        .missing => unreachable, // a missing method was reported and the operator retired
+    };
+    // A probe reports nothing, and a defaulted receiver's failures are
+    // reported as an undetermined type by the drain.
+    if (self.probe_depth != 0 or self.types.varDefaultDecided(lhs_var)) return false;
+    const nominal = closedNominalOf(self.types, lhs_var) orelse return false;
+    const def_idx = method_lookup.binding.def_idx;
+    if (staticDispatchBindingIsDerivedMarker(method_lookup) or
+        methodAnnotationErroneous(method_lookup) or
+        hostedDeclarationIsNotEffectful(method_lookup.env, def_idx) or
+        annotationOnlyValueDef(method_lookup.env, def_idx))
+    {
+        return false;
+    }
+    const signature_var = if (method_lookup.is_this_module)
+        self.predeclaredSchemeVar(def_idx) orelse return false
+    else signature: {
+        // Read the declaration's type where it is declared first, so only a
+        // qualifying method is copied into this module here.
+        if (!varIsClosedNominalFunction(&method_lookup.env.types, ModuleEnv.varFrom(method_lookup.binding.type_node_idx), 2)) {
+            return false;
+        }
+        break :signature try self.importedMethodScheme(method_lookup);
+    };
+    if (!varIsClosedNominalFunction(self.types, signature_var, 2)) return false;
+    const func = self.types.resolveVar(signature_var).desc.content.structure.fn_pure;
+    const params = self.types.sliceVars(func.args);
+    const ret = closedNominalOf(self.types, func.ret).?;
+    const is_contract = self.varIsClosedNominal(params[0], nominal) and
+        self.varIsClosedNominal(params[1], nominal) and switch (result) {
+        .operand => unifier.sameNominalIdentity(ret, nominal),
+        .bool => self.nominalIsBuiltinBoolType(ret),
+    };
+    if (is_contract) return false;
+
+    // The method's instance: a fresh copy of a signature with no type
+    // variables, so the failing relation below never reaches the
+    // declaration's own type.
+    const instance_params = [_]Var{
+        try self.freshFromContent(.{ .structure = .{ .nominal_type = closedNominalOf(self.types, params[0]).? } }, env, region),
+        try self.freshFromContent(.{ .structure = .{ .nominal_type = closedNominalOf(self.types, params[1]).? } }, env, region),
+    };
+    const instance_ret = try self.freshFromContent(.{ .structure = .{ .nominal_type = ret } }, env, region);
+    const method_var = try self.freshFromContent(.{ .structure = .{ .fn_pure = Func{
+        .args = try self.types.appendVars(&instance_params),
+        .ret = instance_ret,
+    } } }, env, region);
+
+    // The operator's contract at the left operand's type.
+    const contract_ret = switch (result) {
+        .operand => lhs_var,
+        .bool => try self.freshBool(env, region),
+    };
+    const contract_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = try self.types.appendVars(&.{ lhs_var, lhs_var }),
+        .ret = contract_ret,
+    } } }, env, region);
+    // The operator's type is its contract's result, as when its constraint
+    // is queued; the failing relation then rejects both.
+    _ = try self.unify(expr_var, contract_ret, env);
+    // The report names the operand an operator's constraint is built on:
+    // the left one for arithmetic, the right one for ordering.
+    const relation = try self.unifyInContext(method_var, contract_fn_var, env, .{
+        .method_type = .{
+            .constraint_var = switch (result) {
+                .operand => lhs_var,
+                .bool => rhs_var,
+            },
+            .dispatcher_name = nominal.ident.ident_idx,
+            .method_name = method_name,
+        },
+    });
+    std.debug.assert(!relation.isEstablished());
+    try self.poisonConstraintFailureSource(lhs_var, .{
+        .fn_name = method_name,
+        .fn_var = contract_fn_var,
+        .origin = .{ .desugared_binop = .{ .negated = false } },
+        .provenance = constraintProvenance(expr_idx),
+    }, expr_idx);
+    return true;
 }
 
 /// The method a closed method call selects: this module's copy of the
