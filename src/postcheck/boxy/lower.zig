@@ -1735,6 +1735,17 @@ pub const Program = struct {
             }
             bound[node.index] = try self.substitute(self.allocator, node.ty, bound);
         }
+        // Bool, primitive or builtin nominal, is the tag union `[False,
+        // True]`, whose tags a body builds by position.
+        for (target.row_nodes) |node| {
+            if (self.store.get(node.ty) != .tag_union) continue;
+            const is_bool = switch (self.store.get(bound[node.index])) {
+                .primitive => |primitive| primitive == .bool,
+                .nominal => |nominal| nominal.builtin == .bool,
+                .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => false,
+            };
+            if (is_bool) bound[node.index] = try self.boolUnion();
+        }
     }
 
     /// `ty` with each of worker `id`'s row nodes read as its whole-value
@@ -1884,9 +1895,7 @@ pub const Program = struct {
         while (pending.pop()) |pair| {
             if (captured) |out| for (row_nodes, out) |node, *slot| {
                 if (node.ty != pair[0] or slot.* != .none) continue;
-                // Bool is the tag union `[False, True]`.
-                const actual = store.get(pair[1]);
-                slot.* = .some(if (actual == .primitive and actual.primitive == .bool) try self.boolUnion() else pair[1]);
+                slot.* = .some(pair[1]);
             };
             const formal = store.get(pair[0]);
             if (formal == .variable) {

@@ -14178,7 +14178,7 @@ const EvidencePass = struct {
                     }
                     param.path = .{ .last = parent, .len = param.path.len + 1 };
                 },
-                .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .open_row_value => {},
+                .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .open_row_value, .row_remainder => {},
             }
             try self.evidence_params_pool.append(self.allocator, param);
         }
@@ -14688,6 +14688,7 @@ const EvidencePass = struct {
                     } };
                 },
                 .open_row_value => .open_row_value,
+                .row_remainder => .row_remainder,
                 .scheme_requirement => .scheme_requirement,
             };
             const published_path: static_dispatch.EvidencePath = switch (source) {
@@ -14695,7 +14696,7 @@ const EvidencePass = struct {
                     .last = try self.publishPathNode(path_nodes, param.path_node),
                     .len = param.path_len,
                 },
-                .scheme_requirement, .use_site_only, .explicit_default, .open_row_value => .{},
+                .scheme_requirement, .use_site_only, .explicit_default, .open_row_value, .row_remainder => .{},
             };
             const contract_start: u32 = @intCast(self.evidence_param_callables.items.len);
             for (param.callable_contracts) |contract| {
@@ -15539,7 +15540,7 @@ const EvidencePass = struct {
             switch (param.source) {
                 .scheme_callable => if (param.path.len == 0) return false,
                 .constraint_callable, .use_site_only => {},
-                .scheme_requirement, .explicit_default, .open_row_value => return false,
+                .scheme_requirement, .explicit_default, .open_row_value, .row_remainder => return false,
             }
         }
         return true;
@@ -16516,7 +16517,7 @@ const EvidencePass = struct {
         param: EvidenceParam,
     ) Allocator.Error!static_dispatch.CheckedEvidence {
         if (try self.evidenceForRecordParam(pairs, param, .defer_resolution)) |evidence| return evidence;
-        if (param.path_len == 0 or param.source == .constraint_callable or param.source == .open_row_value) {
+        if (param.path_len == 0 or param.source == .constraint_callable or param.source == .open_row_value or param.source == .row_remainder) {
             return (try self.evidenceForRecordParam(pairs, param, .commit)).?;
         }
         const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
@@ -16715,7 +16716,7 @@ test "procedure evidence schema positively classifies callable paths and pathles
 
     var pathless_params = params;
     pathless_params[1].path = .{};
-    pathless_params[1].source = .open_row_value;
+    pathless_params[1].source = .row_remainder;
     const pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = pathless_params[0..],
     };
@@ -32028,7 +32029,7 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => template.checked_fn_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value => {
+                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value, .row_remainder => {
                         if (param.path.len != 0) {
                             return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = template.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         }
@@ -32053,7 +32054,7 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => scope.scheme_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value => {
+                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value, .row_remainder => {
                         if (param.path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         continue;
                     },

@@ -1769,6 +1769,11 @@ pub const EvidenceParamSource = union(enum) {
     /// variable's; `dispatcher_ty` is the record or tag union, whose type at
     /// each instantiation answers the requirement.
     open_row_value,
+    /// A requirement a row variable holds that is not about the value its row
+    /// ends (a derived codec's requirement on the fields the row stands
+    /// for): pathless, since closing erases the row variable; `dispatcher_ty`
+    /// is the row variable.
+    row_remainder,
 };
 
 /// Where a procedure target's nested evidence comes from. `from_target` is a
@@ -1801,7 +1806,7 @@ pub fn procedureEvidenceSchema(params: []const EvidenceParamRecord) ProcedureEvi
             } else {
                 return .requires_record;
             },
-            .constraint_callable, .use_site_only, .open_row_value => return .requires_record,
+            .constraint_callable, .use_site_only, .open_row_value, .row_remainder => return .requires_record,
         }
     }
     if (scheme_requirements == params.len) return .from_target;

@@ -1,6 +1,8 @@
 Issue9487StaticDispatchEq :: [].{}
 
-Tag := [A, B]
+Tag := [A, B].{
+    is_eq : _
+}
 
 Req :: { tag : Tag }.{
     from_tag : Tag -> Req

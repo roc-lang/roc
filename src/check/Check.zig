@@ -51399,7 +51399,7 @@ fn closeRecursiveDispatch(
             .constraint_callable => |source| {
                 if (!varListContains(determined_callables.items, self.types.resolveVar(source.callable_var).var_)) return null;
             },
-            .open_row_value, .scheme_requirement => return null,
+            .open_row_value, .row_remainder, .scheme_requirement => return null,
         }
         try determined_callables.append(self.gpa, self.types.resolveVar(param.constraint.fn_var).var_);
         for (param.callable_contracts) |contract| {

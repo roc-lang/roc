@@ -55107,7 +55107,7 @@ const BodyContext = struct {
     fn evidenceParamRequiresConstraintRelation(param: static_dispatch.EvidenceParamRecord) bool {
         return switch (param.source) {
             .scheme_requirement, .constraint_callable, .use_site_only => true,
-            .scheme_callable, .explicit_default, .open_row_value => false,
+            .scheme_callable, .explicit_default, .open_row_value, .row_remainder => false,
         };
     }
 

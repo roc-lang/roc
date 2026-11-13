@@ -12397,7 +12397,10 @@ A requirement a row variable holds is a method call on the value: its
 method takes the value as its first argument. A derived `map`, `map!`, parser
 or encoder is not held: its derivation decides the row it is derived over
 exactly, closing what it reads (`closeTagRowsForDerivation`), so it is decided
-where it is. A literal's conversion
+where it is; a requirement such a derivation leaves on a row variable, about
+the fields or tags the row stands for rather than the whole value, is
+published as a pathless `row_remainder` evidence parameter dispatching on the
+row variable itself. A literal's conversion
 (`from_quote : Str -> a`) is not one, and a record or tag union never
 converts from a literal, so such a relation is decided against the plain
 type at once. A row's composition can leave the value and its row variable
@@ -12441,7 +12444,8 @@ structural implementation, as for a type variable's requirement. Under
 row variable (`Worker.row_nodes`) is described by one hidden descriptor of
 the whole value as the use has it: the nominal type a caller supplied, or the
 plain record or tag union. A call fills it with the type at that position of
-its actual function type (Bool as `[False, True]`); a use with no actual type
+its actual function type (Bool, primitive or builtin nominal, as
+`[False, True]` for a tag union, whose tags the body builds by position); a use with no actual type
 there fills it with the node over the use's other bindings, the plain value.
 Every descriptor the body takes of a type containing such a node reads that
 input, so the position of a field or tag (`field_index`, `tag_index`) comes
