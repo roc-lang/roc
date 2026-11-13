@@ -375,7 +375,9 @@ pub const Constants = struct {
     ///      aliases, and their descriptors name an identity row.
     /// 187: every vars range of a type store has its length in the pool slot
     ///      just before it, and a stored descriptor keeps only a range's start.
-    pub const CACHE_VERSION = 187;
+    /// 188: a flex's literal marker is stored in its descriptor's word, and a
+    ///      stored descriptor's payload is three words.
+    pub const CACHE_VERSION = 188;
 };
 
 /// Configuration for the Roc cache system.

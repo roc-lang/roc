@@ -39,7 +39,7 @@ test {
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     // The stored form: one word of kind, flags and rank, then the payload.
     try std.testing.expectEqual(4, @sizeOf(Descriptor.Word));
-    try std.testing.expectEqual(20, @sizeOf(Descriptor.Row));
+    try std.testing.expectEqual(16, @sizeOf(Descriptor.Row));
     try std.testing.expectEqual(28, @sizeOf(Content));
     try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
@@ -198,19 +198,20 @@ pub const Descriptor = struct {
 
     /// The first word of a stored descriptor: what kind of content the class
     /// holds, its flags and its rank, so a reader that needs only those
-    /// decodes nothing else.
+    /// decodes nothing else. The word is full: a new field or flag needs
+    /// room made elsewhere.
     pub const Word = packed struct(u32) {
         kind: ContentKind,
         flags: DescriptorFlags,
-        /// Unused, always zero.
-        spare: u2 = 0,
+        /// A flex's `Flex.literal`; `.none` for every other kind.
+        literal: Flex.Literal = .none,
         rank: Rank,
     };
 
     /// The rest of a stored descriptor: the content's payload, laid out per
     /// kind by `encode`. Words a kind does not use are zero, so a row's bytes
     /// are a function of the descriptor alone.
-    pub const Payload = [4]u32;
+    pub const Payload = [3]u32;
 
     /// A stored descriptor. Every byte belongs to a field.
     pub const Row = struct {
@@ -219,7 +220,7 @@ pub const Descriptor = struct {
     };
 
     comptime {
-        std.debug.assert(@bitSizeOf(ContentKind) + @bitSizeOf(DescriptorFlags) + 2 + @bitSizeOf(Rank) == @bitSizeOf(Word));
+        std.debug.assert(@bitSizeOf(ContentKind) + @bitSizeOf(DescriptorFlags) + @bitSizeOf(Flex.Literal) + @bitSizeOf(Rank) == @bitSizeOf(Word));
         std.debug.assert(@sizeOf(Row) == @sizeOf(Word) + @sizeOf(Payload));
     }
 
@@ -230,11 +231,12 @@ pub const Descriptor = struct {
     /// (`Store.storedVarRange`).
     pub inline fn encode(self: Descriptor, identity: u32, store: anytype) Row {
         var payload: Payload = @splat(0);
+        var literal: Flex.Literal = .none;
         const kind: ContentKind = switch (self.content) {
             .flex => |flex| kind: {
                 payload[0] = @backingInt(collections.OptionalU32.of(if (flex.name) |name| name.denseIndex() else null));
                 putRange(&payload, 1, flex.constraints);
-                payload[3] = @backingInt(flex.literal);
+                literal = flex.literal;
                 break :kind .flex;
             },
             .rigid => |rigid| kind: {
@@ -290,7 +292,7 @@ pub const Descriptor = struct {
                 .empty_tag_union => .empty_tag_union,
             },
         };
-        return .{ .word = .{ .kind = kind, .flags = self.flags, .rank = self.rank }, .payload = payload };
+        return .{ .word = .{ .kind = kind, .flags = self.flags, .literal = literal, .rank = self.rank }, .payload = payload };
     }
 
     /// The descriptor a stored row holds. `store` is the type store that
@@ -303,7 +305,7 @@ pub const Descriptor = struct {
             .flex => .{ .flex = .{
                 .name = if (@as(collections.OptionalU32, @fromBackingInt(p[0])).get()) |dense| Ident.Idx.fromDenseIndex(dense) else null,
                 .constraints = getRange(StaticDispatchConstraint.SafeList.Range, p, 1),
-                .literal = @fromBackingInt(@intCast(p[3])),
+                .literal = row.word.literal,
             } },
             .rigid => .{ .rigid = .{
                 .name = Ident.Idx.fromDenseIndex(p[0]),
@@ -664,7 +666,7 @@ pub const Flex = struct {
     /// literal's type, so only the variable's own class carries this.
     literal: Literal = .none,
 
-    pub const Literal = enum(u8) {
+    pub const Literal = enum(u2) {
         none,
         numeral,
         quote,

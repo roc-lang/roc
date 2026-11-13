@@ -1135,7 +1135,7 @@ pub const Store = struct {
 
     /// `setDescWord` without the frozen-class guard, for freezing and thawing.
     fn setDescWordUnguarded(self: *Self, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
-        std.debug.assert(word.kind == self.descs.getWord(idx).kind);
+        std.debug.assert(word.kind == self.descs.getWord(idx).kind and word.literal == self.descs.getWord(idx).literal);
         try self.journalDescWrite(idx);
         self.descs.setWord(idx, word);
     }
@@ -3389,7 +3389,7 @@ const DescStore = struct {
     /// Whether two rows hold the same content, whatever their words' flags
     /// and ranks.
     fn sameContent(a: Desc.Row, b: Desc.Row) bool {
-        return a.word.kind == b.word.kind and std.mem.eql(u32, &a.payload, &b.payload);
+        return a.word.kind == b.word.kind and a.word.literal == b.word.literal and std.mem.eql(u32, &a.payload, &b.payload);
     }
 
     /// Deinit & free allocated memory
