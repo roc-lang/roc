@@ -3720,7 +3720,7 @@ fn snapshotRootRequestByOrder(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     order: u32,
 ) check.CheckedArtifact.RootRequest {
-    for (root_artifact.root_requests.requests) |request| {
+    for (root_artifact.root_requests.requests.items()) |request| {
         if (request.order == order) return request;
     }
     base.invariant("snapshot invariant violated: missing root request order {d}", .{order});
@@ -3740,7 +3740,7 @@ fn snapshotProvidedEntrypointName(
         base.invariant("snapshot invariant violated: exported platform root has no published top-level value", .{});
     };
 
-    for (root_artifact.provides_requires.provides) |entry| {
+    for (root_artifact.provides_requires.provides.items()) |entry| {
         if (entry.source_name == top_level.source_name) {
             return root_artifact.canonical_names.externalSymbolNameText(entry.ffi_symbol);
         }
@@ -3812,7 +3812,7 @@ fn snapshotNativeEntrypoints(
 fn snapshotHasProvidedProcedureExports(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) bool {
-    for (root_artifact.provided_exports.exports) |provided| {
+    for (root_artifact.provided_exports.exports.items()) |provided| {
         switch (provided) {
             .procedure => return true,
             .data, .checked_error => {},
@@ -3824,7 +3824,7 @@ fn snapshotHasProvidedProcedureExports(
 fn snapshotHasProvidedDataExports(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) bool {
-    for (root_artifact.provided_exports.exports) |provided| {
+    for (root_artifact.provided_exports.exports.items()) |provided| {
         switch (provided) {
             .data => return true,
             .procedure, .checked_error => {},
@@ -3911,7 +3911,7 @@ fn processDevObjectSnapshot(
             }
 
             const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, root_artifact.root_requests.runtime_requests);
+            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, root_artifact.root_requests.runtime_requests.items());
             defer allocator.free(build_roots);
 
             var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(

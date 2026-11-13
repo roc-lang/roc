@@ -1203,16 +1203,16 @@ const PreparedModuleGraph = struct {
 
     fn edgeCount(self: PreparedModuleGraph, node: usize) usize {
         const artifact = self.entries[node].mod.checkedArtifact().?;
-        return artifact.direct_import_module_keys.len + artifact.platform_required_bindings.bindings.len;
+        return artifact.direct_import_module_keys.items().len + artifact.platform_required_bindings.bindings.items().len;
     }
 
     fn edge(self: PreparedModuleGraph, node: usize, edge_index: usize) ?usize {
         const artifact = self.entries[node].mod.checkedArtifact().?;
-        const imports = artifact.direct_import_module_keys;
+        const imports = artifact.direct_import_module_keys.items();
         const key = if (edge_index < imports.len)
             imports[edge_index].bytes
         else
-            artifact.platform_required_bindings.bindings[edge_index - imports.len].app_value.artifact.bytes;
+            artifact.platform_required_bindings.bindings.items()[edge_index - imports.len].app_value.artifact.bytes;
         return self.by_key.get(key);
     }
 };
@@ -1616,7 +1616,7 @@ const BoxyObjects = struct {
         defer visited.deinit(self.coordinator.gpa);
         const builtin_artifact = &self.coordinator.builtin_modules.checked_artifact;
         if (!try self.visit(builtin_artifact, &visited, &ordered)) return null;
-        for (module.direct_import_module_keys) |key| {
+        for (module.direct_import_module_keys.items()) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return null;
             if (!try self.visit(imported, &visited, &ordered)) return null;
         }
@@ -1696,7 +1696,7 @@ const BoxyObjects = struct {
         const entry = try visited.getOrPut(gpa, artifact.key.bytes);
         if (entry.found_existing) return true;
         entry.value_ptr.* = artifact;
-        for (artifact.direct_import_module_keys) |key| {
+        for (artifact.direct_import_module_keys.items()) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return false;
             if (!try self.visit(imported, visited, ordered)) return false;
         }
@@ -1713,7 +1713,7 @@ const BoxyObjects = struct {
     fn closureKnown(self: *BoxyObjects, module: *const Artifact) Allocator.Error!bool {
         if (self.closures_known.contains(module.key.bytes)) return true;
         if (!self.records.contains(self.coordinator.builtin_modules.checked_artifact.key.bytes)) return false;
-        for (module.direct_import_module_keys) |key| {
+        for (module.direct_import_module_keys.items()) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
             if (!self.records.contains(imported.key.bytes)) return false;
             if (!try self.closureKnown(imported)) return false;
@@ -1724,7 +1724,7 @@ const BoxyObjects = struct {
 
     /// The module whose hosted section binds `artifact`'s hosted functions.
     fn platformOf(self: *BoxyObjects, artifact: *const Artifact) ?CheckedArtifact.ImportedModuleView {
-        if (artifact.hosted_procs.procs.len == 0) return null;
+        if (artifact.hosted_procs.procs.items().len == 0) return null;
         var packages = self.coordinator.packages.iterator();
         while (packages.next()) |package| {
             for (package.value_ptr.*.modules.items) |*mod| {
@@ -1760,9 +1760,9 @@ const BoxyObjects = struct {
     /// own still to evaluate, or hosted functions no checked platform module
     /// binds while checking continues), or now.
     fn eligibility(self: *BoxyObjects, artifact: *const Artifact) enum { never, later, now } {
-        if (artifact.platform_type_inputs.requirements.len != 0) return .never;
+        if (artifact.platform_type_inputs.requirements.items().len != 0) return .never;
         if (Coordinator.unevaluatedRequestCount(artifact, .boxy) != 0) return .later;
-        if (artifact.hosted_procs.procs.len != 0 and self.platformOf(artifact) == null) {
+        if (artifact.hosted_procs.procs.items().len != 0 and self.platformOf(artifact) == null) {
             return if (self.coordinator.frontend_complete) .never else .later;
         }
         return .now;
@@ -1817,7 +1817,7 @@ const BoxyObjects = struct {
     /// finished before anything keys them.
     fn addToDigests(self: *BoxyObjects, artifact: *const Artifact) Error!void {
         if (!try self.digests.add(artifact)) return;
-        for (artifact.direct_import_module_keys) |key| {
+        for (artifact.direct_import_module_keys.items()) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
             try self.addToDigests(imported);
         }
@@ -1913,7 +1913,7 @@ const BoxyObjects = struct {
                 return;
             },
             .later => {
-                if (artifact.hosted_procs.procs.len != 0) try self.unbound_hosted.append(gpa, artifact);
+                if (artifact.hosted_procs.procs.items().len != 0) try self.unbound_hosted.append(gpa, artifact);
                 return;
             },
             .now => {},
@@ -1924,7 +1924,7 @@ const BoxyObjects = struct {
         errdefer task.prepared.deinit(gpa);
         try self.units.put(gpa, artifact.key.bytes, task);
         errdefer _ = self.units.remove(artifact.key.bytes);
-        for (artifact.direct_import_module_keys) |key| {
+        for (artifact.direct_import_module_keys.items()) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
             try self.offer(imported);
             if (self.records.contains(imported.key.bytes)) continue;
@@ -1944,7 +1944,7 @@ const BoxyObjects = struct {
     /// evaluating its roots runs against.
     fn offerClosure(self: *BoxyObjects, module: *const Artifact) Error!void {
         try self.offer(&self.coordinator.builtin_modules.checked_artifact);
-        for (module.direct_import_module_keys) |key| {
+        for (module.direct_import_module_keys.items()) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
             try self.offer(imported);
         }
@@ -2914,7 +2914,7 @@ pub const Coordinator = struct {
 
         try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, &self.builtin_modules.checked_artifact);
 
-        for (root_artifact.lowering_visibility.module_ids) |key| {
+        for (root_artifact.lowering_visibility.module_ids.items()) |key| {
             if (rootRelationContainsArtifact(root_artifact, key)) continue;
             try self.appendPublicApiDependencyViewByKey(&views, allocator, root_artifact, key);
         }
@@ -2957,7 +2957,7 @@ pub const Coordinator = struct {
                 try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
             }
 
-            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+            for (view.public_api_dependencies.type_owner_artifacts.items()) |dependency_key| {
                 const artifact = self.checkedArtifactByKey(dependency_key) orelse base.invariant("compile.coordinator missing type-owner dependency checked artifact", .{});
                 try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
             }
@@ -2970,7 +2970,7 @@ pub const Coordinator = struct {
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         key: check.CheckedArtifact.ModuleId,
     ) bool {
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
+        for (root_artifact.platform_required_bindings.bindings.items()) |binding| {
             if (std.mem.eql(u8, &binding.app_value.artifact.bytes, &key.bytes)) return true;
         }
         return false;
@@ -3036,7 +3036,7 @@ pub const Coordinator = struct {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
             if (platform.evaluation_state == .prepared) {
-                if (platform.root_requests.compile_time_requests.len == 0) {
+                if (platform.root_requests.compile_time_requests.items().len == 0) {
                     // No evaluator is needed to finish this parametric module.
                     // App checking and runtime roots still share one program.
                     var stores = std.ArrayList(PendingStore).empty;
@@ -3301,8 +3301,8 @@ pub const Coordinator = struct {
         if (self.findRootModule(.platform)) |platform_root| {
             if (platform_root.mod.checkedArtifact()) |artifact| {
                 if (artifact.checking_context_identity.platform_app_relation != null or
-                    artifact.root_requests.requests.len > 0 or
-                    artifact.provided_exports.exports.len > 0)
+                    artifact.root_requests.requests.items().len > 0 or
+                    artifact.provided_exports.exports.items().len > 0)
                 {
                     return artifact;
                 }
@@ -3324,7 +3324,7 @@ pub const Coordinator = struct {
         var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         errdefer views.deinit(allocator);
 
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
+        for (root_artifact.platform_required_bindings.bindings.items()) |binding| {
             const artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse base.invariant("compile.coordinator.collectRelationArtifactViews missing app artifact for platform relation", .{});
             try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
         }
@@ -3710,7 +3710,7 @@ pub const Coordinator = struct {
                 const entry = try dependencies.getOrPut(key.bytes);
                 if (entry.found_existing) continue;
                 const artifact = self.checkedArtifactByKey(key.digest()).?;
-                try pending.appendSlice(self.gpa, artifact.direct_import_module_keys);
+                try pending.appendSlice(self.gpa, artifact.direct_import_module_keys.items());
             }
         }
         // A finalized artifact whose requested roots earlier compilations
@@ -3728,7 +3728,7 @@ pub const Coordinator = struct {
                 // The platform-alone pass completed every demanded value.
                 // A different strategy can still need its function form.
                 if (artifact.hasUnboundPlatformRequirements()) {
-                    for (artifact.root_requests.compile_time_requests) |request| {
+                    for (artifact.root_requests.compile_time_requests.items()) |request| {
                         const root = artifact.compile_time_roots.root(request.compile_time_root.get().?);
                         if (root.needsEvaluation(self.specialization_strategy) and root.boxy_value == null and
                             (root.payload == .pending or root.payload == .unevaluated))
@@ -3783,13 +3783,13 @@ pub const Coordinator = struct {
         var cached_artifacts = self.checked_artifact_index.iterator();
         while (cached_artifacts.next()) |entry| {
             const artifact = self.checkedArtifactByKey(.{ .bytes = entry.key_ptr.* }).?;
-            if (replay_cached_debug and artifact.evaluation_state == .finalized and artifact.compile_time_debug.entries.len != 0)
+            if (replay_cached_debug and artifact.evaluation_state == .finalized and artifact.compile_time_debug.entries.items().len != 0)
                 try cached_debug_modules.append(self.gpa, artifact);
         }
         if (extra_cached) |artifact| {
             // A reopened composition replays its stored observations as one
             // of the modules this evaluation finalizes.
-            if (artifact.evaluation_state == .finalized and artifact.compile_time_debug.entries.len != 0) try cached_debug_modules.append(self.gpa, artifact);
+            if (artifact.evaluation_state == .finalized and artifact.compile_time_debug.entries.items().len != 0) try cached_debug_modules.append(self.gpa, artifact);
         }
         // An explicit runtime root set (a command that names its own roots,
         // such as `roc test`) is its own program. Every other command
@@ -3833,7 +3833,7 @@ pub const Coordinator = struct {
         // The program's entrypoint roots, with everything any runtime
         // consumer of them materializes, whatever the command.
         const entrypoint_requests = if (!explicit_runtime and program_root != null)
-            try lir.CheckedPipeline.selectPlatformEntrypointRoots(self.gpa, root.root_requests.runtime_requests)
+            try lir.CheckedPipeline.selectPlatformEntrypointRoots(self.gpa, root.root_requests.runtime_requests.items())
         else
             &.{};
         defer if (!explicit_runtime and program_root != null) self.gpa.free(entrypoint_requests);
@@ -3854,7 +3854,7 @@ pub const Coordinator = struct {
             for (test_modules) |key| {
                 const artifact = self.checkedArtifactByKey(key.digest()) orelse
                     coordinatorInvariant("program test module has no checked module data", .{});
-                for (artifact.root_requests.requests) |request| {
+                for (artifact.root_requests.requests.items()) |request| {
                     // An expect reading a platform requirement runs only once
                     // the platform has its app; until then it demands nothing.
                     if (request.kind != .test_expect or request.requires_pairing) continue;
@@ -3957,7 +3957,7 @@ pub const Coordinator = struct {
     /// (`CheckedModuleArtifact.hasUnevaluatedRequests`).
     fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy) usize {
         var count: usize = 0;
-        for (artifact.root_requests.compile_time_requests) |request| {
+        for (artifact.root_requests.compile_time_requests.items()) |request| {
             const root = request.compile_time_root.get() orelse continue;
             if (artifact.compile_time_roots.root(root).needsEvaluation(strategy)) count += 1;
         }
@@ -4140,7 +4140,7 @@ pub const Coordinator = struct {
     /// Whether any requested root of `artifact` is unevaluated under some
     /// specialization strategy, so a later compilation can reopen it.
     fn hasUnevaluatedRequestsUnderAnyStrategy(artifact: *const CheckedArtifact.CheckedModuleArtifact) bool {
-        for (artifact.root_requests.compile_time_requests) |request| {
+        for (artifact.root_requests.compile_time_requests.items()) |request| {
             const root = request.compile_time_root.get() orelse continue;
             const payload = artifact.compile_time_roots.root(root).payload;
             if (payload == .unevaluated or payload == .pending) return true;
@@ -4951,7 +4951,7 @@ pub const Coordinator = struct {
             platform_keys.allocator,
             platform_keys.io,
             platform.moduleEnvConst(),
-            platform.checked_procedure_templates.promoted,
+            platform.checked_procedure_templates.promoted.items(),
         ) catch {
             synthesized_keys.destroy();
             return null;
@@ -6481,7 +6481,7 @@ pub const Coordinator = struct {
     fn rootSees(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact) bool {
         if (!self.checked_program) return false;
         const root = self.executableRootCheckedArtifact();
-        for (root.lowering_visibility.module_ids) |key| {
+        for (root.lowering_visibility.module_ids.items()) |key| {
             if (std.mem.eql(u8, &key.bytes, &artifact.key.bytes)) return true;
         }
         return false;
@@ -8487,7 +8487,7 @@ fn compileAppRootIdentityExpecting(
     const root = coord.executableRootCheckedArtifact();
     for (expected_constants) |expected| {
         var found = false;
-        for (root.top_level_values.entries) |entry| {
+        for (root.top_level_values.entries.items()) |entry| {
             if (!std.mem.eql(u8, root.canonical_names.exportNameText(entry.source_name), expected.name)) continue;
             const state = root.const_templates.get(entry.value.const_ref).state;
             try std.testing.expect(state == .stored_const);
@@ -8511,8 +8511,8 @@ fn compileAppRootIdentityExpecting(
         }
     }
     var direct_required_call_count: usize = 0;
-    for (root.resolved_value_refs.call_direct_targets) |call| {
-        if (root.resolved_value_refs.records[@backingInt(call.target)].ref == .platform_required_proc) {
+    for (root.resolved_value_refs.call_direct_targets.items()) |call| {
+        if (root.resolved_value_refs.records.items()[@backingInt(call.target)].ref == .platform_required_proc) {
             direct_required_call_count += 1;
         }
     }
@@ -8521,8 +8521,8 @@ fn compileAppRootIdentityExpecting(
         if (template.forwarded_lookup != .none) forwarded_callable_count += 1;
     }
     return .{
-        .compile_time_request_count = root.root_requests.compile_time_requests.len,
-        .compile_time_debug_count = root.compile_time_debug.entries.len,
+        .compile_time_request_count = root.root_requests.compile_time_requests.items().len,
+        .compile_time_debug_count = root.compile_time_debug.entries.items().len,
         .artifact_key = root.codeGenerationKey().bytes,
         .module_identity_hash = root.module_identity.stable_hash,
         .cache_hits = coord.getBuildStats().cache_hits,
@@ -8811,7 +8811,7 @@ test "prepared checked imports finalize after frontend and release abandoned dia
         const artifact = helper_mod.checkedArtifact().?;
         try std.testing.expectEqual(.prepared, artifact.evaluation_state);
         try std.testing.expect(helper_mod.pending_evaluation != null);
-        try std.testing.expect(artifact.root_requests.compile_time_requests.len > 0);
+        try std.testing.expect(artifact.root_requests.compile_time_requests.items().len > 0);
         try std.testing.expectEqual(@as(usize, 0), artifact.const_store.values.items().len);
         const imported = CheckedArtifact.importedView(artifact);
         try std.testing.expect(imported.exported_const_templates.templates.len > 0);
@@ -9074,7 +9074,7 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
     }
     var values = std.ArrayList(?i64).empty;
     errdefer values.deinit(allocator);
-    for (app.compile_time_roots.roots) |root| {
+    for (app.compile_time_roots.roots.items()) |root| {
         const def = switch (root.source) {
             .def => |def| def,
             .hoisted, .expr, .statement, .required_binding, .literal => continue,
@@ -9393,8 +9393,8 @@ test "app artifact records platform requirement solutions from checking" {
     const table = &app_artifact.platform_requirement_solutions;
 
     // One requirement (`prog`), a record of functions, so a const value.
-    try std.testing.expectEqual(@as(usize, 1), table.solutions.len);
-    const solution = table.solutions[0];
+    try std.testing.expectEqual(@as(usize, 1), table.solutions.items().len);
+    const solution = table.solutions.items()[0];
     try std.testing.expectEqual(@as(u32, 0), solution.requires_idx);
     try std.testing.expectEqual(check.CheckedArtifact.PlatformRequiredValueKind.const_value, solution.value_kind);
 
@@ -9622,7 +9622,7 @@ test "erroneous function requirement publishes an explicit checked-error outcome
     try std.testing.expect(coord.hasUserErrors());
 
     const app_artifact = coord.appRootCheckedArtifact();
-    try std.testing.expectEqual(@as(usize, 0), app_artifact.platform_requirement_solutions.solutions.len);
+    try std.testing.expectEqual(@as(usize, 0), app_artifact.platform_requirement_solutions.solutions.items().len);
 }
 
 fn writeAliasBackingRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
@@ -9709,11 +9709,11 @@ test "platform requirement relation specializes identity reached through app ali
 
     const platform_artifact = coord.executableRootCheckedArtifact();
     var platform_hoisted_constants: usize = 0;
-    for (platform_artifact.compile_time_roots.roots) |root| {
+    for (platform_artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind == .hoisted_constant) platform_hoisted_constants += 1;
     }
     try std.testing.expect(platform_hoisted_constants > 0);
-    const relations = platform_artifact.platform_requirement_relations.relations;
+    const relations = platform_artifact.platform_requirement_relations.relations.items();
     try std.testing.expectEqual(@as(usize, 1), relations.len);
 
     const relation = relations[0];
@@ -9891,8 +9891,8 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     // platform root defers its publication like any other app build.
     const app_artifact = coord.appRootCheckedArtifact();
     const table = &app_artifact.platform_requirement_solutions;
-    try std.testing.expectEqual(@as(usize, 1), table.solutions.len);
-    const solution = table.solutions[0];
+    try std.testing.expectEqual(@as(usize, 1), table.solutions.items().len);
+    const solution = table.solutions.items()[0];
     try std.testing.expectEqual(@as(u32, 1), solution.identity_len);
     const identity_payload = app_artifact.checked_types.payload(table.identitySlice(solution)[0]);
     try std.testing.expect(identity_payload == .alias);
@@ -9907,7 +9907,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     try std.testing.expectEqual(@as(u32, 1), coord.platform_root_publish_count);
 
     const platform_artifact = coord.executableRootCheckedArtifact();
-    const relations = platform_artifact.platform_requirement_relations.relations;
+    const relations = platform_artifact.platform_requirement_relations.relations.items();
     try std.testing.expectEqual(@as(usize, 1), relations.len);
     try std.testing.expect(platform_artifact.checked_types.payload(relations[0].requested_source_ty_payload) != .pending);
 }
@@ -10040,7 +10040,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
                 if (std.mem.eql(u8, &seen, &view.key.bytes)) continue :views;
             }
             try seen_keys.append(allocator, view.key.bytes);
-            for (view.hosted_procs.procs) |proc| {
+            for (view.hosted_procs.procs.items()) |proc| {
                 try symbols.append(allocator, view.canonical_names.externalSymbolNameText(proc.external_symbol_name));
                 try proc_refs.append(allocator, proc.proc);
             }
@@ -10061,7 +10061,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
     for (view_groups) |views| {
         for (views) |view| {
             if (view.module_identity.kind != .platform) continue;
-            for (view.hosted_bindings.bindings) |binding| {
+            for (view.hosted_bindings.bindings.items()) |binding| {
                 const symbol = view.canonical_names.externalSymbolNameText(binding.external_symbol_name);
                 if (first_target) |target| {
                     try std.testing.expect(!std.mem.eql(u8, &target.bytes, &binding.target_checked_module.bytes));
@@ -10106,7 +10106,7 @@ fn hashPatternExtractionRegionsForView(
     count: *usize,
     view: check.CheckedArtifact.ImportedModuleView,
 ) PatternExtractionRegionStatsError!void {
-    for (view.compile_time_roots.roots) |root| {
+    for (view.compile_time_roots.roots.items()) |root| {
         const is_selected_root = switch (root.kind) {
             .hoisted_constant,
             .hoisted_validation,
@@ -10205,7 +10205,7 @@ fn hashExhaustivenessSitesForView(
     count: *usize,
     view: check.CheckedArtifact.ImportedModuleView,
 ) void {
-    for (view.exhaustiveness_sites.sites) |site| {
+    for (view.exhaustiveness_sites.sites.items()) |site| {
         count.* += 1;
         hasher.update(&view.key.bytes);
         hashU32IntoSha256(hasher, @backingInt(site.id));
@@ -10270,9 +10270,9 @@ fn countHoistedConstants(
     imports: []const check.CheckedArtifact.ImportedModuleView,
     relations: []const check.CheckedArtifact.ImportedModuleView,
 ) usize {
-    var count = root.hoisted_constants.entries.len;
-    for (imports) |view| count += view.hoisted_constants.entries.len;
-    for (relations) |view| count += view.hoisted_constants.entries.len;
+    var count = root.hoisted_constants.entries.items().len;
+    for (imports) |view| count += view.hoisted_constants.entries.items().len;
+    for (relations) |view| count += view.hoisted_constants.entries.items().len;
     return count;
 }
 
@@ -10283,16 +10283,16 @@ fn countHoistedValidations(
 ) usize {
     var count: usize = 0;
     const root_view = check.CheckedArtifact.importedView(root);
-    for (root_view.compile_time_roots.roots) |entry| {
+    for (root_view.compile_time_roots.roots.items()) |entry| {
         if (entry.kind == .hoisted_validation) count += 1;
     }
     for (imports) |view| {
-        for (view.compile_time_roots.roots) |entry| {
+        for (view.compile_time_roots.roots.items()) |entry| {
             if (entry.kind == .hoisted_validation) count += 1;
         }
     }
     for (relations) |view| {
-        for (view.compile_time_roots.roots) |entry| {
+        for (view.compile_time_roots.roots.items()) |entry| {
             if (entry.kind == .hoisted_validation) count += 1;
         }
     }
@@ -13090,7 +13090,7 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
             const app = coord.appRootCheckedArtifact();
             var roots = std.ArrayList(CheckedArtifact.RootRequest).empty;
             defer roots.deinit(allocator);
-            for (app.root_requests.requests) |request| {
+            for (app.root_requests.requests.items()) |request| {
                 if (request.kind == .test_expect) try roots.append(allocator, request);
             }
             try std.testing.expectEqual(@as(usize, 1), roots.items.len);
@@ -13250,7 +13250,7 @@ test "successful compile-time dbg replays from warm checked cache without evalua
         const maybe_artifact = coord.checkedArtifactByKey(helper_key.?.digest());
         try std.testing.expect(maybe_artifact != null);
         const artifact = maybe_artifact.?;
-        try std.testing.expectEqual(@as(usize, 1), artifact.compile_time_debug.entries.len);
+        try std.testing.expectEqual(@as(usize, 1), artifact.compile_time_debug.entries.items().len);
         try std.testing.expect(std.mem.find(u8, capture.bytes[0..capture.len], "successful cached dbg") != null);
         if (run_index == 1) {
             try std.testing.expect(coord.cache_hits > 0);
@@ -13585,7 +13585,7 @@ test "initializer evaluation after edits preserves errors observations and test 
             defer roots.deinit(gpa);
             var metadata = std.ArrayList(lir.CheckedPipeline.RootTestPlanMetadata).empty;
             defer metadata.deinit(gpa);
-            for (app.root_requests.requests) |request| {
+            for (app.root_requests.requests.items()) |request| {
                 if (request.kind != .test_expect) continue;
                 const index: u32 = @intCast(roots.items.len);
                 try roots.append(gpa, request);
@@ -13755,7 +13755,7 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
                 if (std.mem.eql(u8, artifact.moduleEnvConst().module_name, "Schema")) found = artifact;
             }
             const artifact = found orelse return error.TestUnexpectedResult;
-            const root_id = root: for (artifact.compile_time_roots.roots) |root| {
+            const root_id = root: for (artifact.compile_time_roots.roots.items()) |root| {
                 if (root.source != .def) continue;
                 const env = artifact.moduleEnvConst();
                 const pattern = env.store.getPattern(env.store.getDef(root.source.def).pattern);

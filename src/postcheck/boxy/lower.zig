@@ -827,7 +827,7 @@ pub const Program = struct {
         const view = self.module(module_index);
         const bodies = view.bodies();
         try bodies.demandIndex();
-        for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
+        for (view.view.checked_procedure_templates.dispatch_scopes.items(), 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
             switch (bodies.exprData(scope.checked_expr)) {
@@ -835,7 +835,7 @@ pub const Program = struct {
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
-        for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
+        for (view.view.nested_proc_sites.sites.items(), 0..) |site, site_index| {
             const site_expr = site.checked_expr.get() orelse continue;
             try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
             // A closure's site is also its lambda's, which names its worker.
@@ -849,7 +849,7 @@ pub const Program = struct {
         }
         // A method of a type declared in a function body is a local
         // procedure its dispatches call, each at its own instantiation.
-        for (view.view.method_registry.entries) |entry| {
+        for (view.view.method_registry.entries.items()) |entry| {
             const target = entry.target orelse continue;
             switch (target.kind) {
                 .local_proc => |local| {
@@ -870,7 +870,7 @@ pub const Program = struct {
         }
         // A local procedure's uses all reach it through its binding, so its
         // own scheme's arguments are passed per call.
-        for (view.view.resolved_value_refs.records) |record| {
+        for (view.view.resolved_value_refs.records.items()) |record| {
             const local = switch (record.ref) {
                 .local_proc => |local| local,
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
@@ -884,9 +884,9 @@ pub const Program = struct {
         }
         self.body_indexed[module_slot] = true;
         base.dev_diagnostics.countTestWork(.boxy_body_index_prepared_modules, 1);
-        base.dev_diagnostics.countTestWork(.boxy_body_index_rows, view.view.checked_procedure_templates.dispatch_scopes.len +
-            view.view.nested_proc_sites.sites.len + bodies.recordOmittedDefaults().len +
-            view.view.method_registry.entries.len + view.view.resolved_value_refs.records.len);
+        base.dev_diagnostics.countTestWork(.boxy_body_index_rows, view.view.checked_procedure_templates.dispatch_scopes.items().len +
+            view.view.nested_proc_sites.sites.items().len + bodies.recordOmittedDefaults().len +
+            view.view.method_registry.entries.items().len + view.view.resolved_value_refs.records.items().len);
     }
 
     pub fn localScope(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!?checked.DispatchScopeId {
@@ -934,7 +934,7 @@ pub const Program = struct {
             .module => |unit| unit,
         };
         if (index == self.modules.views.items[0].index) return true;
-        return unit.root and self.module(index).view.platform_type_inputs.requirements.len != 0;
+        return unit.root and self.module(index).view.platform_type_inputs.requirements.items().len != 0;
     }
 
     /// The content identity of a module's worker (design.md "Per-Module
@@ -1398,7 +1398,7 @@ pub const Program = struct {
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
         const template = view.view.checked_procedure_templates.templates.items()[@backingInt(template_id)];
-        const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
+        const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool.items(), template.scheme_vars);
         // A sealed variable (design.md "Sealed Result Rows"), which checking
         // records (`CheckedProcedureTemplate.sealed_slots`), is no hidden
         // input: it seals to the empty row wherever the body mentions it, and
@@ -1590,7 +1590,7 @@ pub const Program = struct {
             var methods: std.AutoHashMapUnmanaged(TemplateKey, void) = .empty;
             errdefer methods.deinit(self.allocator);
             const builtin = self.builtinModule();
-            for (builtin.view.method_registry.entries) |entry| {
+            for (builtin.view.method_registry.entries.items()) |entry| {
                 switch (entry.key.owner) {
                     .builtin => |owner| if (owner != .list) continue,
                     .nominal => continue,
@@ -2333,7 +2333,7 @@ pub const Program = struct {
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
-        const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items()[@backingInt(key.template)].evidence_params);
+        const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.templates.items()[@backingInt(key.template)].evidence_params);
         const env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = bound };
         for (target_worker.dictionary_params, requirements) |param_index, *requirement| {
             const param = params[param_index];
@@ -2489,7 +2489,7 @@ pub const Program = struct {
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
-        const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items()[@backingInt(key.template)].evidence_params);
+        const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.templates.items()[@backingInt(key.template)].evidence_params);
         const params = try self.allocator.alloc(static_dispatch.EvidenceParamRecord, target_worker.dictionary_params.len);
         defer self.allocator.free(params);
         for (target_worker.dictionary_params, params) |param_index, *param| param.* = all_params[param_index];
@@ -2740,8 +2740,8 @@ pub const Program = struct {
     /// procedure refers to, is a top-level procedure and takes none either.
     pub fn runtimeCaptures(self: *Program, view: *const types.ModuleView, site_index: anytype) Allocator.Error![]const checked.CheckedCapture {
         const table = view.view.nested_proc_sites;
-        const span = table.sites[site_index].runtime_captures;
-        const listed = table.runtime_captures[span.start..][0..span.len];
+        const span = table.sites.items()[site_index].runtime_captures;
+        const listed = table.runtime_captures.items()[span.start..][0..span.len];
         const bodies = view.bodies();
         try bodies.demandIndex();
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
@@ -3742,7 +3742,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         // Checked procedure aliases forward directly to their targets. They
         // have no evaluated value, so their evaluator wrappers are not part
         // of the module's runtime interface.
-        const forwarded_roots = try program.allocator.alloc(bool, view.view.compile_time_roots.roots.len);
+        const forwarded_roots = try program.allocator.alloc(bool, view.view.compile_time_roots.roots.items().len);
         defer program.allocator.free(forwarded_roots);
         @memset(forwarded_roots, false);
         for (view.view.callable_eval_templates.templates) |callable| {
@@ -3761,7 +3761,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
                 for (std.enums.values(ListIntItem)) |item| _ = try program.listIntTemplateWorker(view.index, @fromBackingInt(@intCast(index)), item);
             }
         }
-        for (view.view.method_registry.entries) |entry| {
+        for (view.view.method_registry.entries.items()) |entry| {
             const target = entry.target orelse continue;
             const template = switch (target.kind) {
                 .procedure => |procedure| procedure.template,
@@ -3860,7 +3860,7 @@ fn initHosted(program: *Program) Allocator.Error!void {
     var platform: ?*const types.ModuleView = null;
     for (program.modules.views.items) |*view| {
         if (view.view.module_identity.kind == .platform) platform = view;
-        for (view.view.hosted_procs.procs) |proc| {
+        for (view.view.hosted_procs.procs.items()) |proc| {
             const owner = program.moduleByKey(.{ .bytes = proc.template.artifact.bytes });
             const key: TemplateKey = .{ .module = owner.index, .template = proc.template.template };
             try program.hosted.put(allocator, key, .{
@@ -3872,7 +3872,7 @@ fn initHosted(program: *Program) Allocator.Error!void {
         }
     }
     if (platform) |view| {
-        for (view.view.hosted_bindings.bindings, 0..) |binding, index| {
+        for (view.view.hosted_bindings.bindings.items(), 0..) |binding, index| {
             const target = switch (program.input.unit) {
                 .program => program.moduleByKey(binding.target_checked_module),
                 // A unit binds the hosted functions of the modules it lowers;
@@ -3906,15 +3906,15 @@ fn initHosted(program: *Program) Allocator.Error!void {
 /// the app provides for its requirements.
 fn solvePlatformIdentities(program: *Program) Allocator.Error!void {
     const platform = for (program.modules.views.items) |*view| {
-        if (view.view.platform_type_inputs.requirements.len != 0) break view;
+        if (view.view.platform_type_inputs.requirements.items().len != 0) break view;
     } else return;
     for (program.modules.views.items) |*app| {
         const table = app.view.platform_requirement_solutions;
-        for (table.solutions) |solution| {
-            if (solution.requires_idx >= platform.view.platform_type_inputs.requirements.len) invariant("an app solves a requirement its platform does not declare");
-            const requirement = platform.view.platform_type_inputs.requirements[solution.requires_idx];
-            const formals = platform.view.platform_type_inputs.identities[requirement.identities.start..][0..requirement.identities.len];
-            const solved = table.identity_solutions[solution.identity_start..][0..solution.identity_len];
+        for (table.solutions.items()) |solution| {
+            if (solution.requires_idx >= platform.view.platform_type_inputs.requirements.items().len) invariant("an app solves a requirement its platform does not declare");
+            const requirement = platform.view.platform_type_inputs.requirements.items()[solution.requires_idx];
+            const formals = platform.view.platform_type_inputs.identities.items()[requirement.identities.start..][0..requirement.identities.len];
+            const solved = table.identity_solutions.items()[solution.identity_start..][0..solution.identity_len];
             if (formals.len != solved.len) invariant("an app's requirement solution differs from its requirement's identity variables");
             for (formals, solved) |formal, app_ty| {
                 const ty = try program.converter().convert(app.index, app_ty, .{ .module = app.index, .vars = &.{}, .bound = &.{} });

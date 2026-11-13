@@ -838,13 +838,18 @@ corrupt table whose occupied cells outnumber its count, or a cell naming an
 entry that does not exist, is not detected.
 
 The stores of a checked artifact relocated beside its env, and of a pairing
-entry, load over the entry's bytes the same way. A store's list fields are
-`SafeList`s loaded borrowing the entry, so growth copies and `deinit` frees
-nothing borrowed; `SliceStoreSerde` rejects a `std.ArrayList` field at compile
-time, since one over loaded bytes would hand them to an allocator on growth or
-`deinit`. A store's plain slice fields have no growth operation; a loaded
-artifact frees only its own buffer (`serialized_backing`), never a sub-store's
-slices, which alias it. A loaded store whose build-only dedup tables are not
+entry, load over the entry's bytes the same way. Every list field of such a
+store, and the artifact's own `direct_import_module_keys`, is a `SafeList` that
+a build owns and a load borrows from the entry, so growth copies and `deinit`
+frees nothing borrowed. `SliceStoreSerde` rejects a `std.ArrayList` field at
+compile time, since one over loaded bytes would hand them to an allocator on
+growth or `deinit`, and it rejects a raw slice field, since a slice cannot
+record whether it borrows. A built and a loaded artifact are therefore
+released by the same `deinit`: every sub-store's `deinit` runs, and a loaded
+artifact then releases its buffer (`serialized_backing`) last, after every list
+that borrowed it. Reopening a loaded artifact for evaluation copies its
+evaluation columns into storage its owning allocator owns, so its `deinit`
+frees them like a built artifact's. A loaded store whose build-only dedup tables are not
 stored (a checked type store's interning tables, a const store's blob index)
 takes no new entries.
 

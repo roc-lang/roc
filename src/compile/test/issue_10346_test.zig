@@ -31,6 +31,6 @@ test "issue 10346: unsupported generated method warning survives publication" {
         check.problem.Problem.Tag.unsupported_generated_method,
         std.meta.activeTag(resources.checker.problems.problems.items[0]),
     );
-    try std.testing.expectEqual(@as(usize, 0), resources.checked_artifact.method_registry.entries.len);
-    try std.testing.expectEqual(@as(usize, 0), resources.checked_artifact.static_dispatch_plans.plans.len);
+    try std.testing.expectEqual(@as(usize, 0), resources.checked_artifact.method_registry.entries.items().len);
+    try std.testing.expectEqual(@as(usize, 0), resources.checked_artifact.static_dispatch_plans.plans.items().len);
 }

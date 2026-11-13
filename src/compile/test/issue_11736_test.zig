@@ -176,7 +176,7 @@ fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile
         const platform = coord.executableRootCheckedArtifact();
         const bodies = platform.bodies();
         try bodies.demandIndex();
-        for (platform.resolved_value_refs.records) |ref| {
+        for (platform.resolved_value_refs.records.items()) |ref| {
             if (ref.ref != .platform_required_checked_error) continue;
             try std.testing.expect(bodies.exprData(ref.expr) == .runtime_error);
             try std.testing.expect(try bodies.exprDiverges(ref.expr, .run));

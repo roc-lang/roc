@@ -252,7 +252,7 @@ test "checking evaluates a generic function's conversion at its concrete runtime
     // can register a literal root, so nothing is specialized for discovery.
     const root = checked.coord.appRootCheckedArtifact();
     var stored: usize = 0;
-    for (root.compile_time_roots.roots) |compile_time_root| {
+    for (root.compile_time_roots.roots.items()) |compile_time_root| {
         if (compile_time_root.kind != .literal_argument) continue;
         try std.testing.expect(compile_time_root.payload == .const_node);
         stored += 1;

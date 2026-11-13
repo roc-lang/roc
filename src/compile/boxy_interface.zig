@@ -167,7 +167,7 @@ pub const Digests = struct {
     fn interfaceOfLocked(self: *Digests, artifact: *const Artifact) Allocator.Error!Digest {
         if (self.interfaces.get(artifact.key.bytes)) |known| return known;
         var hasher = (try self.preparedOf(artifact)).interface;
-        for (artifact.direct_import_module_keys) |key| {
+        for (artifact.direct_import_module_keys.items()) |key| {
             const imported = self.artifactOf(key.bytes);
             hasher.update(&try self.interfaceOfLocked(imported));
         }
@@ -195,14 +195,14 @@ pub const Digests = struct {
         switch (part) {
             .name => hasher.update(&self.nameOf(artifact.key.bytes)),
             .checking => hasher.update(&artifact.moduleEnvConst().checking_dependency.digest),
-            .templates => for (artifact.exported_procedure_templates.templates) |exported| self.hashTemplateRef(hasher, artifact, exported.template),
+            .templates => for (artifact.exported_procedure_templates.templates.items()) |exported| self.hashTemplateRef(hasher, artifact, exported.template),
             .bindings => self.hashBindings(hasher, artifact),
             .methods => self.hashMethods(hasher, artifact),
             .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(try artifact.bodies().defaultExprCount(self.gpa))))),
             .nominals => hashNominals(hasher, artifact),
             .consts => try self.hashConsts(hasher, artifact),
             .values => try self.hashStoredValues(hasher, artifact, .read_by_importers),
-            .imports => for (artifact.direct_import_module_keys) |key| {
+            .imports => for (artifact.direct_import_module_keys.items()) |key| {
                 const imported = self.artifactOf(key.bytes);
                 hasher.update(&try self.interfaceOfLocked(imported));
             },
@@ -239,7 +239,7 @@ pub const Digests = struct {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
         var hasher = (try self.preparedOf(artifact)).object_input;
-        for (artifact.direct_import_module_keys) |key| {
+        for (artifact.direct_import_module_keys.items()) |key| {
             const imported = self.artifactOf(key.bytes);
             hasher.update(&try self.interfaceOfLocked(imported));
         }
@@ -256,7 +256,7 @@ pub const Digests = struct {
         var values = Sha256.init(.{});
         try self.hashStoredValues(&values, artifact, .every_root);
         var imports = Sha256.init(.{});
-        for (artifact.direct_import_module_keys) |key| {
+        for (artifact.direct_import_module_keys.items()) |key| {
             const imported = self.artifactOf(key.bytes);
             imports.update(&try self.interfaceOfLocked(imported));
         }
@@ -276,7 +276,7 @@ pub const Digests = struct {
 
     /// Called with the mutex held.
     fn hashImportedExports(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) void {
-        for (artifact.direct_import_module_keys) |key| {
+        for (artifact.direct_import_module_keys.items()) |key| {
             if (self.exports.get(key.bytes)) |digest| hasher.update(&digest);
         }
     }
@@ -287,7 +287,7 @@ pub const Digests = struct {
     /// they name, and the stored values they restore.
     fn hashPublicSurface(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         hasher.update(&artifact.moduleEnvConst().checking_dependency.digest);
-        for (artifact.exported_procedure_templates.templates) |exported| {
+        for (artifact.exported_procedure_templates.templates.items()) |exported| {
             self.hashTemplateRef(hasher, artifact, exported.template);
         }
         self.hashBindings(hasher, artifact);
@@ -299,7 +299,7 @@ pub const Digests = struct {
     }
 
     fn hashBindings(self: *Digests, hasher: *Sha256, artifact: *const Artifact) void {
-        for (artifact.exported_procedure_bindings.bindings) |binding| {
+        for (artifact.exported_procedure_bindings.bindings.items()) |binding| {
             hashTag(hasher, @tagName(std.meta.activeTag(binding.body)));
             switch (binding.body) {
                 .direct_template => |direct| switch (direct.template) {
@@ -312,7 +312,7 @@ pub const Digests = struct {
     }
 
     fn hashMethods(self: *Digests, hasher: *Sha256, artifact: *const Artifact) void {
-        for (artifact.method_registry.entries) |entry| {
+        for (artifact.method_registry.entries.items()) |entry| {
             const target = entry.target orelse {
                 hashTag(hasher, "rejected");
                 continue;
@@ -334,7 +334,7 @@ pub const Digests = struct {
     }
 
     fn hashConsts(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
-        const exported_consts = artifact.exported_const_templates.templates;
+        const exported_consts = artifact.exported_const_templates.templates.items();
         for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
         for (artifact.const_templates.templates.items()) |template| switch (template.owner) {
             .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),
@@ -352,7 +352,7 @@ pub const Digests = struct {
         const templates = &artifact.checked_procedure_templates;
         const template = templates.templates.items()[@backingInt(ref.template)];
         hasher.update(std.mem.asBytes(&template.scheme_vars.len));
-        for (templates.evidence_params_pool[template.evidence_params.start..][0..template.evidence_params.len]) |param| {
+        for (templates.evidence_params_pool.items()[template.evidence_params.start..][0..template.evidence_params.len]) |param| {
             hashBytes(hasher, artifact.canonical_names.methodNameText(param.method));
             hasher.update(std.mem.asBytes(&(param.slot.get() orelse @as(u32, std.math.maxInt(u32)))));
         }
@@ -384,7 +384,7 @@ pub const Digests = struct {
     /// The values of `artifact`'s compile-time roots in `scope`. A module's
     /// own object stores all of them.
     fn hashStoredValues(self: *Digests, hasher: *Sha256, artifact: *const Artifact, scope: RootScope) Allocator.Error!void {
-        for (artifact.compile_time_roots.roots) |root| {
+        for (artifact.compile_time_roots.roots.items()) |root| {
             switch (scope) {
                 .every_root => {},
                 .read_by_importers => if (root.kind != .callable_binding and root.boxy_value == null) continue,

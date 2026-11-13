@@ -100,7 +100,7 @@ fn expectConstantListNotRebuilt(target: lir.CheckedPipeline.TargetConfig) (harne
     // Evaluation Under `.lss`").
     try std.testing.expect(session.runtime_stages == .evaluation);
     try std.testing.expect(space_bytes_evaluated: {
-        for (coord.appRootCheckedArtifact().compile_time_roots.roots) |root| {
+        for (coord.appRootCheckedArtifact().compile_time_roots.roots.items()) |root| {
             if (root.kind == .constant and root.payload == .const_node) break :space_bytes_evaluated true;
         }
         break :space_bytes_evaluated false;

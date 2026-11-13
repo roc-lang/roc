@@ -187,12 +187,12 @@ fn buildWithCacheAndTests(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
         .pending_boxy_functions = 0,
         .first_lss_function = null,
         .first_boxy_function = null,
-        .debug_observations = coord.appRootCheckedArtifact().compile_time_debug.entries.len,
+        .debug_observations = coord.appRootCheckedArtifact().compile_time_debug.entries.items().len,
         .static_callables = 0,
         .invalid_static_parts = 0,
         .stored_outside_input = stored_outside_input,
     };
-    for (coord.appRootCheckedArtifact().compile_time_roots.roots) |root| {
+    for (coord.appRootCheckedArtifact().compile_time_roots.roots.items()) |root| {
         if (root.lss_value_has_functions or root.payload == .fn_value) {
             facts.lss_functions += 1;
             if (root.needsEvaluation(.boxy)) facts.pending_boxy_functions += 1;
@@ -219,7 +219,7 @@ fn buildWithCacheAndTests(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
     var expected_stderr: std.ArrayList(u8) = .empty;
     defer expected_stderr.deinit(gpa);
     const debug = coord.appRootCheckedArtifact().compile_time_debug;
-    for (debug.entries) |entry| try expected_stderr.print(gpa, "[dbg] {s}\n", .{debug.message(entry)});
+    for (debug.entries.items()) |entry| try expected_stderr.print(gpa, "[dbg] {s}\n", .{debug.message(entry)});
     try std.testing.expectEqualStrings(expected_stderr.items, stderr_capture.bytes.items);
     facts.program = try out.toOwnedSlice();
     return facts;

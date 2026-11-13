@@ -608,19 +608,28 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 ///   * `SafeList`-backed fields—serialized from `.items()` and loaded as lists
 ///     borrowing the relocated buffer, which copy on their first growth and free
 ///     nothing they borrow. A `std.ArrayList` field is a compile error: it would
-///     hand the buffer to an allocator on growth or `deinit`.
+///     hand the buffer to an allocator on growth or `deinit`. A raw slice field is
+///     a compile error too: a slice cannot record whether it borrows, so a built
+///     and a loaded store could not share one `deinit`.
 /// Every store field must be one of: serialized (a `Serialized` field), the frozen
 /// flag, the allocator, or a declared transient—otherwise a compile error fires, so
-/// a data field accidentally left out of `Serialized` cannot silently vanish. `deinit`
-/// stays hand-written per store: it encodes genuine per-store ownership (slice-free vs
-/// list/interner deinit, frozen gating, allocator retention) that does not belong in
-/// shared infra.
+/// a data field accidentally left out of `Serialized` cannot silently vanish. A
+/// store's `deinit` (`SliceStoreDeinit` or hand-written) is one path for built and
+/// loaded stores alike.
 pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
     comptime {
         // Every Serialized field must map to a store field of the same name.
         for (@typeInfo(Serialized).@"struct".field_names) |sf_name| {
             if (!@hasField(Store, sf_name)) @compileError(
                 "SliceStoreSerde: Serialized field '" ++ sf_name ++ "' has no matching field in " ++ @typeName(Store),
+            );
+        }
+        // A serialized field loads pointing into the buffer, so it must be a list
+        // that records whether it borrows: a raw slice cannot.
+        for (@typeInfo(Serialized).@"struct".field_names) |sf_name| {
+            if (@typeInfo(@FieldType(Store, sf_name)) == .pointer) @compileError(
+                "SliceStoreSerde: store field '" ++ sf_name ++ "' of " ++ @typeName(Store) ++
+                    " is a raw slice, which a load would point into the buffer with no way to tell it from an owned one; make it a SafeList.",
             );
         }
         // Every store field must be accounted for: serialized, the frozen flag, the
@@ -709,20 +718,16 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
     };
 }
 
-/// `deinit` for a store whose ownership is uniform: every slice field is freed,
-/// every field with a `deinit` is deinitialized, and POD fields need nothing. A
-/// `serialized: bool` frozen flag gates the persisted fields (they alias a loaded
-/// buffer) while declared transients are always released. The store is reset to
-/// its default value. A store aliases it as `pub const deinit = SliceStoreDeinit(@This()).deinit;`.
+/// `deinit` for a store whose ownership is uniform: every field with a `deinit`
+/// is deinitialized and POD fields need nothing. Built and loaded stores take
+/// the same path: a list loaded borrowing the buffer frees nothing. The store is
+/// reset to its default value. A store aliases it as
+/// `pub const deinit = SliceStoreDeinit(@This()).deinit;`.
 pub fn SliceStoreDeinit(comptime Store: type) type {
     return struct {
         pub fn deinit(store: *Store, allocator: std.mem.Allocator) void {
-            const flag = comptime frozenFlagField(Store);
-            const frozen = if (comptime flag != null) @field(store, flag.?) else false;
             inline for (@typeInfo(Store).@"struct".field_names) |name| {
-                const is_flag = comptime flag != null and comptimeStrEq(name, flag.?);
-                const persisted = comptime !is_flag and !isTransientField(Store, name);
-                if (!frozen or !persisted) deinitStoreField(&@field(store, name), allocator);
+                deinitStoreField(&@field(store, name), allocator);
             }
             store.* = .{};
         }
@@ -732,10 +737,7 @@ pub fn SliceStoreDeinit(comptime Store: type) type {
 fn deinitStoreField(field: anytype, allocator: std.mem.Allocator) void {
     const FT = @TypeOf(field.*);
     switch (@typeInfo(FT)) {
-        .pointer => |info| {
-            if (info.size != .slice) @compileError("SliceStoreDeinit: " ++ @typeName(FT) ++ " is not a slice");
-            allocator.free(field.*);
-        },
+        .pointer => @compileError("SliceStoreDeinit: " ++ @typeName(FT) ++ " is a raw pointer; store a SafeList"),
         .@"struct" => if (comptime @hasDecl(FT, "deinit")) {
             if (@typeInfo(@TypeOf(FT.deinit)).@"fn".param_types.len == 1) field.deinit() else field.deinit(allocator);
         } else if (comptime ownsPointers(FT)) {

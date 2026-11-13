@@ -250,8 +250,8 @@ pub const CanonicalNameStore = struct {
     proc_base_by_key: std.StringHashMap(ProcBaseKeyRef),
     /// Build-only scratch buffer for proc-base key encoding. NOT serialized.
     scratch_key: std.ArrayList(u8) = .empty,
-    /// True for a store reconstructed from a serialized buffer: its interners
-    /// and `proc_bases` point into buffer-owned memory and must not be freed.
+    /// True for a store reconstructed from a serialized buffer, whose
+    /// build-only `proc_base_by_key` index is empty.
     serialized: bool = false,
     /// Query-only facade; its owner retains every allocation and must remain
     /// alive and unmodified until all borrowed readers have finished.
@@ -333,19 +333,17 @@ pub const CanonicalNameStore = struct {
         }
         if (self.record_field_text_rank) |cache| cache.destroy();
         if (self.tag_text_rank) |cache| cache.destroy();
-        if (!self.serialized) {
-            // Interners no-op their own free when frozen, but `proc_bases` is a
-            // plain SafeList with no frozen flag, so guard the whole owned set.
-            self.module_names.deinit(self.allocator);
-            self.module_identities.deinit(self.allocator);
-            self.type_names.deinit(self.allocator);
-            self.method_names.deinit(self.allocator);
-            self.record_field_labels.deinit(self.allocator);
-            self.tag_labels.deinit(self.allocator);
-            self.export_names.deinit(self.allocator);
-            self.external_symbol_names.deinit(self.allocator);
-            self.proc_bases.deinit(self.allocator);
-        }
+        // A loaded store's interners and `proc_bases` borrow the relocated
+        // buffer, and a borrowed list frees nothing.
+        self.module_names.deinit(self.allocator);
+        self.module_identities.deinit(self.allocator);
+        self.type_names.deinit(self.allocator);
+        self.method_names.deinit(self.allocator);
+        self.record_field_labels.deinit(self.allocator);
+        self.tag_labels.deinit(self.allocator);
+        self.export_names.deinit(self.allocator);
+        self.external_symbol_names.deinit(self.allocator);
+        self.proc_bases.deinit(self.allocator);
         // Build-only fields are always heap-owned (empty on a frozen store).
         freeStringHashMapKeys(ProcBaseKeyRef, &self.proc_base_by_key, self.allocator);
         self.proc_base_by_key.deinit();
