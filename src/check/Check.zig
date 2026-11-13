@@ -3365,8 +3365,9 @@ const WaitingPredeclaredDispatchUse = struct {
 /// still gets a record. Each use site keeps the policy it applies to every
 /// other scheme it instantiates.
 const PredeclaredRecordPolicy = enum {
-    /// Record only a nonempty substitution or a scheme with evidence params,
-    /// as `instantiateVarHelp` decides.
+    /// Record only a nonempty substitution, a scheme with evidence params (as
+    /// `instantiateVarHelp` decides), or a scheme that shares hole variables
+    /// with its body (`PredeclaredSlots.shares_holes`).
     when_needed,
     /// Always record, as `instantiateDispatchTargetMethodVar` does for every
     /// same-module target.
@@ -3393,6 +3394,12 @@ const VarRange = struct {
 /// binding's template publishes.
 const PredeclaredSlots = struct {
     scheme_var: Var,
+    /// Whether the predeclared scheme shares live `_` hole variables with the
+    /// body's annotation. The binding's own scheme can quantify such a
+    /// variable, which no identity slot enumerates, so a use's record with an
+    /// empty substitution still says something: the use shares every one of
+    /// them with the body.
+    shares_holes: bool,
     /// Enumerated from the pristine predeclared scheme at its first use.
     predeclared: ?VarRange = null,
     /// Enumerated when the body generates the annotation, before anything
@@ -21090,9 +21097,9 @@ fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error
         const def = self.cir.store.getDef(def_idx);
         const annotation_idx = def.annotation orelse continue;
         if (!self.annotationIsPredeclarableScheme(def.pattern, annotation_idx)) continue;
-        const scheme_var = try self.predeclareAnnotationScheme(annotation_idx, env);
-        self.setPredeclaredSchemeVar(def_idx, scheme_var);
-        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+        const scheme = try self.predeclareAnnotationScheme(annotation_idx, env);
+        self.setPredeclaredSchemeVar(def_idx, scheme.scheme_var);
+        try self.registerPredeclaredSlots(annotation_idx, scheme);
     }
 }
 
@@ -21134,9 +21141,9 @@ fn predeclareHoledAnnotationSchemes(
         const annotation_idx = self.appliedAnnotation(def.pattern, def.annotation) orelse continue;
         if (!self.cir.store.getAnnotation(annotation_idx).contains_underscore) continue;
         if (self.predeclared_slots.contains(annotation_idx)) continue;
-        const scheme_var = try self.predeclareAnnotationSchemeKeepingHolesShared(annotation_idx, env, hole_rank);
-        self.setPredeclaredSchemeVar(def_idx, scheme_var);
-        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+        const scheme = try self.predeclareAnnotationSchemeKeepingHolesShared(annotation_idx, env, hole_rank);
+        self.setPredeclaredSchemeVar(def_idx, scheme.scheme_var);
+        try self.registerPredeclaredSlots(annotation_idx, scheme);
     }
 }
 
@@ -21157,7 +21164,7 @@ fn predeclareAnnotationScheme(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!PredeclaredScheme {
     return self.predeclareAnnotationSchemeHelp(annotation_idx, env, null);
 }
 
@@ -21181,16 +21188,23 @@ fn predeclareAnnotationSchemeKeepingHolesShared(
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
     hole_rank: Rank,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!PredeclaredScheme {
     return self.predeclareAnnotationSchemeHelp(annotation_idx, env, hole_rank);
 }
+
+/// A standalone scheme predeclared from an annotation, and whether it shares
+/// live `_` hole variables with the body's annotation.
+const PredeclaredScheme = struct {
+    scheme_var: Var,
+    shares_holes: bool,
+};
 
 fn predeclareAnnotationSchemeHelp(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
     hole_rank: ?Rank,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!PredeclaredScheme {
     const problems_len = self.problems.len();
     const snapshots_mark = self.snapshots.mark();
 
@@ -21289,7 +21303,7 @@ fn predeclareAnnotationSchemeHelp(
         try self.hole_shared_vars.appendSlice(self.gpa, shared_vars.items);
         try self.hole_shared_schemes.put(self.gpa, scheme_var, .{ .start = start, .len = len });
     }
-    return scheme_var;
+    return .{ .scheme_var = scheme_var, .shares_holes = live_holes.items.len > 0 };
 }
 
 const HoleSharedRun = struct { start: u32, len: u32 };
@@ -21326,8 +21340,8 @@ fn retainUndecidedHoles(self: *const Self, holes: *std.ArrayListUnmanaged(Var)) 
 /// are enumerated later; see `PredeclaredSlots`. A block-local annotation is
 /// predeclared again each time its statement is checked, and each check
 /// generates the body annotation afresh, so re-registration starts over.
-fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, scheme_var: Var) Allocator.Error!void {
-    try self.predeclared_slots.put(self.gpa, annotation_idx, .{ .scheme_var = scheme_var });
+fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, scheme: PredeclaredScheme) Allocator.Error!void {
+    try self.predeclared_slots.put(self.gpa, annotation_idx, .{ .scheme_var = scheme.scheme_var, .shares_holes = scheme.shares_holes });
 }
 
 fn predeclaredSlotsPtr(self: *Self, annotation_idx: CIR.Annotation.Idx) *PredeclaredSlots {
@@ -21536,11 +21550,13 @@ fn writePredeclaredSchemeUse(
 ) Allocator.Error!void {
     defer self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
-    if (policy == .when_needed and
-        self.scratch_evidence_pairs.items.len == 0 and
-        !try self.predeclaredHasEvidenceParams(annotation_idx))
-    {
-        return;
+    if (policy == .when_needed and self.scratch_evidence_pairs.items.len == 0) {
+        const slots = self.predeclaredSlotsPtr(annotation_idx);
+        if (!slots.shares_holes and
+            !(slots.has_evidence_params orelse try self.predeclaredHasEvidenceParams(annotation_idx)))
+        {
+            return;
+        }
     }
     try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_root, self.scratch_evidence_pairs.items);
 }
@@ -32184,13 +32200,13 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 // lookup of an enclosing function's variable is that
                 // candidate's.
                 if (is_local_procedure_candidate) try self.local_procedure_candidate_stack.append(self.gpa, decl_stmt.pattern);
-                const scheme_var = scheme: {
+                const scheme = scheme: {
                     defer if (is_local_procedure_candidate) {
                         _ = self.local_procedure_candidate_stack.pop();
                     };
                     break :scheme try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
                 };
-                try self.registerPredeclaredSlots(decl_stmt.anno.?, scheme_var);
+                try self.registerPredeclaredSlots(decl_stmt.anno.?, scheme);
                 try self.predeclared_local_annotations.put(self.gpa, decl_stmt.pattern, decl_stmt.anno.?);
             }
 
