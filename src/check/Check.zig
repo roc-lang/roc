@@ -16404,12 +16404,20 @@ fn hoistedRootExprStep(
         .e_unary_minus => |unary| try pushHoistedKeptExpr(gpa, pending, unary.expr),
         .e_field_access => |field| try pushHoistedKeptExpr(gpa, pending, field.receiver),
         .e_interpolation => |interpolation| blk: {
-            const fn_var = interpolation.constraint_fn_var orelse break :blk false;
-            const dispatcher_var = interpolation.dispatcher_var orelse break :blk false;
-            if (!try self.staticDispatchAllowsHoistedRoot(
-                dispatcher_var,
-                fn_var,
-            )) break :blk false;
+            if (interpolation.constraint_fn_var) |fn_var| {
+                const dispatcher_var = interpolation.dispatcher_var orelse break :blk false;
+                if (!try self.staticDispatchAllowsHoistedRoot(
+                    dispatcher_var,
+                    fn_var,
+                )) break :blk false;
+            } else if (!self.varIsBuiltinStr(ModuleEnv.varFrom(expr))) {
+                // An interpolation with absent dispatch variables is the
+                // builtin `Str` over `Str` parts (design.md "Concrete Builtin
+                // Interpolation Introduction"), whose conversion is the pure
+                // builtin one no local procedure declares. One retired for an
+                // erroneous operand has none either, and is not a `Str`.
+                break :blk false;
+            }
             try pending.append(gpa, .{ .expr = interpolation.first });
             break :blk try self.pushHoistedKeptExprs(pending, interpolation.parts);
         },
@@ -53789,6 +53797,12 @@ fn tagUnionIsClosedAndUnit(self: *Self, tag_union: types_mod.TagUnion) std.mem.A
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
     if (!nominal_type.originIsBuiltin()) return null;
     return self.builtinNumKindFromBuiltinSourceDecl(nominal_type.sourceDeclOptional());
+}
+
+/// Whether a variable's type, through aliases, is the builtin `Str`.
+fn varIsBuiltinStr(self: *const Self, var_: Var) bool {
+    const nominal = self.types.resolveThroughAliases(var_).desc.content.unwrapNominalType() orelse return false;
+    return self.nominalIsBuiltinStrType(nominal);
 }
 
 fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalType) bool {

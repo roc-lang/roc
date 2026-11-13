@@ -1771,8 +1771,9 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     // `.iter()` must materialize as static data and allocate nothing, so the
     // whole minted chain (base list included) is zero-alloc on the cart path.
     // `--max-allocs 0` is a strictly stronger assertion than
-    // `--assert-alloc-balanced`.
-    .{ .app = "iter_list_hoist_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "iter_list_hoist_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--max-allocs", "0" } },
+    // `--assert-alloc-balanced`. Minted chains are the specialized lowering's
+    // iterator representation, which `--opt=size` selects only when asked.
+    .{ .app = "iter_list_hoist_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=yes" }, .output = "iter_list_hoist_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--max-allocs", "0" } },
     // Noiter twin: the same sums over plain list literals. The runner prints
     // each cart's byte size, so the iter build minus this baseline is the
     // minted-adapter premium tracked in CI (the fusion pass's target).
@@ -2286,7 +2287,7 @@ pub fn build(b: *std.Build) void {
 
     // The native Boxy runtime object (`roc_desc_*`) for the host target.
     const build_boxy_runtime_step = b.step("build-boxy-runtime", "Build the native Boxy runtime object");
-    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime", "src/boxy_runtime/static_lib.zig", target);
+    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime", "src/boxy_runtime/static_lib.zig", target, false);
     build_boxy_runtime_step.dependOn(&b.addInstallArtifact(boxy_runtime_obj, .{ .dest_dir = .{ .override = .{ .custom = "boxy_runtime" } } }).step);
 
     // Build-time compiler for builtin .roc modules
@@ -5501,7 +5502,7 @@ fn addEvalWasmRuntimeModules(
 
     // The Boxy runtime a `.boxy` program's module merges next to the
     // builtins, whose compiler-rt it shares.
-    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}_eval", .{name}), "src/boxy_runtime/static_lib.zig", target);
+    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}_eval", .{name}), "src/boxy_runtime/static_lib.zig", target, false);
 
     const builtins_files = b.addWriteFiles();
     _ = builtins_files.addCopyFile(merged_builtins, "roc_builtins.o");
@@ -5786,18 +5787,26 @@ fn addBuiltinsObject(
     return obj;
 }
 
-/// The position-independent native Boxy runtime object: the `roc_desc_*`
-/// entry points over the builtins, reaching the host through the runtime
-/// symbols (`src/boxy_runtime/static_lib.zig`). It gets its own builtins
-/// module instance with the minimal builtins imports, as the builtins objects
-/// do.
+/// The Boxy runtime object: the `roc_desc_*` entry points over the builtins,
+/// reaching the host through the runtime symbols
+/// (`src/boxy_runtime/static_lib.zig`). It gets its own builtins module
+/// instance with the minimal builtins imports, as the builtins objects do.
+///
+/// The object is position-independent, so it can join a shared-library link
+/// and a wasm archive a platform links as a shared module. The one exception
+/// is a wasm stack-checked twin (`wasm_stack_checks`), which names
+/// `__stack_low` by a direct data-symbol relocation: that relocated
+/// `i32.const` is how its bound reaches the stack room analysis
+/// (`StackRoom.fillCheckRooms`).
 fn addBoxyRuntimeObject(
     b: *std.Build,
     roc_modules: modules.RocModules,
     name: []const u8,
     root_source_file: []const u8,
     target: ResolvedTarget,
+    wasm_stack_checks: bool,
 ) *Step.Compile {
+    std.debug.assert(!wasm_stack_checks or target.result.cpu.arch == .wasm32);
     const builtins_module = b.createModule(.{ .root_source_file = b.path("src/builtins/mod.zig") });
     addBuiltinsImports(b, roc_modules, builtins_module);
     builtins_module.addImport("roc_str_view", roc_modules.roc_str_view);
@@ -5816,11 +5825,7 @@ fn addBoxyRuntimeObject(
             .optimize = .ReleaseFast,
             .strip = program_object_strip,
             .omit_frame_pointer = program_object_omit_frame_pointer,
-            // Native runtime objects can participate in shared-library links.
-            // Wasm uses direct data-symbol relocations, which is how the
-            // stack-checked twin's `__stack_low` bound reaches the stack room
-            // analysis (`StackRoom.fillCheckRooms`) as a relocated `i32.const`.
-            .pic = target.result.cpu.arch != .wasm32,
+            .pic = !wasm_stack_checks,
         }),
     });
     obj.root_module.addImport("builtins", builtins_module);
@@ -6243,7 +6248,7 @@ fn addMainExe(
 
     // The Boxy runtime object a `--specialize=no` program compiled by the
     // dev backend links next to the builtins.
-    const boxy_runtime_native_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime_native", "src/boxy_runtime/static_lib.zig", builtins_target);
+    const boxy_runtime_native_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime_native", "src/boxy_runtime/static_lib.zig", builtins_target, false);
     const host_boxy_runtime_filename = if (target.result.os.tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
     _ = embedded_assets.addCopyFile(boxy_runtime_native_obj.getEmittedBin(), b.pathJoin(&.{ "", host_boxy_runtime_filename }));
     embedded_digests.addArg("boxy_runtime_native");
@@ -6352,7 +6357,7 @@ fn addMainExe(
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
         {
-            const cross_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib.zig", cross_resolved_target);
+            const cross_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib.zig", cross_resolved_target, false);
             const boxy_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
             embedded_digests.addArg(b.fmt("boxy_runtime_{s}", .{cross_target.name}));
             embedded_digests.addFileArg(cross_boxy_runtime_obj.getEmittedBin());
@@ -6395,7 +6400,7 @@ fn addMainExe(
                 b.pathJoin(&.{ "targets", cross_target.name, "roc_builtins_extern_stack_checked.o" }),
             );
 
-            const checked_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_stack_checked_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib_stack_checked.zig", cross_resolved_target);
+            const checked_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_stack_checked_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib_stack_checked.zig", cross_resolved_target, true);
             embedded_digests.addArg(b.fmt("boxy_runtime_stack_checked_{s}", .{cross_target.name}));
             embedded_digests.addFileArg(checked_boxy_runtime_obj.getEmittedBin());
             _ = embedded_assets.addCopyFile(
