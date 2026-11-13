@@ -506,10 +506,10 @@ expect_dispatch_effect_watchers: std.ArrayListUnmanaged(ExpectDispatchWatcher) =
 /// exists. `finalizeExpectEffectSlots` normalizes them to roots once all roots
 /// have settled, so a watcher is matched against the final unification graph.
 successful_dispatch_fn_vars: std.ArrayListUnmanaged(Var) = .empty,
-/// Every imported method a closed operator resolution selected, once each:
-/// the callable var its nodes name, and the declaration it is this module's
-/// copy of.
-closed_operator_targets: std.AutoArrayHashMapUnmanaged(Var, ClosedOperatorTarget) = .empty,
+/// Every imported method a closed operator resolution or a closed method call
+/// resolution selected, once each: the callable var its nodes name, and the
+/// declaration it is this module's copy of.
+closed_dispatch_targets: std.AutoArrayHashMapUnmanaged(Var, ClosedDispatchTarget) = .empty,
 current_expect_effect_slot: ?ExpectEffectSlotId = null,
 /// Dense table of top-level patterns, and whether their defs have been processed.
 top_level_ptrns: std.ArrayListUnmanaged(?DefProcessed),
@@ -1791,7 +1791,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .expect_effect_slots = .settled,
     .expect_dispatch_effect_watchers = .settled,
     .successful_dispatch_fn_vars = .settled,
-    .closed_operator_targets = .settled,
+    .closed_dispatch_targets = .settled,
     .current_expect_effect_slot = .lexical,
     .top_level_ptrns = .keyed,
     .platform_requirements = .input,
@@ -15470,7 +15470,7 @@ fn finalizeTopLevelDemandDependencies(self: *Self) Allocator.Error!void {
         });
     }
 
-    for (self.closed_operator_targets.keys(), self.closed_operator_targets.values()) |scheme_var, target| {
+    for (self.closed_dispatch_targets.keys(), self.closed_dispatch_targets.values()) |scheme_var, target| {
         try dispatch_targets.append(self.gpa, .{
             .fn_var = scheme_var,
             .parent_fn_var = .none,
@@ -34411,6 +34411,10 @@ const MethodCallCheck = struct {
     /// finish, until the task is done.
     arg_vars_top: ?u32 = null,
     resolve_method_first: bool = false,
+    /// Whether Closed Method Call Resolution selected the method, so
+    /// `eager_constraint_fn_var` is the declaration's own callable, shared by
+    /// every call of it, and `result_var` is unused.
+    closed: bool = false,
     did_err: bool = false,
     result_var: Var = undefined,
     eager_constraint_fn_var: ?Var = null,
@@ -34444,9 +34448,44 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
             // fills in; each argument is related to its parameter afterwards,
             // in the call-argument context.
             state.resolve_method_first = !state.did_err and self.varResolvesToKnownType(receiver_var);
-            if (state.resolve_method_first) {
+            if (state.resolve_method_first) closed: {
                 const arg_vars_top = self.scratch_vars.top();
                 state.arg_vars_top = arg_vars_top;
+                if (try self.closedMethodCall(receiver_var, method_call.method_name, arg_expr_idxs.len)) |closed| {
+                    // Closed Method Call Resolution (design.md): each argument
+                    // is checked against a fresh copy of its parameter's
+                    // type, never the declaration's own, which a rejected
+                    // argument relation must not reach.
+                    const params = self.types.sliceVars(closed.func.args);
+                    for (arg_expr_idxs, 1..) |arg_expr_idx, param_index| {
+                        const param = closedNominalOf(self.types, params[param_index]).?;
+                        try self.scratch_vars.append(try self.freshFromContent(
+                            .{ .structure = .{ .nominal_type = param } },
+                            env,
+                            self.cir.store.getExprRegion(arg_expr_idx),
+                        ));
+                    }
+                    try self.closed_dispatch_targets.put(self.gpa, closed.scheme_var, closed.target);
+                    try self.cir.store.replaceExprWithDispatchCall(
+                        expr_idx,
+                        method_call.receiver,
+                        method_call.method_name,
+                        method_call.method_name_region,
+                        method_call.args,
+                        closed.scheme_var,
+                        .method_call,
+                    );
+                    // The call reaches its target as any dispatch does for
+                    // compile-time hoisting; a target in another module is
+                    // never a local procedure, so the proof always holds.
+                    try self.noteHoistDispatchDependency(receiver_var, method_call.method_name, closed.scheme_var);
+                    // Relations queued before this call settle here, as they
+                    // do when a call's own relation is drained.
+                    try self.checkStaticDispatchConstraints(env, false);
+                    state.closed = true;
+                    state.eager_constraint_fn_var = closed.scheme_var;
+                    break :closed;
+                }
                 for (arg_expr_idxs) |arg_expr_idx| {
                     try self.scratch_vars.append(try self.fresh(env, self.cir.store.getExprRegion(arg_expr_idx)));
                 }
@@ -34537,7 +34576,17 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
             }
             if (did_err) try self.retireCallLikeExpr(expr_idx, expr_var);
         }
-        if (!did_err) _ = try self.unify(expr_var, state.result_var, env);
+        if (!did_err) {
+            if (state.closed) {
+                // A fresh copy of the declared result, so nothing the call's
+                // own type meets reaches the declaration's signature.
+                const func = self.types.resolveVar(state.eager_constraint_fn_var.?).desc.content.structure.fn_pure;
+                const result = closedNominalOf(self.types, func.ret).?;
+                try self.unifyWith(expr_var, .{ .structure = .{ .nominal_type = result } }, env);
+            } else {
+                _ = try self.unify(expr_var, state.result_var, env);
+            }
+        }
     } else {
         did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs) or did_err;
     }
@@ -34563,7 +34612,8 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
                 .method_call,
             );
         }
-        task.does_fx = try self.recordCallEffect(constraint_fn_var) or task.does_fx;
+        // A closed method is a pure function: the call has no effect.
+        if (!state.closed) task.does_fx = try self.recordCallEffect(constraint_fn_var) or task.does_fx;
     }
     return .done;
 }
@@ -37510,7 +37560,7 @@ fn varIsDefinitelyNonNumericOperand(self: *Self, var_: Var) bool {
 /// What an operator's method returns: its operands' type, or `Bool`.
 const OperatorResult = enum { operand, bool };
 
-const ClosedOperatorTarget = struct {
+const ClosedDispatchTarget = struct {
     env: *const ModuleEnv,
     def_idx: CIR.Def.Idx,
 };
@@ -37560,7 +37610,7 @@ fn resolveClosedOperator(
         },
     }
 
-    try self.closed_operator_targets.put(self.gpa, scheme_var, .{
+    try self.closed_dispatch_targets.put(self.gpa, scheme_var, .{
         .env = method_lookup.env,
         .def_idx = method_lookup.binding.def_idx,
     });
@@ -37573,6 +37623,90 @@ fn resolveClosedOperator(
 fn varIsClosedNominal(self: *const Self, var_: Var, nominal: types_mod.NominalType) bool {
     const candidate = self.types.resolveVar(var_).desc.content.unwrapNominalType() orelse return false;
     return candidate.args.len() == 0 and unifier.sameNominalIdentity(candidate, nominal);
+}
+
+/// The nominal type `var_` resolves to when that type takes no arguments.
+fn closedNominalOf(store: *const types_mod.Store, var_: Var) ?types_mod.NominalType {
+    const nominal = store.resolveVar(var_).desc.content.unwrapNominalType() orelse return null;
+    if (nominal.args.len() != 0) return null;
+    return nominal;
+}
+
+/// Whether the type `var_` names in `store` is a pure function of exactly
+/// `param_count` parameters whose parameters and result are all nominal
+/// types taking no arguments.
+fn varIsClosedNominalFunction(store: *const types_mod.Store, var_: Var, param_count: usize) bool {
+    const func = switch (store.resolveVar(var_).desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure => |func| func,
+            .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return false,
+        },
+        .flex, .rigid, .alias, .field_presence, .err => return false,
+    };
+    const params = store.sliceVars(func.args);
+    if (params.len != param_count) return false;
+    for (params) |param| {
+        if (closedNominalOf(store, param) == null) return false;
+    }
+    return closedNominalOf(store, func.ret) != null;
+}
+
+/// The method a closed method call selects: this module's copy of the
+/// declaration's own callable, and the declaration.
+const ClosedMethodCall = struct {
+    scheme_var: Var,
+    func: Func,
+    target: ClosedDispatchTarget,
+};
+
+/// Closed Method Call Resolution (design.md): the method a call of
+/// `method_name` with `arg_count` arguments selects on `receiver_var` when the
+/// receiver's type is a nominal type declared in another module that declares
+/// the method as a pure function whose parameters and result are all nominal
+/// types taking no arguments, the first being the receiver's own type. Such a
+/// signature has no type variables, so the call is related to the declaration
+/// itself and has no constraint. Null for every other call.
+fn closedMethodCall(
+    self: *Self,
+    receiver_var: Var,
+    method_name: Ident.Idx,
+    arg_count: usize,
+) Allocator.Error!?ClosedMethodCall {
+    const nominal = self.types.resolveVar(receiver_var).desc.content.unwrapNominalType() orelse return null;
+    const method_lookup = self.lookupStaticDispatchMethodBinding(
+        self.getNominalOriginEnv(nominal),
+        nominal.sourceDeclOptional(),
+        self.cir,
+        method_name,
+    ) orelse return null;
+    // A method of this module carries definition dependencies and
+    // instantiation records, and its scheme may not be final yet.
+    if (method_lookup.is_this_module) return null;
+    // A dispatch to a declaration with no callable value, or to a derived
+    // method, is judged by the drain.
+    const def_idx = method_lookup.binding.def_idx;
+    if (staticDispatchBindingIsDerivedMarker(method_lookup) or
+        methodAnnotationErroneous(method_lookup) or
+        hostedDeclarationIsNotEffectful(method_lookup.env, def_idx) or
+        annotationOnlyValueDef(method_lookup.env, def_idx))
+    {
+        return null;
+    }
+    // Read the declaration's type where it is declared first, so only a
+    // qualifying method is copied into this module here.
+    if (!varIsClosedNominalFunction(&method_lookup.env.types, ModuleEnv.varFrom(method_lookup.binding.type_node_idx), arg_count + 1)) {
+        return null;
+    }
+
+    const scheme_var = try self.importedMethodScheme(method_lookup);
+    if (!varIsClosedNominalFunction(self.types, scheme_var, arg_count + 1)) return null;
+    const func = self.types.resolveVar(scheme_var).desc.content.structure.fn_pure;
+    if (!self.varIsClosedNominal(self.types.sliceVars(func.args)[0], nominal)) return null;
+    return .{
+        .scheme_var = scheme_var,
+        .func = func,
+        .target = .{ .env = method_lookup.env, .def_idx = def_idx },
+    };
 }
 
 /// The builtin `Bool` type's content. `Bool` takes no arguments, so every

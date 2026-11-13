@@ -7272,6 +7272,45 @@ definition dependencies and instantiation records), a signature of any other
 shape, and an effectful method. Accepted and rejected sides are pinned in
 `closed_operator_test.zig`.
 
+Closed method call resolution is the same mechanism for a method call. When a
+call's receiver has already resolved to a nominal type when the call is
+checked, that type is declared in another module, and that module declares
+the method as a pure function whose parameters and result are all nominal
+types taking no arguments, the first being the receiver's type, with one
+parameter per call argument after it, the call is resolved where it is
+checked (`closedMethodCall`): the checked node names this module's copy of the
+declaration's own callable, and no constraint, per-use function type, carrier
+variable, or dispatch-queue entry exists for it. The constraint a call
+otherwise makes is `receiver, args -> result` over fresh argument and result
+variables. Relating it to the signature, which has no type variables and
+whose first parameter is the receiver's type, could only give each fresh
+variable its parameter's type, so it establishes nothing a fresh copy of the
+parameter types does not, and rejects nothing. Each argument is checked
+against a fresh variable holding its parameter's type, and the call's type
+receives a fresh copy of the declared result once every argument is
+accepted, so a rejected argument relation never reaches the declaration's
+signature, which every call of the method shares. Of the records an ordinary
+method call makes, a closed call keeps only its hoisting proof
+(`noteHoistDispatchDependency`), keyed by the declaration's callable: its
+target is never a local procedure, so the proof always holds, and keeping it
+keeps a compile-time condition warning reported where it otherwise is. It
+needs none of the others: `own_dispatch_exprs` attributes a queued
+relation's resolution and failure to its expression, and a closed call has no
+queued relation; an `expect` watcher asks whether the selected callable is
+effectful, and the method is pure; a scheme requirement candidate becomes a
+requirement only while its receiver is still a flexible variable, and an
+ambiguity candidate is judged only while its receiver still carries
+constraints, and a nominal receiver is neither. The call still drains the
+relations queued before it, as an ordinary call's eager resolution does, so
+those settle at the same point. Every other call keeps its ordinary
+constraint: a receiver whose type is not yet known or is not a nominal type,
+a method of this module, a signature with type variables or a type with
+arguments anywhere in it, a different number of arguments than the signature
+has, an effectful method, a derived method, and a declaration with no
+callable value or an erroneous annotation. The checked node is consumed
+exactly as a closed operator's is. Accepted and rejected sides are pinned in
+`closed_method_call_test.zig`.
+
 A where alias (`a.Sortable : where [...]`) is a source-level abbreviation for a
 set of method constraints, not a type. Its declaration solves to its receiver: a
 rigid variable carrying the constraints it names. A signature that references
