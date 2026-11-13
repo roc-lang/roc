@@ -616,6 +616,11 @@ pub const SchemeUseRecord = extern struct {
         /// or substitution of its own; an accompanying value/shared use owns
         /// those facts when the referenced scheme has quantified variables.
         recursive_reference,
+        /// The platform invokes this app binding without a source call.
+        /// `node_idx` names the binding's expression for diagnostics only;
+        /// the platform solution owns this record, not an expression-use table.
+        /// `slot_data` is the instantiated callable's raw type variable.
+        platform_requirement,
         /// A reference to a block-local value binding from inside that
         /// binding's own value. Canonicalization rejects an eager
         /// self-reference, so the reference is delayed through a function and
@@ -878,9 +883,12 @@ pub const PlatformRequirementSolution = struct {
     requires_idx: u32,
     /// The exported app definition the requirement resolved to.
     def: CIR.Def.Idx,
-    /// The requirement type instantiated into the app's store and unified
-    /// against the app definition's expression.
+    /// The solved requirement in the app's store. A function requirement names
+    /// its checked invocation instance, not the uninstantiated binding scheme.
     solved_var: types_mod.Var,
+    /// The checked instantiation used by this implicit platform invocation.
+    /// Null when the binding has neither a substitution nor evidence.
+    scheme_use: ?u32 = null,
     /// Whether the platform declares the requirement at a function type.
     is_function: bool,
     outcome: Outcome,
@@ -974,12 +982,6 @@ pub const CheckingDependency = struct {
         pub fn deserializeInto(self: *const @This(), address: usize) CheckingDependency {
             return .{ .digest = self.digest, .owners = self.owners.deserializeInto(address), .references = self.references.deserializeInto(address), .published = self.published != 0 };
         }
-
-        pub fn deserializeWithCopy(self: *const @This(), address: usize, allocator: Allocator) Allocator.Error!CheckingDependency {
-            var owners = try self.owners.deserializeWithCopy(address, allocator);
-            errdefer owners.deinit(allocator);
-            return .{ .digest = self.digest, .owners = owners, .references = try self.references.deserializeWithCopy(address, allocator), .published = self.published != 0 };
-        }
     };
 };
 
@@ -1010,7 +1012,22 @@ pub const BindingSchemeCodecRequirement = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A loaded cache entry an environment is relocated in place inside. The
+/// environment's lists read and write its bytes until they grow, so the entry
+/// lives exactly as long as the environment.
+pub const LoadedEntry = struct {
+    bytes: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+    /// Releases `bytes` (an unmapping, or a free with the given allocator).
+    release: *const fn ([]align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, std.mem.Allocator) void,
+};
+
 gpa: std.mem.Allocator,
+
+/// The loaded cache entry this environment's borrowed lists point into, which
+/// `deinit` releases after everything else. Null when the environment's lists
+/// own their memory, or borrow memory that outlives it (such as the compiler's
+/// embedded Builtin bytes).
+loaded_entry: ?LoadedEntry = null,
 
 common: CommonEnv,
 types: TypeStore,
@@ -1678,6 +1695,10 @@ pub fn deinit(self: *Self) void {
     self.checking_dependency.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
+    // Every list above that still borrows the entry freed nothing, so the
+    // entry goes last.
+    if (self.loaded_entry) |entry| entry.release(entry.bytes, self.gpa);
+    self.loaded_entry = null;
 }
 
 /// Replace the module's exact strict-demand relation with freshly produced
@@ -1704,7 +1725,7 @@ pub fn setInvokingDefs(self: *Self, defs: []const CIR.Def.Idx) std.mem.Allocator
 /// Whether calling top-level `def_idx` can invoke a function value it does
 /// not name.
 pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
-    const defs = self.invoking_defs.items.items;
+    const defs = self.invoking_defs.items();
     const wanted: u32 = @backingInt(def_idx);
     var low: usize = 0;
     var high: usize = defs.len;
@@ -1726,7 +1747,7 @@ pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
 /// method binding's definition has a producer row, including rejected
 /// definitions; absence is a compiler bug.
 pub fn callableAllowsStoredConst(self: *const Self, def_idx: CIR.Def.Idx) bool {
-    const facts = self.callable_checking_facts.items.items;
+    const facts = self.callable_checking_facts.items();
     var low: usize = 0;
     var high = facts.len;
     while (low < high) {
@@ -1744,7 +1765,7 @@ pub fn callableAllowsStoredConst(self: *const Self, def_idx: CIR.Def.Idx) bool {
 
 /// Return the producer-authored low-level implementation for `def_idx`.
 pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.LowLevel {
-    const entries = self.provided_low_level_defs.items.items;
+    const entries = self.provided_low_level_defs.items();
     const wanted: u32 = @backingInt(def_idx);
     var low: usize = 0;
     var high: usize = entries.len;
@@ -1765,7 +1786,7 @@ pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.Low
 /// Return the current producer-authored exact strict-demand relation.
 pub fn topLevelDemandDependencies(self: *const Self) []const DependencyGraph.Dependency {
     std.debug.assert(self.top_level_demand_dependencies_ready);
-    return self.top_level_demand_dependencies.items.items;
+    return self.top_level_demand_dependencies.items();
 }
 
 /// Whether a compiler stage has produced the exact strict-demand relation.
@@ -1786,74 +1807,11 @@ pub fn hasTopLevelDemandDependency(
     );
 }
 
-/// Deinitialize a cached module environment.
-/// This frees heap-allocated data from deserialization:
-/// - Hash maps (imports, import_mapping)
-/// - Type store arrays (when using deserializeWithMutableTypes)
-/// - NodeStore regions (when using deserializeWithMutableTypes)
-///
-/// After deserialization with deserializeWithMutableTypes, the type store
-/// arrays and NodeStore regions are heap-allocated and can be mutated.
-/// Other data (common env, nodes, etc.) still points into the cache buffer
-/// and must NOT be freed.
-///
-/// Call this instead of deinit() for modules loaded from cache.
-pub fn deinitCachedModule(self: *Self) void {
-    // Free the type store arrays (allocated by deserializeWithMutableTypes)
-    self.types.deinit();
-
-    // Free the NodeStore regions (allocated by deserializeWithMutableTypes)
-    self.store.regions.deinit(self.gpa);
-
-    // Only free the hash map that was allocated during deserialization
-    // (see CIR.Import.Store.Serialized.deserialize which calls ensureTotalCapacity)
-    self.imports.deinitMapOnly(self.gpa);
-
-    // import_mapping is initialized empty during deserialization and may have
-    // items added later, so we need to free it
-    self.import_mapping.deinit();
-    self.provided_low_level_defs.deinit(self.gpa);
-    self.for_loop_dispatch_plans.deinit(self.gpa);
-    self.numeral_digit_bytes.deinit(self.gpa);
-    self.numeral_literals.deinit(self.gpa);
-    self.numeric_suffix_targets.deinit(self.gpa);
-    self.scheme_uses.deinit(self.gpa);
-    self.scheme_use_pairs.deinit(self.gpa);
-    self.dispatch_relation_merges.deinit(self.gpa);
-    self.binding_schemes.deinit(self.gpa);
-    self.row_coerced_results.deinit(self.gpa);
-    self.erroneous_nodes.deinit(self.gpa);
-    self.selected_hoisted_roots.deinit(self.gpa);
-    self.promoted_local_procedures.deinit(self.gpa);
-    self.platform_requirement_solutions.deinit(self.gpa);
-    self.platform_requirement_identity_vars.deinit(self.gpa);
-    self.exhaustiveness_obligations.deinit(self.gpa);
-    self.binding_scheme_codec_requirements.deinit(self.gpa);
-    self.generated_codec_derivations.deinit(self.gpa);
-    self.generated_codec_calls.deinit(self.gpa);
-    self.generated_codec_renamings.deinit(self.gpa);
-    self.generated_codec_recurrences.deinit(self.gpa);
-    self.rejected_static_dispatches.deinit(self.gpa);
-    self.record_omitted_defaults.deinit(self.gpa);
-    self.inspect_override_instances.deinit(self.gpa);
-
-    // If enableRuntimeInserts was called on the interner, it allocated new memory
-    // that needs to be freed. The interner.deinit checks supports_inserts internally
-    // and will only free if memory was actually allocated (not for pure cached data).
-    self.common.idents.interner.deinit(self.gpa);
-    self.common.idents.deinitTextRanks();
-
-    // Same pattern for the module identity table: frozen (buffer-aliased) data is
-    // a no-op to deinit; runtime-grown data is freed.
-    self.module_identities.deinit(self.gpa);
-    self.module_identity_displays.deinit(self.gpa);
-}
-
 /// Whether every recorded file import has been read, which is what makes this
 /// module's source inputs complete. The canonicalize task reads them, before
 /// the module's source-input identity keys the checked-module cache.
 pub fn fileDependenciesSettled(self: *const Self) bool {
-    for (self.file_dependencies.items.items) |dep| {
+    for (self.file_dependencies.items()) |dep| {
         if (dep.state == .pending) return false;
     }
     return true;
@@ -1861,7 +1819,7 @@ pub fn fileDependenciesSettled(self: *const Self) bool {
 
 /// Whether one recorded file import has been read.
 pub fn fileDependencySettled(self: *const Self, idx: FileDependency.SafeList.Idx) bool {
-    return self.file_dependencies.items.items[@backingInt(idx)].state != .pending;
+    return self.file_dependencies.items()[@backingInt(idx)].state != .pending;
 }
 
 /// Record a relative file dependency before its final read state is known.
@@ -1879,21 +1837,21 @@ pub fn recordFileDependency(self: *Self, relative_path: []const u8, start_offset
 
 /// Mark a previously recorded file dependency as missing.
 pub fn setFileDependencyMissing(self: *Self, idx: FileDependency.SafeList.Idx) void {
-    const dep = &self.file_dependencies.items.items[@backingInt(idx)];
+    const dep = &self.file_dependencies.items()[@backingInt(idx)];
     dep.state = .missing;
     dep.content_hash = @as([32]u8, @splat(0));
 }
 
 /// Mark a previously recorded file dependency as unreadable.
 pub fn setFileDependencyUnreadable(self: *Self, idx: FileDependency.SafeList.Idx) void {
-    const dep = &self.file_dependencies.items.items[@backingInt(idx)];
+    const dep = &self.file_dependencies.items()[@backingInt(idx)];
     dep.state = .unreadable;
     dep.content_hash = @as([32]u8, @splat(0));
 }
 
 /// Set the content hash for a previously recorded file dependency.
 pub fn setFileDependencyContentHash(self: *Self, idx: FileDependency.SafeList.Idx, content_hash: [32]u8) void {
-    const dep = &self.file_dependencies.items.items[@backingInt(idx)];
+    const dep = &self.file_dependencies.items()[@backingInt(idx)];
     dep.state = .present;
     dep.content_hash = content_hash;
 }
@@ -2021,7 +1979,7 @@ pub fn publishScratchDiagnosticsFrom(self: *Self, start: u32) std.mem.Allocator.
     // Reserve before borrowing existing diagnostics. The diagnostic span is a
     // view into index_data, so growing index_data while iterating that view
     // would invalidate it if the backing allocation moved.
-    try self.store.index_data.items.ensureUnusedCapacity(self.gpa, additional_capacity);
+    try self.store.index_data.ensureUnusedCapacity(self.gpa, additional_capacity);
 
     if (!existing_at_tail) {
         const existing = self.store.sliceDiagnostics(self.diagnostics);
@@ -4141,6 +4099,7 @@ pub const Serialized = extern struct {
         .Owner = Self,
         .owner_only_fields = &.{
             "qualified_module_name", // Workspace information, recorded by the coordinator.
+            "loaded_entry", // The process-local mapping or buffer a loaded environment lives in.
         },
         .serialized_only_fields = &.{
             "display_module_name_idx_padding", // Fixed-width padding after the display name slot.
@@ -4268,24 +4227,54 @@ pub const Serialized = extern struct {
         self._reserved_flags = .{ 0, 0 };
     }
 
-    /// Materialize a non-owning view over statically embedded serialized bytes.
-    /// This is for the compiler's baked Builtin module: every list/slice points
-    /// into the executable's aligned static data and no backing bytes are copied.
+    /// A view over the compiler's embedded Builtin bytes, which hold no
+    /// imports and start with this header. Its lists point into the
+    /// executable's static data and nothing is copied. The bytes are shared by
+    /// every compilation in the process, so nothing writes through the view:
+    /// its type store is sealed, it has no imports or node scratch, and the
+    /// baked module is already prepared for checked-artifact use, so nothing
+    /// inserts into its identifier or string-literal tables.
     pub fn viewStatic(
+        self: *const Serialized,
+        backing: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) const u8,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_basename: []const u8,
+    ) (std.mem.Allocator.Error || error{CorruptSerializedModuleEnv})!Self {
+        std.debug.assert(@intFromPtr(self) == @intFromPtr(backing.ptr));
+        if (self.imports.imports.len != 0) return error.CorruptSerializedModuleEnv;
+        if (self.imports.import_idents.len != 0) return error.CorruptSerializedModuleEnv;
+        if (self.imports.resolved_modules.len != 0) return error.CorruptSerializedModuleEnv;
+        // The view's lists hold mutable item pointers, so this is where the
+        // bytes' constness is dropped. Nothing writes through a static view;
+        // an optimized native build keeps the bytes in read-only data, where a
+        // write faults.
+        const base_addr = @intFromPtr(@constCast(backing.ptr));
+        return self.deserializeInPlace(base_addr, gpa, source, module_basename, .sealed);
+    }
+
+    /// The environment serialized at `base_addr`, relocated in place: every
+    /// list borrows the serialized bytes, reading and writing them where they
+    /// lie, and copies itself into memory owned by `gpa` the first time it
+    /// grows. Nothing is copied up front, and `deinit` frees only those copies,
+    /// so the bytes must outlive the environment (a cache entry is handed to it
+    /// as `loaded_entry`).
+    ///
+    /// A checked module's types are solved, so `.sealed` loads them read-only.
+    /// A canonicalized module is still to be checked, so `.writable` loads its
+    /// types for solving and gives its node store scratch buffers.
+    pub fn deserializeInPlace(
         self: *const Serialized,
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_basename: []const u8,
-    ) error{CorruptSerializedModuleEnv}!Self {
-        if (self.imports.imports.len != 0) return error.CorruptSerializedModuleEnv;
-        if (self.imports.import_idents.len != 0) return error.CorruptSerializedModuleEnv;
-        if (self.imports.resolved_modules.len != 0) return error.CorruptSerializedModuleEnv;
-
-        const env = Self{
+        access: types_mod.LoadedAccess,
+    ) std.mem.Allocator.Error!Self {
+        var env = Self{
             .gpa = gpa,
             .common = self.common.deserializeInto(base_addr, source),
-            .types = self.types.deserializeInto(base_addr, gpa),
+            .types = self.types.deserializeInto(base_addr, gpa, access),
             .module_kind = self.module_kind.decode(),
             .module_role = self.module_role,
             .all_defs = self.all_defs,
@@ -4304,7 +4293,7 @@ pub const Serialized = extern struct {
             .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
-            .imports = CIR.Import.Store.init(),
+            .imports = self.imports.deserializeInto(base_addr),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
             .deferred_import_refs = self.deferred_import_refs.deserializeInto(base_addr),
             .import_identities = self.import_identities.deserializeInto(base_addr),
@@ -4351,204 +4340,9 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
             .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
         };
+        if (access == .writable) try env.store.ensureScratch();
 
         env.debugAssertModuleBasename();
-        return env;
-    }
-
-    /// Deserialize a checked module from the checked-module cache.
-    /// Allocates fresh memory for the type store and node store arrays. The
-    /// type store holds the module's solved types, so it is sealed.
-    pub fn deserializeWithMutableTypes(
-        self: *const Serialized,
-        base_addr: usize,
-        gpa: std.mem.Allocator,
-        source: []const u8,
-        module_basename: []const u8,
-    ) std.mem.Allocator.Error!*Self {
-        // Allocate a fresh ModuleEnv on the heap
-        const env = try gpa.create(Self);
-        errdefer gpa.destroy(env);
-
-        env.* = Self{
-            .gpa = gpa,
-            .common = self.common.deserializeInto(base_addr, source),
-            .types = try self.types.deserializeWithCopy(base_addr, gpa),
-            .module_kind = self.module_kind.decode(),
-            .module_role = self.module_role,
-            .all_defs = self.all_defs,
-            .global_value_defs = self.global_value_defs,
-            .top_level_value_defs = self.top_level_value_defs,
-            .value_binding_defs = self.value_binding_defs,
-            .hosted_defs = self.hosted_defs,
-            .diagnostic_hosted_returns = self.diagnostic_hosted_returns.deserializeInto(base_addr),
-            .all_statements = self.all_statements,
-            .type_decls = self.type_decls,
-            .forward_type_decls = self.forward_type_decls,
-            .exports = self.exports,
-            .requires_types = self.requires_types.deserializeInto(base_addr),
-            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
-            .provides_entries = self.provides_entries.deserializeInto(base_addr),
-            .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
-            .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserializeInto(base_addr),
-            .imports = try self.imports.deserializeInto(base_addr, gpa),
-            .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .deferred_import_refs = self.deferred_import_refs.deserializeInto(base_addr),
-            .import_identities = self.import_identities.deserializeInto(base_addr),
-            .module_name = module_basename,
-            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_name = "",
-            .module_identities = self.module_identities.deserialize(base_addr),
-            // Copy so the display list can grow if runtime type copies add identities.
-            .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
-            .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
-            .diagnostics = self.diagnostics,
-            // Use deserializeWithCopy for NodeStore so regions can be extended
-            .store = try self.store.deserializeWithCopy(base_addr, gpa),
-            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
-            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
-            .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
-            .callable_checking_facts = self.callable_checking_facts.deserializeInto(base_addr),
-            .checking_dependency = self.checking_dependency.deserializeInto(base_addr),
-            .runtime_prepared = self.runtime_prepared,
-            .idents = self.idents,
-            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserializeInto(base_addr),
-            .method_defs = self.method_defs.deserializeInto(base_addr),
-            .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
-            .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
-            .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
-            .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
-            .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
-            .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
-            .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
-            .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
-            .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
-            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
-            .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
-            .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
-            .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
-            .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
-            .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
-            .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_recurrences = try self.generated_codec_recurrences.deserializeWithCopy(base_addr, gpa),
-            .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
-            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
-            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
-        };
-        env.types.seal();
-
-        env.debugAssertModuleBasename();
-
-        return env;
-    }
-
-    /// Deserialize into a ModuleEnv that owns every byte it holds.
-    ///
-    /// This is what a canonicalized-cache hit loads: the module still has its
-    /// file imports to read, its deferred import worklist to drain, and its
-    /// types to solve, and each of those appends to the env. Every store is
-    /// therefore copied into growable memory owned by `gpa`, the identifier
-    /// interner and module-identity table are reopened for insertion, the
-    /// string-literal builder is rebuilt from the store's own entries, and the
-    /// node store gets its scratch buffers. The result is released with
-    /// `deinit`, exactly like a freshly canonicalized env.
-    pub fn deserializeOwned(
-        self: *const Serialized,
-        base_addr: usize,
-        gpa: std.mem.Allocator,
-        source: []const u8,
-        module_basename: []const u8,
-    ) std.mem.Allocator.Error!*Self {
-        const env = try gpa.create(Self);
-        errdefer gpa.destroy(env);
-
-        // The frozen store's lists alias the serialized buffer, so only the
-        // lookup map `deserializeInto` allocated is released here; `clone`
-        // copies those lists into memory this env owns.
-        var frozen_imports = try self.imports.deserializeInto(base_addr, gpa);
-        defer frozen_imports.deinitMapOnly(gpa);
-
-        var module_identities = self.module_identities.deserialize(base_addr);
-        try module_identities.enableRuntimeInserts(gpa);
-
-        env.* = Self{
-            .gpa = gpa,
-            .common = try self.common.deserializeOwned(base_addr, gpa, source),
-            .types = try self.types.deserializeWithCopy(base_addr, gpa),
-            .module_kind = self.module_kind.decode(),
-            .module_role = self.module_role,
-            .all_defs = self.all_defs,
-            .global_value_defs = self.global_value_defs,
-            .top_level_value_defs = self.top_level_value_defs,
-            .value_binding_defs = self.value_binding_defs,
-            .hosted_defs = self.hosted_defs,
-            .diagnostic_hosted_returns = try self.diagnostic_hosted_returns.deserializeWithCopy(base_addr, gpa),
-            .all_statements = self.all_statements,
-            .type_decls = self.type_decls,
-            .forward_type_decls = self.forward_type_decls,
-            .exports = self.exports,
-            .requires_types = try self.requires_types.deserializeWithCopy(base_addr, gpa),
-            .for_clause_aliases = try self.for_clause_aliases.deserializeWithCopy(base_addr, gpa),
-            .provides_entries = try self.provides_entries.deserializeWithCopy(base_addr, gpa),
-            .hosted_entries = try self.hosted_entries.deserializeWithCopy(base_addr, gpa),
-            .builtin_statements = self.builtin_statements,
-            .external_decls = try self.external_decls.deserializeWithCopy(base_addr, gpa),
-            .imports = try frozen_imports.clone(gpa),
-            .file_dependencies = try self.file_dependencies.deserializeWithCopy(base_addr, gpa),
-            .deferred_import_refs = try self.deferred_import_refs.deserializeWithCopy(base_addr, gpa),
-            .import_identities = try self.import_identities.deserializeWithCopy(base_addr, gpa),
-            .module_name = module_basename,
-            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_name = "",
-            .module_identities = module_identities,
-            .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
-            .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
-            .diagnostics = self.diagnostics,
-            .store = try self.store.deserializeOwned(base_addr, gpa),
-            .top_level_demand_dependencies = try self.top_level_demand_dependencies.deserializeWithCopy(base_addr, gpa),
-            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
-            .invoking_defs = try self.invoking_defs.deserializeWithCopy(base_addr, gpa),
-            .callable_checking_facts = try self.callable_checking_facts.deserializeWithCopy(base_addr, gpa),
-            .checking_dependency = try self.checking_dependency.deserializeWithCopy(base_addr, gpa),
-            .runtime_prepared = self.runtime_prepared,
-            .idents = self.idents,
-            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = try self.method_idents.deserializeWithCopy(base_addr, gpa),
-            .method_defs = try self.method_defs.deserializeWithCopy(base_addr, gpa),
-            .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
-            .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
-            .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
-            .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
-            .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
-            .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
-            .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
-            .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
-            .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
-            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
-            .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
-            .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
-            .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
-            .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
-            .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
-            .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
-            .generated_codec_recurrences = try self.generated_codec_recurrences.deserializeWithCopy(base_addr, gpa),
-            .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
-            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
-            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
-        };
-
-        env.debugAssertModuleBasename();
-
         return env;
     }
 };
@@ -4594,7 +4388,7 @@ pub fn recordForLoopDispatchPlan(
     const raw_node: u32 = @backingInt(node_idx);
     const raw_pattern: u32 = @backingInt(pattern_idx);
     const raw_iterable: u32 = @backingInt(iterable_idx);
-    for (self.for_loop_dispatch_plans.items.items) |*plan| {
+    for (self.for_loop_dispatch_plans.items()) |*plan| {
         if (plan.node_idx != raw_node) continue;
         plan.* = .{
             .node_idx = raw_node,
@@ -4662,7 +4456,7 @@ pub fn recordNumeralLiteral(
 
 /// Return exact base-256 digits for a numeric source node.
 pub fn numeralLiteralForNode(self: *const Self, node_idx: Node.Idx) ?NumeralLiteral {
-    return findSortedByNode(NumeralLiteral, self.numeral_literals.items.items, @backingInt(node_idx));
+    return findSortedByNode(NumeralLiteral, self.numeral_literals.items(), @backingInt(node_idx));
 }
 
 /// First index whose `node_idx` is >= `raw_node` in a node-sorted table.
@@ -4701,7 +4495,7 @@ fn sortedNodeEndSlot(comptime T: type, entries: []const T, raw_node: u32) usize 
 /// entries arrive in increasing node order (the common case—recording
 /// follows node allocation); out-of-order inserts shift the tail.
 fn upsertSortedByNode(comptime T: type, list: *collections.SafeList(T), gpa: std.mem.Allocator, entry: T) std.mem.Allocator.Error!void {
-    const entries = list.items.items;
+    const entries = list.items();
     if (entries.len == 0 or entries[entries.len - 1].node_idx < entry.node_idx) {
         _ = try list.append(gpa, entry);
         return;
@@ -4712,7 +4506,7 @@ fn upsertSortedByNode(comptime T: type, list: *collections.SafeList(T), gpa: std
         return;
     }
     _ = try list.append(gpa, entry);
-    const grown = list.items.items;
+    const grown = list.items();
     std.mem.copyBackwards(T, grown[slot + 1 ..], grown[slot .. grown.len - 1]);
     grown[slot] = entry;
 }
@@ -4742,7 +4536,7 @@ pub fn recordBindingScheme(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Er
 pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
     return findSortedByNode(
         BindingScheme,
-        self.binding_schemes.items.items,
+        self.binding_schemes.items(),
         @backingInt(node_idx),
     ) != null;
 }
@@ -4762,10 +4556,10 @@ pub fn recordRowCoercedResult(self: *Self, node_idx: Node.Idx, wide_var: types_m
 /// Drop the row-coerced result record for the expression at `node_idx`: its
 /// widening copy gained nothing, so the expression is read at its own type.
 pub fn removeRowCoercedResult(self: *Self, node_idx: Node.Idx) void {
-    const entries = self.row_coerced_results.items.items;
+    const entries = self.row_coerced_results.items();
     const slot = sortedNodeSlot(RowCoercedResult, entries, @backingInt(node_idx));
     if (slot >= entries.len or entries[slot].node_idx != @backingInt(node_idx)) return;
-    _ = self.row_coerced_results.items.orderedRemove(slot);
+    _ = self.row_coerced_results.orderedRemove(slot);
 }
 
 /// The widening copy the expression at `node_idx` flows into its function's
@@ -4773,7 +4567,7 @@ pub fn removeRowCoercedResult(self: *Self, node_idx: Node.Idx) void {
 pub fn rowCoercedResultWideVar(self: *const Self, node_idx: Node.Idx) ?types_mod.Var {
     const entry = findSortedByNode(
         RowCoercedResult,
-        self.row_coerced_results.items.items,
+        self.row_coerced_results.items(),
         @backingInt(node_idx),
     ) orelse return null;
     return @fromBackingInt(entry.wide_var);
@@ -4782,24 +4576,24 @@ pub fn rowCoercedResultWideVar(self: *const Self, node_idx: Node.Idx) ?types_mod
 /// The identity variables of a platform requirement solution, in canonical
 /// identity-slot order.
 pub fn platformRequirementIdentityVars(self: *const Self, solution: PlatformRequirementSolution) []const types_mod.Var {
-    return self.platform_requirement_identity_vars.items.items[solution.identities_start..][0..solution.identities_len];
+    return self.platform_requirement_identity_vars.items()[solution.identities_start..][0..solution.identities_len];
 }
 
 /// Record the nodes whose own checked state is erroneous, in increasing node
 /// order (`erroneous_nodes`).
 pub fn recordErroneousNodes(self: *Self, nodes: []const u32) std.mem.Allocator.Error!void {
-    self.erroneous_nodes.items.clearRetainingCapacity();
-    try self.erroneous_nodes.items.ensureTotalCapacity(self.gpa, nodes.len);
+    self.erroneous_nodes.clearRetainingCapacity();
+    try self.erroneous_nodes.ensureTotalCapacity(self.gpa, nodes.len);
     for (nodes, 0..) |node, index| {
         std.debug.assert(index == 0 or nodes[index - 1] < node);
-        self.erroneous_nodes.items.appendAssumeCapacity(.{ .node_idx = node });
+        _ = self.erroneous_nodes.appendAssumeCapacity(.{ .node_idx = node });
     }
 }
 
 /// Whether checking recorded the node at `node_idx` as erroneous in its own
 /// right (`erroneous_nodes`).
 pub fn nodeIsErroneous(self: *const Self, node_idx: Node.Idx) bool {
-    return findSortedByNode(ErroneousNode, self.erroneous_nodes.items.items, @backingInt(node_idx)) != null;
+    return findSortedByNode(ErroneousNode, self.erroneous_nodes.items(), @backingInt(node_idx)) != null;
 }
 
 /// Record one exact generated-codec relation owned by a source binding scheme.
@@ -4822,7 +4616,7 @@ pub fn recordBindingSchemeCodecRequirement(
         .requires_instantiation = @intFromBool(requires_instantiation),
         .is_synthetic = @intFromBool(is_synthetic),
     };
-    const entries = self.binding_scheme_codec_requirements.items.items;
+    const entries = self.binding_scheme_codec_requirements.items();
     const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
     const end = sortedNodeEndSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
     for (entries[start..end]) |existing| {
@@ -4840,7 +4634,7 @@ pub fn recordBindingSchemeCodecRequirement(
         return;
     }
     _ = try self.binding_scheme_codec_requirements.append(self.gpa, entry);
-    const grown = self.binding_scheme_codec_requirements.items.items;
+    const grown = self.binding_scheme_codec_requirements.items();
     std.mem.copyBackwards(
         BindingSchemeCodecRequirement,
         grown[end + 1 ..],
@@ -4855,7 +4649,7 @@ pub fn bindingSchemeCodecRequirementsForNode(
     self: *const Self,
     node_idx: Node.Idx,
 ) []const BindingSchemeCodecRequirement {
-    const entries = self.binding_scheme_codec_requirements.items.items;
+    const entries = self.binding_scheme_codec_requirements.items();
     const raw_node = @backingInt(node_idx);
     const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, raw_node);
     const end = sortedNodeEndSlot(BindingSchemeCodecRequirement, entries, raw_node);
@@ -4864,13 +4658,13 @@ pub fn bindingSchemeCodecRequirementsForNode(
 
 /// Return the digits before the decimal point for a recorded numeral.
 pub fn numeralDigitsBefore(self: *const Self, literal: NumeralLiteral) []const u8 {
-    return self.numeral_digit_bytes.items.items[literal.digits_start..][0..literal.before_len];
+    return self.numeral_digit_bytes.items()[literal.digits_start..][0..literal.before_len];
 }
 
 /// Return the digits after the decimal point for a recorded numeral.
 pub fn numeralDigitsAfter(self: *const Self, literal: NumeralLiteral) []const u8 {
     const start = literal.digits_start + literal.before_len;
-    return self.numeral_digit_bytes.items.items[start..][0..literal.after_len];
+    return self.numeral_digit_bytes.items()[start..][0..literal.after_len];
 }
 
 /// The exact-digit view of a recorded numeral—the input every literal fit
@@ -4951,7 +4745,7 @@ pub fn recordSchemeUse(
     scheme_root: TypeVar,
     pairs: []const SchemeUsePair,
 ) std.mem.Allocator.Error!void {
-    const pairs_start: u32 = @intCast(self.scheme_use_pairs.items.items.len);
+    const pairs_start: u32 = @intCast(self.scheme_use_pairs.items().len);
     for (pairs) |pair| {
         _ = try self.scheme_use_pairs.append(self.gpa, pair);
     }
@@ -4989,7 +4783,7 @@ pub fn recordGeneratedCodecDerivation(
     renamings: []const GeneratedCodecRenaming,
 ) std.mem.Allocator.Error!void {
     var existing_index: ?usize = null;
-    for (self.generated_codec_derivations.items.items, 0..) |existing, index| {
+    for (self.generated_codec_derivations.items(), 0..) |existing, index| {
         if (existing.kind == @backingInt(kind) and
             existing.source_constraint_fn_var == @backingInt(source_constraint_fn_var))
         {
@@ -4998,18 +4792,18 @@ pub fn recordGeneratedCodecDerivation(
         }
     }
     if (existing_index) |index| {
-        const existing = self.generated_codec_derivations.items.items[index];
-        if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items.items.len) {
-            self.generated_codec_calls.items.shrinkRetainingCapacity(existing.calls_start);
+        const existing = self.generated_codec_derivations.items()[index];
+        if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items().len) {
+            self.generated_codec_calls.shrinkRetainingCapacity(existing.calls_start);
         }
-        if (existing.renamings_start + existing.renamings_len == self.generated_codec_renamings.items.items.len) {
-            self.generated_codec_renamings.items.shrinkRetainingCapacity(existing.renamings_start);
+        if (existing.renamings_start + existing.renamings_len == self.generated_codec_renamings.items().len) {
+            self.generated_codec_renamings.shrinkRetainingCapacity(existing.renamings_start);
         }
     }
 
-    const calls_start: u32 = @intCast(self.generated_codec_calls.items.items.len);
+    const calls_start: u32 = @intCast(self.generated_codec_calls.items().len);
     _ = try self.generated_codec_calls.appendSlice(self.gpa, calls);
-    const renamings_start: u32 = @intCast(self.generated_codec_renamings.items.items.len);
+    const renamings_start: u32 = @intCast(self.generated_codec_renamings.items().len);
     _ = try self.generated_codec_renamings.appendSlice(self.gpa, renamings);
     const derivation = GeneratedCodecDerivation{
         .kind = @backingInt(kind),
@@ -5034,7 +4828,7 @@ pub fn recordGeneratedCodecDerivation(
         .renamings_len = @intCast(renamings.len),
     };
     if (existing_index) |index| {
-        self.generated_codec_derivations.items.items[index] = derivation;
+        self.generated_codec_derivations.items()[index] = derivation;
         return;
     }
     _ = try self.generated_codec_derivations.append(self.gpa, derivation);
@@ -5061,7 +4855,7 @@ pub fn recordRejectedStaticDispatch(self: *Self, constraint_fn_var: TypeVar) std
 
 /// Checker-rejected static-dispatch obligations in production order.
 pub fn rejectedStaticDispatches(self: *const Self) []const RejectedStaticDispatch {
-    return self.rejected_static_dispatches.items.items;
+    return self.rejected_static_dispatches.items();
 }
 
 /// Persist the use inspection makes of one `to_inspect` method.
@@ -5075,7 +4869,7 @@ pub fn recordInspectOverrideInstance(self: *Self, def_idx: CIR.Def.Idx, callable
 /// The use inspection makes of the `to_inspect` method `def_idx`, or null
 /// when its type has no instance whose result is `Str`.
 pub fn inspectOverrideInstance(self: *const Self, def_idx: CIR.Def.Idx) ?TypeVar {
-    for (self.inspect_override_instances.items.items) |instance| {
+    for (self.inspect_override_instances.items()) |instance| {
         if (instance.def() == def_idx) return instance.callableVar();
     }
     return null;
@@ -5120,7 +4914,7 @@ pub fn recordNumericSuffixTarget(
             .data2 = external.target_node_idx,
         },
         .pending => |ref| blk: {
-            self.deferred_import_refs.items.items[@backingInt(ref)].node_idx = raw_node;
+            self.deferred_import_refs.items()[@backingInt(ref)].node_idx = raw_node;
             break :blk NumericSuffixTarget{
                 .node_idx = raw_node,
                 .kind = @backingInt(NumericSuffixTarget.Kind.pending),
@@ -5141,7 +4935,7 @@ pub fn recordNumericSuffixTarget(
 
 /// Return the scope-resolved type target for an explicit numeric suffix.
 pub fn numericSuffixTargetForNode(self: *const Self, node_idx: Node.Idx) ?NumericSuffixTarget {
-    return findSortedByNode(NumericSuffixTarget, self.numeric_suffix_targets.items.items, @backingInt(node_idx));
+    return findSortedByNode(NumericSuffixTarget, self.numeric_suffix_targets.items(), @backingInt(node_idx));
 }
 
 /// Adds an identifier to the list of exposed items by its identifier index.
@@ -5193,7 +4987,7 @@ pub fn ensureExposedSorted(self: *Self, allocator: std.mem.Allocator) void {
 /// Assert that nodes and regions are in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .debug) {
-        const cir_nodes = self.store.nodes.items.len;
+        const cir_nodes = self.store.nodes.len();
         const region_nodes = self.store.regions.len();
 
         if (!(cir_nodes == region_nodes)) {
@@ -5730,7 +5524,7 @@ pub fn internModuleIdentity(
 pub fn importIdentity(self: *const Self, import_idx: CIR.Import.Idx) ?base.ModuleIdentity.Idx {
     const idx: usize = @backingInt(import_idx);
     if (idx >= self.import_identities.len()) return null;
-    const identity = self.import_identities.items.items[idx];
+    const identity = self.import_identities.items()[idx];
     if (identity.isNone()) return null;
     return identity;
 }
@@ -5747,7 +5541,7 @@ pub fn setImportIdentity(
     while (self.import_identities.len() <= idx) {
         _ = try self.import_identities.append(self.gpa, base.ModuleIdentity.Idx.NONE);
     }
-    self.import_identities.items.items[idx] = identity;
+    self.import_identities.items()[idx] = identity;
 }
 
 /// Look up a module content identity in this env's table without inserting.
@@ -5768,7 +5562,7 @@ pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *cons
 /// use for identity decisions.
 pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Idx) Ident.Idx {
     std.debug.assert(!idx.isNone());
-    return self.module_identity_displays.items.items[@backingInt(idx)];
+    return self.module_identity_displays.items()[@backingInt(idx)];
 }
 
 /// Display text for an env-local identity index. Diagnostics only.
@@ -5867,7 +5661,7 @@ pub fn appendMethodForMethodOwner(
     qualified_ident: Ident.Idx,
     binding: MethodBinding,
 ) Allocator.Error!void {
-    std.debug.assert(self.method_idents.entries.items.len == self.method_defs.entries.items.len);
+    std.debug.assert(self.method_idents.entries.items().len == self.method_defs.entries.items().len);
     try self.method_idents.entries.ensureUnusedCapacity(self.gpa, 1);
     try self.method_defs.entries.ensureUnusedCapacity(self.gpa, 1);
     try self.registerMethodIdentForMethodOwner(owner, method_ident, qualified_ident);
@@ -5944,7 +5738,7 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
             // Poison each row, then write its fields one at a time. A whole-struct store
             // may overwrite an undeclared gap with the temporary's own bytes, so putting
             // the stale bytes in deliberately is what makes this test able to fail.
-            for (list.items.items, 0..) |*slot, i| {
+            for (list.items(), 0..) |*slot, i| {
                 @memset(std.mem.asBytes(slot), poison);
                 slot.node_idx = @intCast(i);
                 slot.digits_start = @intCast(i * 4);
@@ -6005,7 +5799,7 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
 pub fn diagnosticHostedReturn(self: *const Self, def: CIR.Def.Idx) ?Ident.Idx {
     const index = @backingInt(def);
     if (index >= self.diagnostic_hosted_returns.len()) return null;
-    const origin = self.diagnostic_hosted_returns.items.items[index];
+    const origin = self.diagnostic_hosted_returns.items()[index];
     return if (origin.isNone()) null else origin;
 }
 
@@ -6015,5 +5809,5 @@ pub fn setDiagnosticHostedReturn(self: *Self, def: CIR.Def.Idx, origin: Ident.Id
     while (self.diagnostic_hosted_returns.len() <= index) {
         _ = try self.diagnostic_hosted_returns.append(self.gpa, Ident.Idx.NONE);
     }
-    self.diagnostic_hosted_returns.items.items[index] = origin;
+    self.diagnostic_hosted_returns.items()[index] = origin;
 }

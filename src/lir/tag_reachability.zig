@@ -203,7 +203,7 @@ const Pass = struct {
     fn seedBoundaries(self: *Pass) Allocator.Error!void {
         for (0..self.store.procSpecCount()) |proc_index| {
             const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-            if (proc.body == null or proc.hosted != null) {
+            if (proc.body == .none or proc.hosted.get() != null) {
                 _ = self.proc_returns[proc_index].markAll(self.allocator);
             }
             const args = self.store.getLocalSpan(proc.args);
@@ -220,7 +220,7 @@ const Pass = struct {
             changed = false;
             for (0..self.store.procSpecCount()) |proc_index| {
                 const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-                const body = proc.body orelse continue;
+                const body = proc.body.get() orelse continue;
                 if (try self.analyzeProc(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))), body)) {
                     changed = true;
                 }
@@ -420,7 +420,7 @@ const Pass = struct {
 
         for (0..self.store.procSpecCount()) |proc_index| {
             const proc = self.store.getProcSpecPtr(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-            if (proc.body) |body| proc.body = self.resolveRedirect(body);
+            if (proc.body.get()) |body| proc.body = .some(self.resolveRedirect(body));
             const join_points = self.store.getJoinPointSpanMut(proc.join_points);
             for (0..join_points.len) |index| {
                 const join_point = GuardedList.atPtr(join_points, index);
@@ -524,7 +524,7 @@ test "tag reachability bypasses call result and direct payload switches" {
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
-        .body = callee_body,
+        .body = .some(callee_body),
         .ret_layout = f.outer_layout,
     }, .none);
 
@@ -572,7 +572,7 @@ test "tag reachability bypasses call result and direct payload switches" {
         .name = LIR.Symbol.fromRaw(2),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{caller_ret}),
-        .body = caller_body,
+        .body = .some(caller_body),
         .ret_layout = f.inner_layout,
     }, .none);
     try f.result.root_procs.append(testing.allocator, caller);
@@ -633,7 +633,7 @@ test "tag reachability tracks per-payload tags through payload structs" {
         .name = LIR.Symbol.fromRaw(4),
         .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
-        .body = callee_body,
+        .body = .some(callee_body),
         .ret_layout = outer_layout,
     }, .none);
 
@@ -667,7 +667,7 @@ test "tag reachability tracks per-payload tags through payload structs" {
         .name = LIR.Symbol.fromRaw(5),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
-        .body = caller_body,
+        .body = .some(caller_body),
         .ret_layout = f.inner_layout,
     }, .none);
     try f.result.root_procs.append(testing.allocator, caller);
@@ -788,7 +788,7 @@ test "tag reachability preserves nested tag variants extracted across a loop joi
         .name = LIR.Symbol.fromRaw(11),
         .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = f.inner_layout,
     }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
@@ -841,7 +841,7 @@ test "tag reachability removes impossible explicit branches from multi-value set
         .name = LIR.Symbol.fromRaw(3),
         .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = f.inner_layout,
     }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
@@ -899,7 +899,7 @@ test "tag reachability keeps unrelated live discriminant reads" {
         .name = LIR.Symbol.fromRaw(6),
         .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u16,
     }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
@@ -941,7 +941,7 @@ test "tag reachability retains branches for arg-derived tags" {
         .name = LIR.Symbol.fromRaw(7),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{arg}),
-        .body = body,
+        .body = .some(body),
         .ret_layout = f.outer_layout,
     }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
@@ -965,12 +965,12 @@ test "tag reachability retains branches for hosted call results" {
         .name = LIR.Symbol.fromRaw(8),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
-        .body = null,
+        .body = .none,
         .ret_layout = f.outer_layout,
-        .hosted = .{
+        .hosted = .some(.{
             .symbol = try store.insertString("roc_test_hosted"),
             .dispatch_index = 0,
-        },
+        }),
     }, .none);
 
     const result = try f.local(f.outer_layout);
@@ -998,7 +998,7 @@ test "tag reachability retains branches for hosted call results" {
         .name = LIR.Symbol.fromRaw(9),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = f.outer_layout,
     }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
@@ -1047,7 +1047,7 @@ test "tag reachability retains branches for erased call results" {
         .name = LIR.Symbol.fromRaw(10),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{closure}),
-        .body = body,
+        .body = .some(body),
         .ret_layout = f.outer_layout,
     }, .none);
     try f.result.root_procs.append(testing.allocator, proc);

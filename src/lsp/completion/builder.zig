@@ -1170,7 +1170,7 @@ pub const CompletionBuilder = struct {
         const type_name = method_owner.type_name;
 
         // Iterate through method_idents to find all methods for this owner.
-        const entries = module_env.method_idents.entries.items;
+        const entries = module_env.method_idents.entries.items();
         for (entries) |entry| {
             // Check if this method is for our type owner.
             if (entry.key.owner == method_owner.owner) {
@@ -1488,7 +1488,7 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
     ) Allocator.Error!void {
         // Iterate all tags in the type store
-        const tag_names = module_env.types.tags.items.items(.name);
+        const tag_names = module_env.types.tags.field(.name);
         for (tag_names) |name_idx| {
             const tag_name = module_env.getIdentText(name_idx);
             if (tag_name.len == 0) continue;

@@ -44,18 +44,23 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 22 stores reproducible checking
-/// and evaluation reports beside cached literal argument roots for both
-/// strategies, body-local type context arguments, generated-codec recurrences,
-/// field-default identities in Boxy stored-function types, and integer list
-/// worker item-type bindings. It rejects every version 18 recipe format and
-/// the independent version 19, 20 and 21 formats. Platform-pairing entries
-/// share it.
-const checked_envelope_version: u32 = 22;
+/// reflected in layout fingerprints. Version 37 stores reproducible checking
+/// and evaluation reports beside paired callable forwarding and request
+/// completion and cached literal argument roots for both strategies,
+/// body-local type context arguments, generated-codec recurrences,
+/// field-default identities in Boxy stored-function types, integer list
+/// worker item-type bindings, Boxy stored-function type tables that store a
+/// padded record's declaration entries rather than its slots, nominal
+/// declaration backings whose formals bind by binder identity rather than by
+/// name, stored function recipes naming modules the storing module imports,
+/// type stores listing their widening field names once, and anonymous
+/// structure that every use shares when nothing visible can lift or widen it.
+/// It rejects every earlier format. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 37;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
-/// body order.
-const canonicalized_envelope_version: u32 = 3;
+/// body order and alignment.
+const canonicalized_envelope_version: u32 = 4;
 
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
@@ -150,8 +155,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xF2, 0x59, 0x15, 0x42, 0x4F, 0xEC, 0xA6, 0xEF, 0x88, 0x7B, 0xA6, 0xEC, 0xB8, 0xB4, 0xD1, 0xA9,
-        0xC2, 0xE4, 0x96, 0x1B, 0xD4, 0xD7, 0xB6, 0x63, 0x29, 0x59, 0xFF, 0xD0, 0x74, 0x92, 0xB1, 0x06,
+        0x23, 0xAB, 0x37, 0x0F, 0xA9, 0xE4, 0x24, 0x21, 0x65, 0x93, 0xF2, 0x4F, 0xEF, 0x7D, 0xCA, 0x88,
+        0xD0, 0xEC, 0x8B, 0x3D, 0x57, 0x17, 0x6F, 0x51, 0xE2, 0xF8, 0x8A, 0x6A, 0xF3, 0x2B, 0x96, 0xC2,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

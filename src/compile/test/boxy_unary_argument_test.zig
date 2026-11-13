@@ -38,7 +38,7 @@ test "boxy deferred packets pin native and wasm32 inline boundaries" {
                         defer pending.deinit(std.testing.allocator);
                         var seen = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
                         defer seen.deinit();
-                        try pending.append(std.testing.allocator, proc.body.?);
+                        try pending.append(std.testing.allocator, proc.body.get().?);
                         while (pending.pop()) |id| {
                             if ((try seen.getOrPut(id)).found_existing) continue;
                             const stmt = store.getCFStmt(id);
@@ -86,7 +86,7 @@ test "boxy declared primitives lower directly at closed and open call sites" {
                     defer pending.deinit(std.testing.allocator);
                     var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
                     defer visited.deinit();
-                    try pending.append(std.testing.allocator, proc.body.?);
+                    try pending.append(std.testing.allocator, proc.body.get().?);
                     var operations: usize = 0;
                     while (pending.pop()) |id| {
                         if ((try visited.getOrPut(id)).found_existing) continue;
@@ -126,7 +126,7 @@ test "boxy worker reads the composite parameter and result descriptor once from 
                     const args = store.getLocalSpan(proc.args);
                     try std.testing.expectEqual(@as(usize, 2), args.len);
                     const param = store.localDyn(collections.GuardedList.at(args, 0)) orelse return error.TestUnexpectedResult;
-                    const result = store.localDyn(proc.dyn_result orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult;
+                    const result = store.localDyn(proc.dyn_result.get() orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult;
                     try std.testing.expectEqual(param.desc, result.desc);
                 }
                 try std.testing.expect(found);
@@ -165,7 +165,7 @@ fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLi
         defer work.deinit(std.testing.allocator);
         var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
         defer visited.deinit();
-        try work.append(std.testing.allocator, proc.body.?);
+        try work.append(std.testing.allocator, proc.body.get().?);
         var records: usize = 0;
         var calls: usize = 0;
         var constructed: ?lir.LIR.LocalId = null;
@@ -224,7 +224,7 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
         defer pending.deinit(std.testing.allocator);
         var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
         defer visited.deinit();
-        try pending.append(std.testing.allocator, proc.body.?);
+        try pending.append(std.testing.allocator, proc.body.get().?);
         // The descriptor each record the body builds is built with, and the
         // argument blocks of its erased calls.
         var record_descs = collections.DenseMap(lir.LIR.LocalId, lir.LIR.LocalId).init(std.testing.allocator);
@@ -233,7 +233,7 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
         defer call_args.deinit(std.testing.allocator);
         const params = store.getLocalSpan(proc.args);
         // An erased worker's last parameter is the erased ABI's reuse input.
-        const reuse_params: usize = @intFromBool(proc.erased_reuse_arg != null);
+        const reuse_params: usize = @intFromBool(proc.erased_reuse_arg != .none);
         const param: ?lir.LIR.LocalId = if (params.len == 2 + reuse_params) collections.GuardedList.at(params, 0) else null;
         var forwards_param = false;
         var extracts_param = false;
@@ -298,7 +298,7 @@ test "boxy worker reads dynamic nominal backing descriptors from its type table"
                     defer pending.deinit(std.testing.allocator);
                     var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
                     defer visited.deinit();
-                    try pending.append(std.testing.allocator, proc.body.?);
+                    try pending.append(std.testing.allocator, proc.body.get().?);
                     var table_reads: usize = 0;
                     while (pending.pop()) |id| {
                         if ((try visited.getOrPut(id)).found_existing) continue;

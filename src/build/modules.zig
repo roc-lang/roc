@@ -270,6 +270,7 @@ pub const ModuleType = enum {
             },
             .collections => .{
                 .root = "src/collections/mod.zig",
+                .deps = &.{.build_options},
                 .tests = .{ .unit = .{ .aggregators = &.{"collections tests"} } },
             },
             .types => .{

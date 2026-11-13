@@ -48,9 +48,8 @@ const NamePrefix = struct {
 
     fn capture(self: *NamePrefix, allocator: Allocator, source: *const names.NameInterner) Allocator.Error!names.NameInterner {
         return .{
-            .bytes = .{ .items = std.ArrayList(u8).fromOwnedSlice(try self.bytes.capture(allocator, source.bytes.items.items)) },
-            .ends = .{ .items = std.ArrayList(u32).fromOwnedSlice(try self.ends.capture(allocator, source.ends.items.items)) },
-            .supports_inserts = false,
+            .bytes = .fromBorrowedSlice(try self.bytes.capture(allocator, source.bytes.items())),
+            .ends = .fromBorrowedSlice(try self.ends.capture(allocator, source.ends.items())),
         };
     }
 
@@ -138,7 +137,7 @@ pub const ProgramInputs = struct {
         inline for (.{ "module_names", "module_identities", "type_names", "method_names", "record_field_labels", "tag_labels", "export_names", "external_symbol_names" }) |field| {
             @field(view.names, field) = try @field(self, field).capture(allocator, &@field(source.names, field));
         }
-        view.names.proc_bases.items = std.ArrayList(names.ProcBaseKey).fromOwnedSlice(try self.proc_bases.capture(allocator, source.names.proc_bases.items.items));
+        view.names.proc_bases = .fromBorrowedSlice(try self.proc_bases.capture(allocator, source.names.proc_bases.items()));
         view.names.serialized = true;
         inline for (.{ "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |field| {
             @field(view, field) = try @field(self, field).capture(allocator, @field(source, field).unsafeRawItemsForView());

@@ -230,15 +230,17 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to restore key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         return null;
     };
-    const bytes = manager.loadFamilyBytes(.boxy_object, key.bytes, object_cache.scope) orelse {
+    const loaded = manager.loadFamilyBytes(.boxy_object, key.bytes, object_cache.scope) orelse {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no object cache entry for key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         return null;
     };
-    defer gpa.free(bytes);
+    const bytes = loaded.bytes;
+    defer manager.allocator.free(bytes);
     const entry = object_cache.decode(gpa, bytes) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidEntry => {
             if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} is not an entry ({d} bytes)\n", .{ &std.fmt.bytesToHex(key.bytes[0..8], .lower), bytes.len });
+            manager.rejectEntry(.checked, .boxy_object, key.bytes, object_cache.scope, loaded.stamp, "it does not decode as a Boxy object", .{});
             return null;
         },
     };
@@ -307,6 +309,7 @@ fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cach
             return error.OutOfMemory;
         },
         error.InvalidEntry => {
+            manager.rejectEntry(.checked, .boxy_object, key.bytes, object_cache.scope, data.stamp, "it does not decode as a Boxy object", .{});
             data.deinit(gpa);
             return null;
         },
@@ -382,7 +385,7 @@ pub fn hostedSymbols(arena: Allocator, store_: *const lir.LirStore) Allocator.Er
     var seen = std.StringHashMap(void).init(arena);
     var symbols = std.ArrayList([]const u8).empty;
     for (store_.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         const text = store_.getString(hosted.symbol);
         const gop = try seen.getOrPut(text);
         if (!gop.found_existing) try symbols.append(arena, try arena.dupe(u8, text));

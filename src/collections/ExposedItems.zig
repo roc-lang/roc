@@ -92,7 +92,7 @@ pub const ExposedItems = struct {
     fn findIndex(self: *Self, allocator: Allocator, ident_idx: IdentIdx) struct { index: usize, found: bool } {
         self.items.ensureSorted(allocator);
 
-        const entries = self.items.entries.items;
+        const entries = self.items.entries.items();
         var left: usize = 0;
         var right: usize = entries.len;
 
@@ -125,7 +125,7 @@ pub const ExposedItems = struct {
     fn setTargetById(self: *Self, allocator: Allocator, ident_idx: IdentIdx, target: ExposedItemTarget) Allocator.Error!void {
         const found = self.findIndex(allocator, ident_idx);
         if (found.found) {
-            self.items.entries.items[found.index].value = target;
+            self.items.entries.items()[found.index].value = target;
             return;
         }
 
@@ -221,7 +221,7 @@ pub const ExposedItems = struct {
 
     /// Get an iterator over all exposed items
     pub fn iterator(self: *const Self) Iterator {
-        return .{ .items = self.items.entries.items, .index = 0 };
+        return .{ .items = self.items.entries.items(), .index = 0 };
     }
 };
 

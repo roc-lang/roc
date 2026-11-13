@@ -38,7 +38,7 @@ fn staticCallables(exports: []const lir.Program.StaticDataExport) usize {
     var count: usize = 0;
     for (exports) |item| {
         for (item.relocations) |relocation| {
-            if (relocation.callable_capture_offset != null) count += 1;
+            if (relocation.callable_capture_offset != .none) count += 1;
         }
     }
     return count;

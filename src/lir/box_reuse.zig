@@ -57,7 +57,7 @@ pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) Resour
     for (0..store.procSpecCount()) |index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
         const proc = store.getProcSpecImmediate(proc_id);
-        if (proc.body == null or proc.hosted != null or proc.abi != .roc) continue;
+        if (proc.body == .none or proc.hosted.get() != null or proc.abi != .roc) continue;
         const ret = layouts.getLayout(proc.ret_layout);
         if (ret.tag == .box and !payloadNeedsOwnedUnbox(layouts, ret.getIdx())) {
             _ = try layouts.insertPtr(ret.getIdx());
@@ -567,7 +567,7 @@ const Transform = struct {
 
     fn jumpCountToJoin(self: *Transform, join_id: LIR.JoinPointId) ResourceError!usize {
         const proc = self.store.getProcSpecImmediate(self.proc_id);
-        const body = proc.body orelse return 0;
+        const body = proc.body.get() orelse return 0;
 
         var work = std.ArrayList(CFStmtId).empty;
         defer work.deinit(self.scratch_allocator);
@@ -738,7 +738,7 @@ fn testDirectBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqu
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{boxed_arg}),
         .frame_locals = try store.addLocalSpan(&.{ boxed_arg, old_payload, new_payload, result_box }),
-        .body = unbox,
+        .body = .some(unbox),
         .ret_layout = box_u64,
     }, .none);
 
@@ -749,7 +749,7 @@ fn testDirectBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqu
         defer scratch.deinit();
         try runProc(&store, &layouts, caller, scratch.allocator());
         try std.testing.expectEqual(layout_count, layouts.layoutCount());
-        try std.testing.expect(store.getProcSpecImmediate(callee).body == null);
+        try std.testing.expect(store.getProcSpecImmediate(callee).body == .none);
     } else {
         try run(&store, &layouts);
     }
@@ -810,7 +810,7 @@ test "box reuse rewrites an inlined straight-line payload producer" {
         .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&.{boxed_arg}),
         .frame_locals = try store.addLocalSpan(&.{ boxed_arg, old_payload, one, new_payload, result_box }),
-        .body = unbox,
+        .body = .some(unbox),
         .ret_layout = box_u64,
     }, .none);
 
@@ -860,7 +860,7 @@ fn testRejectedBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedE
         .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{boxed_arg}),
         .frame_locals = try store.addLocalSpan(&.{ boxed_arg, boxed_copy, old_payload, result_box }),
-        .body = unbox,
+        .body = .some(unbox),
         .ret_layout = box_u64,
     }, .none);
 
@@ -952,7 +952,7 @@ test "box reuse rewrites joined update wrappers" {
             prelude_zst,
             remainder_zst,
         }),
-        .body = unbox,
+        .body = .some(unbox),
         .ret_layout = box_u64,
     }, .none);
 
@@ -1054,7 +1054,7 @@ test "box reuse rewrites platform-style join remainder update wrappers" {
             proc_zst,
             remainder_zst,
         }),
-        .body = proc_zst_stmt,
+        .body = .some(proc_zst_stmt),
         .ret_layout = box_u64,
     }, .none);
 
@@ -1149,7 +1149,7 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
         .identity = LIR.ProcIdentity.forTest(11),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{ old_capture, new_capture, old_callable, new_callable }),
-        .body = old_pack,
+        .body = .some(old_pack),
         .ret_layout = erased_callable,
     }, .none);
 
@@ -1216,7 +1216,7 @@ test "erased callable reuse forwards through aliases between the packs" {
             old_callable,
             new_callable,
         }),
-        .body = old_pack,
+        .body = .some(old_pack),
         .ret_layout = erased_callable,
     }, .none);
 
@@ -1278,7 +1278,7 @@ test "erased callable reuse declines when an alias of the old pack is read elsew
             old_callable_alias2,
             new_callable,
         }),
-        .body = old_pack,
+        .body = .some(old_pack),
         .ret_layout = erased_callable,
     }, .none);
 
@@ -1336,7 +1336,7 @@ test "erased callable reuse forwards through the aliased return path" {
             return_alias_a,
             return_alias_b,
         }),
-        .body = old_pack,
+        .body = .some(old_pack),
         .ret_layout = erased_callable,
     }, .none);
 

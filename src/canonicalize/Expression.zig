@@ -1014,8 +1014,8 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
 
                 const module_idx_int = @backingInt(e.module_idx);
-                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
-                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                std.debug.assert(module_idx_int < ir.imports.imports.items().len);
+                const string_lit_idx = ir.imports.imports.items()[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
                 // Special case: Builtin module is an implementation detail, print as (builtin)
                 if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
@@ -1029,7 +1029,7 @@ pub const Expr = union(enum) {
             },
             .e_deferred_import_ref => |e| {
                 const begin = try ir.beginSExprNodeAt(tree, "e-deferred-import-ref", expr_idx);
-                const entry = ir.deferred_import_refs.items.items[@backingInt(e.ref)];
+                const entry = ir.deferred_import_refs.items()[@backingInt(e.ref)];
                 try tree.pushStringPair("module", ir.getIdent(entry.moduleName()));
                 try tree.pushStringPair("path", ir.getIdent(entry.path()));
                 const attrs = tree.beginNode();
@@ -1072,7 +1072,7 @@ pub const Expr = union(enum) {
                 const begin = try ir.beginSExprNodeAt(tree, "e-lookup-required", expr_idx);
                 const attrs = tree.beginNode();
 
-                const requires_items = ir.requires_types.items.items;
+                const requires_items = ir.requires_types.items();
                 const idx = e.requires_idx.toU32();
                 if (idx < requires_items.len) {
                     const required_type = requires_items[idx];
@@ -1223,8 +1223,8 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
 
                 const module_idx_int = @backingInt(e.module_idx);
-                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
-                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                std.debug.assert(module_idx_int < ir.imports.imports.items().len);
+                const string_lit_idx = ir.imports.imports.items()[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
                 // Special case: Builtin module is an implementation detail, print as (builtin)
                 if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {

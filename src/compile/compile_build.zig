@@ -298,6 +298,16 @@ pub const BuildEnv = struct {
     /// takes ordinary `.checking` validation.
     entry_validation: Can.Validation = .checking,
 
+    /// Whether a separate entry module below an owning `main.roc` is the only
+    /// checking root. When set, the owning `main.roc` and the selected
+    /// platform contribute only their headers, which dependency discovery
+    /// already read: they supply the entry's package aliases and public
+    /// modules, but neither is parsed into a module or checked, so the build
+    /// checks exactly the entry module's import closure. `roc test` sets this
+    /// so that testing a module runs that module's `expect`s and the ones its
+    /// imports reach, just as testing an app does.
+    entry_closure_only: bool = false,
+
     /// Optional source directory used to resolve imports from the root module.
     root_source_dir_override: ?[]const u8 = null,
     diagnostic_observer: ?struct {
@@ -587,6 +597,10 @@ pub const BuildEnv = struct {
 
     pub fn setEntryValidation(self: *BuildEnv, validation: Can.Validation) void {
         self.entry_validation = validation;
+    }
+
+    pub fn setEntryClosureOnly(self: *BuildEnv, enabled: bool) void {
+        self.entry_closure_only = enabled;
     }
 
     pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
@@ -1234,8 +1248,6 @@ pub const BuildEnv = struct {
 
         // Queue root module in coordinator
         const coord_pkg = coord.getPackage(pkg_name).?;
-        const module_name = base.module_path.getModuleName(pkg_root_file);
-        const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
         // When an owning `main.roc` supplied the packages, the file the build
         // was pointed at is a separate entry module and owns the entry
         // validation; the `main.roc` root is validated as an ordinary module.
@@ -1243,38 +1255,53 @@ pub const BuildEnv = struct {
             !std.mem.eql(u8, entry_file, pkg_root_file)
         else
             false;
-        coord_pkg.modules.items[root_id].validation = if (has_separate_entry) .checking else self.entry_validation;
-        if (self.root_source_dir_override) |source_dir| {
-            coord_pkg.modules.items[root_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
-        }
-        if (self.packages.get(pkg_name)) |queued_root_pkg| {
-            if (queued_root_pkg.kind == .platform) {
-                coord_pkg.modules.items[root_id].explicit_root_ident_names = try self.targetConfigRootIdentNames(queued_root_pkg.targets_config);
+        // Under `entry_closure_only`, the owning `main.roc` and the selected
+        // platform supply packages only: neither becomes a module, and the
+        // entry module is its package's root, exactly as when it is built
+        // without an owning `main.roc`.
+        const entry_is_only_root = has_separate_entry and self.entry_closure_only;
+        if (entry_is_only_root) {
+            replaceDiscoveredParse(&self.discovered_root_parse, null);
+        } else {
+            const module_name = base.module_path.getModuleName(pkg_root_file);
+            const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
+            coord_pkg.modules.items[root_id].validation = if (has_separate_entry) .checking else self.entry_validation;
+            if (self.root_source_dir_override) |source_dir| {
+                coord_pkg.modules.items[root_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
             }
+            if (self.packages.get(pkg_name)) |queued_root_pkg| {
+                if (queued_root_pkg.kind == .platform) {
+                    coord_pkg.modules.items[root_id].explicit_root_ident_names = try self.targetConfigRootIdentNames(queued_root_pkg.targets_config);
+                }
+            }
+            coord_pkg.modules.items[root_id].depth = 0;
+            coord_pkg.root_module_id = root_id;
+            coord_pkg.remaining_modules += 1;
+            coord.total_remaining += 1;
         }
-        coord_pkg.modules.items[root_id].depth = 0;
-        coord_pkg.root_module_id = root_id;
-        coord_pkg.remaining_modules += 1;
-        coord.total_remaining += 1;
 
         // Start workers (for multi-threaded mode)
         try coord.start();
 
         // Queue initial parse task
-        if (takeDiscoveredParse(&self.discovered_root_parse)) |parsed| {
-            try coord.enqueueDiscoveredParseTask(pkg_name, root_id, parsed);
-        } else {
-            try coord.enqueueParseTask(pkg_name, root_id);
+        if (coord_pkg.root_module_id) |root_id| {
+            if (takeDiscoveredParse(&self.discovered_root_parse)) |parsed| {
+                try coord.enqueueDiscoveredParseTask(pkg_name, root_id, parsed);
+            } else {
+                try coord.enqueueParseTask(pkg_name, root_id);
+            }
         }
 
         if (self.entry_module_abs) |entry_file| {
-            if (!std.mem.eql(u8, entry_file, pkg_root_file)) {
+            if (has_separate_entry) {
                 const entry_module_name = self.entry_module_logical_path orelse return error.Internal;
                 const entry_id = try coord_pkg.ensureModule(self.gpa, entry_module_name, entry_file);
                 const entry_module = &coord_pkg.modules.items[entry_id];
                 entry_module.validation = .explicit_roots;
-                // The build's root is the `main.roc` that supplied the
-                // packages, so the coordinator would otherwise take this
+                if (entry_is_only_root) coord_pkg.root_module_id = entry_id;
+                // Unless this file is its package's root, the build's root is
+                // the `main.roc` that supplied the packages, so the
+                // coordinator would otherwise take this
                 // file—the one the compiler was actually pointed at—for a
                 // module reached through imports, and withhold `default_app`
                 // from it. See `Coordinator.markTargetedModule`.
@@ -1300,7 +1327,7 @@ pub const BuildEnv = struct {
                 coord.markPlatformPackage(platform_coord_pkg.name);
                 // A selected platform that is itself the build root was
                 // already queued above; marking it is sufficient here.
-                if (!std.mem.eql(u8, platform_name, pkg_name)) {
+                if (!entry_is_only_root and !std.mem.eql(u8, platform_name, pkg_name)) {
                     const plat_module_name = base.module_path.getModuleName(pf_pkg.root_file);
                     const plat_root_id = try platform_coord_pkg.ensureModule(self.gpa, plat_module_name, pf_pkg.root_file);
                     if (platform_coord_pkg.modules.items[plat_root_id].phase == .Parse) {
@@ -2426,7 +2453,7 @@ pub const BuildEnv = struct {
             try self.remapSyntheticRootDocumentElement(
                 &report.document,
                 element,
-                original_line_starts.items.items,
+                original_line_starts.items(),
             );
         }
     }
@@ -2642,7 +2669,7 @@ pub const BuildEnv = struct {
         source_dir: []const u8,
         env: *const ModuleEnv,
     ) Allocator.Error!void {
-        for (env.file_dependencies.items.items) |dep| {
+        for (env.file_dependencies.items()) |dep| {
             const relative_path = env.fileDependencyRelativePath(dep);
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
             defer self.gpa.free(full_path);
@@ -2725,7 +2752,7 @@ pub const BuildEnv = struct {
             while (coordinator_packages.next()) |pkg| {
                 for (pkg.*.modules.items) |*mod| {
                     try Owned.append(allocator, &inputs, mod.path, mod.source_file_state.?);
-                    if (mod.moduleEnv()) |env| for (env.file_dependencies.items.items) |dep| {
+                    if (mod.moduleEnv()) |env| for (env.file_dependencies.items()) |dep| {
                         const path = try std.fs.path.resolve(allocator, &.{ mod.canonicalSourceDir(), env.fileDependencyRelativePath(dep) });
                         defer allocator.free(path);
                         const state: watch_inputs.State = switch (dep.state) {
@@ -3644,7 +3671,7 @@ pub const BuildEnv = struct {
                         );
                         const region_info = base.RegionInfo.position(
                             original_source,
-                            line_starts.items.items,
+                            line_starts.items(),
                             mapped_region.start.offset,
                             mapped_region.end.offset,
                         ) catch |err| base.invariant(
@@ -3658,7 +3685,7 @@ pub const BuildEnv = struct {
                             .warning_highlight,
                             owned_path,
                             original_source,
-                            line_starts.items.items,
+                            line_starts.items(),
                         );
                         return;
                     }

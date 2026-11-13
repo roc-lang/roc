@@ -41,6 +41,13 @@ const WorkerId = lower.WorkerId;
 const StaticDataExport = LirProgram.StaticDataExport;
 const StaticDataRelocation = LirProgram.StaticDataRelocation;
 const ExportIndex = u32;
+/// An export position as a typed index, for compact optional columns.
+const ExportSlot = enum(u32) { _ };
+/// A destination variant's position in its union.
+const VariantPosition = enum(u32) { _ };
+const OptionalName = collections.OptionalId(NameId);
+const OptionalVariant = collections.OptionalId(VariantPosition);
+const OptionalExport = collections.OptionalId(ExportSlot);
 
 /// The static descriptors and dictionaries the program carries as static data.
 pub const StaticDescs = struct {
@@ -79,6 +86,8 @@ pub const StaticDescs = struct {
     captured_callables: std.AutoHashMapUnmanaged(ExportIndex, CapturedCallable) = .empty,
     captured_tables: std.AutoHashMapUnmanaged(ExportIndex, u32) = .empty,
     captured_records: std.ArrayList(CapturedRecord) = .empty,
+    /// The procedure each static callable enters, from its reservation on.
+    callable_procs: std.AutoHashMapUnmanaged(ExportIndex, LIR.LirProcSpecId) = .empty,
     next_unfilled: usize = 0,
     /// The root callable of each static dictionary tree, by its root.
     dictionary_trees: std.StringHashMapUnmanaged(ExportIndex) = .empty,
@@ -167,6 +176,7 @@ pub const StaticDescs = struct {
         var captured = self.captured_callables.valueIterator();
         while (captured.next()) |callable| self.allocator.free(callable.words);
         self.captured_callables.deinit(self.allocator);
+        self.callable_procs.deinit(self.allocator);
         self.captured_tables.deinit(self.allocator);
         for (self.captured_records.items) |record| self.allocator.free(record.elems);
         self.captured_records.deinit(self.allocator);
@@ -235,9 +245,16 @@ pub const StaticDescs = struct {
     /// An immortal callable of `proc` with `word_count` capture words,
     /// reserved: `fillCallable` gives its words once the callables it
     /// captures, which may capture it, are reserved too.
-    pub fn reserveCallable(self: *StaticDescs, word_count: u32) Allocator.Error!ExportIndex {
+    pub fn reserveCallable(self: *StaticDescs, proc: LIR.LirProcSpecId, word_count: u32) Allocator.Error!ExportIndex {
         self.extra_nodes += 1;
-        return try self.reserveStaticCallable(0, 16 + self.extra_nodes, word_count);
+        const node = try self.reserveStaticCallable(0, 16 + self.extra_nodes, word_count);
+        try self.callable_procs.put(self.allocator, node, proc);
+        return node;
+    }
+
+    /// The procedure the static callable `node` enters.
+    pub fn callableProc(self: *const StaticDescs, node: ExportIndex) LIR.LirProcSpecId {
+        return self.callable_procs.get(node) orelse types.invariant("a static callable has no procedure");
     }
 
     /// Fill the callable `reserveCallable` reserved.
@@ -340,7 +357,7 @@ pub const StaticDescs = struct {
                 .primitive, .empty_record, .variable, .function => {},
                 .record => |record| {
                     for (store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
-                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                    if (record.ext.get()) |ext| try pending.append(self.allocator, ext);
                     try pending.appendSlice(self.allocator, store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, store.span(items)),
@@ -608,7 +625,7 @@ pub const StaticDescs = struct {
     fn addSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = .opaque_ptr,
         });
         return id;
@@ -919,6 +936,9 @@ pub const StaticDescs = struct {
     }
 
     fn fillStaticCallable(self: *StaticDescs, node: ExportIndex, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!void {
+        const known = try self.callable_procs.getOrPut(self.allocator, node);
+        if (known.found_existing and known.value_ptr.* != proc) types.invariant("a static callable was reserved for another procedure");
+        known.value_ptr.* = proc;
         if (self.table_identities) {
             const owned = try self.allocator.dupe(CaptureWord, words);
             errdefer self.allocator.free(owned);
@@ -944,8 +964,8 @@ pub const StaticDescs = struct {
             .target_symbol_name = try self.result.store.getProcSpec(proc).identity.symbolName(self.allocator),
             .owns_target_symbol_name = true,
             .kind = .function_pointer,
-            .procedure = proc,
-            .callable_capture_offset = capture_offset,
+            .procedure = .some(proc),
+            .callable_capture_offset = .some(capture_offset),
         };
         var next: usize = 1;
         for (words, 0..) |word, position| {
@@ -1107,13 +1127,13 @@ pub const StaticDescs = struct {
             },
             .record => |record| {
                 kind = .record;
-                flags.declared_order = record.declared != null;
+                flags.declared_order = record.declared.get() != null;
                 const fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
                 defer self.allocator.free(fields);
                 const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
                 count = @intCast(storage.len);
-                try self.fillFields(item.node, &pointers, committed_layout, .{ .types = storage, .scope = scope_id }, fields.len, if (record.declared) |declared| self.store.declaredSlots(declared) else null);
+                try self.fillFields(item.node, &pointers, committed_layout, .{ .types = storage, .scope = scope_id }, fields.len, if (record.declared.get()) |declared| self.store.declaredSlots(declared) else null);
             },
             .tuple => |items_span| {
                 kind = .tuple;
@@ -1357,23 +1377,23 @@ pub const StaticDescs = struct {
                 try pointers.append(self.allocator, .{ .offset = names_layout.of(.child), .target = target });
             },
             .record, .tuple => |fields| {
-                const labels = try self.allocator.alloc(?NameId, fields.len);
+                const labels = try self.allocator.alloc(OptionalName, fields.len);
                 defer self.allocator.free(labels);
                 const keys = try self.allocator.alloc(Key, fields.len);
                 defer self.allocator.free(keys);
                 for (fields, labels, keys) |field, *label, *child| {
-                    label.* = field.name;
+                    label.* = .of(field.name);
                     child.* = field.key;
                 }
                 if (try self.namesEntries(labels, keys, pending)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
             },
             .tag_union => |tag_union| {
-                const labels = try self.allocator.alloc(?NameId, tag_union.variants.len);
+                const labels = try self.allocator.alloc(OptionalName, tag_union.variants.len);
                 defer self.allocator.free(labels);
                 const keys = try self.allocator.alloc(Key, tag_union.variants.len);
                 defer self.allocator.free(keys);
                 for (tag_union.variants, labels, keys) |variant, *label, *child| {
-                    label.* = variant.name;
+                    label.* = .some(variant.name);
                     child.* = variant.payload;
                 }
                 if (try self.namesEntries(labels, keys, pending)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
@@ -1384,7 +1404,7 @@ pub const StaticDescs = struct {
 
     /// The `NamesEntry` array of a names block: each component's label and
     /// its type's names block.
-    fn namesEntries(self: *StaticDescs, labels: []const ?NameId, keys: []const Key, pending: *std.ArrayList(Key)) Allocator.Error!?ExportIndex {
+    fn namesEntries(self: *StaticDescs, labels: []const OptionalName, keys: []const Key, pending: *std.ArrayList(Key)) Allocator.Error!?ExportIndex {
         if (labels.len == 0) return null;
         const entry_layout = desc_format.NamesEntry.layout(self.width);
         self.extra_nodes += 1;
@@ -1393,7 +1413,7 @@ pub const StaticDescs = struct {
         defer pointers.deinit(self.allocator);
         for (labels, keys, 0..) |label, key, index| {
             const base_offset = @as(u32, @intCast(index)) * entry_layout.size;
-            if (label) |name| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.label), .target = (try self.reserveName(name)).node });
+            if (label.get()) |name| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.label), .target = (try self.reserveName(name)).node });
             if (try self.reserveNamesBlock(key, pending)) |block| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.names), .target = block });
         }
         try self.setRelocations(entries, pointers.items);
@@ -1485,7 +1505,7 @@ pub const StaticDescs = struct {
             .record => |record| blk: {
                 const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
-                break :blk .{ storage.len, if (record.declared) |order| self.store.declaredSlots(order) else null };
+                break :blk .{ storage.len, if (record.declared.get()) |order| self.store.declaredSlots(order) else null };
             },
             .tuple => |items| .{ self.store.span(items).len, null },
             .empty_record => .{ 0, null },
@@ -1648,7 +1668,7 @@ pub const StaticDescs = struct {
                 defer self.allocator.free(names);
                 const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
-                break :blk .{ .record = try self.fieldShapes(committed_layout, storage, scope_id, names, if (record.declared) |declared| self.store.declaredSlots(declared) else null) };
+                break :blk .{ .record = try self.fieldShapes(committed_layout, storage, scope_id, names, if (record.declared.get()) |declared| self.store.declaredSlots(declared) else null) };
             },
             .tuple => |items_span| blk: {
                 const items = try self.allocator.dupe(TypeId, self.store.span(items_span));
@@ -1808,20 +1828,21 @@ pub const StaticDescs = struct {
             const sources = from_shape.tag_union.variants;
             const node = try self.reservePlanNode(.retag, @intCast(sources.len), 0);
             try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
-            const targets = try self.allocator.alloc(?u32, sources.len);
+            const targets = try self.allocator.alloc(OptionalVariant, sources.len);
             defer self.allocator.free(targets);
-            for (sources, targets) |source, *target| target.* = @intFromBool(std.mem.eql(u8, self.store.nameText(source.name), "True"));
+            for (sources, targets) |source, *target| target.* = .some(@fromBackingInt(@intFromBool(std.mem.eql(u8, self.store.nameText(source.name), "True"))));
             try self.finishPlanNode(node, from, to, null, try self.retagEntries(targets, null));
             return node;
         }
         if (from_shape == .bool_ and to_shape == .tag_union) {
             const node = try self.reservePlanNode(.retag, 2, 0);
             try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
-            var targets: [2]?u32 = .{ null, null };
+            var targets: [2]OptionalVariant = .{ .none, .none };
             for (to_shape.tag_union.variants, 0..) |variant, index| {
                 const text = self.store.nameText(variant.name);
-                if (std.mem.eql(u8, text, "False")) targets[0] = @intCast(index);
-                if (std.mem.eql(u8, text, "True")) targets[1] = @intCast(index);
+                const position: VariantPosition = @fromBackingInt(@as(u32, @intCast(index)));
+                if (std.mem.eql(u8, text, "False")) targets[0] = .some(position);
+                if (std.mem.eql(u8, text, "True")) targets[1] = .some(position);
             }
             try self.finishPlanNode(node, from, to, null, try self.retagEntries(&targets, null));
             return node;
@@ -1878,18 +1899,21 @@ pub const StaticDescs = struct {
                 // The destination's variant is the source's by tag name; a
                 // label a joined row holds at several payload types names
                 // the variant whose payload describes the same values.
-                const targets = try self.allocator.alloc(?u32, sources.len);
+                const targets = try self.allocator.alloc(OptionalVariant, sources.len);
                 defer self.allocator.free(targets);
-                const payloads = try self.allocator.alloc(?ExportIndex, sources.len);
+                const payloads = try self.allocator.alloc(OptionalExport, sources.len);
                 defer self.allocator.free(payloads);
                 for (sources, targets, payloads) |source, *target, *payload| {
-                    target.* = null;
+                    target.* = .none;
                     for (to_union.variants, 0..) |candidate, index| {
                         if (candidate.name != source.name or candidate.payload_count != source.payload_count) continue;
-                        if (target.* != null) types.invariant("a re-tagged variant matches two destination variants");
-                        target.* = @intCast(index);
+                        if (target.* != .none) types.invariant("a re-tagged variant matches two destination variants");
+                        target.* = .some(@fromBackingInt(@as(u32, @intCast(index))));
                     }
-                    payload.* = if (target.*) |index| if (source.payload_count != 0) try self.planBetween(source.payload, to_union.variants[index].payload) else null else null;
+                    payload.* = if (target.get()) |position| if (source.payload_count != 0)
+                        .some(@fromBackingInt(try self.planBetween(source.payload, to_union.variants[@backingInt(position)].payload)))
+                    else
+                        .none else .none;
                 }
                 try self.finishPlanNode(node, from, to, null, try self.retagEntries(targets, payloads));
                 return node;
@@ -1945,7 +1969,7 @@ pub const StaticDescs = struct {
     /// The `AdaptVariant` entries of a re-tag plan: for each source
     /// variant, the destination's discriminant (null where the destination
     /// lacks the variant) and its payload's plan.
-    fn retagEntries(self: *StaticDescs, targets: []const ?u32, payloads: ?[]const ?ExportIndex) Allocator.Error!?ExportIndex {
+    fn retagEntries(self: *StaticDescs, targets: []const OptionalVariant, payloads: ?[]const OptionalExport) Allocator.Error!?ExportIndex {
         if (targets.len == 0) return null;
         const variant_layout = desc_format.AdaptVariant.layout(self.width);
         self.extra_nodes += 1;
@@ -1954,9 +1978,9 @@ pub const StaticDescs = struct {
         defer pointers.deinit(self.allocator);
         for (targets, 0..) |target, index| {
             const base_offset = @as(u32, @intCast(index)) * variant_layout.size;
-            writeU32(@constCast(self.exports.items[entries].bytes), base_offset + variant_layout.of(.discriminant), target orelse desc_format.AdaptVariant.absent);
-            const payload = if (payloads) |plans| plans[index] else null;
-            if (payload) |plan| try pointers.append(self.allocator, .{ .offset = base_offset + variant_layout.of(.plan), .target = plan });
+            writeU32(@constCast(self.exports.items[entries].bytes), base_offset + variant_layout.of(.discriminant), if (target.get()) |position| @backingInt(position) else desc_format.AdaptVariant.absent);
+            const payload = if (payloads) |plans| plans[index].get() else null;
+            if (payload) |plan| try pointers.append(self.allocator, .{ .offset = base_offset + variant_layout.of(.plan), .target = @backingInt(plan) });
         }
         try self.setRelocations(entries, pointers.items);
         return entries;
@@ -2319,12 +2343,12 @@ test "override scopes are interned by content and restricted to a type's reach" 
     defer declarations.deinit(allocator);
     var declaration_ids: [2]checked.CheckedNominalDeclarationId = undefined;
     for (&declaration_ids) |*id| {
-        id.* = @fromBackingInt(@intCast(declarations.nominal_declarations.items.len));
+        id.* = @fromBackingInt(@intCast(declarations.nominal_declarations.items().len));
         // These opaque nominals are compared by identity only. No backing,
         // declaration root, source statement, or name metadata is inspected.
         var declaration: checked.CheckedNominalDeclaration = undefined;
         declaration.id = id.*;
-        try declarations.nominal_declarations.append(allocator, declaration);
+        _ = try declarations.nominal_declarations.append(allocator, declaration);
     }
     const module: types.ModuleIndex = @fromBackingInt(@intCast(fixture.modules.views.items.len));
     // Scope traversal never opens a backing for these has_backing=false nodes.

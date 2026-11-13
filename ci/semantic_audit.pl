@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use File::Find;
+require './ci/storage_lint.pl';
 
 my @roots = qw(
     src/check
@@ -371,6 +372,28 @@ sub guarded_stale_write_reason {
 }
 
 my @violations;
+
+for my $root (qw(src/check src/postcheck src/lir src/eval src/layout src/types src/compile src/canonicalize)) {
+    next unless -d $root;
+    find({
+        wanted => sub {
+            my $path = $File::Find::name;
+            return if skip_file($path);
+            open my $fh, '<', $path or die "failed to open $path: $!";
+            local $/;
+            my $source = <$fh>;
+            close $fh;
+            for my $error (StorageLint::violations($source)) {
+                my ($offset, $reason) = @$error;
+                my $prefix = substr($source, 0, $offset);
+                my $line_no = 1 + ($prefix =~ tr/\n/\n/);
+                my ($line) = substr($source, $offset) =~ /([^\n]*)/;
+                push @violations, [$path, $line_no, $reason, $line];
+            }
+        },
+        no_chdir => 1,
+    }, $root);
+}
 
 sub scan_snapshot_module_words {
     my $root = 'test/snapshots';

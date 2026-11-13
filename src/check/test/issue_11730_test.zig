@@ -25,7 +25,7 @@ test "issue 11730: fixed decoder errors survive generalized helper layers" {
     }
     // A fixed local shape contributes its constraints once. Its helpers do not
     // need per-use codec evidence just to rediscover the same required field.
-    try std.testing.expectEqual(0, env.module_env.binding_scheme_codec_requirements.items.items.len);
+    try std.testing.expectEqual(0, env.module_env.binding_scheme_codec_requirements.items().len);
 }
 
 test "issue 11730: forwarding depth does not multiply fixed codec derivations" {
@@ -47,14 +47,14 @@ test "issue 11730: forwarding depth does not multiply fixed codec derivations" {
     const ty = try forwarded.allocDefType(std.testing.allocator, "hop32");
     defer std.testing.allocator.free(ty);
     try std.testing.expect(std.mem.find(u8, ty, "InvalidJson(Str)") != null);
-    try std.testing.expectEqual(0, forwarded.module_env.binding_scheme_codec_requirements.items.items.len);
+    try std.testing.expectEqual(0, forwarded.module_env.binding_scheme_codec_requirements.items().len);
     try std.testing.expectEqual(
-        direct.module_env.generated_codec_derivations.items.items.len,
-        forwarded.module_env.generated_codec_derivations.items.items.len,
+        direct.module_env.generated_codec_derivations.items().len,
+        forwarded.module_env.generated_codec_derivations.items().len,
     );
     try std.testing.expectEqual(
-        direct.module_env.generated_codec_calls.items.items.len,
-        forwarded.module_env.generated_codec_calls.items.items.len,
+        direct.module_env.generated_codec_calls.items().len,
+        forwarded.module_env.generated_codec_calls.items().len,
     );
 }
 
@@ -110,7 +110,7 @@ test "issue 11730: nested local record demands survive success projection" {
     const ty = try env.allocDefType(std.testing.allocator, "fetch");
     defer std.testing.allocator.free(ty);
     try std.testing.expect(std.mem.find(u8, ty, "InvalidJson(Str)") != null);
-    try std.testing.expectEqual(0, env.module_env.binding_scheme_codec_requirements.items.items.len);
+    try std.testing.expectEqual(0, env.module_env.binding_scheme_codec_requirements.items().len);
 }
 
 test "issue 11730: local decoder permits wider independent caller rows" {

@@ -18,7 +18,12 @@ pub const Text = extern struct { start: u32, len: u32 };
 /// A snapshot and its preserved display text.
 pub const Formatted = extern struct { snapshot: snapshot.SnapshotContentIdx, text: Text };
 /// Pointer-free snapshot tag with its preserved display text.
-pub const Tag = struct { name: base.Ident.Idx, args: @FieldType(snapshot.SnapshotTag, "args"), text: Text };
+pub const Tag = struct {
+    name: base.Ident.Idx,
+    args: @FieldType(snapshot.SnapshotTag, "args"),
+    render_root: ?snapshot.SnapshotContentIdx,
+    text: Text,
+};
 /// An explicit foreign source dependency for retained diagnostic regions.
 pub const Source = extern struct { owner: u32, digest: [32]u8 };
 
@@ -29,6 +34,8 @@ extra_strings: []const u8 = &.{},
 missing_patterns: []const problem.ExtraStringIdx = &.{},
 regions: []const base.Region = &.{},
 contents: []const snapshot.SnapshotContent = &.{},
+node_formats: []const snapshot.NodeFormat = &.{},
+captures: []const snapshot.Capture = &.{},
 content_indexes: []const snapshot.SnapshotContentIdx = &.{},
 record_fields: []const snapshot.SnapshotRecordField = &.{},
 tags: []const Tag = &.{},
@@ -46,6 +53,8 @@ pub const Serialized = extern struct {
     missing_patterns: serde.SerializedSlice(problem.ExtraStringIdx) = .{},
     regions: serde.SerializedSlice(base.Region) = .{},
     contents: serde.SerializedSlice(snapshot.SnapshotContent) = .{},
+    node_formats: serde.SerializedSlice(snapshot.NodeFormat) = .{},
+    captures: serde.SerializedSlice(snapshot.Capture) = .{},
     content_indexes: serde.SerializedSlice(snapshot.SnapshotContentIdx) = .{},
     record_fields: serde.SerializedSlice(snapshot.SnapshotRecordField) = .{},
     tags: serde.SerializedSlice(Tag) = .{},
@@ -85,12 +94,12 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: ?*const dependenci
     var tags = std.ArrayList(Tag).empty;
     for (0..snapshots.tags.len()) |i| {
         const tag = snapshots.tags.get(@fromBackingInt(@as(u32, @intCast(i))));
-        try tags.append(allocator, .{ .name = tag.name, .args = tag.args, .text = try appendText(allocator, &text, tag.formatted) });
+        try tags.append(allocator, .{ .name = tag.name, .args = tag.args, .render_root = tag.render_root, .text = try appendText(allocator, &text, tag.formatted) });
     }
     var formatted = std.ArrayList(Formatted).empty;
     for (0..@as(usize, @intCast(snapshots.contents.len()))) |i| {
         const id: snapshot.SnapshotContentIdx = @fromBackingInt(@as(u32, @intCast(i)));
-        if (snapshots.getFormattedString(id)) |bytes| try formatted.append(allocator, .{ .snapshot = id, .text = try appendText(allocator, &text, bytes) });
+        if (snapshots.formatted_strings.get(id)) |bytes| try formatted.append(allocator, .{ .snapshot = id, .text = try appendText(allocator, &text, bytes) });
     }
     const fields = try allocator.alloc(snapshot.SnapshotRecordField, @intCast(snapshots.record_fields.len()));
     for (fields, 0..) |*field, i| field.* = snapshots.record_fields.get(@fromBackingInt(@as(u32, @intCast(i))));
@@ -108,12 +117,14 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: ?*const dependenci
         .pending = checker.problems.pending_static_exhaustiveness.items,
         .extra_strings = checker.problems.extra_strings_backing.items,
         .missing_patterns = checker.problems.missing_patterns_backing.items,
-        .regions = checker.regions.items.items,
-        .contents = snapshots.contents.items.items,
-        .content_indexes = snapshots.content_indexes.items.items,
+        .regions = checker.regions.items(),
+        .contents = snapshots.contents.items(),
+        .node_formats = snapshots.node_formats.items,
+        .captures = snapshots.captures.items,
+        .content_indexes = snapshots.content_indexes.items(),
         .record_fields = fields,
         .tags = tags.items,
-        .constraints = snapshots.static_dispatch_constraints.items.items,
+        .constraints = snapshots.static_dispatch_constraints.items(),
         .formatted = formatted.items,
         .text = text.items,
         .sources = sources.items,
@@ -137,8 +148,8 @@ pub fn sourcesMatch(self: Self, scope: *const dependencies.Scope) bool {
 /// exhaustiveness recipes. Ordinary publication and reporting decide failures.
 pub fn install(self: Self, checker: anytype) Allocator.Error!void {
     try self.installProblems(&checker.problems);
-    checker.regions.items.clearRetainingCapacity();
-    try self.installRendering(checker.gpa, &checker.snapshots, &checker.regions);
+    checker.regions.clearRetainingCapacity();
+    try self.installRendering(checker.gpa, &checker.snapshots, &checker.regions, snapshot.FormatContext.of(&checker.type_writer));
 }
 
 /// Append the stored problems, deferred exhaustiveness recipes and the strings
@@ -151,18 +162,35 @@ pub fn installProblems(self: Self, store: *problem.Store) Allocator.Error!void {
 }
 
 /// Fill an empty snapshot store and region list with the snapshots and
-/// regions the stored problems render with.
-pub fn installRendering(self: Self, allocator: Allocator, snapshots: *snapshot.Store, regions: *base.Region.List) Allocator.Error!void {
+/// regions the stored problems render with. Snapshots whose text was not
+/// preserved render on demand with `format_context`, the module's names,
+/// import display names and default sources.
+pub fn installRendering(
+    self: Self,
+    allocator: Allocator,
+    snapshots: *snapshot.Store,
+    regions: *base.Region.List,
+    format_context: snapshot.FormatContext,
+) Allocator.Error!void {
+    snapshots.format_context = format_context;
     _ = try regions.appendSlice(allocator, self.regions);
     _ = try snapshots.contents.appendSlice(allocator, self.contents);
+    try snapshots.node_formats.appendSlice(allocator, self.node_formats);
+    try snapshots.captures.appendSlice(allocator, self.captures);
+    try snapshots.render_graphs.appendNTimes(allocator, null, self.captures.len);
     _ = try snapshots.content_indexes.appendSlice(allocator, self.content_indexes);
     _ = try snapshots.record_fields.appendSlice(allocator, self.record_fields);
     _ = try snapshots.static_dispatch_constraints.appendSlice(allocator, self.constraints);
     for (self.tags) |tag| {
         const formatted = try allocator.dupe(u8, self.text[tag.text.start..][0..tag.text.len]);
         errdefer allocator.free(formatted);
-        _ = try snapshots.tags.append(allocator, .{ .name = tag.name, .args = tag.args, .formatted = formatted });
+        _ = try snapshots.tags.append(allocator, .{ .name = tag.name, .args = tag.args, .formatted = formatted, .render_root = tag.render_root });
     }
-    try snapshots.formatted_strings_backing.appendSlice(self.text);
-    for (self.formatted) |formatted| try snapshots.formatted_strings.put(allocator, formatted.snapshot, .{ .start = formatted.text.start, .count = formatted.text.len });
+    for (self.formatted) |formatted| {
+        const text = try allocator.dupe(u8, self.text[formatted.text.start..][0..formatted.text.len]);
+        errdefer allocator.free(text);
+        try snapshots.formatted_log.ensureUnusedCapacity(allocator, 1);
+        try snapshots.formatted_strings.put(allocator, formatted.snapshot, text);
+        snapshots.formatted_log.appendAssumeCapacity(formatted.snapshot);
+    }
 }
