@@ -1654,6 +1654,10 @@ commit_probe_active: bool = false,
 /// destructive side-table transition and is forbidden while any probe can
 /// still roll the type store back.
 probe_depth: u32 = 0,
+/// Where the module first nested a generalization scope inside one at the
+/// deepest rank (`pushGeneralizationScope`), once that is reported. The
+/// module reports it once, however many scopes nest past the limit.
+generalization_nesting_limit_region: ?Region = null,
 /// The frame discipline of every field above (design.md "Frame-Partitioned
 /// Phase State"). A field missing from this table, or a name that is not a
 /// field, is a compile error.
@@ -2100,6 +2104,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .probe_var_pool_lens = .scratch,
     .commit_probe_active = .lexical,
     .probe_depth = .lexical,
+    .generalization_nesting_limit_region = .keyed,
 });
 
 /// A frame-owned field left holding entries when a check entry point returns.
@@ -2781,7 +2786,7 @@ comptime {
     if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DispatchTargetInstantiation) == 88);
     std.debug.assert(@sizeOf(DispatchReplaySource) == 44);
     std.debug.assert(@sizeOf(UseInstance) == 72);
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DeferredLinkContext) == 64);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(DeferredLinkContext) == 56);
     std.debug.assert(@sizeOf(UseReplaySource) == 40);
 }
 
@@ -5925,9 +5930,30 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
     }
 }
 
-/// Generalize the variables of `env`'s current rank.
+/// Generalize the variables of `env`'s current rank. A scope entered
+/// without a rank of its own (`pushGeneralizationScope`) generalizes
+/// nothing: its variables share the enclosing scope's rank and are
+/// generalized when that scope is.
 fn generalizeRank(self: *Self, env: *Env) Allocator.Error!void {
+    if (!env.var_pool.generalizesInnermostScope()) return;
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+}
+
+/// Enter a nested generalization scope for the source at `region`. Inside a
+/// scope at the deepest rank the new scope gets no rank of its own
+/// (`VarPool.pushRank`): the module reports, once, that its definitions nest
+/// too deeply to generalize, and the scope is checked at the enclosing rank
+/// without being generalized. That continuation is diagnostic recovery on
+/// the reported error (design.md "Solver-Mutating Rewrites").
+fn pushGeneralizationScope(self: *Self, env: *Env, region: Region) Allocator.Error!void {
+    try env.var_pool.pushRank();
+    if (env.var_pool.generalizesInnermostScope() or self.generalization_nesting_limit_region != null) return;
+    try self.reportGeneralizationNestingLimit(region);
+}
+
+fn reportGeneralizationNestingLimit(self: *Self, region: Region) Allocator.Error!void {
+    self.generalization_nesting_limit_region = region;
+    _ = try self.problems.appendProblem(.{ .generalization_nesting_too_deep = .{ .region = region } });
 }
 
 /// Mark every dispatch edge that selected an unpromoted local procedure,
@@ -21556,8 +21582,9 @@ fn predeclareAnnotationSchemeHelp(
 ) std.mem.Allocator.Error!Var {
     const problems_len = self.problems.len();
     const snapshots_mark = self.snapshots.mark();
+    const nesting_limit_reported = self.generalization_nesting_limit_region != null;
 
-    try env.var_pool.pushRank();
+    try self.pushGeneralizationScope(env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(annotation_idx)));
     const saved_predeclaring = self.predeclaring_annotation;
     const saved_active_scheme_root = self.active_scheme_root;
     self.predeclaring_annotation = true;
@@ -21629,6 +21656,11 @@ fn predeclareAnnotationSchemeHelp(
 
     self.truncateProblems(problems_len);
     self.snapshots.truncateToMark(snapshots_mark);
+    // The nesting limit is the module's to report however the scope that
+    // reached it ends, so its report survives the discarded problems.
+    if (!nesting_limit_reported) {
+        if (self.generalization_nesting_limit_region) |region| try self.reportGeneralizationNestingLimit(region);
+    }
     try self.resetAnnotationNodes(annotation_idx);
 
     if (hole_rank) |hr| {
@@ -22735,12 +22767,12 @@ fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.E
         !isFunctionDef(&self.cir.store, self.cir.store.getExpr(self.cir.store.getDef(scc.defs[0]).expr));
 
     self.group_states.items[group_index] = .checking;
-    const boundary_rank = if (group_is_value_def) base_rank else base_rank.next();
+    const boundary_rank = if (group_is_value_def) base_rank else base_rank.innerScope();
     state.try_row_fixpoint = try self.pushTryRowFixpoint(boundary_rank);
     try self.pushGroupFrame(.{
         .group_index = group_index,
         .base_rank = base_rank,
-        .def_check_rank = if (scc.is_recursive) base_rank.next() else base_rank,
+        .def_check_rank = if (scc.is_recursive) base_rank.innerScope() else base_rank,
         .boundary_rank = boundary_rank,
         .pending_targets_top = self.pending_dispatch_targets.items.len,
         .pending_predeclared_uses_top = self.pending_predeclared_scheme_uses.items.len,
@@ -22762,7 +22794,7 @@ fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.E
         return .{ .push = .{ .def = .{ .def_idx = scc.defs[0] } } };
     }
 
-    try env.var_pool.pushRank();
+    try self.pushGeneralizationScope(env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(scc.defs[0])));
     state.frame_rank = env.rank();
 
     // Rank every member's def/pattern vars in the shared frame first, so
@@ -30367,7 +30399,7 @@ fn beginExprCheckFrame(
     if (frame.should_generalize) try self.activateSchemeOwner(expr_var_raw);
 
     if (frame.should_generalize) {
-        try env.var_pool.pushRank();
+        try self.pushGeneralizationScope(env, expr_region);
         frame.rank_pushed = true;
     }
 
@@ -32626,7 +32658,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
 
             const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
             if (decl.decl_fn_frame) {
-                try env.var_pool.pushRank();
+                try self.pushGeneralizationScope(env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx)));
                 const fixpoint = try self.pushTryRowFixpoint(env.rank());
                 decl.try_row_fixpoint = fixpoint;
                 try self.addTryRowFixpointLink(fixpoint, decl_pattern_var);
@@ -61900,6 +61932,10 @@ fn reportDerivedMapError(
 const EnvPool = struct {
     available: std.ArrayList(Env),
     gpa: Allocator,
+    /// The deepest rank an acquired env's scopes get (`VarPool.deepest_rank`).
+    /// Always `Rank.deepest` outside tests, which lower it to reach the
+    /// generalization nesting limit cheaply.
+    deepest_rank: Rank = .deepest,
 
     fn init(gpa: Allocator) std.mem.Allocator.Error!EnvPool {
         var pool = try std.ArrayList(Env).initCapacity(gpa, 8);
@@ -61929,12 +61965,15 @@ const EnvPool = struct {
             // Reset the env for reuse
             var reused_env = env;
             try reused_env.reset(.generalized);
+            reused_env.var_pool.deepest_rank = self.deepest_rank;
             return reused_env;
         } else {
             // Otherwise init a new one and ensure there's room to put it back
             // into the pool when we're done using it
             try self.available.ensureUnusedCapacity(self.gpa, 1);
-            return try Env.init(self.gpa, .generalized);
+            var new_env = try Env.init(self.gpa, .generalized);
+            new_env.var_pool.deepest_rank = self.deepest_rank;
+            return new_env;
         }
     }
 

@@ -65,6 +65,7 @@ const UnmatchablePattern = problem_mod.UnmatchablePattern;
 const MatchAltBinderMissing = problem_mod.MatchAltBinderMissing;
 const DiscardedVarUpdate = problem_mod.DiscardedVarUpdate;
 const ComptimeCondition = problem_mod.ComptimeCondition;
+const GeneralizationNestingTooDeep = problem_mod.GeneralizationNestingTooDeep;
 
 // Type declaration errors
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
@@ -1171,6 +1172,7 @@ pub const ReportBuilder = struct {
             .match_alt_binder_missing => |data| return self.buildMatchAltBinderMissingReport(data),
             .discarded_var_update => |data| return self.buildDiscardedVarUpdateReport(data),
             .comptime_condition => |data| return self.buildComptimeConditionReport(data),
+            .generalization_nesting_too_deep => |data| return self.buildGeneralizationNestingTooDeepReport(data),
         }
     }
 
@@ -6430,6 +6432,13 @@ pub const ReportBuilder = struct {
         try report.document.addCodeBlock(try report.addOwnedString(reassignment));
 
         return report;
+    }
+
+    fn buildGeneralizationNestingTooDeepReport(self: *Self, data: GeneralizationNestingTooDeep) Allocator.Error!Report {
+        return self.buildHighlightedRegionReport("Definitions Nested Too Deeply", "This definition is nested inside too many other definitions for the compiler to generalize its type.", .runtime_error, data.region, &.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Move some of the enclosing definitions to the top level."),
+        });
     }
 
     fn buildComptimeConditionReport(self: *Self, data: ComptimeCondition) Allocator.Error!Report {

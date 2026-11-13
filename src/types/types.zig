@@ -32,9 +32,11 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    // A rank counts nested generalization scopes, which valid source can nest
-    // arbitrarily deep, so it takes a full word.
-    try std.testing.expectEqual(36, @sizeOf(Descriptor));
+    // A rank counts nested generalization scopes in 16 bits. Source nesting
+    // scopes deeper than `Rank.deepest` is reported as a problem, and the
+    // scopes past it are checked without being generalized
+    // (`VarPool.pushRank`).
+    try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
     try std.testing.expectEqual(20, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
@@ -231,10 +233,16 @@ pub const Descriptor = struct {
 ///
 /// Keeping track of ranks makes type inference faster.
 ///
-pub const Rank = enum(u32) {
+pub const Rank = enum(u16) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
     outermost = 1,
+    /// The deepest rank a descriptor can record. The checker gives a
+    /// generalization scope nested inside one at this rank no rank of its
+    /// own (`VarPool.pushRank`): the scope is checked at this rank and not
+    /// generalized, after the module reports that its definitions nest too
+    /// deeply.
+    deepest = std.math.maxInt(u16),
     _,
 
     /// Get the lowest rank
@@ -247,14 +255,24 @@ pub const Rank = enum(u32) {
         return @fromBackingInt(@intCast(@max(@backingInt(a), @backingInt(b))));
     }
 
-    /// Get the next rank
+    /// Get the next rank. Only ranks below `deepest` have one; a scope the
+    /// checker enters goes through `innerScope` instead.
     pub fn next(a: Rank) Rank {
-        return @fromBackingInt(@intCast(@backingInt(a) + 1));
+        std.debug.assert(a != .deepest);
+        return @fromBackingInt(@backingInt(a) + 1);
+    }
+
+    /// The rank of a generalization scope entered inside one at this rank:
+    /// the next rank, or `deepest` itself inside a scope at `deepest`, where
+    /// `VarPool.pushRank` gives the inner scope no rank of its own.
+    pub fn innerScope(a: Rank) Rank {
+        return if (a == .deepest) a else a.next();
     }
 
     /// Get the prev rank
     pub fn prev(a: Rank) Rank {
-        return @fromBackingInt(@intCast(@backingInt(a) - 1));
+        std.debug.assert(a != .generalized);
+        return @fromBackingInt(@backingInt(a) - 1);
     }
 };
 

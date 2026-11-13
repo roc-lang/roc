@@ -256,6 +256,7 @@ pub const Store = struct {
                     .match_alt_binder_missing,
                     .discarded_var_update,
                     .comptime_condition,
+                    .generalization_nesting_too_deep,
                     .derived_parser_error_row,
                     .derived_codec_open_record,
                     .associated_item_not_found,

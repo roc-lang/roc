@@ -141,6 +141,7 @@ pub const Problem = union(enum) {
     match_alt_binder_missing: MatchAltBinderMissing,
     discarded_var_update: DiscardedVarUpdate,
     comptime_condition: ComptimeCondition,
+    generalization_nesting_too_deep: GeneralizationNestingTooDeep,
     derived_parser_error_row: DerivedParserErrorRow,
     derived_codec_open_record: DerivedCodecOpenRecord,
 
@@ -793,6 +794,14 @@ pub const NonExhaustiveDestructure = struct {
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.
     empirical: bool = false,
+};
+
+/// Source nested generalization scopes deeper than a type descriptor's rank
+/// can record (`types.Rank.deepest`). `region` is the definition or
+/// expression whose scope first went past the limit. Reported once per
+/// module.
+pub const GeneralizationNestingTooDeep = struct {
+    region: base.Region,
 };
 
 /// A conditional expression was known while checking, so it will always make the same choice.

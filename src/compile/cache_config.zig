@@ -368,7 +368,8 @@ pub const Constants = struct {
     ///      whether it is a deferred literal's type.
     /// 183: an alias's source-argument count is held in the type store's vars
     ///      pool, in the slot just before the alias's vars.
-    pub const CACHE_VERSION = 183;
+    /// 184: a type descriptor's rank is 16 bits.
+    pub const CACHE_VERSION = 184;
 };
 
 /// Configuration for the Roc cache system.

@@ -273,12 +273,30 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     return initConfigured(module_name, source, explicit_root_names, false, .sealed);
 }
 
+/// Check a whole file with generalization scopes given no rank deeper than
+/// `deepest_rank`, so a test reaches the nesting limit (`Rank.deepest` in
+/// every compiler build) with a few nested definitions.
+pub fn initWithDeepestRank(module_name: []const u8, source: []const u8, deepest_rank: types.Rank) TestEnvError!TestEnv {
+    return initConfiguredWithDeepestRank(module_name, source, &.{}, false, .sealed, deepest_rank);
+}
+
 fn initConfigured(
     module_name: []const u8,
     source: []const u8,
     explicit_root_names: []const []const u8,
     hosted: bool,
     comptime store_after_check: StoreAfterCheck,
+) TestEnvError!TestEnv {
+    return initConfiguredWithDeepestRank(module_name, source, explicit_root_names, hosted, store_after_check, .deepest);
+}
+
+fn initConfiguredWithDeepestRank(
+    module_name: []const u8,
+    source: []const u8,
+    explicit_root_names: []const []const u8,
+    hosted: bool,
+    comptime store_after_check: StoreAfterCheck,
+    deepest_rank: types.Rank,
 ) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
@@ -380,6 +398,7 @@ fn initConfigured(
         try checker.addExecutableRootDef(root_def_idx);
     }
     errdefer checker.deinit();
+    checker.env_pool.deepest_rank = deepest_rank;
 
     try runChecker(&checker, store_after_check);
     _ = try checker.problems.flushAllPendingStaticExhaustiveness();

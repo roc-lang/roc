@@ -239,6 +239,7 @@ pub const Generalizer = struct {
         if (rank_to_generalize == Rank.generalized) return;
 
         std.debug.assert(var_pool.current_rank == rank_to_generalize);
+        std.debug.assert(var_pool.generalizesInnermostScope());
         const rank_to_generalize_int = @backingInt(rank_to_generalize);
 
         // Reset internal state from any previous generalization
@@ -707,6 +708,13 @@ pub const VarPool = struct {
     ranks: std.array_list.Managed(VarArrayList),
     current_rank: Rank,
     allocator: std.mem.Allocator,
+    /// The innermost scopes `pushRank` entered without a rank of their own,
+    /// because the scope around them was at `deepest_rank`. Each is left by
+    /// the `popRank` that pairs with its push, before any scope with a rank.
+    declined_scopes: u32 = 0,
+    /// The deepest rank a scope gets. Always `Rank.deepest` outside tests,
+    /// which lower it to reach the limit without nesting 65,534 scopes.
+    deepest_rank: Rank = .deepest,
 
     pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!Self {
         var ranks = try std.array_list.Managed(VarArrayList).initCapacity(allocator, 16);
@@ -733,6 +741,7 @@ pub const VarPool = struct {
             rank.clearRetainingCapacity();
         }
         self.current_rank = Rank.generalized;
+        self.declined_scopes = 0;
     }
 
     // Ensure the var pool has ranks up to and including `next_rank`
@@ -748,14 +757,32 @@ pub const VarPool = struct {
         return self.ranks.items[0 .. @backingInt(self.current_rank) + 1];
     }
 
+    /// Enter a nested generalization scope at the next rank. A scope entered
+    /// inside one at `deepest_rank` gets no rank of its own: it is checked at
+    /// the enclosing rank, and `generalizesInnermostScope` is false until
+    /// the matching `popRank`. Reporting that is the caller's job.
     pub fn pushRank(self: *Self) std.mem.Allocator.Error!void {
+        if (self.current_rank == self.deepest_rank) {
+            self.declined_scopes += 1;
+            return;
+        }
         self.current_rank = self.current_rank.next();
         if (@backingInt(self.current_rank) >= self.ranks.items.len) {
             try self.ranks.append(try VarArrayList.initCapacity(self.allocator, 16));
         }
     }
 
+    /// Whether the innermost scope entered has a rank of its own, so leaving
+    /// it generalizes that rank.
+    pub fn generalizesInnermostScope(self: *const Self) bool {
+        return self.declined_scopes == 0;
+    }
+
     pub fn popRank(self: *Self) void {
+        if (self.declined_scopes != 0) {
+            self.declined_scopes -= 1;
+            return;
+        }
         if (@backingInt(self.current_rank) > 0) {
             self.ranks.items[@backingInt(self.current_rank)].clearRetainingCapacity();
             self.current_rank = self.current_rank.prev();
@@ -852,6 +879,33 @@ test "mergeFrom - vars at multiple ranks" {
     try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{ mkVar(1), mkVar(10) });
     try expectVarsEqual(pool_a.getVarsForRank(@fromBackingInt(@intCast(2))), &.{mkVar(20)});
     try expectVarsEqual(pool_a.getVarsForRank(@fromBackingInt(@intCast(3))), &.{mkVar(30)});
+}
+
+test "pushRank - a scope inside one at the deepest rank shares that rank until its pop" {
+    const gpa = std.testing.allocator;
+    var pool = try VarPool.init(gpa);
+    defer pool.deinit();
+    pool.deepest_rank = @fromBackingInt(2);
+
+    try pool.pushRank(); // 1
+    try pool.pushRank(); // 2
+    try std.testing.expect(pool.generalizesInnermostScope());
+    try pool.pushRank(); // declined
+    try pool.pushRank(); // declined
+    try std.testing.expectEqual(@as(Rank, @fromBackingInt(2)), pool.current_rank);
+    try std.testing.expect(!pool.generalizesInnermostScope());
+    pool.popRank();
+    try std.testing.expect(!pool.generalizesInnermostScope());
+    pool.popRank();
+    try std.testing.expect(pool.generalizesInnermostScope());
+    try std.testing.expectEqual(@as(Rank, @fromBackingInt(2)), pool.current_rank);
+    pool.popRank();
+    try std.testing.expectEqual(Rank.outermost, pool.current_rank);
+}
+
+test "Rank - the scope inside the deepest rank is the deepest rank" {
+    try std.testing.expectEqual(Rank.deepest, Rank.deepest.innerScope());
+    try std.testing.expectEqual(@as(Rank, @fromBackingInt(2)), Rank.outermost.innerScope());
 }
 
 test "generalize - effect cycles inherit the enclosing traversal rank" {
