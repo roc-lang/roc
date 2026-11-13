@@ -370,7 +370,9 @@ pub const Constants = struct {
     /// 187: CIR external nominal construction and pattern nodes record which
     ///      index space their module refers to, and a reserved-module-name
     ///      diagnostic node is added.
-    pub const CACHE_VERSION = 187;
+    /// 190: type tags record whether they are in their row only because `match`
+    ///      branch patterns asked for them.
+    pub const CACHE_VERSION = 190;
 };
 
 /// Configuration for the Roc cache system.
