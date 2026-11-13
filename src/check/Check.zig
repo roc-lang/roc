@@ -8943,7 +8943,7 @@ fn checkForInfiniteType(
     const err_var = self.occurs_scratch.err_var.?;
     const data: problem.VarWithSnapshot = .{
         .var_ = var_,
-        .region = self.getRegionAt(var_),
+        .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(idx)),
         .snapshot = try self.snapshotVarForError(err_var),
         .def_name = self.bindingRootName(Idx, idx),
     };
@@ -10617,7 +10617,7 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
         // just the type's name).
         const snapshot = try self.snapshotVarForError(decl.backing);
         _ = try self.problems.appendProblem(.{ .invalid_nominal_decl_recursion = .{
-            .region = self.getRegionAt(decl_var),
+            .region = self.cir.store.getNodeRegion(@fromBackingInt(@intCast(decl.statement()))),
             .snapshot = snapshot,
             .type_name = decl.ident.ident_idx,
             .kind = kind,
@@ -10986,7 +10986,7 @@ fn reportChangingNominalDecl(
     const decl_var: Var = @fromBackingInt(@intCast(decl.statement()));
     const snapshot = try self.snapshotVarForError(decl.backing);
     _ = try self.problems.appendProblem(.{ .invalid_nominal_decl_recursion = .{
-        .region = self.getRegionAt(decl_var),
+        .region = self.cir.store.getNodeRegion(@fromBackingInt(@intCast(decl.statement()))),
         .snapshot = snapshot,
         .type_name = decl.ident.ident_idx,
         .kind = kind,
@@ -31900,7 +31900,7 @@ fn recordUpdateFieldContext(
 ) problem.Context {
     return .{ .record_update = .{
         .field_name = field.name,
-        .field_region = self.getRegionAt(ModuleEnv.varFrom(field.value)),
+        .field_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(field.value)),
         .record_region = self.getRegionAt(record_being_updated_var),
         .record_name = record_being_updated_name,
     } };
@@ -32005,7 +32005,7 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
     // optionality, exactly like `.?`.
     for (self.cir.store.sliceUnsetFields(e.unsets)) |field_idx| {
         const field = self.cir.store.getUnsetField(field_idx);
-        const field_region = self.getRegionAt(ModuleEnv.varFrom(field_idx));
+        const field_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(field_idx));
 
         const field_var = try self.fresh(env, expr_region);
         const presence_var = try self.fresh(env, expr_region);
@@ -32029,7 +32029,7 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
         // Unify this record update with the record we're updating
         _ = try self.unifyRecordInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
             .field_name = field.name,
-            .field_region = self.getRegionAt(ModuleEnv.varFrom(field_idx)),
+            .field_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(field_idx)),
             .record_region = self.getRegionAt(record_being_updated_var),
             .record_name = state.record_being_updated_name,
         } });
@@ -32166,7 +32166,7 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
     // Progress: Unsetting an Optional Field").
     for (self.cir.store.sliceUnsetFields(e.unsets)) |field_idx| {
         const field = self.cir.store.getUnsetField(field_idx);
-        const field_region = self.getRegionAt(ModuleEnv.varFrom(field_idx));
+        const field_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(field_idx));
 
         const field_var = try self.fresh(env, expr_region);
         const presence_var = try self.fresh(env, expr_region);
@@ -34024,7 +34024,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
             .call_expr = expr_idx,
             .arg_index = @intCast(arg_index),
             .num_args = @intCast(call_arg_expr_idxs.len),
-            .arg_region = self.getRegionAt(ModuleEnv.varFrom(call_arg_idx)),
+            .arg_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(call_arg_idx)),
         } };
         const arg_expected = if (state.shape_result.isEstablished())
             child_expected.withContextualType(.{
@@ -34053,7 +34053,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
                 .call_expr = expr_idx,
                 .arg_index = @intCast(arg_index),
                 .num_args = @intCast(call_arg_expr_idxs.len),
-                .arg_region = self.getRegionAt(ModuleEnv.varFrom(call_arg_idx)),
+                .arg_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(call_arg_idx)),
             } };
             const arg_result = try self.unifyOwnedRelation(
                 expected_arg_var,
@@ -34214,7 +34214,7 @@ fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck
 
         // Setup the CIR node
         const access_var = ModuleEnv.varFrom(access_idx);
-        const access_region = self.getRegionAt(access_var);
+        const access_region = self.cir.store.getFieldAccessSegmentRegion(access_idx);
         try self.setVarRank(access_var, env);
 
         // Every segment's var is the FIELD's value type—for `.?` segments
@@ -35386,7 +35386,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
     const cond_is_error = resolved_cond.desc.content == .err;
 
     if (!match.skip_exhaustiveness and !state.had_type_error and !cond_is_error and !state.has_invalid_try and !state.cond_always_crashes) {
-        const match_region = self.getRegionAt(@fromBackingInt(@intCast(@backingInt(expr_idx))));
+        const match_region = self.cir.store.getExprRegion(expr_idx);
 
         // Exhaustiveness analysis (and its union-closing) walks the
         // SCRUTINEE type, so every record-destructure binder in the branch
@@ -37909,7 +37909,7 @@ fn methodCallArgContext(
         .call_expr = call_expr,
         .arg_index = @intCast(arg_index),
         .num_args = @intCast(arg_expr_idxs.len),
-        .arg_region = self.getRegionAt(ModuleEnv.varFrom(arg_expr_idxs[arg_index])),
+        .arg_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(arg_expr_idxs[arg_index])),
     } };
 }
 
@@ -41119,7 +41119,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         // resolved.
         if (default_does_fx) {
             _ = try self.problems.appendProblem(.{ .effectful_default_value = .{
-                .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
+                .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pending.default_expr)),
                 .field_name = pending.field_name,
             } });
             // Diagnostic recovery after the reported problem: record the
@@ -46068,7 +46068,7 @@ fn checkReturnRelation(
         std.debug.assert(result == .problem);
         const result_expr = self.resultValueExpr(actual_expr);
         self.problems.problems.items[@backingInt(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
-        self.problems.problems.items[@backingInt(result.problem)].type_mismatch.actual_region = self.getRegionAt(ModuleEnv.varFrom(result_expr));
+        self.problems.problems.items[@backingInt(result.problem)].type_mismatch.actual_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(result_expr));
         try self.markErroneousValueExpr(result_expr);
     }
 }
@@ -46097,7 +46097,7 @@ fn relateResultValue(
     const result_expr = self.resultValueExpr(actual_expr);
     const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
     self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
-    self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.actual_region = self.getRegionAt(ModuleEnv.varFrom(result_expr));
+    self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.actual_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(result_expr));
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(expected, actual);
     try self.markErroneousValueExpr(result_expr);
@@ -46142,7 +46142,7 @@ fn relateWidenedResultValue(
     const result_expr = self.resultValueExpr(actual_expr);
     const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
     self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
-    self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.actual_region = self.getRegionAt(ModuleEnv.varFrom(result_expr));
+    self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.actual_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(result_expr));
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(expected, actual);
     try self.markErroneousValueExpr(result_expr);
@@ -46625,7 +46625,7 @@ fn refineAnnotatedBodyMismatch(self: *Self, body_result: unifier.Result, body: C
     self.refinePlatformRequirementReturnContext(body_result);
     const result_expr = self.resultValueExpr(body);
     self.problems.problems.items[@backingInt(body_result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
-    self.problems.problems.items[@backingInt(body_result.problem)].type_mismatch.actual_region = self.getRegionAt(ModuleEnv.varFrom(result_expr));
+    self.problems.problems.items[@backingInt(body_result.problem)].type_mismatch.actual_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(result_expr));
     try self.markErroneousValueExpr(result_expr);
 }
 
