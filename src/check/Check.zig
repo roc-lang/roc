@@ -52013,7 +52013,7 @@ inline fn processDeferredDispatchEntry(
     var enclosing: std.ArrayList(EnclosingVarRank) = .empty;
     defer enclosing.deinit(self.gpa);
     if (self.captured_scheme_owners.count() != 0) {
-        try self.collectFrozenRelationEnclosingVars(env.deferred_static_dispatch_constraints.items.items[entry_index], &enclosing);
+        try self.collectFrozenRelationEnclosingVars(env.deferred_static_dispatch_constraints.items()[entry_index], &enclosing);
     }
     const outcome = try self.processDeferredDispatchEntryRelations(env, drain, entry_index);
     if (enclosing.items.len != 0) try self.restoreEnclosingVarRanks(enclosing.items, env);
@@ -52032,7 +52032,7 @@ fn collectFrozenRelationEnclosingVars(
     defer reachable.deinit();
     const constraints_start: usize = @backingInt(entry.constraints.start);
     for (0..entry.constraints.len()) |offset| {
-        const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + offset];
+        const constraint = self.types.static_dispatch_constraints.items()[constraints_start + offset];
         const owner = (self.dispatch_relation_owners.get(constraint.fn_var) orelse continue).get() orelse continue;
         if (!self.captured_scheme_owners.contains(owner)) continue;
         try self.collectReachableVars(constraint.fn_var, &reachable);
