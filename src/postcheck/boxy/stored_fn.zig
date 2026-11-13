@@ -50,6 +50,10 @@ const invariant = types.invariant;
 pub const CaptureShape = struct {
     values: []const TypeId,
     descs: u32,
+    /// The variable of the worker's scope each of the `descs` descriptors
+    /// describes (`lower.Worker.desc_slots`); null when descriptor `i`
+    /// describes variable `i`.
+    desc_slots: ?[]const u32 = null,
     dicts: u32,
     /// The callable is an immortal dictionary (`Builder.composeDictionary`).
     composed: bool,
@@ -62,11 +66,12 @@ pub fn captureShape(program: *Program, id: WorkerId) CaptureShape {
     return switch (worker.key) {
         .lambda => .{
             .values = worker.capture_types,
-            .descs = @intCast(worker.scheme_vars.len - worker.own_descs),
+            .descs = program.descCount(id) - worker.own_descs,
+            .desc_slots = if (worker.desc_slots) |slots| slots[0 .. slots.len - worker.own_descs] else null,
             .dicts = worker.capturedDictionaryCount() + worker.capturedLiteralCount(),
             .composed = false,
         },
-        .adapter => .{ .values = worker.capture_types, .descs = @intCast(worker.scheme_vars.len), .dicts = 0, .composed = false },
+        .adapter => .{ .values = worker.capture_types, .descs = program.descCount(id), .desc_slots = worker.desc_slots, .dicts = 0, .composed = false },
         .method_entry => |target| blk: {
             const target_worker = program.worker(target).*;
             break :blk .{
@@ -86,6 +91,22 @@ pub fn captureShape(program: *Program, id: WorkerId) CaptureShape {
         },
         .template, .default, .root, .static_data, .convert => invariant("a worker that is no function value reached a stored function"),
     };
+}
+
+/// The type each variable of the scope of a worker some body packs as a
+/// function value, of capture shape `shape`, takes when its captured
+/// descriptor inputs describe `descs`: the variable of each descriptor slot takes its descriptor's
+/// type (`lower.Worker.desc_slots`), and a variable it takes no descriptor
+/// of stays itself, which no captured value's type mentions.
+fn scopeBinding(program: *Program, allocator: Allocator, shape: CaptureShape, descs: []const TypeId) Allocator.Error![]TypeId {
+    const slots = shape.desc_slots orelse return try allocator.dupe(TypeId, descs);
+    if (slots.len != descs.len) invariant("a captured table's descriptors differ from its worker's descriptor slots");
+    const count: usize = if (slots.len == 0) 0 else slots[slots.len - 1] + 1;
+    const bound = try allocator.alloc(TypeId, count);
+    errdefer allocator.free(bound);
+    for (bound, 0..) |*ty, index| ty.* = try program.store.variable(@intCast(index));
+    for (slots, descs) |slot, ty| bound[slot] = ty;
+    return bound;
 }
 
 /// One captured value of a stored function: read it at `ptr`, by `plan`,
@@ -420,8 +441,8 @@ pub const Retained = struct {
         // edge. Its scope is data, including override callables, not a type
         // from which the receiving body reads the recorded overrides.
         const table: ?[*]u8 = if (has_table) @ptrCast(@constCast(readWord(capture + offsets[shape.values.len]))) else null;
-        const bound = try allocator.alloc(TypeId, shape.descs);
-        defer allocator.free(bound);
+        const descs = try allocator.alloc(TypeId, shape.descs);
+        defer allocator.free(descs);
         // Producer and selected edge arrays are consumed by recipe.finish;
         // only the independently allocated recipe and value captures escape.
         var scratch = std.heap.ArenaAllocator.init(allocator);
@@ -453,8 +474,10 @@ pub const Retained = struct {
                 roots = metadata.tables[index];
                 graph = metadata.graph;
             }
-            for (bound, roots[0..shape.descs]) |*ty, ref| ty.* = captureType(graph, ref);
+            for (descs, roots[0..shape.descs]) |*ty, ref| ty.* = captureType(graph, ref);
         }
+        const bound = try scopeBinding(program, allocator, shape, descs);
+        defer allocator.free(bound);
 
         var recipe = Encoder{ .allocator = allocator, .program = program, .store_module = store_module };
         defer recipe.deinit();
@@ -919,12 +942,17 @@ const ImportedMetadata = struct {
             _ = input.word(); // native symbol belongs to the loader
             const values = try input.typeSpan();
             const descs = input.word();
+            const desc_slots: ?[]const u32 = if (input.byte() != 0) blk: {
+                const slots = try arena.alloc(u32, descs);
+                for (slots) |*slot| slot.* = input.word();
+                break :blk slots;
+            } else null;
             const dicts = input.word();
             const table_words = input.word();
             const composed = input.byte() != 0;
             const worker_len = input.word();
             const worker = input.take(worker_len);
-            try result.functions.put(arena, identity, .{ .shape = .{ .values = values, .descs = descs, .dicts = dicts, .composed = composed }, .worker = worker, .table_words = table_words });
+            try result.functions.put(arena, identity, .{ .shape = .{ .values = values, .descs = descs, .desc_slots = desc_slots, .dicts = dicts, .composed = composed }, .worker = worker, .table_words = table_words });
         }
         std.debug.assert(input.at == bytes.len);
         return result;
@@ -978,6 +1006,8 @@ pub fn encodeMetadata(retained: *Retained, result: *LirProgram.Result, compiled:
         try encoder.word(function.symbol);
         try encoder.typeSpan(shape.values);
         try encoder.word(shape.descs);
+        try encoder.bytes.append(allocator, @intFromBool(shape.desc_slots != null));
+        if (shape.desc_slots) |slots| for (slots) |slot| try encoder.word(slot);
         try encoder.word(shape.dicts);
         try encoder.word(if (shape.descs + shape.dicts == 0) 0 else (record.needs orelse invariant("a captured function table has no declared needs")).wordCount());
         try encoder.bytes.append(allocator, @intFromBool(shape.composed));
@@ -1719,8 +1749,10 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
     const shape = captureShape(b.program, worker);
     if (inputs.len != shape.descs + shape.dicts) invariant("a stored function's immutable inputs differ from its worker's");
     const arena = b.program.arena.allocator();
-    const bound = try arena.alloc(TypeId, shape.descs);
-    for (bound, inputs[0..shape.descs]) |*ty, ref| ty.* = captureType(graph, ref);
+    const descs = try b.allocator.alloc(TypeId, shape.descs);
+    defer b.allocator.free(descs);
+    for (descs, inputs[0..shape.descs]) |*ty, ref| ty.* = captureType(graph, ref);
+    const bound = try scopeBinding(b.program, arena, shape, descs);
     const words = try arena.alloc(Tables.Operand, graph.len);
     // Reserve before connecting any edge. Scoped descriptors can capture
     // overrides that capture those descriptors, and dictionaries can cycle.
@@ -2023,6 +2055,9 @@ pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs)
     defer encoder.deinit();
     try encoder.word(needs.input_count);
     try encoder.word(needs.desc_count);
+    // The descriptor slots, after whether there are any.
+    try encoder.bytes.append(allocator, @intFromBool(needs.desc_slots != null));
+    if (needs.desc_slots) |slots| for (slots) |slot| try encoder.word(slot);
     try encoder.word(@intCast(needs.recipes.len));
     for (needs.recipes) |recipe| {
         try encoder.bytes.append(allocator, @backingInt(std.meta.activeTag(recipe)));
@@ -2115,6 +2150,11 @@ pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.
     defer program.allocator.free(decoder.table);
     const input_count = decoder.word();
     const desc_count = decoder.word();
+    const desc_slots: ?[]const u32 = if (decoder.byte() != 0) blk: {
+        const slots = try arena.alloc(u32, desc_count);
+        for (slots) |*slot| slot.* = decoder.word();
+        break :blk slots;
+    } else null;
     const recipes = try arena.alloc(Tables.Recipe, decoder.word());
     for (recipes) |*recipe| {
         const tag: std.meta.Tag(Tables.Recipe) = @fromBackingInt(@intCast(decoder.byte()));
@@ -2167,7 +2207,7 @@ pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.
     }
     const slots = try arena.alloc(Tables.RecipeId, decoder.word());
     for (slots) |*slot| slot.* = @fromBackingInt(decoder.word());
-    return .{ .input_count = input_count, .desc_count = desc_count, .recipes = recipes, .slots = slots };
+    return .{ .input_count = input_count, .desc_count = desc_count, .desc_slots = desc_slots, .recipes = recipes, .slots = slots };
 }
 
 fn decodeOperands(decoder: *Decoder) Allocator.Error![]const Tables.Operand {

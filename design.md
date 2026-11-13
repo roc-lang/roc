@@ -15112,7 +15112,7 @@ input takes as one hidden argument after its explicit checked parameters
 ("Type Tables"). A generalized local function (a dispatch scope with its own
 `scheme_vars` and `evidence_params`) is a worker with its own hidden inputs in
 the same way. A nested lambda that is not generalized has no scheme of its own: the
-descriptors and dictionaries its body mentions belong to the enclosing worker
+descriptors and dictionaries its body reads belong to the enclosing worker
 and reach it as captures (see Function Values).
 
 Checking can give a local function a dispatch scope that quantifies nothing
@@ -15579,7 +15579,9 @@ keyed by its worker and its input words, when a word naming it is evaluated,
 and filled once its worker's needs list exists: lowering alternates between
 lowering queued workers and filling reserved tables until neither has work.
 Evaluating a descriptor recipe substitutes the types its descriptor inputs
-describe into its type, in the override scope of those inputs and its own
+describe into its type, each input standing for the variable its descriptor
+slot names (`Needs.desc_slots`, the identity for a worker taking every
+variable's descriptor), in the override scope of those inputs and its own
 overrides. Recipes that lead back to one another (a dictionary whose
 requirements capture it, a descriptor whose override captures that
 descriptor) are evaluated together, their callables reserved before any is
@@ -16042,11 +16044,33 @@ and holds the capture bytes after the fixed capture offset. This is the host
 ABI representation of `Box(function)` and is unchanged by strategy.
 
 The captures of a compiler-created callable are the captured binders' values,
-followed by its worker's type table, whose inputs are the hidden descriptors
-and dictionaries of the enclosing worker ("Type Tables"). A closure created in
-a generic body thus carries the type knowledge of its creation site, and its
+followed by its worker's type table, whose inputs are the hidden dictionaries
+and literal arguments of the enclosing worker and the descriptors of those of
+its variables the lambda's body reads ("Type Tables"). A closure created in a
+generic body thus carries the type knowledge of its creation site, and its
 worker takes no hidden argument of its own: it reads its inputs from the
-table it captured. When any capture is of variable type, the capture record
+table it captured.
+
+A lambda worker's body converts its types over every variable of its scope,
+the enclosing worker's and its own scheme's, but takes the descriptors of only
+some (`Worker.desc_slots`): each of the enclosing worker's variables that a
+checked type its body can convert mentions, then every variable of its own
+scheme. Those types are, explicitly, the checked types of every node of the
+lambda, its nested lambdas' nodes included (an expression's or pattern's own type, its row
+coercion, its site's checked substitution, evidence dispatcher types and
+instance type, and the runtime captures of each nested lambda or closure),
+the types of its captures, and those of the local procedures whose site the
+chain's procedure template owns, which a body of the chain builds from its
+own inputs. A nested lambda's types are its enclosing lambda's too, so every
+descriptor a lambda takes is one its enclosing worker holds; a lambda takes
+none for a variable only its enclosing bodies mention, such as the parameter
+type of an enclosing curried lambda. An adapter (`WorkerKey.adapter`) takes the descriptors of the
+variables its two function types mention, which are all its body converts.
+Reading the descriptor of a variable the worker takes none of is a compiler
+invariant violation. Conversions in a worker's own scheme look variables up by
+an index of the scheme (`types.VarPositions`) and are remembered per checked
+type and scheme environment, so nested lambdas sharing one scheme convert a
+deep type once rather than once per level. When any capture is of variable type, the capture record
 is a dynamic record whose descriptor is a word of the creating worker's type
 table (`Tables.Recipe.args_desc` over the captures' types), its first word is the capture record's
 descriptor, its second word the capture capacity of the allocation holding it

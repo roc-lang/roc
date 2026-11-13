@@ -472,15 +472,42 @@ pub const Env = struct {
     module: ModuleIndex,
     vars: []const checked.CheckedTypeId,
     bound: []const TypeId,
+    /// The position of each of `vars`, when the environment's owner built
+    /// one (`VarPositions`): a worker's environment carries its scheme's, so
+    /// its conversions' lookups do not scan the scheme.
+    positions: ?*const VarPositions = null,
 
     pub const empty_bindings: []const checked.CheckedTypeId = &.{};
 
     pub fn lookup(self: Env, module: ModuleIndex, id: checked.CheckedTypeId) ?TypeId {
         if (module != self.module) return null;
+        if (self.positions) |positions| {
+            std.debug.assert(positions.vars.ptr == self.vars.ptr and positions.vars.len == self.vars.len);
+            return self.bound[positions.map.get(id) orelse return null];
+        }
         for (self.vars, 0..) |variable, index| {
             if (variable == id) return self.bound[index];
         }
         return null;
+    }
+};
+
+/// The position of each variable of a scheme's variable list `vars`, which
+/// never repeats a variable, for `Env.lookup`.
+pub const VarPositions = struct {
+    vars: []const checked.CheckedTypeId,
+    map: collections.DenseMapUnmanaged(checked.CheckedTypeId, u32) = .empty,
+
+    pub fn init(allocator: Allocator, vars: []const checked.CheckedTypeId) Allocator.Error!VarPositions {
+        var positions: VarPositions = .{ .vars = vars };
+        errdefer positions.deinit(allocator);
+        try positions.map.ensureTotalCapacity(allocator, vars.len);
+        for (vars, 0..) |variable, index| try positions.map.put(allocator, variable, @intCast(index));
+        return positions;
+    }
+
+    pub fn deinit(self: *VarPositions, allocator: Allocator) void {
+        self.map.deinit(allocator);
     }
 };
 
@@ -527,6 +554,9 @@ pub const Store = struct {
 
     /// Converted closed checked types, by module and checked id.
     closed_memo: std.AutoHashMapUnmanaged(ClosedKey, TypeId) = .empty,
+    /// Converted checked types under a worker's own scheme environment (one
+    /// carrying `Env.positions`), by module, checked id and environment.
+    scheme_memo: std.AutoHashMapUnmanaged(SchemeKey, TypeId) = .empty,
     /// The backing of each instantiated nominal node.
     backing_memo: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
     /// `Converter.representationClosed` of each type asked about.
@@ -545,6 +575,11 @@ pub const Store = struct {
     const DeclKey = struct { module: ModuleIndex, key: names.NominalTypeKey };
 
     const ClosedKey = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
+
+    /// A checked type under an environment that carries `Env.positions`.
+    /// Its positions and bindings are never freed or changed while the
+    /// store lives, so their addresses name the environment.
+    pub const SchemeKey = struct { module: ModuleIndex, ty: checked.CheckedTypeId, env_module: ModuleIndex, positions: usize, bound: usize, bound_len: usize };
 
     pub const InternKey = struct { start: u32, len: u32 };
 
@@ -600,6 +635,7 @@ pub const Store = struct {
         self.decl_name_ids.deinit(self.allocator);
         self.name_arena.deinit();
         self.closed_memo.deinit(self.allocator);
+        self.scheme_memo.deinit(self.allocator);
         self.backing_memo.deinit(self.allocator);
         self.representation_closed.deinit(self.allocator);
         self.erased_slots.deinit(self.allocator);
@@ -1180,6 +1216,8 @@ pub const Converter = struct {
             // every environment.
             if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
+            } else if (schemeKey(frame.module, frame.ty, env)) |key| {
+                if (!self.seal_undetermined_kinds) try self.store.scheme_memo.put(allocator, key, built);
             }
             if (frames.items.len == 0) return built;
             try results.append(allocator, built);
@@ -1188,6 +1226,13 @@ pub const Converter = struct {
     }
 
     const Child = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
+
+    /// The `Store.scheme_memo` key of `ty` under `env`, when `env` is a
+    /// worker's own scheme environment.
+    fn schemeKey(module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) ?Store.SchemeKey {
+        const positions = env.positions orelse return null;
+        return .{ .module = module, .ty = ty, .env_module = env.module, .positions = @intFromPtr(positions), .bound = @intFromPtr(env.bound.ptr), .bound_len = env.bound.len };
+    }
 
     /// The app type the program solves platform requirement identity
     /// variable `ty` to, or null for any other type.
@@ -1207,6 +1252,8 @@ pub const Converter = struct {
         const view = self.modules.get(module);
         if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(view, ty)) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| return memo;
+        } else if (schemeKey(module, ty, env)) |key| {
+            if (!self.seal_undetermined_kinds) if (self.store.scheme_memo.get(key)) |memo| return memo;
         }
         return switch (view.types().payload(ty)) {
             .pending => invariant("a pending checked type reached Boxy lowering"),

@@ -407,7 +407,10 @@ const LocalProcScope = struct {
     declaring: WorkerId,
     worker: WorkerId,
     bound: []const TypeId,
-    descs: []const Word,
+    /// The descriptor of each variable of the declaring scope, or null when
+    /// the declaring body is the one this body is, or is nested in: each is
+    /// then this worker's input for that variable (`Builder.localProcScopeDescs`).
+    descs: ?[]const Word,
     /// A reserved recipe stands for each slot still being built.
     dicts: []const Word,
     literals: []const Word,
@@ -676,20 +679,24 @@ pub const Builder = struct {
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
         try program.module(worker.module).bodies().demandIndex();
-        const bound = try program.arena.allocator().alloc(TypeId, worker.scheme_vars.len);
-        for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
+        const identity = try program.identityBound(worker.scheme_vars.len);
         // An integer list worker's body, and its lambdas', is lowered with
         // the list item variable bound to its integer type (design.md
         // "Pre-Specialized Integer List Workers"): every value of the item
         // type is static.
-        if (worker.list_int) |list_int| bound[list_int.slot] = try program.store.primitive(list_int.item.primitive());
+        const bound = if (worker.list_int) |list_int| blk: {
+            const own = try program.arena.allocator().dupe(TypeId, identity);
+            own[list_int.slot] = try program.store.primitive(list_int.item.primitive());
+            break :blk own;
+        } else identity;
+        const positions = try program.varPositions(worker.scheme_vars);
         return .{
             .program = program,
             .allocator = program.allocator,
             .worker_id = id,
             .module = worker.module,
             .view = program.module(worker.module),
-            .env = .{ .module = worker.module, .vars = worker.scheme_vars, .bound = bound },
+            .env = .{ .module = worker.module, .vars = worker.scheme_vars, .bound = bound, .positions = positions },
             .store = &program.result.store,
             .tail_calls = lir_core.TailCallBuilder.init(program.allocator, worker.proc),
             .recipes = Tables.Recipes.init(program.allocator),
@@ -1317,7 +1324,7 @@ pub const Builder = struct {
     /// its scheme variables (`var_descs`), its dictionaries (`dict_locals`),
     /// then its literal arguments (`literal_locals`).
     pub fn inputWord(self: *Builder, index: usize) Allocator.Error!Word {
-        return .{ .recipe = try self.recipes.intern(.{ .input = @intCast(index) }) };
+        return .{ .recipe = try self.recipes.input(@intCast(index)) };
     }
 
     /// The input word of `dict_locals[position]`.
@@ -1332,10 +1339,56 @@ pub const Builder = struct {
         return try self.inputWord(self.var_descs.len + self.dict_locals.len + position);
     }
 
-    /// The input words of descriptors `var_descs[start..end]`.
+    /// The input word of the descriptor of variable `index` of this
+    /// worker's scope, which its body reads (`Worker.desc_slots`).
+    pub fn varInputWord(self: *Builder, index: usize) Allocator.Error!Word {
+        const position = self.program.descInput(self.worker_id, @intCast(index)) orelse
+            invariant("a body reads the descriptor of a variable its worker takes no descriptor of");
+        return try self.inputWord(position);
+    }
+
+    /// The input words of the descriptors of variables `start..end` of this
+    /// worker's scope.
     pub fn descInputWords(self: *Builder, start: usize, end: usize) Allocator.Error![]Word {
         const words = try self.program.arena.allocator().alloc(Word, end - start);
-        for (words, start..) |*word, index| word.* = try self.inputWord(index);
+        for (words, start..) |*word, index| word.* = try self.varInputWord(index);
+        return words;
+    }
+
+    /// The descriptor inputs a lambda or adapter worker `callee` takes for
+    /// the first `outer_count` variables of its scope, the variables of
+    /// this worker's scope it shares: this worker's input for each one
+    /// whose descriptor it takes (`Worker.desc_slots`).
+    pub fn scopeDescInputWords(self: *Builder, callee: WorkerId, outer_count: usize) Allocator.Error![]Word {
+        const target = self.program.worker(callee).*;
+        const slots = target.desc_slots orelse return try self.descInputWords(0, outer_count);
+        var count: usize = 0;
+        while (count < slots.len and slots[count] < outer_count) count += 1;
+        const words = try self.program.arena.allocator().alloc(Word, count);
+        // Both slot lists ascend, so one pass finds each slot's input.
+        const own_slots = self.currentWorker().desc_slots orelse {
+            for (words, slots[0..count]) |*word, slot| word.* = try self.varInputWord(slot);
+            return words;
+        };
+        var position: usize = 0;
+        for (words, slots[0..count]) |*word, slot| {
+            while (position < own_slots.len and own_slots[position] < slot) position += 1;
+            if (position == own_slots.len or own_slots[position] != slot) invariant("a body reads the descriptor of a variable its worker takes no descriptor of");
+            word.* = try self.inputWord(position);
+        }
+        return words;
+    }
+
+    /// The descriptors among `descs`, one per variable of a scope whose
+    /// first `descs.len` variables a lambda worker `callee`'s scope starts
+    /// with, that `callee` takes (`Worker.desc_slots`).
+    pub fn selectScopeDescs(self: *Builder, callee: WorkerId, descs: []const Word) Allocator.Error![]const Word {
+        const target = self.program.worker(callee).*;
+        const slots = target.desc_slots orelse return descs;
+        var count: usize = 0;
+        while (count < slots.len and slots[count] < descs.len) count += 1;
+        const words = try self.program.arena.allocator().alloc(Word, count);
+        for (words, slots[0..count]) |*word, slot| word.* = descs[slot];
         return words;
     }
 
@@ -1361,7 +1414,7 @@ pub const Builder = struct {
     pub fn descWord(self: *Builder, ty: TypeId) Allocator.Error!Word {
         if (try self.closed(ty) and !try self.program.composedInBody(ty)) return .{ .static = .{ .desc = ty } };
         switch (self.program.store.get(ty)) {
-            .variable => |index| return try self.inputWord(index),
+            .variable => |index| return try self.varInputWord(index),
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => {},
         }
         return .{ .recipe = try self.descRecipe(ty) };
@@ -1621,7 +1674,9 @@ pub const Builder = struct {
             if (self.slots.items.len != 0) invariant("a worker without inputs read a table slot");
             return null;
         }
-        return try self.recipes.needs(self.program.arena.allocator(), self.allocator, input_count, self.program.descCount(self.worker_id), self.slots.items);
+        var needs = try self.recipes.needs(self.program.arena.allocator(), self.allocator, input_count, self.program.descCount(self.worker_id), self.slots.items);
+        needs.desc_slots = self.currentWorker().desc_slots;
+        return needs;
     }
 
     /// The local holding input `index` (`inputWord`), read from this
@@ -1647,8 +1702,10 @@ pub const Builder = struct {
 
     /// The local holding the descriptor of scope variable `index`.
     pub fn varDesc(self: *Builder, index: usize) Allocator.Error!LocalId {
-        if (index >= self.var_descs.len) invariant("a scope variable's descriptor is not among its worker's inputs");
-        return try self.inputLocal(@intCast(index));
+        const position = self.program.descInput(self.worker_id, @intCast(index)) orelse
+            invariant("a scope variable's descriptor is not among its worker's inputs");
+        if (position >= self.var_descs.len) invariant("a scope variable's descriptor is not among its worker's inputs");
+        return try self.inputLocal(position);
     }
 
     // -- Body --
@@ -2219,7 +2276,7 @@ pub const Builder = struct {
             },
             .function => {
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const inputs = try self.descInputWords(0, self.program.descCount(adapter));
+                const inputs = try self.scopeDescInputWords(adapter, self.program.worker(adapter).scheme_vars.len);
                 const static_inputs = for (inputs) |word| {
                     if (word == .recipe and try self.readsInputs(word.recipe)) break false;
                 } else true;
@@ -2353,7 +2410,7 @@ pub const Builder = struct {
             .function => {
                 // The adapter captures the dictionary, then its table.
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const descs = try self.descInputWords(0, self.program.descCount(adapter));
+                const descs = try self.scopeDescInputWords(adapter, self.program.worker(adapter).scheme_vars.len);
                 var captures: [2]Word = .{ dictionary, undefined };
                 const count: usize = if (descs.len == 0) 1 else 2;
                 if (descs.len != 0) captures[1] = try self.tableWord(adapter, descs);
@@ -5094,7 +5151,7 @@ pub const Builder = struct {
             } else try self.program.converter().sealedScheme(self.module, variable);
         }
         try self.resolveOwnKinds(lambda_ty, scheme, own_types);
-        const descs = try std.mem.concat(arena, Word, &.{ scope.descs, try self.descWords(own_types) });
+        const descs = try std.mem.concat(arena, Word, &.{ try self.localProcScopeDescs(scope, callee), try self.descWords(own_types) });
         const dicts = try arena.alloc(Word, scheme.dictionaries.len);
         const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
         for (scheme.dictionaries, dicts) |param_index, *dict| {
@@ -5282,7 +5339,7 @@ pub const Builder = struct {
                 .declaring = scope_worker,
                 .worker = found,
                 .bound = self.env.bound[0..declaring.scheme_vars.len],
-                .descs = try self.descInputWords(0, declaring.scheme_vars.len),
+                .descs = null,
                 .dicts = words[0..declaring_dicts],
                 .literals = words[declaring_dicts..],
                 .declaration = null,
@@ -5492,7 +5549,7 @@ pub const Builder = struct {
                 value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
             }
         }
-        const descs = scope.descs;
+        const descs = try self.localProcScopeDescs(scope, target);
         const dicts = try std.mem.concat(self.program.arena.allocator(), Word, &.{ scope.dicts, scope.literals });
         return .{
             .callee = target,
@@ -5502,6 +5559,24 @@ pub const Builder = struct {
             .words = dicts,
             .static_scope = if (static_captures) scope else null,
         };
+    }
+
+    /// The types among `bound`, one per variable of the scope of lambda
+    /// worker `callee`, whose descriptors `callee` takes (`Worker.desc_slots`).
+    pub fn selectScopeTypes(self: *Builder, callee: WorkerId, bound: []const TypeId) Allocator.Error![]const TypeId {
+        const target = self.program.worker(callee).*;
+        if (bound.len != target.scheme_vars.len) invariant("a lambda's scope types differ from its scope");
+        const slots = target.desc_slots orelse return bound;
+        const selected = try self.program.arena.allocator().alloc(TypeId, slots.len);
+        for (selected, slots) |*ty, slot| ty.* = bound[slot];
+        return selected;
+    }
+
+    /// The descriptor inputs the local procedure worker `callee` takes for
+    /// the variables of its declaring scope `scope`.
+    fn localProcScopeDescs(self: *Builder, scope: LocalProcScope, callee: WorkerId) Allocator.Error![]const Word {
+        if (scope.descs) |descs| return try self.selectScopeDescs(callee, descs);
+        return try self.scopeDescInputWords(callee, self.program.worker(scope.declaring).scheme_vars.len);
     }
 
     /// The own scheme of generalized-local scope `scope_id`: its quantified
@@ -6068,8 +6143,7 @@ pub const Builder = struct {
                     concrete_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), concrete);
                 }
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
-                const descs = try self.program.arena.allocator().alloc(Word, bound.len);
-                for (bound, descs) |ty, *desc| desc.* = try self.descWord(ty);
+                const descs = try self.descWords(try self.selectScopeTypes(worker, bound));
                 const owner_dicts = if (nested.default_root != null) try self.allocator.alloc(Word, 0) else try self.storedDictionaries(source, stored, owner_worker, bound[0..owner.scheme_vars.len]);
                 defer self.allocator.free(owner_dicts);
                 // A generalized lambda's own dictionaries are the stored
@@ -8753,7 +8827,7 @@ pub const Builder = struct {
         const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.isEmpty()) null else scheme) else null;
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
-        const values = try self.allocator.alloc(LocalId, captures.len + self.var_descs.len + self.dict_locals.len);
+        const values = try self.allocator.alloc(LocalId, captures.len);
         defer self.allocator.free(values);
         for (captures, capture_types, 0..) |capture, *capture_ty, index| {
             capture_ty.* = try self.capturedType(capture.pattern, try self.patternType(capture.pattern));
@@ -8765,7 +8839,7 @@ pub const Builder = struct {
         // where it is constructed: its function value captures its own
         // scheme's descriptors and dictionaries after the enclosing scope's.
         const enclosing_dicts = try self.dictLiteralInputWords(0, 0);
-        var descs: []const Word = try self.descInputWords(0, self.var_descs.len);
+        var descs: []const Word = try self.scopeDescInputWords(callee, self.currentWorker().scheme_vars.len);
         var dicts: []const Word = enclosing_dicts;
         var own_descs: std.ArrayList(Word) = .empty;
         defer own_descs.deinit(self.allocator);

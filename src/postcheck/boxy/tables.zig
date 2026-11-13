@@ -105,6 +105,11 @@ pub const Needs = struct {
     /// How many of the inputs are the descriptors of the worker's type
     /// variables, the leading ones, in variable order.
     desc_count: u32,
+    /// The variable of the worker's scope each of those descriptors
+    /// describes, ascending, for a worker whose inputs hold the descriptors
+    /// of only some of its variables (`lower.Worker.desc_slots`); null when
+    /// descriptor `i` describes variable `i`.
+    desc_slots: ?[]const u32 = null,
     /// The worker's recipes, which `slots` and one another name.
     recipes: []const Recipe,
     /// The recipe of table word `input_count + index`.
@@ -135,6 +140,9 @@ pub const Recipes = struct {
     arena: std.heap.ArenaAllocator,
     items: std.ArrayList(Entry) = .empty,
     interned: std.HashMapUnmanaged(Recipe, RecipeId, Context, std.hash_map.default_max_load_percentage) = .empty,
+    /// The recipe of each input word interned so far, by input index
+    /// (`input`), which a body reads once per descriptor it passes on.
+    inputs: std.ArrayList(?RecipeId) = .empty,
 
     const Entry = union(enum) {
         reserved,
@@ -151,7 +159,20 @@ pub const Recipes = struct {
         const allocator = self.arena.child_allocator;
         self.items.deinit(allocator);
         self.interned.deinit(allocator);
+        self.inputs.deinit(allocator);
         self.arena.deinit();
+    }
+
+    /// The recipe of input word `index`: `intern(.{ .input = index })`.
+    pub fn input(self: *Recipes, index: u32) Allocator.Error!RecipeId {
+        if (index < self.inputs.items.len) {
+            if (self.inputs.items[index]) |known| return known;
+        } else {
+            try self.inputs.appendNTimes(self.arena.child_allocator, null, index + 1 - self.inputs.items.len);
+        }
+        const id = try self.intern(.{ .input = index });
+        self.inputs.items[index] = id;
+        return id;
     }
 
     /// The recipe `recipe`, interned by its content. Its slices are copied.
@@ -383,6 +404,8 @@ pub const Evaluation = struct {
     inputs: []const StaticDescs.CaptureWord,
     /// How many leading inputs are the worker's variables' descriptors.
     desc_count: u32,
+    /// The variable each of those describes (`Needs.desc_slots`).
+    desc_slots: ?[]const u32 = null,
     words: std.ArrayList(?StaticDescs.CaptureWord) = .empty,
     /// The search's order of visit and low link of each recipe it visited,
     /// and whether it is on the search's stack.
@@ -583,6 +606,26 @@ pub const Evaluation = struct {
         for (self.program.static_descs.scopeEntries(scope)) |entry| try mergeEntry(self.allocator, &self.program.static_descs, entries, entry);
     }
 
+    /// The type each variable of the worker's scope takes at this
+    /// instantiation, by variable index: its descriptor input's type. A
+    /// variable the worker takes no descriptor of (`desc_slots`) stays
+    /// itself, so a descriptor that names it is open and rejected.
+    fn instantiation(self: *Evaluation, allocator: Allocator) Allocator.Error![]TypeId {
+        if (self.desc_count > self.inputs.len) invariant("a table's instantiation lacks a variable's descriptor");
+        const slots = self.desc_slots orelse {
+            const bound = try allocator.alloc(TypeId, self.desc_count);
+            for (bound, self.inputs[0..self.desc_count]) |*slot, input| slot.* = describedType(input);
+            return bound;
+        };
+        if (slots.len != self.desc_count) invariant("a table's descriptor slots differ from its descriptor inputs");
+        const count: usize = if (slots.len == 0) 0 else slots[slots.len - 1] + 1;
+        const bound = try allocator.alloc(TypeId, count);
+        errdefer allocator.free(bound);
+        for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
+        for (slots, self.inputs[0..slots.len]) |slot, input| bound[slot] = describedType(input);
+        return bound;
+    }
+
     /// The descriptor word of the type `ty` over the worker's variables at
     /// this instantiation: the type with each variable at the type its
     /// descriptor input describes, in the override scope of those inputs and
@@ -591,14 +634,11 @@ pub const Evaluation = struct {
         const program = self.program;
         if (self.desc_count > self.inputs.len) invariant("a table's instantiation lacks a variable's descriptor");
         const desc_count = if (substitute_inputs) self.desc_count else 0;
-        const bound = try self.allocator.alloc(TypeId, desc_count);
+        const bound = if (substitute_inputs) try self.instantiation(self.allocator) else try self.allocator.alloc(TypeId, 0);
         defer self.allocator.free(bound);
         var entries: std.ArrayList(StaticDescs.ScopedMethods) = .empty;
         defer entries.deinit(self.allocator);
-        for (bound, self.inputs[0..desc_count]) |*slot, input| {
-            slot.* = describedType(input);
-            try self.appendScope(&entries, input);
-        }
+        for (self.inputs[0..desc_count]) |input| try self.appendScope(&entries, input);
         const closed = if (substitute_inputs) try program.substituteRepresentation(self.allocator, ty, bound) else ty;
         if (!try program.converter().representationClosed(closed)) invariant("a table's descriptor recipe is open at its instantiation");
         for (scoped) |override| {
@@ -706,9 +746,8 @@ pub const Evaluation = struct {
     fn groupKey(self: *Evaluation, order: []const RecipeId, key: *std.ArrayList(u8)) Allocator.Error!void {
         const allocator = self.allocator;
         const program = self.program;
-        const bound = try allocator.alloc(TypeId, self.desc_count);
+        const bound = try self.instantiation(allocator);
         defer allocator.free(bound);
-        for (bound, self.inputs[0..self.desc_count]) |*slot, input| slot.* = describedType(input);
         for (order) |member| {
             const recipe = self.source.get(member);
             try key.append(allocator, @backingInt(std.meta.activeTag(recipe)));

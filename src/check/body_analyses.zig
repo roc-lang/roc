@@ -216,11 +216,7 @@ pub const ModuleIndex = struct {
         return std.math.order(key, item.pattern);
     }
 
-    const Pending = union(enum) {
-        expr: ExprId,
-        pattern: PatternId,
-        statement: StatementId,
-    };
+    const Pending = BodyNode;
 
     const Builder = struct {
         has_expects: bool = false,
@@ -407,242 +403,29 @@ pub const ModuleIndex = struct {
         }
 
         fn drain(self: *Builder, id: UnitId) Allocator.Error!void {
-            while (self.work.pop()) |pending| switch (pending) {
-                .expr => |expr| try self.markExprChildren(expr, id),
-                .pattern => |pattern| try self.markPatternChildren(pattern, id),
-                .statement => |statement| try self.markStatementChildren(statement, id),
-            };
-        }
-
-        fn markExprs(self: *Builder, exprs: []const ExprId, id: UnitId) Allocator.Error!void {
-            for (exprs) |expr| try self.mark(.{ .expr = expr }, id);
-        }
-
-        fn markPatterns(self: *Builder, patterns: []const PatternId, id: UnitId) Allocator.Error!void {
-            for (patterns) |pattern| try self.mark(.{ .pattern = pattern }, id);
-        }
-
-        fn markExprChildren(self: *Builder, expr_idx: ExprId, id: UnitId) Allocator.Error!void {
             const store = &self.env.store;
-            switch (store.getExpr(expr_idx)) {
-                .e_str => |str| try self.markExprs(store.sliceExpr(str.span), id),
-                .e_list => |list| try self.markExprs(store.sliceExpr(list.elems), id),
-                .e_tuple => |tuple| try self.markExprs(store.sliceExpr(tuple.elems), id),
-                .e_match => |match| {
-                    try self.mark(.{ .expr = match.cond }, id);
-                    for (store.sliceMatchBranches(match.branches)) |branch_idx| {
-                        const branch = store.getMatchBranch(branch_idx);
-                        for (store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
-                            try self.mark(.{ .pattern = store.getMatchBranchPattern(branch_pattern_idx).pattern }, id);
-                        }
-                        if (branch.guard) |guard| try self.mark(.{ .expr = guard }, id);
-                        try self.mark(.{ .expr = branch.value }, id);
-                    }
-                },
-                .e_if => |if_| {
-                    for (store.sliceIfBranches(if_.branches)) |branch_idx| {
-                        const branch = store.getIfBranch(branch_idx);
-                        try self.mark(.{ .expr = branch.cond }, id);
-                        try self.mark(.{ .expr = branch.body }, id);
-                    }
-                    try self.mark(.{ .expr = if_.final_else }, id);
-                },
-                .e_call => |call| {
-                    try self.mark(.{ .expr = call.func }, id);
-                    try self.markExprs(store.sliceExpr(call.args), id);
-                },
-                .e_record => |record| {
-                    for (store.sliceRecordFields(record.fields)) |field_idx| {
-                        try self.mark(.{ .expr = store.getRecordField(field_idx).value }, id);
-                    }
-                    if (record.ext) |ext| try self.mark(.{ .expr = ext }, id);
-                },
-                .e_block => |block| {
-                    for (store.sliceStatements(block.stmts)) |statement| try self.mark(.{ .statement = statement }, id);
-                    try self.mark(.{ .expr = block.final_expr }, id);
-                },
-                .e_tag => |tag| try self.markExprs(store.sliceExpr(tag.args), id),
-                .e_nominal => |nominal| try self.mark(.{ .expr = nominal.backing_expr }, id),
-                .e_nominal_external => |nominal| try self.mark(.{ .expr = nominal.backing_expr }, id),
-                .e_closure => |closure| {
-                    try self.mark(.{ .expr = closure.lambda_idx }, id);
-                    for (store.sliceCaptures(closure.captures)) |capture_idx| {
-                        try self.mark(.{ .pattern = store.getCapture(capture_idx).pattern_idx }, id);
-                    }
-                },
-                .e_lambda => |lambda| {
-                    try self.markPatterns(store.slicePatterns(lambda.args), id);
-                    try self.mark(.{ .expr = lambda.body }, id);
-                },
-                .e_binop => |binop| {
-                    try self.mark(.{ .expr = binop.lhs }, id);
-                    try self.mark(.{ .expr = binop.rhs }, id);
-                },
-                .e_unary_minus => |unary| try self.mark(.{ .expr = unary.expr }, id),
-                .e_field_access => |field| try self.mark(.{ .expr = field.receiver }, id),
-                inline .e_method_call, .e_dispatch_call => |call| {
-                    try self.mark(.{ .expr = call.receiver }, id);
-                    try self.markExprs(store.sliceExpr(call.args), id);
-                },
-                .e_interpolation => |interpolation| {
-                    try self.mark(.{ .expr = interpolation.first }, id);
-                    try self.markExprs(store.sliceExpr(interpolation.parts), id);
-                },
-                .e_structural_eq => |eq| {
-                    try self.mark(.{ .expr = eq.lhs }, id);
-                    try self.mark(.{ .expr = eq.rhs }, id);
-                },
-                .e_structural_hash => |hash| {
-                    try self.mark(.{ .expr = hash.value }, id);
-                    try self.mark(.{ .expr = hash.hasher }, id);
-                },
-                .e_method_eq => |eq| {
-                    try self.mark(.{ .expr = eq.lhs }, id);
-                    try self.mark(.{ .expr = eq.rhs }, id);
-                },
-                .e_type_method_call => |call| {
-                    try self.mark(.{ .statement = call.type_dispatch_stmt }, id);
-                    try self.markExprs(store.sliceExpr(call.args), id);
-                },
-                .e_type_dispatch_call => |call| {
-                    switch (call.owner) {
-                        .statement => |statement| try self.mark(.{ .statement = statement }, id),
-                        .dispatcher => {},
-                    }
-                    try self.markExprs(store.sliceExpr(call.args), id);
-                },
-                .e_tuple_access => |access| try self.mark(.{ .expr = access.tuple }, id),
-                .e_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
-                .e_expect_err => |expect_err| try self.mark(.{ .expr = expect_err.expr }, id),
-                .e_expect => |expect| {
-                    self.has_expects = true;
-                    try self.mark(.{ .expr = expect.body }, id);
-                },
-                .e_return => |ret| {
-                    try self.mark(.{ .expr = ret.expr }, id);
-                    try self.mark(.{ .expr = ret.lambda }, id);
-                },
-                .e_for => |for_| {
-                    try self.mark(.{ .pattern = for_.patt }, id);
-                    try self.mark(.{ .expr = for_.expr }, id);
-                    try self.mark(.{ .expr = for_.body }, id);
-                },
-                .e_hosted_lambda => |hosted| try self.markPatterns(store.slicePatterns(hosted.args), id),
-                .e_run_low_level => |run| try self.markExprs(store.sliceExpr(run.args), id),
-                .e_runtime_error => |runtime_error| try self.markExprs(store.sliceExpr(runtime_error.evaluated), id),
-                .e_num,
-                .e_frac_f32,
-                .e_frac_f64,
-                .e_dec,
-                .e_dec_small,
-                .e_num_from_numeral,
-                .e_typed_int,
-                .e_typed_frac,
-                .e_typed_num_from_numeral,
-                .e_str_segment,
-                .e_bytes_literal,
-                .e_lookup_local,
-                .e_lookup_external,
-                .e_lookup_associated_resolved,
-                .e_lookup_required,
-                .e_empty_list,
-                .e_empty_record,
-                .e_zero_argument_tag,
-                .e_crash,
-                .e_ellipsis,
-                .e_anno_only,
-                .e_derived_method,
-                .e_break,
-                => {},
-                .e_lookup_associated_local, .e_lookup_associated => invariant("an unresolved associated lookup reached a checked body"),
-                .e_deferred_import_ref => invariant("a deferred import reference reached a checked body"),
+            while (self.work.pop()) |pending| {
+                switch (pending) {
+                    .expr => |expr| if (store.getExpr(expr) == .e_expect) {
+                        self.has_expects = true;
+                    },
+                    .statement => |statement| if (store.getStatement(statement) == .s_expect) {
+                        self.has_expects = true;
+                    },
+                    .pattern => {},
+                }
+                try visitBodyChildren(self.env, pending, MarkSink{ .builder = self, .unit = id });
             }
         }
 
-        fn markPatternChildren(self: *Builder, pattern_idx: PatternId, id: UnitId) Allocator.Error!void {
-            const store = &self.env.store;
-            switch (store.getPattern(pattern_idx)) {
-                .as => |as| try self.mark(.{ .pattern = as.pattern }, id),
-                .applied_tag => |tag| try self.markPatterns(store.slicePatterns(tag.args), id),
-                .nominal => |nominal| try self.mark(.{ .pattern = nominal.backing_pattern }, id),
-                .nominal_external => |nominal| try self.mark(.{ .pattern = nominal.backing_pattern }, id),
-                .record_destructure => |record| for (store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    try self.mark(.{ .pattern = store.getRecordDestruct(destruct_idx).kind.toPatternIdx() }, id);
-                },
-                .list => |list| {
-                    try self.markPatterns(store.slicePatterns(list.patterns), id);
-                    if (list.rest_info) |rest| if (rest.pattern) |rest_pattern| try self.mark(.{ .pattern = rest_pattern }, id);
-                },
-                .tuple => |tuple| try self.markPatterns(store.slicePatterns(tuple.patterns), id),
-                .str_interpolation => |str| {
-                    var offset: u32 = 0;
-                    while (offset < str.steps.span.len) : (offset += 1) {
-                        if (store.getStrPatternStep(str.steps, offset).capture) |capture| try self.mark(.{ .pattern = capture }, id);
-                    }
-                },
-                .assign,
-                .var_assign,
-                .num_literal,
-                .num_from_numeral_literal,
-                .small_dec_literal,
-                .dec_literal,
-                .frac_f32_literal,
-                .frac_f64_literal,
-                .str_literal,
-                .underscore,
-                .runtime_error,
-                => {},
-                .deferred_import_ref => invariant("a deferred import reference pattern reached a checked body"),
-            }
-        }
+        const MarkSink = struct {
+            builder: *Builder,
+            unit: UnitId,
 
-        fn markStatementChildren(self: *Builder, statement_idx: StatementId, id: UnitId) Allocator.Error!void {
-            const store = &self.env.store;
-            switch (store.getStatement(statement_idx)) {
-                .s_decl => |decl| {
-                    try self.mark(.{ .pattern = decl.pattern }, id);
-                    try self.mark(.{ .expr = decl.expr }, id);
-                },
-                .s_var => |var_| {
-                    try self.mark(.{ .pattern = var_.pattern_idx }, id);
-                    try self.mark(.{ .expr = var_.expr }, id);
-                },
-                .s_var_uninitialized => |var_| try self.mark(.{ .pattern = var_.pattern_idx }, id),
-                .s_reassign => |reassign| {
-                    try self.mark(.{ .pattern = reassign.pattern_idx }, id);
-                    try self.mark(.{ .expr = reassign.expr }, id);
-                },
-                .s_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
-                .s_expr => |expr| try self.mark(.{ .expr = expr.expr }, id),
-                .s_expect => |expect| {
-                    self.has_expects = true;
-                    try self.mark(.{ .expr = expect.body }, id);
-                },
-                .s_for => |for_| {
-                    try self.mark(.{ .pattern = for_.patt }, id);
-                    try self.mark(.{ .expr = for_.expr }, id);
-                    try self.mark(.{ .expr = for_.body }, id);
-                },
-                inline .s_while, .s_infinite_loop, .s_breakable_loop => |loop| {
-                    try self.mark(.{ .expr = loop.cond }, id);
-                    try self.mark(.{ .expr = loop.body }, id);
-                },
-                .s_return => |ret| {
-                    try self.mark(.{ .expr = ret.expr }, id);
-                    try self.mark(.{ .expr = ret.lambda }, id);
-                },
-                .s_runtime_error => |runtime_error| try self.markExprs(store.sliceExpr(runtime_error.evaluated), id),
-                .s_crash,
-                .s_break,
-                .s_import,
-                .s_alias_decl,
-                .s_nominal_decl,
-                .s_where_alias_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                => {},
+            pub fn child(sink: MarkSink, node: Pending) Allocator.Error!void {
+                try sink.builder.mark(node, sink.unit);
             }
-        }
+        };
 
         /// Rejected method declarations, recursive value declarations and
         /// their binders, and generalized callable lookup bindings.
@@ -695,6 +478,243 @@ pub const ModuleIndex = struct {
         }
     };
 };
+
+/// A reached CIR node of a checked body.
+pub const BodyNode = union(enum) {
+    expr: ExprId,
+    pattern: PatternId,
+    statement: StatementId,
+};
+
+/// Call `sink.child` with each child of `node` that the module index
+/// reaches it through, in the order the index walks them.
+pub fn visitBodyChildren(env: *const ModuleEnv, node: BodyNode, sink: anytype) Allocator.Error!void {
+    switch (node) {
+        .expr => |expr| try visitExprChildren(env, expr, sink),
+        .pattern => |pattern| try visitPatternChildren(env, pattern, sink),
+        .statement => |statement| try visitStatementChildren(env, statement, sink),
+    }
+}
+
+pub fn visitExprChildren(env: *const ModuleEnv, expr_idx: ExprId, sink: anytype) Allocator.Error!void {
+    const store = &env.store;
+    switch (store.getExpr(expr_idx)) {
+        .e_str => |str| for (store.sliceExpr(str.span)) |child| try sink.child(.{ .expr = child }),
+        .e_list => |list| for (store.sliceExpr(list.elems)) |child| try sink.child(.{ .expr = child }),
+        .e_tuple => |tuple| for (store.sliceExpr(tuple.elems)) |child| try sink.child(.{ .expr = child }),
+        .e_match => |match| {
+            try sink.child(.{ .expr = match.cond });
+            for (store.sliceMatchBranches(match.branches)) |branch_idx| {
+                const branch = store.getMatchBranch(branch_idx);
+                for (store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
+                    try sink.child(.{ .pattern = store.getMatchBranchPattern(branch_pattern_idx).pattern });
+                }
+                if (branch.guard) |guard| try sink.child(.{ .expr = guard });
+                try sink.child(.{ .expr = branch.value });
+            }
+        },
+        .e_if => |if_| {
+            for (store.sliceIfBranches(if_.branches)) |branch_idx| {
+                const branch = store.getIfBranch(branch_idx);
+                try sink.child(.{ .expr = branch.cond });
+                try sink.child(.{ .expr = branch.body });
+            }
+            try sink.child(.{ .expr = if_.final_else });
+        },
+        .e_call => |call| {
+            try sink.child(.{ .expr = call.func });
+            for (store.sliceExpr(call.args)) |child| try sink.child(.{ .expr = child });
+        },
+        .e_record => |record| {
+            for (store.sliceRecordFields(record.fields)) |field_idx| {
+                try sink.child(.{ .expr = store.getRecordField(field_idx).value });
+            }
+            if (record.ext) |ext| try sink.child(.{ .expr = ext });
+        },
+        .e_block => |block| {
+            for (store.sliceStatements(block.stmts)) |statement| try sink.child(.{ .statement = statement });
+            try sink.child(.{ .expr = block.final_expr });
+        },
+        .e_tag => |tag| for (store.sliceExpr(tag.args)) |child| try sink.child(.{ .expr = child }),
+        .e_nominal => |nominal| try sink.child(.{ .expr = nominal.backing_expr }),
+        .e_nominal_external => |nominal| try sink.child(.{ .expr = nominal.backing_expr }),
+        .e_closure => |closure| {
+            try sink.child(.{ .expr = closure.lambda_idx });
+            for (store.sliceCaptures(closure.captures)) |capture_idx| {
+                try sink.child(.{ .pattern = store.getCapture(capture_idx).pattern_idx });
+            }
+        },
+        .e_lambda => |lambda| {
+            for (store.slicePatterns(lambda.args)) |child| try sink.child(.{ .pattern = child });
+            try sink.child(.{ .expr = lambda.body });
+        },
+        .e_binop => |binop| {
+            try sink.child(.{ .expr = binop.lhs });
+            try sink.child(.{ .expr = binop.rhs });
+        },
+        .e_unary_minus => |unary| try sink.child(.{ .expr = unary.expr }),
+        .e_field_access => |field| try sink.child(.{ .expr = field.receiver }),
+        inline .e_method_call, .e_dispatch_call => |call| {
+            try sink.child(.{ .expr = call.receiver });
+            for (store.sliceExpr(call.args)) |child| try sink.child(.{ .expr = child });
+        },
+        .e_interpolation => |interpolation| {
+            try sink.child(.{ .expr = interpolation.first });
+            for (store.sliceExpr(interpolation.parts)) |child| try sink.child(.{ .expr = child });
+        },
+        .e_structural_eq => |eq| {
+            try sink.child(.{ .expr = eq.lhs });
+            try sink.child(.{ .expr = eq.rhs });
+        },
+        .e_structural_hash => |hash| {
+            try sink.child(.{ .expr = hash.value });
+            try sink.child(.{ .expr = hash.hasher });
+        },
+        .e_method_eq => |eq| {
+            try sink.child(.{ .expr = eq.lhs });
+            try sink.child(.{ .expr = eq.rhs });
+        },
+        .e_type_method_call => |call| {
+            try sink.child(.{ .statement = call.type_dispatch_stmt });
+            for (store.sliceExpr(call.args)) |child| try sink.child(.{ .expr = child });
+        },
+        .e_type_dispatch_call => |call| {
+            switch (call.owner) {
+                .statement => |statement| try sink.child(.{ .statement = statement }),
+                .dispatcher => {},
+            }
+            for (store.sliceExpr(call.args)) |child| try sink.child(.{ .expr = child });
+        },
+        .e_tuple_access => |access| try sink.child(.{ .expr = access.tuple }),
+        .e_dbg => |dbg| try sink.child(.{ .expr = dbg.expr }),
+        .e_expect_err => |expect_err| try sink.child(.{ .expr = expect_err.expr }),
+        .e_expect => |expect| {
+            try sink.child(.{ .expr = expect.body });
+        },
+        .e_return => |ret| {
+            try sink.child(.{ .expr = ret.expr });
+            try sink.child(.{ .expr = ret.lambda });
+        },
+        .e_for => |for_| {
+            try sink.child(.{ .pattern = for_.patt });
+            try sink.child(.{ .expr = for_.expr });
+            try sink.child(.{ .expr = for_.body });
+        },
+        .e_hosted_lambda => |hosted| for (store.slicePatterns(hosted.args)) |child| try sink.child(.{ .pattern = child }),
+        .e_run_low_level => |run| for (store.sliceExpr(run.args)) |child| try sink.child(.{ .expr = child }),
+        .e_runtime_error => |runtime_error| for (store.sliceExpr(runtime_error.evaluated)) |child| try sink.child(.{ .expr = child }),
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_crash,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_break,
+        => {},
+        .e_lookup_associated_local, .e_lookup_associated => invariant("an unresolved associated lookup reached a checked body"),
+        .e_deferred_import_ref => invariant("a deferred import reference reached a checked body"),
+    }
+}
+
+pub fn visitPatternChildren(env: *const ModuleEnv, pattern_idx: PatternId, sink: anytype) Allocator.Error!void {
+    const store = &env.store;
+    switch (store.getPattern(pattern_idx)) {
+        .as => |as| try sink.child(.{ .pattern = as.pattern }),
+        .applied_tag => |tag| for (store.slicePatterns(tag.args)) |child| try sink.child(.{ .pattern = child }),
+        .nominal => |nominal| try sink.child(.{ .pattern = nominal.backing_pattern }),
+        .nominal_external => |nominal| try sink.child(.{ .pattern = nominal.backing_pattern }),
+        .record_destructure => |record| for (store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+            try sink.child(.{ .pattern = store.getRecordDestruct(destruct_idx).kind.toPatternIdx() });
+        },
+        .list => |list| {
+            for (store.slicePatterns(list.patterns)) |child| try sink.child(.{ .pattern = child });
+            if (list.rest_info) |rest| if (rest.pattern) |rest_pattern| try sink.child(.{ .pattern = rest_pattern });
+        },
+        .tuple => |tuple| for (store.slicePatterns(tuple.patterns)) |child| try sink.child(.{ .pattern = child }),
+        .str_interpolation => |str| {
+            var offset: u32 = 0;
+            while (offset < str.steps.span.len) : (offset += 1) {
+                if (store.getStrPatternStep(str.steps, offset).capture) |capture| try sink.child(.{ .pattern = capture });
+            }
+        },
+        .assign,
+        .var_assign,
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => {},
+        .deferred_import_ref => invariant("a deferred import reference pattern reached a checked body"),
+    }
+}
+
+pub fn visitStatementChildren(env: *const ModuleEnv, statement_idx: StatementId, sink: anytype) Allocator.Error!void {
+    const store = &env.store;
+    switch (store.getStatement(statement_idx)) {
+        .s_decl => |decl| {
+            try sink.child(.{ .pattern = decl.pattern });
+            try sink.child(.{ .expr = decl.expr });
+        },
+        .s_var => |var_| {
+            try sink.child(.{ .pattern = var_.pattern_idx });
+            try sink.child(.{ .expr = var_.expr });
+        },
+        .s_var_uninitialized => |var_| try sink.child(.{ .pattern = var_.pattern_idx }),
+        .s_reassign => |reassign| {
+            try sink.child(.{ .pattern = reassign.pattern_idx });
+            try sink.child(.{ .expr = reassign.expr });
+        },
+        .s_dbg => |dbg| try sink.child(.{ .expr = dbg.expr }),
+        .s_expr => |expr| try sink.child(.{ .expr = expr.expr }),
+        .s_expect => |expect| {
+            try sink.child(.{ .expr = expect.body });
+        },
+        .s_for => |for_| {
+            try sink.child(.{ .pattern = for_.patt });
+            try sink.child(.{ .expr = for_.expr });
+            try sink.child(.{ .expr = for_.body });
+        },
+        inline .s_while, .s_infinite_loop, .s_breakable_loop => |loop| {
+            try sink.child(.{ .expr = loop.cond });
+            try sink.child(.{ .expr = loop.body });
+        },
+        .s_return => |ret| {
+            try sink.child(.{ .expr = ret.expr });
+            try sink.child(.{ .expr = ret.lambda });
+        },
+        .s_runtime_error => |runtime_error| for (store.sliceExpr(runtime_error.evaluated)) |child| try sink.child(.{ .expr = child }),
+        .s_crash,
+        .s_break,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        => {},
+    }
+}
 
 /// Whether `pattern = expr` binds an exact procedure alias, local or top
 /// level (design.md "Procedure Aliases").

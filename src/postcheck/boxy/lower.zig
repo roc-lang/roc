@@ -42,6 +42,17 @@ const RootMetadata = lir_core.RootMetadata.RootMetadata;
 const TypeId = types.TypeId;
 const ModuleIndex = types.ModuleIndex;
 const invariant = types.invariant;
+const BodyNode = check.BodyAnalyses.BodyNode;
+
+/// A set of checked types of one module.
+const Mentions = collections.DenseMapUnmanaged(checked.CheckedTypeId, void);
+
+/// A lambda expression and a scheme variable list, by its address and
+/// length (`Program.subtreeSlots`).
+const SubtreeKey = struct { module: ModuleIndex, expr: ExprId, vars: usize, len: usize };
+
+/// A chain root worker and a scheme variable list (`Program.localProcSlots`).
+const ProcSlotsKey = struct { root: WorkerId, vars: usize, len: usize };
 
 /// Everything one `.boxy` lowering reads.
 pub const Input = struct {
@@ -497,6 +508,12 @@ pub const Worker = struct {
     captures: []const checked.CheckedCapture = &.{},
     /// For a lambda worker: the stored type of each captured value.
     capture_types: []const TypeId = &.{},
+    /// For a lambda or adapter worker: the positions among `scheme_vars`
+    /// whose descriptors are its inputs, ascending (design.md "Function
+    /// Values"). Its body converts types over every one of `scheme_vars`,
+    /// but reads the descriptors of only these. Null for every other
+    /// worker, whose inputs hold every variable's descriptor.
+    desc_slots: ?[]const u32 = null,
     /// The dictionaries in scope, by generalized scope, innermost first:
     /// each scope's runtime evidence-parameter indices. A template has its
     /// own scope; a lambda shares its outer worker's scopes; a generalized
@@ -815,6 +832,16 @@ pub const Program = struct {
     omitted_defaults: std.AutoHashMapUnmanaged(OmittedField, checked.CheckedFieldDefault) = .empty,
     /// The generated codec families and their workers.
     codec: Codec.State = .{},
+    /// The `variable` nodes of the longest scope `identityBound` returned.
+    identity_bound: []TypeId = &.{},
+    /// `varPositions` of each scheme variable list asked about, by its
+    /// address and length.
+    var_positions: std.AutoHashMapUnmanaged(struct { ptr: usize, len: usize }, *const types.VarPositions) = .empty,
+    /// `subtreeSlots` of each lambda and scheme variable list asked about.
+    subtree_slots: std.AutoHashMapUnmanaged(SubtreeKey, []const u32) = .empty,
+    /// `localProcSlots` of each chain root and scheme variable list asked
+    /// about.
+    proc_slots: std.AutoHashMapUnmanaged(ProcSlotsKey, []const u32) = .empty,
 
     /// Index the checked producer's exact scope, capture, local-procedure and
     /// omitted-default records once when their module is demanded. A missing
@@ -1317,6 +1344,9 @@ pub const Program = struct {
         self.composed_in_body.deinit(self.allocator);
         self.omitted_defaults.deinit(self.allocator);
         self.codec.deinit(self.allocator);
+        self.var_positions.deinit(self.allocator);
+        self.subtree_slots.deinit(self.allocator);
+        self.proc_slots.deinit(self.allocator);
         self.arena.deinit();
     }
 
@@ -1702,6 +1732,7 @@ pub const Program = struct {
             .function => |function| function,
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a lambda's type is not a function type"),
         };
+        const desc_slots = try self.lambdaDescSlots(outer, lambda_expr, captures, scheme_vars, if (own) |scheme| scheme.scheme_vars.len else 0);
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = self.workerIdentity(key);
         // A lambda of an imported worker is that worker's object's.
@@ -1725,6 +1756,7 @@ pub const Program = struct {
             .ret = signature.ret,
             .captures = try self.arena.allocator().dupe(checked.CheckedCapture, captures),
             .capture_types = stored_capture_types,
+            .desc_slots = desc_slots,
             .dict_scopes = if (scope) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
             .dict_scope_params = if (scope) |scheme| try std.mem.concat(self.arena.allocator(), []const static_dispatch.EvidenceParamRecord, &.{ &.{scheme.params}, outer_worker.dict_scope_params }) else outer_worker.dict_scope_params,
             .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,
@@ -1972,7 +2004,7 @@ pub const Program = struct {
                         if (field.kind == .variable_slot) try found.append(allocator, field.slot_variable);
                         try pending.append(allocator, field.ty);
                     }
-                    if (record.ext) |ext| try pending.append(allocator, ext);
+                    if (record.ext.get()) |ext| try pending.append(allocator, ext);
                     try pending.appendSlice(allocator, self.store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(allocator, self.store.span(items)),
@@ -2726,6 +2758,8 @@ pub const Program = struct {
             .function => |function| function,
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an adapted function value's type is not a function type"),
         };
+        const variable_free = self.store.isVariableFree(from) and self.store.isVariableFree(to);
+        const desc_slots: ?[]const u32 = if (variable_free) null else try self.adapterDescSlots(outer, from, to);
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
@@ -2739,11 +2773,12 @@ pub const Program = struct {
             .key = key,
             .proc = proc,
             .module = outer_worker.module,
-            .scheme_vars = if (self.store.isVariableFree(from) and self.store.isVariableFree(to)) &.{} else outer_worker.scheme_vars,
+            .scheme_vars = if (variable_free) &.{} else outer_worker.scheme_vars,
             .dictionary_params = &.{},
             .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
             .ret = signature.ret,
             .capture_types = try self.arena.allocator().dupe(TypeId, &.{from}),
+            .desc_slots = desc_slots,
         });
         try self.worker_ids.put(self.allocator, key, id);
         try self.worklist.append(self.allocator, id);
@@ -3504,6 +3539,7 @@ pub const Program = struct {
         defer self.allocator.free(words);
         @memcpy(words[0..needs.input_count], unfilled.inputs);
         var evaluation = Tables.Evaluation.init(self, .{ .needs = &needs }, unfilled.inputs, needs.desc_count);
+        evaluation.desc_slots = needs.desc_slots;
         defer evaluation.deinit();
         for (words[needs.input_count..], needs.slots) |*slot_word, recipe| slot_word.* = try evaluation.word(recipe);
         try self.static_descs.fillTable(unfilled, words);
@@ -3518,12 +3554,13 @@ pub const Program = struct {
         return switch (target.key) {
             .template => @intCast(target.scheme_vars.len + target.dictionary_params.len + target.literal_params),
             .lambda => blk: {
-                var count: u32 = @intCast(target.scheme_vars.len);
+                var count: u32 = self.descCount(id);
                 for (target.dict_scopes) |scope| count += @intCast(scope.len);
                 for (target.literal_scopes) |scope| count += @intCast(scope.len);
                 break :blk count;
             },
-            .adapter, .codec, .default => @intCast(target.scheme_vars.len),
+            .adapter => self.descCount(id),
+            .codec, .default => @intCast(target.scheme_vars.len),
             .method_entry => |entry_target| self.inputCount(entry_target),
             .structural, .structural_map => target.structural_descs,
             .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => 0,
@@ -3542,11 +3579,404 @@ pub const Program = struct {
     pub fn descCount(self: *Program, id: WorkerId) u32 {
         const target = self.worker(id).*;
         return switch (target.key) {
-            .template, .lambda, .adapter, .codec, .default => @intCast(target.scheme_vars.len),
+            .lambda, .adapter => if (target.desc_slots) |slots| @intCast(slots.len) else @intCast(target.scheme_vars.len),
+            .template, .codec, .default => @intCast(target.scheme_vars.len),
             .method_entry => |entry_target| self.descCount(entry_target),
             .structural, .structural_map => target.structural_descs,
             .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => 0,
         };
+    }
+
+    /// The input position of the descriptor of variable `index` of worker
+    /// `id`'s scope, or null when its body reads no descriptor of that
+    /// variable (`Worker.desc_slots`).
+    pub fn descInput(self: *Program, id: WorkerId, index: u32) ?u32 {
+        const target = self.worker(id).*;
+        const slots = target.desc_slots orelse return if (index < self.descCount(id)) index else null;
+        return @intCast(std.sort.binarySearch(u32, slots, index, orderU32) orelse return null);
+    }
+
+    fn orderU32(key: u32, item: u32) std.math.Order {
+        return std.math.order(key, item);
+    }
+
+    /// The descriptor slots (`Worker.desc_slots`) of a lambda worker of
+    /// `lambda_expr` whose outer worker is `outer`, capturing `captures`,
+    /// whose scope is `scheme_vars`: the outer worker's variables, then
+    /// `own_count` of its own scheme's. They are each of the outer worker's
+    /// variables that a type its body converts mentions, then all of its
+    /// own. The body converts the types of the lambda's nodes, its nested
+    /// lambdas' included (`subtreeSlots`), of its captures, and of the
+    /// local procedures it can build from its own inputs (`localProcSlots`).
+    fn lambdaDescSlots(self: *Program, outer: WorkerId, lambda_expr: ExprId, captures: []const checked.CheckedCapture, scheme_vars: []const checked.CheckedTypeId, own_count: usize) Allocator.Error!?[]const u32 {
+        const outer_worker = self.worker(outer).*;
+        const outer_vars = outer_worker.scheme_vars;
+        if (outer_vars.len == 0) return null;
+        if (scheme_vars.len != outer_vars.len + own_count) invariant("a lambda's scope is not its outer worker's then its own");
+        const module_index = outer_worker.module;
+        const view = self.module(module_index);
+        const positions = (try self.varPositions(outer_vars)).?;
+        var marked = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, outer_vars.len);
+        defer marked.deinit(self.allocator);
+        for (try self.subtreeSlots(module_index, lambda_expr, outer_vars)) |slot| marked.set(slot);
+        for (try self.localProcSlots(outer, outer_vars)) |slot| marked.set(slot);
+        var seen: Mentions = .empty;
+        defer seen.deinit(self.allocator);
+        for (captures) |capture| try self.markTypeSlots(view, positions, view.bodies().patternType(capture.pattern), &seen, &marked);
+        const slots = try self.arena.allocator().alloc(u32, marked.count() + own_count);
+        var bits = marked.iterator(.{});
+        var index: usize = 0;
+        while (bits.next()) |slot| : (index += 1) {
+            if (self.descInput(outer, @intCast(slot)) == null) invariant("a lambda reads a descriptor its outer worker does not hold");
+            slots[index] = @intCast(slot);
+        }
+        for (slots[index..], outer_vars.len..) |*slot, own| slot.* = @intCast(own);
+        return slots;
+    }
+
+    /// The positions among `vars` (a scheme variable list of the worker
+    /// whose body holds it) of the variables that the types of the nodes of
+    /// lambda `lambda_expr` of `module_index` mention, its nested lambdas'
+    /// nodes included: each expression's and pattern's own type, an
+    /// expression's row coercion, and site
+    /// instantiation and evidence, and the runtime captures of each nested
+    /// lambda or closure, which the body packing it reads. Every nested
+    /// lambda's positions are found by the same walk and remembered, so
+    /// each node is visited once per scheme variable list.
+    fn subtreeSlots(self: *Program, module_index: ModuleIndex, lambda_expr: ExprId, vars: []const checked.CheckedTypeId) Allocator.Error![]const u32 {
+        const key: SubtreeKey = .{ .module = module_index, .expr = lambda_expr, .vars = @intFromPtr(vars.ptr), .len = vars.len };
+        if (self.subtree_slots.get(key)) |known| return known;
+        const allocator = self.allocator;
+        const view = self.module(module_index);
+        const bodies = view.bodies();
+        try bodies.demandIndex();
+        try self.indexBodyMetadata(module_index);
+        const positions = (try self.varPositions(vars)) orelse invariant("a lambda's descriptor slots were asked of an empty scope");
+
+        // The lambdas of the walk, the root first, each with the lambda
+        // whose body holds it; and the types each lambda's body converts.
+        const Lambda = struct { expr: ExprId, parent: u32, slots: ?[]const u32 };
+        const Owned = struct { owner: u32, ty: checked.CheckedTypeId };
+        const Pending = struct { node: BodyNode, owner: u32 };
+        var lambdas: std.ArrayList(Lambda) = .empty;
+        defer lambdas.deinit(allocator);
+        var owned: std.ArrayList(Owned) = .empty;
+        defer owned.deinit(allocator);
+        var pending: std.ArrayList(Pending) = .empty;
+        defer pending.deinit(allocator);
+        var visited: collections.DenseMapUnmanaged(u32, void) = .empty;
+        defer visited.deinit(allocator);
+        var children: std.ArrayList(BodyNode) = .empty;
+        defer children.deinit(allocator);
+        const Sink = struct {
+            nodes: *std.ArrayList(BodyNode),
+            allocator: Allocator,
+
+            pub fn child(sink: @This(), node: BodyNode) Allocator.Error!void {
+                try sink.nodes.append(sink.allocator, node);
+            }
+        };
+        try lambdas.append(allocator, .{ .expr = lambda_expr, .parent = 0, .slots = null });
+        try pending.append(allocator, .{ .node = .{ .expr = lambda_expr }, .owner = 0 });
+        const plans = view.view.static_dispatch_plans;
+        while (pending.pop()) |item| {
+            const raw: u32 = switch (item.node) {
+                inline else => |id| @backingInt(id),
+            };
+            if ((try visited.getOrPut(allocator, raw)).found_existing) continue;
+            var inner = item.owner;
+            switch (item.node) {
+                .expr => |expr| {
+                    // A nested lambda's value is built by the body holding
+                    // it, which converts its type and packs its captures.
+                    const node_start = owned.items.len;
+                    try owned.append(allocator, .{ .owner = item.owner, .ty = bodies.exprType(expr) });
+                    if (bodies.rowCoercion(expr)) |wide| try owned.append(allocator, .{ .owner = item.owner, .ty = wide });
+                    if (plans.siteSubstitution(expr)) |subst| for (subst) |ty| try owned.append(allocator, .{ .owner = item.owner, .ty = ty });
+                    if (plans.siteEvidence(expr)) |evidence| for (evidence) |entry| try owned.append(allocator, .{ .owner = item.owner, .ty = entry.dispatcher_ty });
+                    if (plans.siteInstanceType(expr)) |instance| try owned.append(allocator, .{ .owner = item.owner, .ty = instance });
+                    try appendPlanTypes(allocator, plans, raw, item.owner, &owned);
+                    if (self.sites_by_expr.get(.{ .module = module_index, .expr = expr })) |site_index| {
+                        for (try self.runtimeCaptures(view, site_index)) |capture| try owned.append(allocator, .{ .owner = item.owner, .ty = bodies.patternType(capture.pattern) });
+                    }
+                    if (expr != lambda_expr and bodies.exprData(expr) == .lambda) {
+                        const nested: SubtreeKey = .{ .module = module_index, .expr = expr, .vars = key.vars, .len = key.len };
+                        inner = @intCast(lambdas.items.len);
+                        try lambdas.append(allocator, .{ .expr = expr, .parent = item.owner, .slots = self.subtree_slots.get(nested) });
+                        if (lambdas.items[inner].slots != null) continue;
+                        // Its own body takes its parameters, result and
+                        // captures at those types too.
+                        const node_end = owned.items.len;
+                        for (node_start..node_end) |index| try owned.append(allocator, .{ .owner = inner, .ty = owned.items[index].ty });
+                    }
+                },
+                .pattern => |pattern| {
+                    try owned.append(allocator, .{ .owner = item.owner, .ty = bodies.patternType(pattern) });
+                    try appendPlanTypes(allocator, plans, raw, item.owner, &owned);
+                },
+                // A statement's values are its expressions' and patterns'.
+                .statement => {},
+            }
+            children.clearRetainingCapacity();
+            try check.BodyAnalyses.visitBodyChildren(bodies.env, item.node, Sink{ .nodes = &children, .allocator = allocator });
+            for (children.items) |child| try pending.append(allocator, .{ .node = child, .owner = inner });
+        }
+
+        // Each lambda's types, grouped by lambda.
+        const starts = try allocator.alloc(u32, lambdas.items.len + 1);
+        defer allocator.free(starts);
+        @memset(starts, 0);
+        for (owned.items) |entry| starts[entry.owner + 1] += 1;
+        for (1..starts.len) |index| starts[index] += starts[index - 1];
+        const grouped = try allocator.alloc(checked.CheckedTypeId, owned.items.len);
+        defer allocator.free(grouped);
+        const fill = try allocator.dupe(u32, starts[0..lambdas.items.len]);
+        defer allocator.free(fill);
+        for (owned.items) |entry| {
+            grouped[fill[entry.owner]] = entry.ty;
+            fill[entry.owner] += 1;
+        }
+
+        // A nested lambda is walked after the lambda holding it, so the
+        // lambdas in reverse walk order reach every nested lambda before
+        // the one holding it.
+        var marked = try std.DynamicBitSetUnmanaged.initEmpty(allocator, vars.len);
+        defer marked.deinit(allocator);
+        var seen: Mentions = .empty;
+        defer seen.deinit(allocator);
+        var index = lambdas.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (lambdas.items[index].slots != null) continue;
+            marked.unsetAll();
+            seen.clearRetainingCapacity();
+            for (grouped[starts[index]..starts[index + 1]]) |ty| try self.markTypeSlots(view, positions, ty, &seen, &marked);
+            for (lambdas.items[index + 1 ..]) |nested| {
+                if (nested.parent != index) continue;
+                for (nested.slots.?) |slot| marked.set(slot);
+            }
+            const slots = try self.arena.allocator().alloc(u32, marked.count());
+            var bits = marked.iterator(.{});
+            var position: usize = 0;
+            while (bits.next()) |slot| : (position += 1) slots[position] = @intCast(slot);
+            lambdas.items[index].slots = slots;
+            try self.subtree_slots.put(allocator, .{ .module = module_index, .expr = lambdas.items[index].expr, .vars = key.vars, .len = key.len }, slots);
+        }
+        return lambdas.items[0].slots.?;
+    }
+
+    /// Append, owned by `owner`, the checked types of the dispatch, literal
+    /// conversion and iterator plans `plans` keys by the node `raw`: each
+    /// plan's dispatcher and callable types, its iterator's item, step and
+    /// seed types, and the dispatcher and substitution of the evidence a
+    /// direct resolution names.
+    fn appendPlanTypes(allocator: Allocator, plans: *const static_dispatch.StaticDispatchPlanTable, raw: u32, owner: u32, out: anytype) Allocator.Error!void {
+        const Entry = @typeInfo(@TypeOf(out.items)).pointer.child;
+        const call_plans = [_]?static_dispatch.StaticDispatchPlanId{ plans.lookupByNode(raw), plans.numeralPlanForNode(raw), plans.quotePlanForNode(raw) };
+        for (call_plans) |maybe| {
+            const plan = plans.plans[@backingInt(maybe orelse continue)];
+            try out.append(allocator, Entry{ .owner = owner, .ty = plan.dispatcher_ty });
+            try out.append(allocator, Entry{ .owner = owner, .ty = plan.callable_ty });
+            try appendResolutionTypes(allocator, plans, plan.resolution, owner, out);
+        }
+        if (plans.iteratorForPlanForNode(raw)) |id| {
+            const plan = plans.iterator_for_plans[@backingInt(id)];
+            try out.append(allocator, Entry{ .owner = owner, .ty = plan.item_ty });
+            try out.append(allocator, Entry{ .owner = owner, .ty = plan.iterator_ty });
+            switch (plan.site) {
+                .for_loop => |loop| try out.append(allocator, Entry{ .owner = owner, .ty = loop.step_ty }),
+                .interpolation => |interpolation| try out.append(allocator, Entry{ .owner = owner, .ty = interpolation.seed_list_ty }),
+            }
+            for ([_]static_dispatch.IteratorDispatchCall{ plan.iter, plan.next }) |call| {
+                try out.append(allocator, Entry{ .owner = owner, .ty = call.dispatcher_ty });
+                try out.append(allocator, Entry{ .owner = owner, .ty = call.callable_ty });
+                try appendResolutionTypes(allocator, plans, call.resolution, owner, out);
+            }
+        }
+    }
+
+    fn appendResolutionTypes(allocator: Allocator, plans: *const static_dispatch.StaticDispatchPlanTable, resolution: static_dispatch.CheckedCallResolution, owner: u32, out: anytype) Allocator.Error!void {
+        const Entry = @typeInfo(@TypeOf(out.items)).pointer.child;
+        const evidence = switch (resolution) {
+            .direct_pending => |node| node,
+            .direct_closed, .direct_parametric => |direct| direct.evidence,
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => return,
+        };
+        const node = plans.evidenceNode(evidence);
+        if (node.dispatcher_ty.get()) |ty| try out.append(allocator, Entry{ .owner = owner, .ty = ty });
+        for (plans.site_substitutions[node.subst.start..][0..node.subst.len]) |ty| try out.append(allocator, Entry{ .owner = owner, .ty = ty });
+    }
+
+    /// Mark in `marked` the position among the variables `positions` lists
+    /// of each one the checked type `root` of `view` reaches, skipping the
+    /// types already in `seen`.
+    fn markTypeSlots(self: *Program, view: *const types.ModuleView, positions: *const types.VarPositions, root: checked.CheckedTypeId, seen: *Mentions, marked: *std.DynamicBitSetUnmanaged) Allocator.Error!void {
+        const allocator = self.allocator;
+        const checked_types = view.types();
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            if (positions.map.get(ty)) |slot| marked.set(slot);
+            switch (checked_types.payload(ty)) {
+                .alias => |alias| {
+                    try pending.appendSlice(allocator, alias.args);
+                    try pending.append(allocator, alias.backing);
+                },
+                .record => |record| {
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try pending.append(allocator, field.ty);
+                        // An undetermined field kind takes its variable's binding.
+                        if (field.kind.undeterminedVariable()) |variable| try pending.append(allocator, variable);
+                    }
+                    try pending.append(allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .tag_union => |tag_union| {
+                    for (0..tag_union.tags.len()) |tag_index| try pending.appendSlice(allocator, tag_union.tags.get(tag_index).args);
+                    try pending.append(allocator, tag_union.ext);
+                },
+                .function => |function| {
+                    try pending.appendSlice(allocator, function.args);
+                    try pending.append(allocator, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(allocator, nominal.args),
+                .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+            }
+        }
+    }
+
+    /// The positions among `vars`, the scheme variables of worker `id`,
+    /// of the variables that the local procedures the chain of `id` can
+    /// build from its own inputs convert: those whose site the chain's root
+    /// owns (`Body.Builder.localProcDeclaration`), each procedure's nodes
+    /// (`subtreeSlots`) and captures.
+    fn localProcSlots(self: *Program, id: WorkerId, vars: []const checked.CheckedTypeId) Allocator.Error![]const u32 {
+        var root = id;
+        while (true) switch (self.worker(root).key) {
+            .lambda => |key| root = key.outer,
+            .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => break,
+        };
+        const key: ProcSlotsKey = .{ .root = root, .vars = @intFromPtr(vars.ptr), .len = vars.len };
+        if (self.proc_slots.get(key)) |known| return known;
+        const allocator = self.allocator;
+        const root_worker = self.worker(root).*;
+        const module_index = root_worker.module;
+        try self.indexBodyMetadata(module_index);
+        const view = self.module(module_index);
+        const bodies = view.bodies();
+        const positions = (try self.varPositions(vars)) orelse invariant("local procedure slots were asked of an empty scope");
+        var marked = try std.DynamicBitSetUnmanaged.initEmpty(allocator, vars.len);
+        defer marked.deinit(allocator);
+        var seen: Mentions = .empty;
+        defer seen.deinit(allocator);
+        // A body is scanned once per owner reaching it, each scan recording
+        // its own copy of every site, so a procedure is the root's when any
+        // copy of its site is.
+        for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
+            const site_expr = site.checked_expr.get() orelse continue;
+            if (!self.local_procs.contains(.{ .module = module_index, .expr = site_expr })) continue;
+            const owns = switch (site.owner) {
+                .template => |ref| switch (root_worker.key) {
+                    .template => |template| self.moduleByKey(.{ .bytes = ref.artifact.bytes }).index == module_index and ref.template == template.template,
+                    .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
+                },
+                .default_root => root_worker.key == .default,
+            };
+            if (!owns) continue;
+            const lambda_expr = switch (bodies.exprData(site_expr)) {
+                .closure => |closure| blk: {
+                    for (closure.captures) |capture| try self.markTypeSlots(view, positions, bodies.patternType(bodies.capture(capture).pattern), &seen, &marked);
+                    break :blk closure.lambda;
+                },
+                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => site_expr,
+            };
+            for (try self.subtreeSlots(module_index, lambda_expr, vars)) |slot| marked.set(slot);
+            try self.markTypeSlots(view, positions, bodies.exprType(site_expr), &seen, &marked);
+            for (try self.runtimeCaptures(view, site_index)) |capture| try self.markTypeSlots(view, positions, bodies.patternType(capture.pattern), &seen, &marked);
+        }
+        const slots = try self.arena.allocator().alloc(u32, marked.count());
+        var bits = marked.iterator(.{});
+        var position: usize = 0;
+        while (bits.next()) |slot| : (position += 1) slots[position] = @intCast(slot);
+        try self.proc_slots.put(allocator, key, slots);
+        return slots;
+    }
+
+    /// The descriptor slots of an adapter worker from function type `from`
+    /// to `to` over the variables of `outer`: the variables the two types
+    /// mention, through their arguments and results, which are all its body
+    /// converts.
+    fn adapterDescSlots(self: *Program, outer: WorkerId, from: TypeId, to: TypeId) Allocator.Error![]const u32 {
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var found: collections.DenseMapUnmanaged(u32, void) = .empty;
+        defer found.deinit(self.allocator);
+        try pending.appendSlice(self.allocator, &.{ from, to });
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            switch (self.store.get(ty)) {
+                .variable => |index| try found.put(self.allocator, index, {}),
+                .record => |record| {
+                    for (self.store.fieldSpan(record.fields)) |field| {
+                        if (field.kind == .variable_slot) try found.put(self.allocator, field.slot_variable, {});
+                        try pending.append(self.allocator, field.ty);
+                    }
+                    if (record.ext.get()) |ext| try pending.append(self.allocator, ext);
+                    try pending.appendSlice(self.allocator, self.store.paddingTypes(record));
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, self.store.span(items)),
+                .tag_union => |tag_union| {
+                    for (self.store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(self.allocator, self.store.span(tag.payloads));
+                    if (tag_union.ext) |ext| try pending.append(self.allocator, ext);
+                },
+                .list => |elem| try pending.append(self.allocator, elem),
+                .box => |payload| try pending.append(self.allocator, payload),
+                .nominal => |nominal| try pending.appendSlice(self.allocator, self.store.nominalArgs(nominal)),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, self.store.span(function.args));
+                    try pending.append(self.allocator, function.ret);
+                },
+                .primitive, .empty_record => {},
+            }
+        }
+        const slots = try self.arena.allocator().alloc(u32, found.count());
+        var keys = found.constKeyIterator();
+        var index: usize = 0;
+        while (keys.next()) |slot| : (index += 1) {
+            if (self.descInput(outer, slot) == null) invariant("an adapter reads a descriptor its outer worker does not hold");
+            slots[index] = slot;
+        }
+        std.mem.sort(u32, slots, {}, std.sort.asc(u32));
+        return slots;
+    }
+
+    /// The shared binding of the first `count` scope variables to their
+    /// `variable` nodes, the environment of a worker's own scheme.
+    pub fn identityBound(self: *Program, count: usize) Allocator.Error![]const TypeId {
+        if (self.identity_bound.len < count) {
+            const grown = try self.arena.allocator().alloc(TypeId, @max(count, self.identity_bound.len * 2));
+            for (grown, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
+            self.identity_bound = grown;
+        }
+        return self.identity_bound[0..count];
+    }
+
+    /// The positions of `vars`, a worker's scheme variables, which every
+    /// environment over that list shares (`types.VarPositions`).
+    pub fn varPositions(self: *Program, vars: []const checked.CheckedTypeId) Allocator.Error!?*const types.VarPositions {
+        if (vars.len == 0) return null;
+        const entry = try self.var_positions.getOrPut(self.allocator, .{ .ptr = @intFromPtr(vars.ptr), .len = vars.len });
+        if (!entry.found_existing) {
+            const positions = try self.arena.allocator().create(types.VarPositions);
+            positions.* = try types.VarPositions.init(self.arena.allocator(), vars);
+            entry.value_ptr.* = positions;
+        }
+        return entry.value_ptr.*;
     }
 };
 
