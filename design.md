@@ -17188,7 +17188,14 @@ placeholder; completion joins that placeholder to the built node. Acyclic
 construction caches the built node directly. Checked aliases instantiate their
 parameter cells and cache their explicit backing cell: alias spelling is a
 checked view, never a separate value identity established by a placeholder
-unification. Allocation failure removes active
+unification. A closed checked type is cached under its canonical id, so equal
+closed types in a context share one cell, except in two occurrence roles that
+are cells of their own, exactly as in an imported Monotype: a record or tag
+union's row tail, and a nominal's backing. Relating an anonymous structure to a
+nominal lifts the structure's class into the nominal, so a row tail sharing
+that class would become a nominal, and a backing sharing it would come to name
+the nominal it backs. Such an owned occurrence is neither read from nor
+recorded in the cache; its components are. Allocation failure removes active
 entries, and copying completed cells into a child scope skips active entries.
 Graph node identities remain append-only, including recursive placeholders and
 all per-node request evidence. As relations are produced, explicit evidence
