@@ -36,7 +36,7 @@ test {
     // arbitrarily deep, so it takes a full word.
     try std.testing.expectEqual(36, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(24, @sizeOf(Alias));
+    try std.testing.expectEqual(20, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
@@ -462,9 +462,12 @@ pub const Rigid = struct {
 /// A named alias to a different type
 pub const Alias = struct {
     ident: TypeIdent,
+    /// The backing var followed by the args: source arguments first, then
+    /// hidden implicit-row parameters. How many are source arguments is held
+    /// in the vars-pool slot just before this range
+    /// (`Store.aliasSourceArgCount`), so every alias is made through
+    /// `Store.mkAliasWithPackedSourceDecl`.
     vars: Var.SafeList.NonEmptyRange,
-    /// Source arguments precede hidden implicit-row parameters in `vars`.
-    source_arg_count: u32,
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
     origin_module: ModuleIdentity.Idx,

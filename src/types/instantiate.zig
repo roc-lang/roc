@@ -1654,7 +1654,7 @@ pub const Instantiator = struct {
                 frame.alias.ident,
                 fresh_backing_var,
                 fresh_args,
-                frame.alias.source_arg_count,
+                self.store.aliasSourceArgCount(frame.alias),
                 frame.alias.origin_module,
                 frame.alias.source_decl.toOptional(),
                 frame.alias.source_decl.originIsBuiltin(),

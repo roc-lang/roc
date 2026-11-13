@@ -366,7 +366,9 @@ pub const Constants = struct {
     ///      and module identities, cache keys and file-dependency content
     ///      hashes are computed from source digests; a flex variable records
     ///      whether it is a deferred literal's type.
-    pub const CACHE_VERSION = 182;
+    /// 183: an alias's source-argument count is held in the type store's vars
+    ///      pool, in the slot just before the alias's vars.
+    pub const CACHE_VERSION = 183;
 };
 
 /// Configuration for the Roc cache system.

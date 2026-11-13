@@ -26822,7 +26822,7 @@ fn finishAliasDeclarationParameters(self: *Self, decl_var: Var, hidden: []const 
         alias.ident,
         self.types.getAliasBackingVar(alias),
         self.scratch_vars.sliceFromStart(args_top),
-        alias.source_arg_count,
+        self.types.aliasSourceArgCount(alias),
         alias.origin_module,
         alias.source_decl.toOptional(),
         alias.source_decl.originIsBuiltin(),
@@ -49144,7 +49144,7 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
                 try appendReplayWord(out, self.gpa, @bitCast(alias.ident.ident_idx));
                 try appendReplayWord(out, self.gpa, @backingInt(alias.origin_module));
                 try appendReplayWord(out, self.gpa, @bitCast(alias.source_decl));
-                try appendReplayWord(out, self.gpa, alias.source_arg_count);
+                try appendReplayWord(out, self.gpa, self.types.aliasSourceArgCount(alias));
                 const args = self.types.sliceAliasArgs(alias);
                 try appendReplayWord(out, self.gpa, @intCast(args.len));
                 try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
@@ -49529,13 +49529,14 @@ fn frozenContent(self: *Self, copies: *const collections.DenseMapUnmanaged(Var, 
         .alias => |alias| blk: {
             const backing = self.frozenCopy(copies, self.types.getAliasBackingVar(alias));
             const args = try self.frozenCopies(copies, self.types.sliceAliasAllArgs(alias));
-            const backing_idx = try self.types.appendVar(backing);
-            var span = try self.types.appendVars(args);
-            span.start = backing_idx;
-            span.count += 1;
-            var copy = alias;
-            copy.vars = .{ .nonempty = span };
-            break :blk .{ .alias = copy };
+            break :blk try self.types.mkAliasWithPackedSourceDecl(
+                alias.ident,
+                backing,
+                args,
+                self.types.aliasSourceArgCount(alias),
+                alias.origin_module,
+                alias.source_decl,
+            );
         },
         .structure => |flat| .{ .structure = switch (flat) {
             .empty_record, .empty_tag_union => flat,

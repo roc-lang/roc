@@ -511,7 +511,10 @@ pub const Store = struct {
             live_descs.set(@backingInt(storage.desc_idx));
         }
 
-        for (self.vars.items) |*var_| var_.* = self.representativeVar(var_.*);
+        for (self.vars.items) |*var_| {
+            if (isAliasSourceArgCountSlot(var_.*)) continue;
+            var_.* = self.representativeVar(var_.*);
+        }
         for (0..self.record_fields.len()) |index| {
             var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
             field.presence.var_ = self.representativeVar(field.presence.var_);
@@ -1813,24 +1816,67 @@ pub const Store = struct {
         source_decl: ?u32,
         builtin_origin: bool,
     ) std.mem.Allocator.Error!Content {
-        std.debug.assert(source_arg_count <= args.len);
         const packed_source_decl = try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin);
-        const backing_idx = try self.appendVar(backing_var);
-        var span = try self.appendVars(args);
+        return self.mkAliasWithPackedSourceDecl(ident, backing_var, args, source_arg_count, origin_module, packed_source_decl);
+    }
 
-        // Adjust args span to include backing  var
-        span.start = backing_idx;
-        span.count = span.count + 1;
+    /// Make alias content whose first `source_arg_count` args are source
+    /// arguments and the rest hidden implicit-row parameters. Appends
+    /// `[count, backing, args...]` to the vars pool: the alias's range covers
+    /// the backing and args, and the count sits in the slot just before it
+    /// (`aliasSourceArgCount`). Every alias content is made here.
+    pub fn mkAliasWithPackedSourceDecl(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        source_arg_count: u32,
+        origin_module: base.ModuleIdentity.Idx,
+        source_decl: SourceDecl,
+    ) std.mem.Allocator.Error!Content {
+        self.debugAssertUnsealed();
+        std.debug.assert(source_arg_count <= args.len);
+        if (builtin.mode == .debug and self.sliceAliasesVars(args)) {
+            base.invariant("mkAlias: argument slice aliases the var list it is appended to", .{});
+        }
+        try self.vars.ensureUnusedCapacity(self.gpa, args.len + 2);
+        _ = self.vars.appendAssumeCapacity(aliasSourceArgCountSlot(source_arg_count));
+        const backing_idx = self.vars.appendAssumeCapacity(backing_var);
+        for (args) |arg| _ = self.vars.appendAssumeCapacity(arg);
 
         return Content{
             .alias = Alias{
                 .ident = ident,
-                .vars = .{ .nonempty = span },
-                .source_arg_count = source_arg_count,
+                .vars = .{ .nonempty = .{ .start = backing_idx, .count = @intCast(args.len + 1) } },
                 .origin_module = origin_module,
-                .source_decl = packed_source_decl,
+                .source_decl = source_decl,
             },
         };
+    }
+
+    /// The bit marking a vars-pool slot that holds an alias's source-argument
+    /// count rather than a variable. Every variable is below it (the checked
+    /// synthesized-type bit, see `representativeVar`), so a pass over the
+    /// whole pool tells the two apart.
+    const alias_source_arg_count_bit: u32 = @as(u32, 1) << 31;
+
+    fn aliasSourceArgCountSlot(source_arg_count: u32) Var {
+        std.debug.assert(source_arg_count < alias_source_arg_count_bit);
+        return @fromBackingInt(source_arg_count | alias_source_arg_count_bit);
+    }
+
+    fn isAliasSourceArgCountSlot(slot: Var) bool {
+        return @backingInt(slot) & alias_source_arg_count_bit != 0;
+    }
+
+    /// How many of `alias`'s args are source arguments; the rest are hidden
+    /// implicit-row parameters.
+    pub fn aliasSourceArgCount(self: *const Self, alias: Alias) u32 {
+        const start: u32 = @backingInt(alias.vars.nonempty.start);
+        std.debug.assert(start > 0);
+        const slot = self.vars.items[start - 1];
+        std.debug.assert(isAliasSourceArgCountSlot(slot));
+        return @backingInt(slot) & ~alias_source_arg_count_bit;
     }
 
     /// Make a nominal type application: identity plus actual type args only.
@@ -2159,7 +2205,7 @@ pub const Store = struct {
     pub fn sliceAliasArgs(self: *const Self, alias: Alias) []Var {
         std.debug.assert(alias.vars.nonempty.count > 0);
         const slice = self.vars.sliceRange(alias.vars.nonempty);
-        return slice[1..][0..alias.source_arg_count];
+        return slice[1..][0..self.aliasSourceArgCount(alias)];
     }
 
     /// All alias parameters, including hidden implicit-row parameters.
@@ -2168,7 +2214,7 @@ pub const Store = struct {
     }
 
     pub fn sliceAliasHiddenArgs(self: *const Self, alias: Alias) []Var {
-        return self.sliceAliasAllArgs(alias)[alias.source_arg_count..];
+        return self.sliceAliasAllArgs(alias)[self.aliasSourceArgCount(alias)..];
     }
 
     /// Iterate source arguments only.
@@ -2176,7 +2222,7 @@ pub const Store = struct {
         std.debug.assert(alias.vars.nonempty.count > 0);
         var span = alias.vars.nonempty;
         span.dropFirstElem();
-        span.count = alias.source_arg_count;
+        span.count = self.aliasSourceArgCount(alias);
         return self.vars.iterRange(span);
     }
 
@@ -4604,7 +4650,7 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     try std.testing.expectEqual(tag_union_ext, tag_union.ext);
     const alias = deserialized.resolveVar(alias_var).desc.content.alias;
-    try std.testing.expectEqual(@as(u32, 1), alias.source_arg_count);
+    try std.testing.expectEqual(@as(u32, 1), deserialized.aliasSourceArgCount(alias));
     try std.testing.expectEqualSlices(Var, &.{flex}, deserialized.sliceAliasArgs(alias));
     try std.testing.expectEqualSlices(Var, &.{tag_union_ext}, deserialized.sliceAliasHiddenArgs(alias));
     const backing = deserialized.resolveVar(deserialized.getAliasBackingVar(alias)).desc.content.structure.tag_union;
