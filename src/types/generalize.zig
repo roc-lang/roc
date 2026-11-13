@@ -251,15 +251,15 @@ pub const Generalizer = struct {
 
         // Copy all variables at this rank into the temporary list, resolving redirects
         for (vars_to_generalize) |var_| {
-            const resolved = self.store.resolveVar(var_);
-            if (builtin.mode == .debug and @backingInt(resolved.desc.rank) > rank_to_generalize_int) {
-                std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @backingInt(resolved.desc.rank), rank_to_generalize_int });
+            const resolved = self.store.resolveVarWord(var_);
+            if (builtin.mode == .debug and @backingInt(resolved.word.rank) > rank_to_generalize_int) {
+                std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @backingInt(resolved.word.rank), rank_to_generalize_int });
             }
-            self.tmp_vars.appendAssumeCapacity(.{ .var_ = resolved.var_, .rank = resolved.desc.rank });
+            self.tmp_vars.appendAssumeCapacity(.{ .var_ = resolved.var_, .rank = resolved.word.rank });
             // Only add to vars_to_generalized if not already generalized.
             // A var that was already generalized in a previous pass should not be
             // re-processed (which could incorrectly change its rank).
-            if (resolved.desc.rank != .generalized) {
+            if (resolved.word.rank != .generalized) {
                 try self.vars_to_generalized.put(resolved.var_, {});
             }
         }
@@ -283,29 +283,29 @@ pub const Generalizer = struct {
                 current_start = index;
                 break;
             }
-            const resolved = self.store.resolveVar(ranked.var_);
+            const resolved = self.store.resolveVarWord(ranked.var_);
             if (resolved.is_root) {
-                try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+                try var_pool.addVarToRank(resolved.var_, resolved.word.rank);
             }
         }
 
         // Process variables still at rank_to_generalize after adjustment.
         // These either escaped (rank lowered) or can be generalized (rank unchanged).
         for (self.tmp_vars.items[current_start..]) |ranked| {
-            const resolved = self.store.resolveVar(ranked.var_);
+            const resolved = self.store.resolveVarWord(ranked.var_);
             if (resolved.is_root) {
-                const resolved_rank_int = @backingInt(resolved.desc.rank);
+                const resolved_rank_int = @backingInt(resolved.word.rank);
                 // Adjustment only lowers ranks; a rank above the one being
                 // generalized means a reducer broke the invariant (see line ~122).
                 std.debug.assert(resolved_rank_int <= rank_to_generalize_int);
                 if (resolved_rank_int < rank_to_generalize_int) {
                     // Escaped var, so move it to the right pool.
-                    try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+                    try var_pool.addVarToRank(resolved.var_, resolved.word.rank);
                     // Anonymous structure made in this scope is copied by
                     // every use even though no variable in it is quantified:
                     // a use may lift it into a nominal type (design.md
                     // "Anonymous Structure Is Copied Per Use").
-                    if (try self.copiedPerUse(resolved.desc)) {
+                    if (try self.copiedPerUse(self.store.getDesc(resolved.desc_idx))) {
                         try self.store.markPerUseStructure(resolved.desc_idx);
                     }
                 } else {
@@ -419,7 +419,7 @@ pub const Generalizer = struct {
     /// the resulting rank is already on the value stack; false when a frame
     /// was pushed.
     fn requestRank(self: *Self, var_: Var, group_rank: Rank) std.mem.Allocator.Error!bool {
-        const resolved = self.store.resolveVar(var_);
+        const resolved = self.store.resolveVarWord(var_);
 
         // Check if this variable is one we're trying to generalize at this rank
         const is_var_to_generalize = self.vars_to_generalized.contains(resolved.var_);
@@ -434,7 +434,7 @@ pub const Generalizer = struct {
         // `group_rank` keeps adjustment from ever raising a rank. A var that
         // already settled holds a rank no higher than `group_rank`.
         if (is_var_to_generalize and self.rank_adjusted_vars.contains(resolved.var_)) {
-            try self.pending_ranks.append(self.gpa, resolved.desc.rank.min(group_rank));
+            try self.pending_ranks.append(self.gpa, resolved.word.rank.min(group_rank));
             return true;
         }
 
@@ -442,7 +442,7 @@ pub const Generalizer = struct {
             // For other vars: rank can only DECREASE (maintain invariant)
             // This ensures that if an outer type references an inner variable,
             // the outer type's rank is lowered to match
-            try self.settleRank(resolved.desc_idx, resolved.desc.rank.min(group_rank));
+            try self.settleRank(resolved.desc_idx, resolved.word.rank.min(group_rank));
             return true;
         }
 
@@ -450,39 +450,37 @@ pub const Generalizer = struct {
         // A back-edge must observe the rank of this walk, not the node's
         // original inner scope: otherwise an effect-dependency cycle can
         // raise an enclosing function back to that inner scope.
-        if (@backingInt(resolved.desc.rank) > @backingInt(group_rank)) {
+        if (@backingInt(resolved.word.rank) > @backingInt(group_rank)) {
             try self.store.setDescRank(resolved.desc_idx, group_rank);
         }
         try self.rank_adjusted_vars.put(resolved.var_, {});
+
+        // Only a var whose children the walk visits needs its content.
+        switch (resolved.word.kind) {
+            .flex, .rigid, .err => {
+                // A variable starts at group_rank, since it should be
+                // generalized; constraints are deliberately not descended
+                // into. An error sits at group_rank too.
+                try self.settleRank(resolved.desc_idx, group_rank);
+                return true;
+            },
+            .field_presence, .empty_record, .empty_tag_union => {
+                // A settled presence marker is ground (an unresolved presence
+                // is an ordinary flex/rigid var), and empty records and tag
+                // unions never need to be generalized.
+                try self.settleRank(resolved.desc_idx, .outermost);
+                return true;
+            },
+            .alias, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => {},
+        }
+        const content = self.store.getDesc(resolved.desc_idx).content;
 
         // For vars being generalized: rank INCREASES to max of nested vars
         // This allows us to detect when a variable "escapes" by referencing
         // variables from outer scopes (lower ranks)
         const fill = RankFill{ .desc_idx = resolved.desc_idx };
-        switch (resolved.desc.content) {
-            .flex => {
-                // Here, we start at group_rank (since flex should be generalized).
-                // Constraints are deliberately not descended into.
-                try self.settleRank(fill.desc_idx, group_rank);
-                return true;
-            },
-            .rigid => {
-                // Here, we start at group_rank (since rigid should be generalized).
-                // Constraints are deliberately not descended into.
-                try self.settleRank(fill.desc_idx, group_rank);
-                return true;
-            },
-            .field_presence => {
-                // A settled presence marker is ground. An unresolved presence
-                // is represented by an ordinary flex/rigid var and reaches the
-                // corresponding arm above.
-                try self.settleRank(fill.desc_idx, .outermost);
-                return true;
-            },
-            .err => {
-                try self.settleRank(fill.desc_idx, group_rank);
-                return true;
-            },
+        switch (content) {
+            .flex, .rigid, .field_presence, .err => unreachable, // the kind switch above settles every childless kind
             .alias => |alias| {
                 // THEORY: we don't need to descend into the backing type. Everything
                 // in the alias RHS is either a reference to an arg (already visited
@@ -493,11 +491,7 @@ pub const Generalizer = struct {
                 return try self.pushOverArgs(fill, self.store.sliceAliasAllArgs(alias));
             },
             .structure => |flat_type| switch (flat_type) {
-                .empty_record, .empty_tag_union => {
-                    // THEORY: Empty records/tag unions never need to be generalized
-                    try self.settleRank(fill.desc_idx, .outermost);
-                    return true;
-                },
+                .empty_record, .empty_tag_union => unreachable, // the kind switch above settles every childless kind
                 .tuple => |tuple| return try self.pushOverArgs(fill, self.store.sliceVars(tuple.elems)),
                 .nominal_type => |nominal| {
                     // Same as .alias: don't descend into the backing type, take

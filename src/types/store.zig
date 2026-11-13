@@ -2576,6 +2576,22 @@ pub const Store = struct {
 
     // word readers //
 
+    /// A variable's class without its content: what `resolveVar` gives, with
+    /// the descriptor's word in place of the decoded descriptor.
+    pub const ResolvedVarWord = struct {
+        var_: Var,
+        is_root: bool,
+        desc_idx: DescStore.Idx,
+        word: Desc.Word,
+    };
+
+    /// `resolveVar`, decoding nothing but the descriptor's word.
+    pub fn resolveVarWord(self: *const Self, var_: Var) ResolvedVarWord {
+        const desc_idx = self.resolveDescIdx(var_);
+        const checked_var = self.getRootMeta(desc_idx).checked_var;
+        return .{ .var_ = checked_var, .is_root = var_ == checked_var, .desc_idx = desc_idx, .word = self.descs.getWord(desc_idx) };
+    }
+
     /// The descriptor `var_`'s class resolves to, decoding nothing.
     pub fn resolveDescIdx(self: *const Self, var_: Var) DescStore.Idx {
         var slot_idx = Self.varToSlotIdx(var_);
