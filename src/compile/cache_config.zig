@@ -367,10 +367,13 @@ pub const Constants = struct {
     /// 184: combines the independent 179 and 183 entry changes.
     /// 185: combines the independent 181 and 184 entry changes.
     /// 186: combines the independently merged 183 and 185 entry layouts.
+    /// 187: CIR external nominal construction and pattern nodes record which
+    ///      index space their module refers to, and a reserved-module-name
+    ///      diagnostic node is added.
     /// 188: a serialized module env records the BLAKE3 digest of its source,
     ///      and module identities, cache keys and file-dependency content
     ///      hashes are computed from source digests; a flex variable records
-    ///      whether it is a deferred literal's type.
+    ///      whether it is a deferred literal's type. Includes the 187 changes.
     pub const CACHE_VERSION = 188;
 };
 

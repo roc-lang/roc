@@ -3438,6 +3438,29 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .module_name_reserved => |data| blk: {
+            var report = try Report.init(allocator, "Reserved Module Name", "", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.headline.addText("This file is named ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(".roc, but ");
+            try report.headline.addInlineCode(module_name);
+            try report.headline.addReflowingText(" is the name of a builtin type.");
+
+            try report.document.addReflowingText("Module names that match builtin types are reserved for those types, so no module can be named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreaks(2);
+            try report.document.addReflowingText("Rename this module to something else.");
+            try report.document.addLineBreak();
+
+            try report.setFile(filename);
+
+            break :blk report;
+        },
         .default_app_missing_main => blk: {
             var report = try Report.init(allocator, "Missing `main!` Function", "", .runtime_error);
             try report.headline.addReflowingText("This file has no header and declares no types, so it is a default app, but it has no ");
@@ -5195,6 +5218,29 @@ pub fn beginSExprNodeAt(self: *const Self, tree: *SExprTree, name: []const u8, i
     const begin = try tree.beginNamedNode(name);
     try self.appendRegionInfoToSExprTree(tree, idx);
     return begin;
+}
+
+/// Append the module an external nominal construction or pattern names. The
+/// Builtin module is an implementation detail, printed as `(builtin)`.
+pub fn pushNominalExternalModuleToSExprTree(
+    self: *const Self,
+    tree: *SExprTree,
+    module: CIR.Expr.NominalExternalModule,
+) std.mem.Allocator.Error!void {
+    const module_name = switch (module) {
+        .import => |import_idx| blk: {
+            const module_idx_int = @backingInt(import_idx);
+            std.debug.assert(module_idx_int < self.imports.imports.len());
+            break :blk self.common.strings.get(self.imports.imports.items()[module_idx_int]);
+        },
+        .identity => |identity| self.moduleIdentityDisplayText(identity),
+    };
+    if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
+        const field_begin = try tree.beginNamedNode("builtin");
+        try tree.endNodeWithoutChildren(field_begin);
+    } else {
+        try tree.pushStringPair("external-module", module_name);
+    }
 }
 
 /// Append region information to an S-expression node for a given index.

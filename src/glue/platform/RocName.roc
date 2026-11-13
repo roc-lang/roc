@@ -5,7 +5,7 @@
 ## conversion should be consistent across generated languages.
 RocName := { raw : Str }.{
 	from_str : Str -> RocName
-	from_str = |raw| RocName.{ raw }
+	from_str = |text| RocName.{ raw: text }
 
 	raw : RocName -> Str
 	raw = |name| name.raw

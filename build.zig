@@ -319,8 +319,13 @@ fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
 /// fails with "InputSection too large for range extension thunk". Splitting per
 /// function and per datum gives LLD those insertion points, and lets the final
 /// link discard unused compiler code on every target.
+///
+/// COFF skips function sections: a stripped Zig object built with them puts all
+/// of its unwind data in one `.pdata$`/`.xdata$` COMDAT whose key MinGW's libc
+/// objects share, so LLD drops the compiler's unwind tables and
+/// `CompileTimeHost.windowsX64FailurePoint` cannot unwind host frames.
 fn splitCompilerSections(step: *Step.Compile) void {
-    step.link_function_sections = true;
+    if (step.rootModuleTarget().ofmt != .coff) step.link_function_sections = true;
     step.link_data_sections = true;
 }
 
@@ -4221,8 +4226,9 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("compiler_version", compiler_version_module);
         }
 
-        // Add compiled builtins to tests that canonicalize ordinary modules.
-        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
+        // Add compiled builtins to tests that canonicalize ordinary modules
+        // or read the baked Builtin module.
+        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "docs") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }

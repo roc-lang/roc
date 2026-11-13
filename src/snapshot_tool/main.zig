@@ -3469,6 +3469,7 @@ fn processDocsSnapshot(
             const source_decl = mod.public_type_decl orelse continue;
             try public_type_projections.append(allocator, .{
                 .public_name = mod.name,
+                .page_name = mod.name,
                 .package_name = build_env.displayNameForPackage(mod.package_name),
                 .source_env = mod.checked.env,
                 .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,
@@ -3476,6 +3477,27 @@ fn processDocsSnapshot(
                 .public_order = mod.public_order,
             });
         }
+    }
+    // A public alias that renames a nominal type documents that type, so
+    // every such type joins the projections.
+    var renamed_names = std.heap.ArenaAllocator.init(allocator);
+    defer renamed_names.deinit();
+    {
+        var documented = std.ArrayList(docs_mod.extract.DocumentedModule).empty;
+        defer documented.deinit(allocator);
+        for (modules) |documented_module| {
+            try documented.append(allocator, .{
+                .name = documented_module.name,
+                .package_name = build_env.displayNameForPackage(documented_module.package_name),
+                .env = documented_module.checked.env,
+                .public_type_decl = documented_module.public_type_decl,
+                .exposed_names = documented_module.docs_exposed_names,
+                .public_order = documented_module.public_order,
+            });
+        }
+        const package_envs = try build_env.getRootPackageModuleEnvs(allocator);
+        defer allocator.free(package_envs);
+        try docs_mod.extract.adoptRenamedNominals(allocator, renamed_names.allocator(), documented.items, package_envs, &public_type_projections);
     }
     docs_mod.extract.sortPublicTypeProjections(public_type_projections.items);
 
@@ -3487,6 +3509,7 @@ fn processDocsSnapshot(
             .exposed_names = mod.docs_exposed_names,
             .public_type = if (mod.public_type_decl) |source_decl| .{
                 .public_name = mod.name,
+                .page_name = mod.name,
                 .package_name = display_pkg_name,
                 .source_env = mod.checked.env,
                 .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,

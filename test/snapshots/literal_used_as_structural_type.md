@@ -213,7 +213,7 @@ interpolation_as_record = {
 			(s-let
 				(p-assign (ident "n"))
 				(e-runtime-error (tag "erroneous_value_expr")))
-			(e-call (constraint-fn-var 271)
+			(e-call (constraint-fn-var 265)
 				(e-lookup-local
 					(p-assign (ident "n")))
 				(e-num (value "1")))))
