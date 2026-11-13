@@ -476,6 +476,9 @@ imported_scheme_by_source: std.AutoHashMapUnmanaged(ImportedSchemeKey, u32) = .e
 /// Exact associated-item targets keyed by the alias declaration type var and
 /// item. Alias traversal and owner-scope lookup happen once per declaration.
 associated_lookup_cache: std.AutoHashMapUnmanaged(AssociatedLookupCacheKey, ?AssociatedLookupResolution) = .empty,
+/// Recent static-dispatch method lookups (`lookupStaticDispatchMethodBinding`)
+/// by owner module, owner declaration, and this module's method ident.
+method_lookup_memo: MethodLookupMemo = .{},
 /// Copied Bool type from Bool module (for use in if conditions, etc.)
 bool_var: Var = undefined,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
@@ -1781,6 +1784,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .imported_schemes = .keyed,
     .imported_scheme_by_source = .keyed,
     .associated_lookup_cache = .keyed,
+    .method_lookup_memo = .keyed,
     .bool_var = .input,
     .str_var = .input,
     .u64_var = .input,
@@ -4807,7 +4811,7 @@ pub fn fixupTypeWriter(self: *Self) void {
 }
 
 /// Struct-typed field types that own no memory, so `deinit` releases nothing.
-const deinit_exempt_types = [_]type{ std.mem.Allocator, BuiltinContext, ExhaustivenessContext.Context, problem.RelationOwner };
+const deinit_exempt_types = [_]type{ std.mem.Allocator, BuiltinContext, ExhaustivenessContext.Context, problem.RelationOwner, MethodLookupMemo };
 
 /// Deinit owned fields. Memory owned by container elements is released
 /// first; then every field whose type declares `deinit` releases itself. Each
@@ -36063,21 +36067,58 @@ fn methodAnnotationErroneous(lookup: StaticDispatchMethodBinding) bool {
     return lookup.env.store.getAnnotation(annotation_idx).erroneous;
 }
 
+/// A direct-mapped memo of method lookups made with this module's method
+/// idents. Every module's method tables are finalized before checking starts
+/// and gain no entries while this module is checked, and this module's idents
+/// keep their indices for the checker's lifetime, so an entry, found or not,
+/// stays the lookup's answer. A slot holds the most recent key that hashed to
+/// it; a lookup whose key is not in its slot runs the full lookup.
+const MethodLookupMemo = struct {
+    const slot_count = 256;
+
+    const Slot = struct {
+        owner_env: ?*const ModuleEnv = null,
+        owner_source_decl: u32 = 0,
+        method_ident: Ident.Idx = undefined,
+        binding: ?ModuleEnv.MethodBinding = null,
+    };
+
+    slots: [slot_count]Slot = @splat(.{}),
+
+    fn slotIndex(owner_env: *const ModuleEnv, owner_source_decl: u32, method_ident: Ident.Idx) usize {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&@intFromPtr(owner_env)));
+        hasher.update(std.mem.asBytes(&owner_source_decl));
+        hasher.update(std.mem.asBytes(&method_ident));
+        return @intCast(hasher.final() % slot_count);
+    }
+};
+
 /// The method `owner_env`'s declaration `owner_source_decl` declares under
 /// `method_ident`. A type's methods are declared only in its own `.{ … }`
 /// block, so its declaring module's tables are the only place one can be.
 fn lookupStaticDispatchMethodBinding(
-    self: *const Self,
+    self: *Self,
     owner_env: *const ModuleEnv,
     owner_source_decl: ?u32,
     method_source_env: *const ModuleEnv,
     method_ident: Ident.Idx,
 ) ?StaticDispatchMethodBinding {
-    const binding = owner_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+    const binding = (if (method_source_env == self.cir) memo: {
+        // A declaration-less owner declares no methods.
+        const decl = owner_source_decl orelse break :memo null;
+        const slot = &self.method_lookup_memo.slots[MethodLookupMemo.slotIndex(owner_env, decl, method_ident)];
+        if (slot.owner_env == owner_env and slot.owner_source_decl == decl and slot.method_ident.eql(method_ident)) {
+            break :memo slot.binding;
+        }
+        const found = owner_env.lookupMethodBindingFromTwoEnvsAndDeclConst(decl, method_source_env, method_ident);
+        slot.* = .{ .owner_env = owner_env, .owner_source_decl = decl, .method_ident = method_ident, .binding = found };
+        break :memo found;
+    } else owner_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
         owner_source_decl,
         method_source_env,
         method_ident,
-    ) orelse return null;
+    )) orelse return null;
 
     return .{
         .env = owner_env,
