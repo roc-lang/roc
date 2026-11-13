@@ -37291,7 +37291,8 @@ fn finishBinopExpr(
 
             const operand_method = try self.lookupBinopMethod(lhs_var, rhs_var, expr_var, method_name, env, expr_region);
             if (operand_method == .missing) return;
-            if (try self.reportOperatorMethodSignatureMismatch(expr_idx, expr_var, lhs_var, rhs_var, operand_method, method_name, .operand, env, expr_region)) return;
+            const signature = try self.classifyOperatorMethodSignature(expr_idx, expr_var, lhs_var, rhs_var, operand_method, method_name, .operand, env, expr_region);
+            if (signature == .rejected) return;
 
             // An arithmetic operator's operands and result are one type
             // (design.md "Static Dispatch At The Checked Boundary"): either
@@ -37302,7 +37303,7 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (!try self.resolveClosedOperator(expr_idx, lhs_var, operand_method, method_name, .operand, expr_region)) {
+            if (!try self.resolveClosedOperator(expr_idx, lhs_var, operand_method, signature, method_name, .operand, expr_region)) {
                 // The operator's method: operand.method(operand) -> operand.
                 _ = try self.mkBinopConstraint(
                     lhs_var,
@@ -37342,7 +37343,8 @@ fn finishBinopExpr(
 
             const operand_method = try self.lookupBinopMethod(lhs_var, rhs_var, expr_var, method_name, env, expr_region);
             if (operand_method == .missing) return;
-            if (try self.reportOperatorMethodSignatureMismatch(expr_idx, expr_var, lhs_var, rhs_var, operand_method, method_name, .bool, env, expr_region)) return;
+            const signature = try self.classifyOperatorMethodSignature(expr_idx, expr_var, lhs_var, rhs_var, operand_method, method_name, .bool, env, expr_region);
+            if (signature == .rejected) return;
 
             // For comparison binops, lhs and rhs must have the same type.
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
@@ -37354,7 +37356,7 @@ fn finishBinopExpr(
 
             const arg_var = rhs_var;
 
-            if (try self.resolveClosedOperator(expr_idx, arg_var, operand_method, method_name, .bool, expr_region)) {
+            if (try self.resolveClosedOperator(expr_idx, arg_var, operand_method, signature, method_name, .bool, expr_region)) {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
@@ -37442,7 +37444,7 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (try self.resolveClosedOperator(expr_idx, rhs_var, operand_method, self.cir.idents.is_eq, .bool, expr_region)) {
+            if (try self.resolveClosedOperator(expr_idx, rhs_var, operand_method, .open, self.cir.idents.is_eq, .bool, expr_region)) {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
@@ -37474,7 +37476,7 @@ fn finishBinopExpr(
                 return;
             }
 
-            if (try self.resolveClosedOperator(expr_idx, rhs_var, operand_method, self.cir.idents.is_eq, .bool, expr_region)) {
+            if (try self.resolveClosedOperator(expr_idx, rhs_var, operand_method, .open, self.cir.idents.is_eq, .bool, expr_region)) {
                 try self.unifyWith(expr_var, self.builtinBoolContent(), env);
                 return;
             }
@@ -37615,10 +37617,24 @@ fn resolveClosedOperator(
     expr_idx: CIR.Expr.Idx,
     operand_var: Var,
     operand_method: BinopMethod,
+    signature: OperatorMethodSignature,
     method_name: Ident.Idx,
     result: OperatorResult,
     region: Region,
 ) Allocator.Error!bool {
+    switch (signature) {
+        .closed_contract => |scheme_var| {
+            const method_lookup = operand_method.found;
+            try self.closed_dispatch_targets.put(self.gpa, scheme_var, .{
+                .env = method_lookup.env,
+                .def_idx = method_lookup.binding.def_idx,
+            });
+            try self.publishBinopDispatchExpr(expr_idx, method_name, region, scheme_var);
+            return true;
+        },
+        .rejected => unreachable, // a rejected operator was retired
+        .open => {},
+    }
     const nominal = self.types.resolveVar(operand_var).desc.content.unwrapNominalType() orelse return false;
     if (nominal.args.len() != 0) return false;
     const method_lookup = switch (operand_method) {
@@ -37699,21 +37715,35 @@ fn varIsClosedNominalFunction(store: *const types_mod.Store, var_: Var, param_co
     return closedNominalOf(store, func.ret) != null;
 }
 
-/// Report an operator whose method's declared signature can never be the
-/// operator's contract, before the operands are related, and retire the
-/// operator. Returns whether it was reported.
+/// What an arithmetic or ordering operator's method signature decides
+/// before the operands are related.
+const OperatorMethodSignature = union(enum) {
+    /// The method is declared in another module with exactly the operator's
+    /// contract and no type variables (Closed Operator Resolution): this
+    /// module's copy of its callable.
+    closed_contract: Var,
+    /// The signature can never meet the contract; the operator was reported
+    /// and retired (Closed Operator Rejection).
+    rejected,
+    /// Anything else; the ordinary path decides.
+    open,
+};
+
+/// Classify an operator's method by its final signature before the operands
+/// are related, reporting and retiring the operator when that signature can
+/// never be its contract.
 ///
-/// This applies when the left operand's type is a nominal type taking no
-/// arguments and its method's signature is final (declared in another
-/// module, or annotated in this one, whose annotation is its scheme before
-/// any body is checked) and is a pure function over nominal types taking no
-/// arguments that is not `T, T -> T` (`T, T -> Bool` for `.bool`) at the
-/// left operand's type `T`. Such a signature has no type variables, so
+/// A signature is final when the method is declared in another module, or
+/// annotated in this one, whose annotation is its scheme before any body is
+/// checked. When the left operand's type is a nominal type taking no
+/// arguments and the final signature is a pure function over nominal types
+/// taking no arguments other than `T, T -> T` (`T, T -> Bool` for `.bool`)
+/// at the left operand's type `T`, the signature has no type variables, so
 /// relating it to the operator's contract fails whatever the right operand
 /// is: the operator is rejected once, as the drain would reject its
 /// constraint, and the right operand is never related to the left (relating
 /// them first would also report `3` in `duration * 3`).
-fn reportOperatorMethodSignatureMismatch(
+fn classifyOperatorMethodSignature(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
     expr_var: Var,
@@ -37724,35 +37754,25 @@ fn reportOperatorMethodSignatureMismatch(
     result: OperatorResult,
     env: *Env,
     region: Region,
-) Allocator.Error!bool {
+) Allocator.Error!OperatorMethodSignature {
     const method_lookup = switch (operand_method) {
         .found => |found| found,
-        .not_nominal => return false,
+        .not_nominal => return .open,
         .missing => unreachable, // a missing method was reported and the operator retired
     };
-    // A probe reports nothing, and a defaulted receiver's failures are
-    // reported as an undetermined type by the drain.
-    if (self.probe_depth != 0 or self.types.varDefaultDecided(lhs_var)) return false;
-    const nominal = closedNominalOf(self.types, lhs_var) orelse return false;
+    const nominal = closedNominalOf(self.types, lhs_var) orelse return .open;
     const def_idx = method_lookup.binding.def_idx;
-    if (staticDispatchBindingIsDerivedMarker(method_lookup) or
-        methodAnnotationErroneous(method_lookup) or
-        hostedDeclarationIsNotEffectful(method_lookup.env, def_idx) or
-        annotationOnlyValueDef(method_lookup.env, def_idx))
-    {
-        return false;
-    }
     const signature_var = if (method_lookup.is_this_module)
-        self.predeclaredSchemeVar(def_idx) orelse return false
+        self.predeclaredSchemeVar(def_idx) orelse return .open
     else signature: {
         // Read the declaration's type where it is declared first, so only a
         // qualifying method is copied into this module here.
         if (!varIsClosedNominalFunction(&method_lookup.env.types, ModuleEnv.varFrom(method_lookup.binding.type_node_idx), 2)) {
-            return false;
+            return .open;
         }
         break :signature try self.importedMethodScheme(method_lookup);
     };
-    if (!varIsClosedNominalFunction(self.types, signature_var, 2)) return false;
+    if (!varIsClosedNominalFunction(self.types, signature_var, 2)) return .open;
     const func = self.types.resolveVar(signature_var).desc.content.structure.fn_pure;
     const params = self.types.sliceVars(func.args);
     const ret = closedNominalOf(self.types, func.ret).?;
@@ -37761,7 +37781,25 @@ fn reportOperatorMethodSignatureMismatch(
         .operand => unifier.sameNominalIdentity(ret, nominal),
         .bool => self.nominalIsBuiltinBoolType(ret),
     };
-    if (is_contract) return false;
+    if (is_contract) {
+        // A method of this module carries definition dependencies and
+        // instantiation records, so only the ordinary path resolves it.
+        return if (method_lookup.is_this_module) .open else .{ .closed_contract = signature_var };
+    }
+
+    // A probe reports nothing, and a defaulted receiver's failures are
+    // reported as an undetermined type by the drain. A dispatch to a
+    // declaration with no callable value, or to a derived method, is judged
+    // by the drain.
+    if (self.probe_depth != 0 or
+        self.types.varDefaultDecided(lhs_var) or
+        staticDispatchBindingIsDerivedMarker(method_lookup) or
+        methodAnnotationErroneous(method_lookup) or
+        hostedDeclarationIsNotEffectful(method_lookup.env, def_idx) or
+        annotationOnlyValueDef(method_lookup.env, def_idx))
+    {
+        return .open;
+    }
 
     // The method's instance: a fresh copy of a signature with no type
     // variables, so the failing relation below never reaches the
@@ -37807,7 +37845,7 @@ fn reportOperatorMethodSignatureMismatch(
         .origin = .{ .desugared_binop = .{ .negated = false } },
         .provenance = constraintProvenance(expr_idx),
     }, expr_idx);
-    return true;
+    return .rejected;
 }
 
 /// The method a closed method call selects: this module's copy of the

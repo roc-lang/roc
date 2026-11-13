@@ -7319,7 +7319,7 @@ in this one, whose annotation is predeclared as its scheme before any body is
 checked) that is a pure function over nominal types taking no arguments other
 than the operator's contract at that type (`T, T -> T`, or `T, T -> Bool`),
 the operator is rejected where it is checked, before its operands are related
-(`reportOperatorMethodSignatureMismatch`). Such a signature has no type
+(`classifyOperatorMethodSignature`). Such a signature has no type
 variables, so relating an instance of it to the contract fails whatever the
 right operand is; the rejection relates a fresh copy of the signature to the
 contract at the left operand's type, reports the failure exactly as the drain
