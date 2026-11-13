@@ -150,6 +150,9 @@ pub const Generalizer = struct {
     /// the pass began, ordered by that rank. Only ranks the pass's vars hold
     /// are visited, so a pass costs its own vars however deeply ranks nest.
     tmp_vars: std.ArrayListUnmanaged(RankedVar) = .empty,
+    /// Scratch for `groupByRank`: the vars starting at the rank being
+    /// generalized, in queue order.
+    at_rank_vars: std.ArrayListUnmanaged(RankedVar) = .empty,
     /// Map of which variables we are generalizing this pass
     vars_to_generalized: @import("collections").DenseMap(Var, void),
     /// Suspended steps of rank adjustment, innermost last. The walk descends
@@ -189,6 +192,28 @@ pub const Generalizer = struct {
         return query.absorbers.copiedPerUse(self.gpa, self.store, query.idents, desc);
     }
 
+    /// Orders `tmp_vars` by starting rank, keeping each rank's vars in the
+    /// order they were queued. Most of a pass's vars start at the rank being
+    /// generalized, so those move to the back as one group and only the vars
+    /// below it are sorted; nothing here scales with how deeply ranks nest.
+    fn groupByRank(self: *Self, rank_to_generalize: Rank) void {
+        const items = self.tmp_vars.items;
+        var below: usize = 0;
+        var at_rank: usize = 0;
+        for (items) |ranked| {
+            if (ranked.rank == rank_to_generalize) {
+                self.at_rank_vars.appendAssumeCapacity(ranked);
+                at_rank += 1;
+            } else {
+                items[below] = ranked;
+                below += 1;
+            }
+        }
+        @memcpy(items[below..], self.at_rank_vars.items[0..at_rank]);
+        self.at_rank_vars.clearRetainingCapacity();
+        std.sort.block(RankedVar, items[0..below], {}, RankedVar.lessThan);
+    }
+
     /// Reset the state of the generalizer
     pub fn reset(self: *Self) void {
         self.tmp_vars.clearRetainingCapacity();
@@ -198,6 +223,7 @@ pub const Generalizer = struct {
 
     pub fn deinit(self: *Self, _: std.mem.Allocator) void {
         self.tmp_vars.deinit(self.gpa);
+        self.at_rank_vars.deinit(self.gpa);
         self.rank_adjusted_vars.deinit();
         self.vars_to_generalized.deinit();
         self.rank_frames.deinit(self.gpa);
@@ -248,6 +274,7 @@ pub const Generalizer = struct {
         const vars_to_generalize = var_pool.getVarsForRank(rank_to_generalize);
         try self.vars_to_generalized.ensureUnusedCapacity(@intCast(vars_to_generalize.len));
         try self.tmp_vars.ensureUnusedCapacity(self.gpa, vars_to_generalize.len);
+        try self.at_rank_vars.ensureUnusedCapacity(self.gpa, vars_to_generalize.len);
 
         // Copy all variables at this rank into the temporary list, resolving redirects
         for (vars_to_generalize) |var_| {
@@ -265,7 +292,7 @@ pub const Generalizer = struct {
         }
 
         // Group the vars by their starting rank, keeping each group's order.
-        std.sort.block(RankedVar, self.tmp_vars.items, {}, RankedVar.lessThan);
+        self.groupByRank(rank_to_generalize);
 
         // Adjust ranks to maintain invariant: ranks never increase going deeper.
         // Process from lowest to highest rank so that lower ranks are finalized first,
