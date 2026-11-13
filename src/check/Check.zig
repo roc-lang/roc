@@ -54745,14 +54745,22 @@ fn decidePlainMethodsAtBoundary(self: *Self, env: *Env) Allocator.Error!void {
     try self.checkAllConstraints(env);
 }
 
-/// Whether every relation in `range` calls a method on `receiver`: its
-/// method takes the receiver as its first argument. A literal's conversion
-/// (`from_quote : Str -> a`) asks the type to be built from a literal, which
-/// a record or tag union never is.
+/// Whether every relation in `range` calls a method on `receiver` that a row
+/// variable holds: its method takes the receiver as its first argument, and
+/// it is not a derivation that decides the row exactly. A literal's
+/// conversion (`from_quote : Str -> a`) asks the type to be built from a
+/// literal, which a record or tag union never is.
 fn relationsCallMethodsOn(self: *Self, range: StaticDispatchConstraint.SafeList.Range, receiver: Var) bool {
     const receiver_root = self.types.resolveVar(receiver).var_;
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
         if (constraint.origin.literalKind() != null) return false;
+        // A derived `map`, `map!`, parser or encoder decides the row it is
+        // derived over exactly, closing what its derivation reads; it is
+        // decided where it is, as before any row variable could hold it.
+        if (self.derivedMethodKind(constraint.fn_name)) |kind| switch (kind) {
+            .map, .map_effectful, .parser, .encoder => return false,
+            .equality, .hash => {},
+        };
         const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
         const args = self.types.sliceVars(func.args);
         if (args.len == 0 or self.types.resolveVar(args[0]).var_ != receiver_root) return false;

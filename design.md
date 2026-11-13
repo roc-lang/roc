@@ -12394,7 +12394,10 @@ whose literal row is then decided as the plain union and rejects the named
 argument (and likewise `{ id: 1 }.is_eq(one)`).
 
 A requirement a row variable holds is a method call on the value: its
-method takes the value as its first argument. A literal's conversion
+method takes the value as its first argument. A derived `map`, `map!`, parser
+or encoder is not held: its derivation decides the row it is derived over
+exactly, closing what it reads (`closeTagRowsForDerivation`), so it is decided
+where it is. A literal's conversion
 (`from_quote : Str -> a`) is not one, and a record or tag union never
 converts from a literal, so such a relation is decided against the plain
 type at once. A row's composition can leave the value and its row variable
