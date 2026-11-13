@@ -209,8 +209,8 @@ test "a missing member of a Str problem alias is reported under the written name
     defer env.deinit();
 
     try env.assertOneTypeErrorMsg(
-        \\**Associated Item Not Found**
-        \\The type `Str.Utf8Problem` does not have an associated item named `nope`.
+        \\**Associated Constant Not Found**
+        \\The type `Str.Utf8Problem` does not have an associated constant named `nope`.
         \\```roc
         \\x = Str.Utf8Problem.nope
         \\```
