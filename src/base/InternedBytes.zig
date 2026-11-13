@@ -112,8 +112,8 @@ pub fn Index(comptime Policy: type) type {
                 self.findStringOrSlot(owner, bytes_hash, bytes).slot
             else
                 found.slot;
-            self.cells.items.items[slot] = Policy.cellForId(id);
-            if (use_fingerprints) self.fingerprints.items.items[slot] = fingerprint(bytes_hash);
+            self.cells.items()[slot] = Policy.cellForId(id);
+            if (use_fingerprints) self.fingerprints.items()[slot] = fingerprint(bytes_hash);
             return id;
         }
 
@@ -132,8 +132,8 @@ pub fn Index(comptime Policy: type) type {
             std.debug.assert(self.cells.len() != 0);
             std.debug.assert(!wouldExceedMaxLoad(@as(usize, self.len) + 1, @intCast(self.cells.len())));
             self.len += 1;
-            self.cells.items.items[found.slot] = Policy.cellForId(id);
-            if (use_fingerprints) self.fingerprints.items.items[found.slot] = fingerprint(bytes_hash);
+            self.cells.items()[found.slot] = Policy.cellForId(id);
+            if (use_fingerprints) self.fingerprints.items()[found.slot] = fingerprint(bytes_hash);
         }
 
         /// Reserve enough table storage for `total_count` entries. Once this
@@ -162,10 +162,10 @@ pub fn Index(comptime Policy: type) type {
             const needle_fingerprint = fingerprint(bytes_hash);
             var slot = @as(usize, @intCast(bytes_hash & @as(u64, @intCast(table_size - 1))));
             while (true) {
-                const cell = self.cells.items.items[slot];
+                const cell = self.cells.items()[slot];
                 if (cell == Policy.empty_cell) return .{ .idx = null, .slot = slot };
 
-                if (use_fingerprints and self.fingerprints.items.items[slot] != needle_fingerprint) {
+                if (use_fingerprints and self.fingerprints.items()[slot] != needle_fingerprint) {
                     slot = (slot + 1) & (table_size - 1);
                     continue;
                 }
@@ -188,14 +188,14 @@ pub fn Index(comptime Policy: type) type {
 
             try self.allocate(gpa, new_size);
 
-            for (old_cells.items.items) |cell| {
+            for (old_cells.items()) |cell| {
                 if (cell == Policy.empty_cell) continue;
                 const id = Policy.idFromCell(cell);
                 const text = Policy.textForId(owner, id);
                 const text_hash = Policy.hash(text);
                 const slot = self.findStringOrSlot(owner, text_hash, text).slot;
-                self.cells.items.items[slot] = cell;
-                if (use_fingerprints) self.fingerprints.items.items[slot] = fingerprint(text_hash);
+                self.cells.items()[slot] = cell;
+                if (use_fingerprints) self.fingerprints.items()[slot] = fingerprint(text_hash);
             }
 
             @constCast(&old_cells).deinit(gpa);
@@ -206,17 +206,13 @@ pub fn Index(comptime Policy: type) type {
             const table_size = try powerOfTwoTableSize(requested_size);
             var cells = try SafeList(Policy.Cell).initCapacity(gpa, table_size);
             errdefer cells.deinit(gpa);
-            try cells.items.ensureTotalCapacityPrecise(gpa, table_size);
-            cells.items.items.len = table_size;
-            @memset(cells.items.items, Policy.empty_cell);
+            cells.appendNTimesAssumeCapacity(Policy.empty_cell, table_size);
 
             var fingerprints = SafeList(u8){};
             if (use_fingerprints) {
                 fingerprints = try SafeList(u8).initCapacity(gpa, table_size);
                 errdefer fingerprints.deinit(gpa);
-                try fingerprints.items.ensureTotalCapacityPrecise(gpa, table_size);
-                fingerprints.items.items.len = table_size;
-                @memset(fingerprints.items.items, 0);
+                fingerprints.appendNTimesAssumeCapacity(0, table_size);
             }
 
             self.cells = cells;

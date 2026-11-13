@@ -9,6 +9,7 @@ const collections = @import("collections");
 const ctx_mod = @import("ctx");
 
 const cache_versioning = @import("cache_versioning.zig");
+const artifacts = @import("artifact_store.zig");
 const CoreCtx = ctx_mod.CoreCtx;
 
 const ModuleEnv = can.ModuleEnv;
@@ -174,22 +175,29 @@ pub const CacheModule = struct {
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(@constCast(serialized_data.ptr))));
         deserialized_ptr.validate(serialized_data.len) catch return error.CorruptSerializedModuleEnv;
 
-        // Calculate the base address of the serialized data
-        const base_addr = @intFromPtr(serialized_data.ptr);
-
-        // Deserialize the ModuleEnv with mutable types so it can be type-checked further
-        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserializeWithMutableTypes(base_addr, allocator, source, module_basename);
+        // The env is relocated in place, so its lists borrow this module's data.
+        const module_env_ptr = try allocator.create(ModuleEnv);
+        errdefer allocator.destroy(module_env_ptr);
+        module_env_ptr.* = try deserialized_ptr.deserializeInPlace(@intFromPtr(serialized_data.ptr), allocator, source, module_basename, .sealed);
 
         return module_env_ptr;
     }
 
-    /// Tagged union to represent cache data that can be either memory-mapped or heap-allocated
-    pub const CacheData = union(enum) {
-        mapped: CoreCtx.MappedFile,
-        allocated: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8,
+    /// A loaded cache entry file, memory-mapped or read onto the heap, whose
+    /// payload lies between the file's length prefix and length trailer.
+    pub const CacheData = struct {
+        storage: Storage,
+        /// Which file was loaded, for discarding it when it proves corrupt.
+        stamp: artifacts.Stamp,
 
-        pub fn data(self: CacheData) []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8 {
-            return switch (self) {
+        pub const Storage = union(enum) {
+            mapped: CoreCtx.MappedFile,
+            allocated: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8,
+        };
+
+        /// The whole file, its length prefix and trailer included.
+        pub fn file(self: CacheData) []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8 {
+            return switch (self.storage) {
                 .mapped => |m| blk: {
                     // Mappings are page-aligned, which satisfies the 16-byte
                     // serialization alignment.
@@ -200,22 +208,40 @@ pub const CacheModule = struct {
             };
         }
 
+        /// The payload: the file between its length prefix and trailer,
+        /// which keeps the file's 16-byte alignment. The file passed the
+        /// length check when it was loaded.
+        pub fn data(self: CacheData) []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8 {
+            comptime std.debug.assert(artifacts.length_prefix_len % SERIALIZATION_ALIGNMENT.toByteUnits() == 0);
+            return @alignCast(artifacts.payload(self.file()));
+        }
+
         pub fn deinit(self: CacheData, allocator: Allocator) void {
-            switch (self) {
+            switch (self.storage) {
                 .mapped => |m| m.unmap(),
                 .allocated => |a| allocator.free(a),
             }
         }
-    };
 
-    /// Copy-on-write map `file_path` into a `CacheData.mapped` value, or return
-    /// `null` when `roc_ctx` cannot map it (a virtual filesystem, a target without
-    /// `mmap`, or a missing, empty, or kernel-refused file). A `null` result is
-    /// the caller's cue to read the file onto the heap.
-    pub fn tryMapCacheFile(roc_ctx: CoreCtx, file_path: []const u8) ?CacheData {
-        const mapped = roc_ctx.mapFilePrivate(file_path) orelse return null;
-        return CacheData{ .mapped = mapped };
-    }
+        /// Hand the data to an environment relocated in place inside it, whose
+        /// `deinit` releases it with the allocator that allocated it (the
+        /// environment's), so it must not be released here as well.
+        pub fn intoLoadedEntry(self: CacheData) ModuleEnv.LoadedEntry {
+            return switch (self.storage) {
+                .mapped => |mapped| .{ .bytes = mapped.region, .release = &releaseMapped },
+                .allocated => |allocated| .{ .bytes = @constCast(allocated), .release = &releaseAllocated },
+            };
+        }
+
+        fn releaseMapped(bytes: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8, _: Allocator) void {
+            const mapped: CoreCtx.MappedFile = .{ .region = @alignCast(bytes), .file_len = bytes.len };
+            mapped.unmap();
+        }
+
+        fn releaseAllocated(bytes: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8, allocator: Allocator) void {
+            allocator.free(bytes);
+        }
+    };
 };
 
 test "fromMappedMemory rejects a buffer that ends before the data section starts" {

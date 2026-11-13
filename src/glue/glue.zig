@@ -4598,7 +4598,7 @@ fn collectModuleTypeInfo(
 ) TypeTableError!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
     errdefer gpa.free(main_type_str);
-    for (artifact.checked_types.nominal_declarations.items) |declaration| {
+    for (artifact.checked_types.nominal_declarations.items()) |declaration| {
         // A platform module declares its own types, never the Builtin module's.
         const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(artifact.checked_types.nominalDeclarationName(declaration)), false);
         if (std.mem.eql(u8, type_name, module_name)) {
@@ -4644,7 +4644,7 @@ fn collectModuleTypeInfo(
     const module_env = artifact.moduleEnvConst();
     var member_by_def = std.AutoHashMap(can.CIR.Def.Idx, can.ModuleEnv.MethodKey).init(gpa);
     defer member_by_def.deinit();
-    for (module_env.method_defs.entries.items) |member_entry| {
+    for (module_env.method_defs.entries.items()) |member_entry| {
         try member_by_def.put(member_entry.value.def_idx, member_entry.key);
     }
 

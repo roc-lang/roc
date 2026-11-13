@@ -54,7 +54,7 @@ test "write occurrences retain each destructured target and exclude fresh binder
     const statements = store.sliceStatements(block.stmts);
     const x = store.getStatement(statements[0]).s_var.pattern_idx;
     const y = store.getStatement(statements[1]).s_var_uninitialized.pattern_idx;
-    const writes = store.write_occurrences.items.items;
+    const writes = store.write_occurrences.items();
     try testing.expectEqual(@as(usize, 4), writes.len);
     try testing.expectEqual(y, writes[0].pattern_idx);
     try testing.expectEqualStrings("$y", source[writes[0].start..writes[0].end]);

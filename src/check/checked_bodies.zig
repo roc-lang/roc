@@ -974,7 +974,7 @@ pub const CheckedBodies = struct {
     /// The checker-selected defaults of fields omitted at record
     /// construction sites, by site, in checking order.
     pub fn recordOmittedDefaults(self: CheckedBodies) []const ModuleEnv.RecordOmittedDefault {
-        return self.env.record_omitted_defaults.items.items;
+        return self.env.record_omitted_defaults.items();
     }
 
     /// One omitted default in the checked module's names.

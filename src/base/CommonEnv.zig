@@ -22,7 +22,6 @@ const CommonEnv = @This();
 idents: Ident.Store,
 strings: StringLiteral.Store,
 string_builder: StringLiteral.BuilderState = .{},
-strings_insertable: bool = true,
 /// The items (a combination of types and values) that this module exposes
 exposed_items: ExposedItems,
 /// Line starts for error reporting. We retain only start and offset positions in the IR
@@ -42,7 +41,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = idents,
         .strings = strings,
         .string_builder = .{},
-        .strings_insertable = true,
         .exposed_items = ExposedItems.init(),
         .line_starts = line_starts,
         .source = source,
@@ -66,10 +64,7 @@ pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.E
     var strings = try self.strings.clone(gpa);
     errdefer strings.deinit(gpa);
 
-    var string_builder = if (self.strings_insertable)
-        try self.string_builder.clone(gpa)
-    else
-        StringLiteral.BuilderState{};
+    var string_builder = try self.string_builder.clone(gpa);
     errdefer string_builder.deinit(gpa);
 
     var exposed_items = try self.exposed_items.clone(gpa);
@@ -82,7 +77,6 @@ pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.E
         .idents = idents,
         .strings = strings,
         .string_builder = string_builder,
-        .strings_insertable = self.strings_insertable,
         .exposed_items = exposed_items,
         .line_starts = line_starts,
         .source = self.source,
@@ -94,6 +88,7 @@ pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.E
 pub const Serialized = extern struct {
     idents: Ident.Store.Serialized,
     strings: StringLiteral.Store.Serialized,
+    string_builder: StringLiteral.BuilderState.Serialized,
     exposed_items: ExposedItems.Serialized,
     line_starts: SafeList(u32).Serialized,
     source: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
@@ -108,6 +103,10 @@ pub const Serialized = extern struct {
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
         try self.strings.serialize(&env.strings, allocator, writer);
+        if (std.debug.runtime_safety and env.string_builder.index.count() != stringEntryCount(&env.strings)) {
+            invariant("CommonEnv invariant violated: the string literal dedup table does not cover every stored string", .{});
+        }
+        try self.string_builder.serialize(&env.string_builder, allocator, writer);
         try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
         try self.line_starts.serialize(&env.line_starts, allocator, writer);
 
@@ -116,8 +115,9 @@ pub const Serialized = extern struct {
         self.source = .{ 0, 0 };
     }
 
-    /// Deserialize into a CommonEnv value (no in-place modification of cache buffer).
-    /// The base_addr parameter is the base address of the serialized buffer in memory.
+    /// A CommonEnv whose stores borrow the serialized bytes at `base_addr`.
+    /// It reads and writes them in place, each list copies itself into owned
+    /// memory the first time it grows, and `deinit` frees only those copies.
     pub fn deserializeInto(
         self: *const Serialized,
         base_addr: usize,
@@ -126,82 +126,20 @@ pub const Serialized = extern struct {
         return CommonEnv{
             .idents = self.idents.deserializeInto(base_addr),
             .strings = self.strings.deserializeInto(base_addr),
-            .string_builder = .{},
-            .strings_insertable = false,
+            .string_builder = self.string_builder.deserializeInto(base_addr),
             .exposed_items = self.exposed_items.deserializeInto(base_addr),
             .line_starts = self.line_starts.deserializeInto(base_addr),
             .source = source,
         };
     }
-
-    /// Deserialize into a CommonEnv that owns every byte it holds, so later
-    /// compilation stages may append identifiers, string literals, exposed
-    /// items, and line starts to it. `deinit` releases it exactly like a
-    /// freshly constructed `CommonEnv`.
-    pub fn deserializeOwned(
-        self: *const Serialized,
-        base_addr: usize,
-        gpa: Allocator,
-        source: []const u8,
-    ) Allocator.Error!CommonEnv {
-        const frozen = self.deserializeInto(base_addr, source);
-
-        // `enableRuntimeInserts` copies the interner's columns into owned,
-        // growable memory that `deinit` releases.
-        var idents = frozen.idents;
-        try idents.enableRuntimeInserts(gpa);
-        errdefer idents.deinit(gpa);
-
-        var strings = try frozen.strings.clone(gpa);
-        errdefer strings.deinit(gpa);
-
-        var string_builder = try rebuildStringBuilder(&strings, gpa);
-        errdefer string_builder.deinit(gpa);
-
-        var exposed_items = try frozen.exposed_items.clone(gpa);
-        errdefer exposed_items.deinit(gpa);
-
-        const line_starts = try frozen.line_starts.clone(gpa);
-
-        return CommonEnv{
-            .idents = idents,
-            .strings = strings,
-            .string_builder = string_builder,
-            .strings_insertable = true,
-            .exposed_items = exposed_items,
-            .line_starts = line_starts,
-            .source = source,
-        };
-    }
 };
 
-/// Build the transient dedup state for an owned `StringLiteral.Store` from the
-/// entries that store already holds.
-///
-/// Those entries are themselves the builder's input: each was deduped when it
-/// was appended, so registering them in entry order reproduces the index the
-/// appends built. A later `insertString` therefore returns the same
-/// `StringLiteral.Idx` it returns when the store was never serialized.
-fn rebuildStringBuilder(
-    strings: *StringLiteral.Store,
-    gpa: Allocator,
-) Allocator.Error!StringLiteral.BuilderState {
-    var builder = StringLiteral.BuilderState{};
-    errdefer builder.deinit(gpa);
-
+/// The number of entries in `strings`.
+fn stringEntryCount(strings: *const StringLiteral.Store) usize {
     var count: usize = 0;
-    var counting = strings.iterator();
-    while (counting.next()) |_| count += 1;
-    if (count == 0) return builder;
-
-    try builder.ensureAdditionalCapacity(strings, gpa, count);
-
     var entries = strings.iterator();
-    while (entries.next()) |entry| {
-        builder.registerExistingAssumeCapacity(strings, entry.idx);
-    }
-
-    return builder;
+    while (entries.next()) |_| count += 1;
+    return count;
 }
 
 /// Inserts an identifier into the store and returns its index.
@@ -232,18 +170,12 @@ pub fn getIdentStore(self: *const CommonEnv) *const Ident.Store {
 
 /// Inserts a string literal into the store and returns its index.
 pub fn insertString(self: *CommonEnv, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!StringLiteral.Idx {
-    self.assertStringsInsertable();
     return try self.string_builder.insert(&self.strings, gpa, string);
 }
 
 /// Retrieves a string literal by its index.
 pub fn getString(self: *const CommonEnv, idx: StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
-}
-
-fn assertStringsInsertable(self: *const CommonEnv) void {
-    if (self.strings_insertable) return;
-    invariant("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
 }
 
 /// Adds an identifier to the exposed items list by its index.
@@ -280,7 +212,7 @@ pub fn setTypeNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx:
 pub fn getRegionInfo(self: *const CommonEnv, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }!RegionInfo {
     return RegionInfo.position(
         self.source,
-        self.line_starts.items.items,
+        self.line_starts.items(),
         region.start.offset,
         region.end.offset,
     );
@@ -303,7 +235,7 @@ pub fn calcRegionInfo(self: *const CommonEnv, region: Region) RegionInfo {
 
     const info = RegionInfo.position(
         source,
-        self.line_starts.items.items,
+        self.line_starts.items(),
         region.start.offset,
         region.end.offset,
     ) catch {
@@ -323,8 +255,8 @@ pub fn getSourceAll(self: *const CommonEnv) []const u8 {
 pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!void {
     // Reuse the existing storage so this cannot leave `line_starts` freed
     // if a fresh allocation were to fail.
-    self.line_starts.items.clearRetainingCapacity();
-    try self.line_starts.items.ensureTotalCapacity(gpa, 256);
+    self.line_starts.clearRetainingCapacity();
+    try self.line_starts.ensureTotalCapacity(gpa, 256);
 
     // if the source is empty, we're done
     if (self.getSourceAll().len == 0) {
@@ -333,7 +265,7 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
 
     // the first line starts at offset 0
     {
-        const expected_idx = self.line_starts.items.items.len;
+        const expected_idx = self.line_starts.items().len;
         const idx = try self.line_starts.append(gpa, 0);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
@@ -342,7 +274,7 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
     const source = self.getSourceAll();
     var search_from: usize = 0;
     while (std.mem.findScalarPos(u8, source, search_from, '\n')) |newline| {
-        const expected_idx = self.line_starts.items.items.len;
+        const expected_idx = self.line_starts.items().len;
         const idx = try self.line_starts.append(gpa, @intCast(newline + 1));
         std.debug.assert(@backingInt(idx) == expected_idx);
         search_from = newline + 1;
@@ -351,7 +283,7 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
 
 /// Returns all line start positions for source code position mapping.
 pub fn getLineStartsAll(self: *const CommonEnv) []const u32 {
-    return self.line_starts.items.items;
+    return self.line_starts.items();
 }
 
 /// Get the source text for a given region
@@ -362,9 +294,9 @@ pub fn getSource(self: *const CommonEnv, region: Region) []const u8 {
 /// Get the source line for a given region
 pub fn getSourceLine(self: *const CommonEnv, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }![]const u8 {
     const region_info = try self.getRegionInfo(region);
-    const line_start = self.line_starts.items.items[region_info.start_line_idx];
-    const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items.items.len)
-        self.line_starts.items.items[region_info.start_line_idx + 1]
+    const line_start = self.line_starts.items()[region_info.start_line_idx];
+    const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items().len)
+        self.line_starts.items()[region_info.start_line_idx + 1]
     else
         self.source.len;
 
@@ -401,17 +333,17 @@ test "CommonEnv.Serialized roundtrip" {
     try original.addExposedById(gpa, hello_idx);
 
     {
-        const expected_idx = original.line_starts.items.items.len;
+        const expected_idx = original.line_starts.items().len;
         const idx = try original.line_starts.append(gpa, 0);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = original.line_starts.items.items.len;
+        const expected_idx = original.line_starts.items().len;
         const idx = try original.line_starts.append(gpa, 10);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = original.line_starts.items.items.len;
+        const expected_idx = original.line_starts.items().len;
         const idx = try original.line_starts.append(gpa, 20);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
@@ -450,14 +382,14 @@ test "CommonEnv.Serialized roundtrip" {
 
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 3), env.line_starts.len());
-    try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);
-    try testing.expectEqual(@as(u32, 10), env.line_starts.items.items[1]);
-    try testing.expectEqual(@as(u32, 20), env.line_starts.items.items[2]);
+    try testing.expectEqual(@as(u32, 0), env.line_starts.items()[0]);
+    try testing.expectEqual(@as(u32, 10), env.line_starts.items()[1]);
+    try testing.expectEqual(@as(u32, 20), env.line_starts.items()[2]);
 
     try testing.expectEqualStrings(source, env.source);
 }
 
-test "CommonEnv.Serialized deserializeOwned keeps inserting where the original left off" {
+test "CommonEnv.Serialized loaded in place keeps inserting where the original left off" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -489,7 +421,7 @@ test "CommonEnv.Serialized deserializeOwned keeps inserting where the original l
     _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    var env = try deserialized_ptr.deserializeOwned(@intFromPtr(buffer.ptr), gpa, source);
+    var env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
     defer env.deinit(gpa);
 
     try testing.expectEqualStrings("shared literal", env.getString(first));
@@ -654,11 +586,11 @@ test "CommonEnv.Serialized roundtrip with large data" {
     try testing.expectEqualStrings("string_literal_24", env.getString(string_indices.items[24]));
 
     // Verify line starts
-    try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);
+    try testing.expectEqual(@as(u32, 0), env.line_starts.items()[0]);
     // Calculate the actual expected value for the second line start
     const first_line = "Line 0: This is a test line with some content\n";
     const expected_second_line_start = first_line.len;
-    try testing.expectEqual(@as(u32, expected_second_line_start), env.line_starts.items.items[1]);
+    try testing.expectEqual(@as(u32, expected_second_line_start), env.line_starts.items()[1]);
 }
 
 test "CommonEnv.Serialized roundtrip with special characters" {

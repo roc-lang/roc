@@ -3365,8 +3365,9 @@ const WaitingPredeclaredDispatchUse = struct {
 /// still gets a record. Each use site keeps the policy it applies to every
 /// other scheme it instantiates.
 const PredeclaredRecordPolicy = enum {
-    /// Record only a nonempty substitution or a scheme with evidence params,
-    /// as `instantiateVarHelp` decides.
+    /// Record only a nonempty substitution, a scheme with evidence params (as
+    /// `instantiateVarHelp` decides), or a scheme that shares hole variables
+    /// with its body (`PredeclaredSlots.shares_holes`).
     when_needed,
     /// Always record, as `instantiateDispatchTargetMethodVar` does for every
     /// same-module target.
@@ -3393,6 +3394,12 @@ const VarRange = struct {
 /// binding's template publishes.
 const PredeclaredSlots = struct {
     scheme_var: Var,
+    /// Whether the predeclared scheme shares live `_` hole variables with the
+    /// body's annotation. The binding's own scheme can quantify such a
+    /// variable, which no identity slot enumerates, so a use's record with an
+    /// empty substitution still says something: the use shares every one of
+    /// them with the body.
+    shares_holes: bool,
     /// Enumerated from the pristine predeclared scheme at its first use.
     predeclared: ?VarRange = null,
     /// Enumerated when the body generates the annotation, before anything
@@ -4530,7 +4537,7 @@ pub fn initWithOwnerModules(
 /// Preflight module state required by type-checking.
 /// This is intentionally private so `Check.init` is the only public entry point.
 fn preflightForTypeChecking(cir: *ModuleEnv) std.mem.Allocator.Error!void {
-    try cir.getIdentStore().enableRuntimeInserts(cir.gpa);
+    try cir.getIdentStore().enableTextRanks(cir.gpa);
     // Type checking rewrites some expressions into dispatch calls, which can
     // append argument spans to the CIR index store. Existing CIR spans are valid
     // by index, but many checker paths borrow them as slices while recursively
@@ -4538,15 +4545,15 @@ fn preflightForTypeChecking(cir: *ModuleEnv) std.mem.Allocator.Error!void {
     // existing node so those borrows cannot be invalidated by dispatch rewrites.
     const index_count: usize = @intCast(cir.store.index_data.len());
     const node_count: usize = @intCast(cir.store.nodes.len());
-    try cir.store.index_data.items.ensureTotalCapacity(cir.gpa, index_count + node_count);
+    try cir.store.index_data.ensureTotalCapacity(cir.gpa, index_count + node_count);
 
-    const import_count: usize = @intCast(cir.imports.imports.items.items.len);
+    const import_count: usize = @intCast(cir.imports.imports.items().len);
     for (0..import_count) |i| {
         const import_idx: can.CIR.Import.Idx = @fromBackingInt(@intCast(i));
         if (cir.imports.getResolvedModule(import_idx) != null) continue;
         if (cir.imports.importFailedBeforeChecking(import_idx)) continue;
 
-        const import_name = cir.getString(cir.imports.imports.items.items[i]);
+        const import_name = cir.getString(cir.imports.imports.items()[i]);
         base.invariant(
             "Check.init requires resolved import mapping before type checking; unresolved import \"{s}\" in module \"{s}\"",
             .{ import_name, cir.module_name },
@@ -4627,7 +4634,7 @@ fn initAssumePrepared(
 
     var binding_scheme_nodes = try std.DynamicBitSetUnmanaged.initEmpty(gpa, node_count);
     errdefer binding_scheme_nodes.deinit(gpa);
-    for (cir.binding_schemes.items.items) |binding_scheme| {
+    for (cir.binding_schemes.items()) |binding_scheme| {
         std.debug.assert(binding_scheme.node_idx < node_count);
         binding_scheme_nodes.set(binding_scheme.node_idx);
     }
@@ -4647,7 +4654,7 @@ fn initAssumePrepared(
     }
     var rehydrated_type_scheme_by_var: collections.DenseMapUnmanaged(Var, u32) = .empty;
     errdefer rehydrated_type_scheme_by_var.deinit(gpa);
-    for (cir.binding_scheme_codec_requirements.items.items) |serialized_requirement| {
+    for (cir.binding_scheme_codec_requirements.items()) |serialized_requirement| {
         const scheme_root: Var = @fromBackingInt(@intCast(serialized_requirement.scheme_root));
         const indexed_var: Var = @fromBackingInt(@intCast(serialized_requirement.node_idx));
         const receiver_var: Var = @fromBackingInt(@intCast(serialized_requirement.receiver_var));
@@ -4708,7 +4715,7 @@ fn initAssumePrepared(
 
     var rehydrated_where_method_uses: std.AutoHashMapUnmanaged(Var, u32) = .empty;
     errdefer rehydrated_where_method_uses.deinit(gpa);
-    for (cir.scheme_uses.items.items, 0..) |record, record_idx| {
+    for (cir.scheme_uses.items(), 0..) |record, record_idx| {
         if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) continue;
         const entry = try rehydrated_where_method_uses.getOrPut(gpa, @fromBackingInt(@intCast(record.slot_data)));
         if (entry.found_existing) {
@@ -4729,7 +4736,7 @@ fn initAssumePrepared(
         .auto_imported_types = auto_imported_types,
         .regions = blk: {
             var owned = Region.List{};
-            _ = try owned.appendSlice(gpa, regions.items.items);
+            _ = try owned.appendSlice(gpa, regions.items());
             break :blk owned;
         },
         .builtin_ctx = builtin_ctx,
@@ -4879,12 +4886,12 @@ pub fn deinit(self: *Self) void {
 
 /// Returns the hoisted roots selected while checking this module.
 pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoistedRoot {
-    return self.cir.selected_hoisted_roots.items.items;
+    return self.cir.selected_hoisted_roots.items();
 }
 
 /// Returns the local function bindings this module promoted to procedures.
 pub fn promotedLocalProcedures(self: *const Self) []const hoist_roots.PromotedLocalProcedure {
-    return self.cir.promoted_local_procedures.items.items;
+    return self.cir.promoted_local_procedures.items();
 }
 
 /// Mark every candidate on the stack from `depth` inward contextual: its
@@ -5297,7 +5304,7 @@ fn decideLocalTypeContexts(self: *Self) Allocator.Error!void {
             .s_runtime_error,
             => unreachable, // only type declarations were gathered above
         }
-        for (self.cir.method_defs.entries.items) |method_entry| {
+        for (self.cir.method_defs.entries.items()) |method_entry| {
             if (method_entry.key.owner != decl) continue;
             if (self.cir.store.nodes.get(method_entry.value.type_node_idx).tag != .statement_decl) continue;
             const method = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_entry.value.type_node_idx)))).s_decl;
@@ -5920,7 +5927,7 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
 
     // Values of an escaped type exist outside its context, where its methods
     // have no declaration context to run in, so every method is rejected.
-    for (self.cir.method_defs.entries.items) |method_entry| {
+    for (self.cir.method_defs.entries.items()) |method_entry| {
         if (!escaped.contains(method_entry.key.owner)) continue;
         if (self.cir.store.nodes.get(method_entry.value.type_node_idx).tag != .statement_decl) continue;
         const method = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_entry.value.type_node_idx)))).s_decl;
@@ -6012,7 +6019,7 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
 
     var methods: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, LocalMethod) = .empty;
     defer methods.deinit(self.gpa);
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         if (self.cir.store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
         const decl = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)))).s_decl;
         // An associated value that is not a local procedure is no method:
@@ -6687,7 +6694,7 @@ fn receiverLocalProcedureMethod(self: *Self, receiver_var: Var, method_name: Ide
 
 fn moduleDeclaresLocalMethods(self: *Self) Allocator.Error!bool {
     if (self.module_declares_local_methods) |declares| return declares;
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         if (self.cir.store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
         const name = entry.key.methodIdent();
         for (self.local_method_names.items) |existing| {
@@ -7334,12 +7341,12 @@ fn retireInvalidatedRecordDefaults(self: *Self, root: ?CIR.Expr.Idx) void {
     // unreachable. Retire the omission plans attached to those constructions
     // before checked-artifact publication consumes the surviving source tree.
     var retained: usize = 0;
-    for (self.cir.record_omitted_defaults.items.items) |omitted| {
+    for (self.cir.record_omitted_defaults.items()) |omitted| {
         if (omitted.expr == root or self.hoist_invalidated_exprs.contains(omitted.expr)) continue;
-        self.cir.record_omitted_defaults.items.items[retained] = omitted;
+        self.cir.record_omitted_defaults.items()[retained] = omitted;
         retained += 1;
     }
-    self.cir.record_omitted_defaults.items.shrinkRetainingCapacity(retained);
+    self.cir.record_omitted_defaults.shrinkRetainingCapacity(retained);
 }
 
 fn markHoistInvalidatedExpr(
@@ -8353,7 +8360,7 @@ const Env = struct {
         self.var_pool.current_rank = to;
         self.var_pool.clearRetainingCapacity();
         try self.var_pool.ensureRanksThrough(to);
-        self.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.deferred_static_dispatch_constraints.clearRetainingCapacity();
         self.clearClean();
     }
 
@@ -8399,7 +8406,7 @@ fn sourceRecordConstructionForVar(self: *const Self, var_: Var) ?CIR.Expr.Idx {
 }
 
 fn recordAbsorbedDefaults(self: *Self, construction_var: ?Var, a: Var, b: Var) std.mem.Allocator.Error!void {
-    for (self.unify_scratch.absorbed_record_defaults.items.items) |absorbed| {
+    for (self.unify_scratch.absorbed_record_defaults.items()) |absorbed| {
         var mb_expr = self.sourceRecordConstructionForVar(absorbed.record_var);
         // The pair enclosing the absorption names the construction directly,
         // including when it is nested inside the operands (a record literal in
@@ -8501,7 +8508,7 @@ fn adoptUnifyScratch(self: *Self, env: *Env, actual: Var, owner: DeferredDispatc
     // unification and propagate that back, but the current approach is sufficient for
     // typical error reporting scenarios.
     const region = self.getRegionAt(actual);
-    for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
+    for (self.unify_scratch.fresh_vars.items()) |fresh_var| {
         // Set the rank
         const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
         try env.var_pool.addVarToRank(fresh_var, fresh_rank);
@@ -8520,7 +8527,7 @@ fn adoptUnifyScratch(self: *Self, env: *Env, actual: Var, owner: DeferredDispatc
     // group whose checking ran this unification owns each obligation's
     // boundary-time resolution.
     const failure_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
-    for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
+    for (self.unify_scratch.deferred_constraints.items()) |deferred_constraint| {
         const expr_idx = failure_expr orelse {
             try self.enqueueDeferredDispatchConstraint(env, deferred_constraint, owner);
             continue;
@@ -9418,7 +9425,7 @@ fn validateSettledValueRows(self: *Self, env: *Env, walk: *SettledWalk) std.mem.
     for (self.platform_requirement_solutions.items) |solution| {
         try output_type_roots.forEachPlatformRequirementTypeRoot(solution.solved_var, solution.identity_vars, &seeder);
     }
-    for (self.cir.for_loop_dispatch_plans.items.items) |plan| {
+    for (self.cir.for_loop_dispatch_plans.items()) |plan| {
         try output_type_roots.forEachForLoopDispatchTypeRoot(plan, &seeder);
     }
     try output_type_roots.forEachLiteralDispatchTypeRoot(self.cir, &seeder);
@@ -10000,7 +10007,7 @@ fn schemeUseInstantiatesDefinition(record: ModuleEnv.SchemeUseRecord) bool {
 /// created, an obligation derived from one, or a requirement some other use's
 /// instantiation copied, which belongs to that use's expression.
 fn schemeUseExpr(self: *const Self, record_index: u32) CIR.Expr.Idx {
-    const records = self.cir.scheme_uses.items.items;
+    const records = self.cir.scheme_uses.items();
     var current = record_index;
     var guard = types_mod.debug.IterationGuard.init("schemeUseExpr");
     while (true) {
@@ -10039,8 +10046,8 @@ fn schemeUseExpr(self: *const Self, record_index: u32) CIR.Expr.Idx {
 /// This runs once on the settled state, where every use's types are final.
 /// Each offending use is reported and retired like any other rejected use.
 fn rejectPolymorphicRecursion(self: *Self) std.mem.Allocator.Error!void {
-    const records = self.cir.scheme_uses.items.items;
-    const pairs = self.cir.scheme_use_pairs.items.items;
+    const records = self.cir.scheme_uses.items();
+    const pairs = self.cir.scheme_use_pairs.items();
     if (pairs.len == 0) return;
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -10317,7 +10324,7 @@ fn retireDispatchesOfRejectedDefs(
 /// The dispatch constraint whose callable is exactly `fn_var`. Only failure
 /// paths ask, so the scan costs nothing when dispatch succeeds.
 fn dispatchConstraintOfFn(self: *const Self, fn_var: Var) StaticDispatchConstraint {
-    for (self.types.static_dispatch_constraints.items.items) |constraint| {
+    for (self.types.static_dispatch_constraints.items()) |constraint| {
         if (constraint.fn_var == fn_var) return constraint;
     }
     base.invariant("type checker invariant violated: a selected dispatch edge has no dispatch constraint", .{});
@@ -11337,7 +11344,7 @@ fn markBindingSchemeVar(self: *Self, var_: Var) Allocator.Error!void {
 /// stored in checked module output. Scanning node order once avoids maintaining
 /// a sorted list while dependency-order checking discovers schemes.
 fn finalizeBindingSchemeNodes(self: *Self) Allocator.Error!void {
-    self.cir.binding_schemes.items.clearRetainingCapacity();
+    self.cir.binding_schemes.clearRetainingCapacity();
     var raw_node: usize = 0;
     while (raw_node < self.binding_scheme_nodes.bit_length) : (raw_node += 1) {
         if (self.binding_scheme_nodes.isSet(raw_node)) {
@@ -11359,7 +11366,7 @@ fn verifyPredeclaredSchemeUsesRecorded(self: *Self) Allocator.Error!void {
     defer predeclared_roots.deinit(self.gpa);
     var slots_iter = self.predeclared_slots.valueIterator();
     while (slots_iter.next()) |slots| try predeclared_roots.put(self.gpa, @backingInt(slots.scheme_var), {});
-    for (self.cir.scheme_uses.items.items) |record| {
+    for (self.cir.scheme_uses.items()) |record| {
         if (predeclared_roots.contains(record.scheme_root)) {
             base.invariant("type checker invariant violated: a {s} scheme-use record is rooted at a predeclared scheme", .{
                 @tagName(@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))),
@@ -11571,7 +11578,7 @@ fn recordWhereMethodUse(
         base.invariant("body constraint callable already has a where-method use record", .{});
     }
     try self.where_method_use_record_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
-    const record_index: u32 = @intCast(self.cir.scheme_uses.items.items.len);
+    const record_index: u32 = @intCast(self.cir.scheme_uses.items().len);
     try self.cir.recordSchemeUse(
         if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
         .where_method_use,
@@ -11592,7 +11599,7 @@ fn existingWhereMethodUse(
     constraint_fn_var: Var,
 ) ?Var {
     const record_idx = self.where_method_use_record_by_fn_var.get(constraint_fn_var) orelse return null;
-    const record = self.cir.scheme_uses.items.items[record_idx];
+    const record = self.cir.scheme_uses.items()[record_idx];
     if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
         record.slot_data != @backingInt(constraint_fn_var))
     {
@@ -11603,7 +11610,7 @@ fn existingWhereMethodUse(
     {
         base.invariant("body constraint callable was matched to two where-method signatures", .{});
     }
-    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+    const pairs = self.cir.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
     const signature_root = self.types.resolveVar(signature_var).var_;
     for (pairs) |pair| {
         if (self.types.resolveVar(@as(Var, @fromBackingInt(@intCast(pair.old_var)))).var_ == signature_root) {
@@ -12620,7 +12627,7 @@ fn instantiateVarHelpFromScheme(
                 .platform_requirement => |site| .{ .platform_requirement, @backingInt(site.expr), @backingInt(instantiated_var) },
                 .dispatch_target => |site| .{ .dispatch_target, site.node_idx, @backingInt(site.constraint_fn_var) },
             };
-            const record: u32 = @intCast(self.cir.scheme_uses.items.items.len);
+            const record: u32 = @intCast(self.cir.scheme_uses.items().len);
             try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_source, self.scratch_evidence_pairs.items);
             if (evidence == .platform_requirement) evidence.platform_requirement.record.* = record;
             if (registers_use and self.scratch_use_owned.items.len != 0) {
@@ -12690,7 +12697,7 @@ fn nameDeferredCallables(
 ) Allocator.Error!void {
     self.scratch_deferred_placeholders.clearRetainingCapacity();
     for (self.scratch_deferred_slots.items) |slot| {
-        const constraint = &self.types.static_dispatch_constraints.items.items[slot];
+        const constraint = &self.types.static_dispatch_constraints.items()[slot];
         constraint.fn_var = try self.deferredCallableName(var_map, rank, constraint.fn_var, false);
     }
     for (requirements) |*requirement| {
@@ -12914,7 +12921,7 @@ fn enqueueLocalSchemeRequirements(self: *Self, scheme_idx: usize, env: *Env) All
         if (self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var) or
             self.staticDispatchConstraintIsInactive(requirement.constraint)) continue;
         if (self.deferredDispatchRelationIsQueued(
-            env.deferred_static_dispatch_constraints.items.items,
+            env.deferred_static_dispatch_constraints.items(),
             requirement.receiver_var,
             requirement.constraint.fn_var,
         )) continue;
@@ -12989,8 +12996,8 @@ fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
     if (idx >= len) {
         // Use Check's allocator since regions is owned by Check
         const missing: usize = @intCast(@as(u64, idx) + 1 - len);
-        try self.regions.items.ensureUnusedCapacity(self.gpa, missing);
-        self.regions.items.appendNTimesAssumeCapacity(Region.zero(), missing);
+        try self.regions.ensureUnusedCapacity(self.gpa, missing);
+        self.regions.appendNTimesAssumeCapacity(Region.zero(), missing);
     }
 }
 
@@ -14813,23 +14820,23 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 /// in `ModuleEnv.exhaustiveness_obligations` is its checked site id.
 fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
     const env = self.cir;
-    try env.selected_hoisted_roots.items.ensureTotalCapacity(env.gpa, self.selected_hoisted_roots.items.len);
-    env.selected_hoisted_roots.items.clearRetainingCapacity();
+    try env.selected_hoisted_roots.ensureTotalCapacity(env.gpa, self.selected_hoisted_roots.items.len);
+    env.selected_hoisted_roots.clearRetainingCapacity();
     for (self.selected_hoisted_roots.items) |root| {
         var recorded = root;
         recorded.top_level = self.selectedHoistedRootIsTopLevel(root);
-        env.selected_hoisted_roots.items.appendAssumeCapacity(recorded);
+        _ = env.selected_hoisted_roots.appendAssumeCapacity(recorded);
     }
-    env.promoted_local_procedures.items.clearRetainingCapacity();
-    try env.promoted_local_procedures.items.appendSlice(env.gpa, self.promoted_local_procedures.items);
+    env.promoted_local_procedures.clearRetainingCapacity();
+    _ = try env.promoted_local_procedures.appendSlice(env.gpa, self.promoted_local_procedures.items);
 
-    env.platform_requirement_solutions.items.clearRetainingCapacity();
-    env.platform_requirement_identity_vars.items.clearRetainingCapacity();
-    try env.platform_requirement_solutions.items.ensureTotalCapacity(env.gpa, self.platform_requirement_solutions.items.len);
+    env.platform_requirement_solutions.clearRetainingCapacity();
+    env.platform_requirement_identity_vars.clearRetainingCapacity();
+    try env.platform_requirement_solutions.ensureTotalCapacity(env.gpa, self.platform_requirement_solutions.items.len);
     for (self.platform_requirement_solutions.items) |solution| {
-        const identities_start: u32 = @intCast(env.platform_requirement_identity_vars.items.items.len);
-        try env.platform_requirement_identity_vars.items.appendSlice(env.gpa, solution.identity_vars);
-        env.platform_requirement_solutions.items.appendAssumeCapacity(.{
+        const identities_start: u32 = @intCast(env.platform_requirement_identity_vars.items().len);
+        _ = try env.platform_requirement_identity_vars.appendSlice(env.gpa, solution.identity_vars);
+        _ = env.platform_requirement_solutions.appendAssumeCapacity(.{
             .requires_idx = solution.requires_idx,
             .def = solution.def,
             .solved_var = solution.solved_var,
@@ -14846,11 +14853,11 @@ fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
     }
 
     const pending = self.problems.pending_static_exhaustiveness.items;
-    env.exhaustiveness_obligations.items.clearRetainingCapacity();
-    try env.exhaustiveness_obligations.items.ensureTotalCapacity(env.gpa, pending.len);
+    env.exhaustiveness_obligations.clearRetainingCapacity();
+    try env.exhaustiveness_obligations.ensureTotalCapacity(env.gpa, pending.len);
     for (pending, 0..) |*obligation, index| {
         obligation.site = @fromBackingInt(@intCast(index));
-        env.exhaustiveness_obligations.items.appendAssumeCapacity(.{
+        _ = env.exhaustiveness_obligations.appendAssumeCapacity(.{
             .mode = obligation.mode,
             .source = obligation.source,
             .region = obligation.region,
@@ -16100,7 +16107,7 @@ fn publishCallableCheckingFacts(self: *Self) Allocator.Error!void {
     var ids = collections.DenseMap(CIR.Def.Idx, callable_checking.Id).init(self.gpa);
     defer ids.deinit();
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def| try self.addCallableCheckingVertex(&domain, &ids, def);
-    for (self.cir.method_defs.entries.items) |entry| try self.addCallableCheckingVertex(&domain, &ids, entry.value.def_idx);
+    for (self.cir.method_defs.entries.items()) |entry| try self.addCallableCheckingVertex(&domain, &ids, entry.value.def_idx);
     const defs = domain.items;
     var graph = try callable_checking.Graph.init(self.gpa, defs.len);
     defer graph.deinit();
@@ -16130,7 +16137,7 @@ fn publishCallableCheckingFacts(self: *Self) Allocator.Error!void {
         .def = def,
         .allows_stored_const = @intFromBool(graph.allowsStoredConst(@fromBackingInt(@as(u32, @intCast(i))))),
     });
-    std.mem.sort(ModuleEnv.CallableCheckingFact, facts.items.items, {}, struct {
+    std.mem.sort(ModuleEnv.CallableCheckingFact, facts.items(), {}, struct {
         fn lessThan(_: void, a: ModuleEnv.CallableCheckingFact, b: ModuleEnv.CallableCheckingFact) bool {
             return @backingInt(a.def) < @backingInt(b.def);
         }
@@ -17185,8 +17192,8 @@ fn schemeRequirementOfCopy(
     use_expr: CIR.Expr.Idx,
     constraint: StaticDispatchConstraint,
 ) ?struct { slot: ModuleEnv.SchemeUseRecord.Slot, scheme_root: Var, fn_var: Var } {
-    const pairs = self.cir.scheme_use_pairs.items.items;
-    for (self.cir.scheme_uses.items.items) |record| {
+    const pairs = self.cir.scheme_use_pairs.items();
+    for (self.cir.scheme_uses.items()) |record| {
         if (record.node_idx != @backingInt(use_expr)) continue;
         for (pairs[record.pairs_start..][0..record.pairs_len]) |pair| {
             if (pair.fresh_var != @backingInt(constraint.fn_var)) continue;
@@ -17777,7 +17784,7 @@ fn leaveDeferredEntryConstraints(self: *Self, env: *Env, ownership: *DeferredEnt
 /// Give the obligations queued since `children_start` the failure expression
 /// of the constraint whose resolution queued them.
 fn passOnDeferredEntryFailureExpr(self: *Self, env: *Env, ownership: *DeferredEntryOwnership) void {
-    const queued = env.deferred_static_dispatch_constraints.items.items.len;
+    const queued = env.deferred_static_dispatch_constraints.items().len;
     if (queued > ownership.children_start) {
         const failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx = if (ownership.site) |site|
             if (siteFailureExpr(site)) |expr| .from(@backingInt(expr)) else .none
@@ -17801,7 +17808,7 @@ fn inheritDeferredConstraintFailureExpr(
     failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx,
 ) void {
     if (failure_expr == .none) return;
-    const items = env.deferred_static_dispatch_constraints.items.items;
+    const items = env.deferred_static_dispatch_constraints.items();
     var index = @min(start, items.len);
     while (index < items.len) : (index += 1) {
         if (items[index].failure_expr == .none) {
@@ -18024,7 +18031,7 @@ fn poisonConstraintFailure(
     const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
     const fn_root = self.types.resolveVar(constraint.fn_var).var_;
     var found_owner = false;
-    for (env.deferred_static_dispatch_constraints.items.items) |deferred| {
+    for (env.deferred_static_dispatch_constraints.items()) |deferred| {
         if (self.types.resolveVar(deferred.var_).var_ != dispatcher_root) continue;
 
         var owns_relation = false;
@@ -18830,7 +18837,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                 var constraint_offset: u32 = 0;
                 while (constraint_offset < materialization.constraints.len()) : (constraint_offset += 1) {
                     const constraint_idx = constraints_start + constraint_offset;
-                    const constraint = self.types.static_dispatch_constraints.items.items[constraint_idx];
+                    const constraint = self.types.static_dispatch_constraints.items()[constraint_idx];
                     if (instantiated_fns.contains(constraint.fn_var)) continue;
 
                     ran_default_compatibility = true;
@@ -19725,7 +19732,7 @@ fn collectDeclaredHostedFunctions(
 fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     if (self.cir.module_kind != .platform) return;
 
-    const section = self.cir.hosted_entries.items.items;
+    const section = self.cir.hosted_entries.items();
 
     // Exact definitions of every hosted function declared by imported modules.
     // Display names are retained only for missing-entry diagnostics.
@@ -19756,7 +19763,7 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     defer mapped.deinit();
     var symbols = std.StringHashMap(void).init(self.gpa);
     defer symbols.deinit();
-    for (self.cir.provides_entries.items.items) |provides_entry| {
+    for (self.cir.provides_entries.items()) |provides_entry| {
         const symbol_text = self.cir.getString(provides_entry.ffi_symbol);
         try self.checkHostSymbol(symbol_text, &symbols);
         try self.checkProvidesEntryHostBoundary(provides_entry);
@@ -20032,7 +20039,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     // This is because we do not want the type checking we do here to be let-polymorphic
     std.debug.assert(env.rank() == .outermost);
 
-    const requires_types_slice = self.cir.requires_types.items.items;
+    const requires_types_slice = self.cir.requires_types.items();
     for (requires_types_slice) |required_type| {
 
         // First, processes the required type aliases
@@ -20122,7 +20129,7 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
         try alias_source_substitutions.put(binding.platform_alias_source, app_type_var);
     }
 
-    for (input.env.requires_types.items.items, 0..) |required_type, requires_idx| {
+    for (input.env.requires_types.items(), 0..) |required_type, requires_idx| {
         const required_ident = try self.copyPlatformIdent(input.env, required_type.ident);
         const instantiated = (try self.instantiatePlatformRequiredType(
             input,
@@ -20208,7 +20215,7 @@ fn instantiatePlatformRequirementUses(self: *Self, env: *Env) Allocator.Error!vo
         // no-copy path needs an explicit shared invocation record here.
         if (shared_binding and try self.schemeHasEvidenceParams(binding)) {
             std.debug.assert(solution.scheme_use == null);
-            solution.scheme_use = @intCast(self.cir.scheme_uses.items.items.len);
+            solution.scheme_use = @intCast(self.cir.scheme_uses.items().len);
             try self.cir.recordSchemeUse(
                 @backingInt(def.expr),
                 .platform_requirement,
@@ -20355,7 +20362,7 @@ fn collectForClauseAliasBindings(
     env: *Env,
     bindings: *std.ArrayListUnmanaged(ForClauseAliasBinding),
 ) std.mem.Allocator.Error!void {
-    for (input.env.requires_types.items.items) |required_type| {
+    for (input.env.requires_types.items()) |required_type| {
         const aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
         for (aliases) |alias| {
             if (forClauseAliasBinding(bindings.items, alias.alias_stmt_idx) != null) continue;
@@ -20435,7 +20442,7 @@ fn exposedAppDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
 fn collectHostBoundaryAnnotations(self: *Self) std.mem.Allocator.Error!void {
     self.host_boundary_annotations.clearRetainingCapacity();
 
-    for (self.cir.provides_entries.items.items) |provides_entry| {
+    for (self.cir.provides_entries.items()) |provides_entry| {
         const def_idx = provides_entry.local_def orelse continue;
         const def = self.cir.store.getDef(def_idx);
         const annotation_idx = def.annotation orelse continue;
@@ -20577,7 +20584,7 @@ fn appModuleRegion(self: *Self) Region {
 /// references in the module Point to the same var.
 fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
     // Slice the for-clause alias statements and check if stmt_idx is in the list
-    for (self.cir.for_clause_aliases.items.items) |for_clause| {
+    for (self.cir.for_clause_aliases.items()) |for_clause| {
         if (stmt_idx == for_clause.alias_stmt_idx) {
             return true;
         }
@@ -21091,9 +21098,9 @@ fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error
         const def = self.cir.store.getDef(def_idx);
         const annotation_idx = def.annotation orelse continue;
         if (!self.annotationIsPredeclarableScheme(def.pattern, annotation_idx)) continue;
-        const scheme_var = try self.predeclareAnnotationScheme(annotation_idx, env);
-        self.setPredeclaredSchemeVar(def_idx, scheme_var);
-        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+        const scheme = try self.predeclareAnnotationScheme(annotation_idx, env);
+        self.setPredeclaredSchemeVar(def_idx, scheme.scheme_var);
+        try self.registerPredeclaredSlots(annotation_idx, scheme);
     }
 }
 
@@ -21135,9 +21142,9 @@ fn predeclareHoledAnnotationSchemes(
         const annotation_idx = self.appliedAnnotation(def.pattern, def.annotation) orelse continue;
         if (!self.cir.store.getAnnotation(annotation_idx).contains_underscore) continue;
         if (self.predeclared_slots.contains(annotation_idx)) continue;
-        const scheme_var = try self.predeclareAnnotationSchemeKeepingHolesShared(annotation_idx, env, hole_rank);
-        self.setPredeclaredSchemeVar(def_idx, scheme_var);
-        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+        const scheme = try self.predeclareAnnotationSchemeKeepingHolesShared(annotation_idx, env, hole_rank);
+        self.setPredeclaredSchemeVar(def_idx, scheme.scheme_var);
+        try self.registerPredeclaredSlots(annotation_idx, scheme);
     }
 }
 
@@ -21158,7 +21165,7 @@ fn predeclareAnnotationScheme(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!PredeclaredScheme {
     return self.predeclareAnnotationSchemeHelp(annotation_idx, env, null);
 }
 
@@ -21182,16 +21189,23 @@ fn predeclareAnnotationSchemeKeepingHolesShared(
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
     hole_rank: Rank,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!PredeclaredScheme {
     return self.predeclareAnnotationSchemeHelp(annotation_idx, env, hole_rank);
 }
+
+/// A standalone scheme predeclared from an annotation, and whether it shares
+/// live `_` hole variables with the body's annotation.
+const PredeclaredScheme = struct {
+    scheme_var: Var,
+    shares_holes: bool,
+};
 
 fn predeclareAnnotationSchemeHelp(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
     hole_rank: ?Rank,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!PredeclaredScheme {
     const problems_len = self.problems.len();
     const snapshots_mark = self.snapshots.mark();
 
@@ -21290,7 +21304,7 @@ fn predeclareAnnotationSchemeHelp(
         try self.hole_shared_vars.appendSlice(self.gpa, shared_vars.items);
         try self.hole_shared_schemes.put(self.gpa, scheme_var, .{ .start = start, .len = len });
     }
-    return scheme_var;
+    return .{ .scheme_var = scheme_var, .shares_holes = live_holes.items.len > 0 };
 }
 
 const HoleSharedRun = struct { start: u32, len: u32 };
@@ -21327,8 +21341,8 @@ fn retainUndecidedHoles(self: *const Self, holes: *std.ArrayListUnmanaged(Var)) 
 /// are enumerated later; see `PredeclaredSlots`. A block-local annotation is
 /// predeclared again each time its statement is checked, and each check
 /// generates the body annotation afresh, so re-registration starts over.
-fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, scheme_var: Var) Allocator.Error!void {
-    try self.predeclared_slots.put(self.gpa, annotation_idx, .{ .scheme_var = scheme_var });
+fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, scheme: PredeclaredScheme) Allocator.Error!void {
+    try self.predeclared_slots.put(self.gpa, annotation_idx, .{ .scheme_var = scheme.scheme_var, .shares_holes = scheme.shares_holes });
 }
 
 fn predeclaredSlotsPtr(self: *Self, annotation_idx: CIR.Annotation.Idx) *PredeclaredSlots {
@@ -21537,11 +21551,13 @@ fn writePredeclaredSchemeUse(
 ) Allocator.Error!void {
     defer self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
-    if (policy == .when_needed and
-        self.scratch_evidence_pairs.items.len == 0 and
-        !try self.predeclaredHasEvidenceParams(annotation_idx))
-    {
-        return;
+    if (policy == .when_needed and self.scratch_evidence_pairs.items.len == 0) {
+        const slots = self.predeclaredSlotsPtr(annotation_idx);
+        if (!slots.shares_holes and
+            !(slots.has_evidence_params orelse try self.predeclaredHasEvidenceParams(annotation_idx)))
+        {
+            return;
+        }
     }
     try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_root, self.scratch_evidence_pairs.items);
 }
@@ -25354,7 +25370,7 @@ fn aliasArgumentUnused(context: *anyopaque, alias: types_mod.Alias, index: u32) 
     const self: *Self = @ptrCast(@alignCast(context));
     const statement = alias.source_decl.toOptional() orelse return true; // Compiler abstract alias arguments are bookkeeping.
     const owner = self.moduleEnvForIdentity(self.cir, alias.origin_module).env;
-    for (owner.for_clause_aliases.items.items) |abstract| {
+    for (owner.for_clause_aliases.items()) |abstract| {
         if (@backingInt(abstract.alias_stmt_idx) == statement) return true;
     }
     const positions = (try self.declarationPositions(owner, @fromBackingInt(@intCast(statement)))) orelse return null; // Rejected source has no argument-usage facts.
@@ -31005,7 +31021,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
         .e_lookup_required => |req| {
             self.markCurrentHoistRuntimeDependency();
             // Look up the type from the platform's requires clause
-            const requires_items = self.cir.requires_types.items.items;
+            const requires_items = self.cir.requires_types.items();
             const idx = req.requires_idx.toU32();
             if (idx < requires_items.len) {
                 try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
@@ -32207,13 +32223,13 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 // lookup of an enclosing function's variable is that
                 // candidate's.
                 if (is_local_procedure_candidate) try self.local_procedure_candidate_stack.append(self.gpa, decl_stmt.pattern);
-                const scheme_var = scheme: {
+                const scheme = scheme: {
                     defer if (is_local_procedure_candidate) {
                         _ = self.local_procedure_candidate_stack.pop();
                     };
                     break :scheme try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
                 };
-                try self.registerPredeclaredSlots(decl_stmt.anno.?, scheme_var);
+                try self.registerPredeclaredSlots(decl_stmt.anno.?, scheme);
                 try self.predeclared_local_annotations.put(self.gpa, decl_stmt.pattern, decl_stmt.anno.?);
             }
 
@@ -35865,7 +35881,7 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
 }
 
 fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         if (self.cir.store.getDef(entry.value.def_idx).expr == expr_idx) return true;
     }
     return false;
@@ -36453,7 +36469,7 @@ fn reportNonExhaustiveLambdaParams(self: *Self, env: *Env) std.mem.Allocator.Err
 /// dispatch has settled the item type. Iterator items are dynamic values, so
 /// the iterable expression cannot supply constructor facts about them.
 fn reportNonExhaustiveForPatterns(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    for (self.cir.for_loop_dispatch_plans.items.items) |plan| {
+    for (self.cir.for_loop_dispatch_plans.items()) |plan| {
         const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(plan.pattern_idx));
         try self.checkPatternExhaustivenessWithoutValue(pattern_idx, env);
     }
@@ -37481,7 +37497,7 @@ fn debugAssertLocalUseAbsorbersCovered(self: *Self) Allocator.Error!void {
     if (!std.debug.runtime_safety or !self.use_absorbers_collected) return;
     const idents = self.cir.getIdentStoreConst();
     const self_module = self.cir.selfModuleIdentity();
-    for (self.types.nominal_decls.items.items) |decl| {
+    for (self.types.nominal_decls.items()) |decl| {
         if (decl.origin_module != self_module or !decl.isValid()) continue;
         if (!try self.use_absorbers.coversBacking(self.gpa, self.types, idents, decl.backing)) {
             base.invariant("a nominal declaration's backing admits a lift its syntax did not record", .{});
@@ -40073,10 +40089,10 @@ const Probe = struct {
             // Instantiation inside a probe can enqueue a range allocated after
             // the type-store savepoint. Rewind the owning env before any later
             // pass can observe those now-invalid indices.
-            env.deferred_static_dispatch_constraints.items.shrinkRetainingCapacity(self.deferred_constraints_len);
+            env.deferred_static_dispatch_constraints.shrinkRetainingCapacity(self.deferred_constraints_len);
             env.truncateClean(self.deferred_constraints_len);
         }
-        self.check.regions.items.shrinkRetainingCapacity(self.regions_len);
+        self.check.regions.shrinkRetainingCapacity(self.regions_len);
         // Per-instantiation dispatchers recorded during the probe reference fresh
         // receiver vars that were just rolled back with the type store.
         self.check.instantiation_dispatchers.shrinkRetainingCapacity(self.instantiation_dispatchers_len);
@@ -40105,29 +40121,29 @@ const Probe = struct {
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
         // Scheme-use evidence recorded during the probe can reference fresh
         // vars the savepoint rollback just discarded.
-        while (self.check.cir.scheme_uses.items.items.len > self.scheme_uses_len) {
-            const removed = self.check.cir.scheme_uses.items.pop().?;
+        while (self.check.cir.scheme_uses.items().len > self.scheme_uses_len) {
+            const removed = self.check.cir.scheme_uses.pop().?;
             if (removed.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
                 const did_remove = self.check.where_method_use_record_by_fn_var.remove(@fromBackingInt(@intCast(removed.slot_data)));
                 std.debug.assert(did_remove);
             }
         }
-        self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
+        self.check.cir.scheme_use_pairs.shrinkRetainingCapacity(self.scheme_use_pairs_len);
         // A dispatch edge the probe selected is rolled back with
         // `dispatch_target_instantiations` below, so its waiting record goes
         // too. Its fresh-var range stays allocated until the next reclaim.
         self.check.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(self.waiting_predeclared_dispatch_uses_len);
-        self.check.cir.generated_codec_derivations.items.shrinkRetainingCapacity(self.generated_codec_derivations_len);
-        self.check.cir.generated_codec_calls.items.shrinkRetainingCapacity(self.generated_codec_calls_len);
-        self.check.cir.generated_codec_renamings.items.shrinkRetainingCapacity(self.generated_codec_renamings_len);
+        self.check.cir.generated_codec_derivations.shrinkRetainingCapacity(self.generated_codec_derivations_len);
+        self.check.cir.generated_codec_calls.shrinkRetainingCapacity(self.generated_codec_calls_len);
+        self.check.cir.generated_codec_renamings.shrinkRetainingCapacity(self.generated_codec_renamings_len);
         self.check.boundary_codec_derivations.shrinkRetainingCapacity(self.boundary_codec_derivations_len);
         self.check.boundary_codec_calls.shrinkRetainingCapacity(self.boundary_codec_calls_len);
         self.check.codec_row_demands.shrinkRetainingCapacity(self.codec_row_demands_len);
         self.check.codec_row_demand_tags.shrinkRetainingCapacity(self.codec_row_demand_tags_len);
         // The durable records drop here; the rejection markers they mirror live
         // on descriptors the savepoint rollback above already restored.
-        self.check.cir.rejected_static_dispatches.items.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
-        self.check.cir.record_omitted_defaults.items.shrinkRetainingCapacity(self.record_omitted_defaults_len);
+        self.check.cir.rejected_static_dispatches.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
+        self.check.cir.record_omitted_defaults.shrinkRetainingCapacity(self.record_omitted_defaults_len);
         self.check.record_constructions.shrinkRetainingCapacity(self.record_constructions_len);
         // Constructor relations recorded during the probe name the operand var
         // and the backing content the savepoint rollback just discarded.
@@ -40150,7 +40166,7 @@ const Probe = struct {
         self.check.probe_link_copies.shrinkRetainingCapacity(self.probe_link_copies_len);
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
         self.check.codec_derivation_frames.shrinkRetainingCapacity(self.codec_derivation_frames_len);
-        self.check.cir.generated_codec_recurrences.items.shrinkRetainingCapacity(self.generated_codec_recurrences_len);
+        self.check.cir.generated_codec_recurrences.shrinkRetainingCapacity(self.generated_codec_recurrences_len);
         self.check.shrinkCodecDerivationChildrenTo(self.codec_derivation_children_len);
         self.check.codec_derivation_recurrences.shrinkRetainingCapacity(self.codec_derivation_recurrences_len);
         self.check.shrinkComponentDerivationsTo(self.component_derivations_len);
@@ -40184,7 +40200,7 @@ const Probe = struct {
 };
 
 fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
-    const regions_len = self.regions.items.items.len;
+    const regions_len = self.regions.items().len;
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
     const ambiguity_candidates_len = self.ambiguity_candidates.items.len;
@@ -40196,18 +40212,18 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const row_extension_derivations_len = self.row_extension_derivations.items.len;
     const instantiated_literal_conversion_uses_len = self.instantiated_literal_conversion_uses.items.len;
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
-    const scheme_uses_len = self.cir.scheme_uses.items.items.len;
-    const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
+    const scheme_uses_len = self.cir.scheme_uses.items().len;
+    const scheme_use_pairs_len = self.cir.scheme_use_pairs.items().len;
     const waiting_predeclared_dispatch_uses_len = self.waiting_predeclared_dispatch_uses.items.len;
-    const generated_codec_derivations_len = self.cir.generated_codec_derivations.items.items.len;
-    const generated_codec_calls_len = self.cir.generated_codec_calls.items.items.len;
-    const generated_codec_renamings_len = self.cir.generated_codec_renamings.items.items.len;
+    const generated_codec_derivations_len = self.cir.generated_codec_derivations.items().len;
+    const generated_codec_calls_len = self.cir.generated_codec_calls.items().len;
+    const generated_codec_renamings_len = self.cir.generated_codec_renamings.items().len;
     const boundary_codec_derivations_len = self.boundary_codec_derivations.items.len;
     const boundary_codec_calls_len = self.boundary_codec_calls.items.len;
     const codec_row_demands_len = self.codec_row_demands.items.len;
     const codec_row_demand_tags_len = self.codec_row_demand_tags.items.len;
-    const rejected_static_dispatches_len = self.cir.rejected_static_dispatches.items.items.len;
-    const record_omitted_defaults_len = self.cir.record_omitted_defaults.items.items.len;
+    const rejected_static_dispatches_len = self.cir.rejected_static_dispatches.items().len;
+    const record_omitted_defaults_len = self.cir.record_omitted_defaults.items().len;
     const accepted_nominal_constructor_backings_len = self.accepted_nominal_constructor_backings.items.len;
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const dispatch_derivations_len = self.dispatch_derivations.items.len;
@@ -40223,7 +40239,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .probe_links_len = self.probe_links.items.len,
         .probe_link_copies_len = self.probe_link_copies.items.len,
         .deferred_constraints_len = if (env) |probe_env|
-            probe_env.deferred_static_dispatch_constraints.items.items.len
+            probe_env.deferred_static_dispatch_constraints.items().len
         else
             0,
         .regions_len = regions_len,
@@ -40256,7 +40272,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
         .codec_derivation_frames_len = self.codec_derivation_frames.items.len,
-        .generated_codec_recurrences_len = self.cir.generated_codec_recurrences.items.items.len,
+        .generated_codec_recurrences_len = self.cir.generated_codec_recurrences.items().len,
         .codec_derivation_children_len = self.codec_derivation_children.items.len,
         .codec_derivation_recurrences_len = self.codec_derivation_recurrences.items.len,
         .component_derivations_len = component_derivations_len,
@@ -40804,7 +40820,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// This pass consumes registered constructions and accepted decisions only;
 /// it never discovers defaults by reopening nominal declarations or rows.
 fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
-    const entries = self.cir.record_omitted_defaults.items.items;
+    const entries = self.cir.record_omitted_defaults.items();
     if (entries.len == 0) return;
 
     const Decision = struct {
@@ -40908,10 +40924,10 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
 
     var evidence = DefaultWalkEvidence{
         .omitted_defaults_by_expr = .init(self.gpa),
-        .next_omitted_default = try self.gpa.alloc(EvidenceLink, self.cir.record_omitted_defaults.items.items.len),
+        .next_omitted_default = try self.gpa.alloc(EvidenceLink, self.cir.record_omitted_defaults.items().len),
     };
     defer evidence.deinit(self.gpa);
-    for (self.cir.record_omitted_defaults.items.items, 0..) |omitted, index| {
+    for (self.cir.record_omitted_defaults.items(), 0..) |omitted, index| {
         const entry = try evidence.omitted_defaults_by_expr.getOrPut(omitted.expr);
         evidence.next_omitted_default[index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
         entry.value_ptr.* = @intCast(index);
@@ -40947,7 +40963,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     //    dispatch_target record's node_idx may be a foreign module's CIR
     //    index and is never compared against local nodes here).
     // Records are linked from the last, so each node's chain runs in record order.
-    const scheme_use_records = self.cir.scheme_uses.items.items;
+    const scheme_use_records = self.cir.scheme_uses.items();
     evidence.next_node_scheme_use = try self.gpa.alloc(EvidenceLink, scheme_use_records.len);
     var record_cursor = scheme_use_records.len;
     while (record_cursor > 0) {
@@ -41050,7 +41066,7 @@ fn omittedDefaultsBeforeRetirement(
     copy: *?[]ModuleEnv.RecordOmittedDefault,
 ) Allocator.Error![]const ModuleEnv.RecordOmittedDefault {
     if (copy.*) |entries| return entries;
-    const entries = try self.gpa.dupe(ModuleEnv.RecordOmittedDefault, self.cir.record_omitted_defaults.items.items);
+    const entries = try self.gpa.dupe(ModuleEnv.RecordOmittedDefault, self.cir.record_omitted_defaults.items());
     copy.* = entries;
     return entries;
 }
@@ -41105,7 +41121,7 @@ fn retireRejectedDefault(
 /// without reporting a second problem.
 fn retireOmissionsOfRejectedForeignDefaults(self: *Self) std.mem.Allocator.Error!void {
     const self_identity = self.cir.selfModuleIdentity();
-    const has_foreign = for (self.cir.record_omitted_defaults.items.items) |omitted| {
+    const has_foreign = for (self.cir.record_omitted_defaults.items()) |omitted| {
         if (omitted.origin_module != self_identity) break true;
     } else false;
     if (!has_foreign) return;
@@ -41114,7 +41130,7 @@ fn retireOmissionsOfRejectedForeignDefaults(self: *Self) std.mem.Allocator.Error
     // construction nested in it), so walk a copy of the list.
     const omitted_defaults = try self.gpa.dupe(
         ModuleEnv.RecordOmittedDefault,
-        self.cir.record_omitted_defaults.items.items,
+        self.cir.record_omitted_defaults.items(),
     );
     defer self.gpa.free(omitted_defaults);
 
@@ -41189,7 +41205,7 @@ fn checkDefaultParameterConstraints(
         }
     }
 
-    for (env.deferred_static_dispatch_constraints.items.items) |entry| {
+    for (env.deferred_static_dispatch_constraints.items()) |entry| {
         const entry_root = self.types.resolveVar(entry.var_).var_;
         for (params) |param| {
             if (self.types.resolveVar(param.var_).var_ != entry_root) continue;
@@ -41446,8 +41462,8 @@ fn defaultMaterializationIsRecursive(
                     try invoked_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
                 }
                 if (evidence.dispatch_scheme_uses.get(@backingInt(instantiation.constraint_fn_var))) |record_index| {
-                    const record = self.cir.scheme_uses.items.items[record_index];
-                    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+                    const record = self.cir.scheme_uses.items()[record_index];
+                    const pairs = self.cir.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
                     for (pairs) |pair| {
                         try seed_work.append(self.gpa, @fromBackingInt(@intCast(pair.fresh_var)));
                     }
@@ -41585,8 +41601,8 @@ fn defaultMaterializationIsRecursive(
         var next_record = evidence.node_to_scheme_uses.get(@backingInt(expr_idx));
         while (next_record) |record_index| {
             next_record = linkedRecord(evidence.next_node_scheme_use[record_index]);
-            const record = self.cir.scheme_uses.items.items[record_index];
-            const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+            const record = self.cir.scheme_uses.items()[record_index];
+            const pairs = self.cir.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
             for (pairs) |pair| {
                 try seed_work.append(self.gpa, @fromBackingInt(@intCast(pair.fresh_var)));
             }
@@ -41913,7 +41929,7 @@ fn appendOmittedDefaultDependencies(
 ) std.mem.Allocator.Error!bool {
     var next = evidence.omitted_defaults_by_expr.get(record_expr);
     while (next) |index| {
-        const omitted = self.cir.record_omitted_defaults.items.items[index];
+        const omitted = self.cir.record_omitted_defaults.items()[index];
         next = linkedRecord(evidence.next_omitted_default[index]);
         if (omitted.origin_module != self_module) continue;
         if (omitted.default_expr_node == target_expr_node) return true;
@@ -41966,7 +41982,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
         // Committing a default can spawn deferred static-dispatch
         // constraints (e.g. Dec.plus, Dec.to_str returning Str); resolve
         // them so the validations below see settled types.
-        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        if (env.deferred_static_dispatch_constraints.items().len > 0) {
             try self.checkStaticDispatchConstraints(env, true);
             try self.checkAllConstraints(env);
         }
@@ -41975,7 +41991,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     if (scope == .module) {
         try self.recordInspectOverrideInstances(env);
         // A recorded instance's result requirements resolve against Str.
-        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        if (env.deferred_static_dispatch_constraints.items().len > 0) {
             try self.checkStaticDispatchConstraints(env, true);
             try self.checkAllConstraints(env);
         }
@@ -42038,7 +42054,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
 /// own type is never changed: the instance is a fresh copy, related exactly
 /// as a call site at `T -> Str` relates one.
 fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         if (!entry.key.methodIdent().eql(self.cir.idents.to_inspect)) continue;
         if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(entry.key.owner)).tag != .statement_nominal_decl) continue;
         const binding_var = ModuleEnv.varFrom(entry.value.type_node_idx);
@@ -43656,7 +43672,7 @@ fn relateSameMethodRequirements(
         const deferred_end = env.deferred_static_dispatch_constraints.len();
         var deferred_index = deferred_start;
         while (deferred_index < deferred_end) : (deferred_index += 1) {
-            const entry = env.deferred_static_dispatch_constraints.items.items[@intCast(deferred_index)];
+            const entry = env.deferred_static_dispatch_constraints.items()[@intCast(deferred_index)];
             for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
                 try self.merged_method_obligations.put(self.gpa, constraint.fn_var, merged);
             }
@@ -44023,7 +44039,7 @@ fn publishBindingSchemeCodecRequirement(
 fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!void {
     self.retireResolvedTypeSchemeRequirements();
 
-    self.cir.binding_scheme_codec_requirements.items.clearRetainingCapacity();
+    self.cir.binding_scheme_codec_requirements.clearRetainingCapacity();
     for (self.retired_binding_scheme_codec_requirements.items) |requirement| {
         try self.cir.recordBindingSchemeCodecRequirement(
             @fromBackingInt(@intCast(requirement.node_idx)),
@@ -44623,7 +44639,7 @@ fn settleBoundaryLocalDerivedCodecRecords(
     var open_in_interface = std.ArrayList(OpenRecordCodec).empty;
     defer open_in_interface.deinit(self.gpa);
 
-    for (env.deferred_static_dispatch_constraints.items.items) |deferred| {
+    for (env.deferred_static_dispatch_constraints.items()) |deferred| {
         const codec_constraint = for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
             if (self.staticDispatchConstraintIsInactive(constraint)) continue;
             if (constraint.fn_name.eql(self.cir.idents.parser_for) or
@@ -45021,7 +45037,7 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
                 if (self.types.resolveVar(requirement.receiver_var).desc.content == .flex) continue;
                 if (enqueued_fn_vars.contains(requirement.constraint.fn_var)) continue;
                 if (self.deferredDispatchRelationIsQueued(
-                    env.deferred_static_dispatch_constraints.items.items,
+                    env.deferred_static_dispatch_constraints.items(),
                     requirement.receiver_var,
                     requirement.constraint.fn_var,
                 )) continue;
@@ -45102,7 +45118,7 @@ fn dischargedDispatchRelationCount(
 /// `checkStaticDispatchConstraints` pass can make progress (it re-defers only
 /// still-flex receivers; every other receiver is consumed: fired or errored).
 fn anyDeferredDispatchReceiverResolved(self: *Self, env: *Env) Allocator.Error!bool {
-    for (env.deferred_static_dispatch_constraints.items.items) |deferred| {
+    for (env.deferred_static_dispatch_constraints.items()) |deferred| {
         if (self.types.resolveVar(deferred.var_).desc.content == .flex) continue;
         if (deferred.waiting_on_target_def or deferred.waiting_on_repeated_state) continue;
         if (try self.deferredConstraintWaitsOnDerivedCodec(.parse, deferred)) continue;
@@ -47793,7 +47809,7 @@ fn dispatchDerivationHasRejectedAncestor(self: *const Self, fn_var: Var) bool {
     // Error-free modules never need to walk conditional-target ancestry. The
     // durable rejection list is the exact monotone gate for this error-path
     // query, so the normal dispatch loops retain one O(1) predictable check.
-    if (self.cir.rejected_static_dispatches.items.items.len == 0) return false;
+    if (self.cir.rejected_static_dispatches.items().len == 0) return false;
 
     var current = fn_var;
     var followed_edges: usize = 0;
@@ -48138,7 +48154,7 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
     var seen = collections.DenseMap(MethodNameId, void).init(self.gpa);
     defer seen.deinit();
 
-    for (self.cir.method_defs.entries.items) |entry| {
+    for (self.cir.method_defs.entries.items()) |entry| {
         const method_name = try self.method_mint_names.internMethodIdent(self.cir.getIdentStoreConst(), entry.key.methodIdent());
         if (method_name != name) continue;
         const binding = entry.value;
@@ -48150,7 +48166,7 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
     }
 
     for (try self.methodBindingEnvs()) |env| {
-        for (env.method_defs.entries.items) |entry| {
+        for (env.method_defs.entries.items()) |entry| {
             const method_name = try self.method_mint_names.internMethodIdent(env.getIdentStoreConst(), entry.key.methodIdent());
             if (method_name != name) continue;
             const binding = entry.value;
@@ -49181,7 +49197,7 @@ fn instantiateDispatchTargetMethodVar(
     } };
 
     const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
-    const records_before = self.cir.scheme_uses.items.items.len;
+    const records_before = self.cir.scheme_uses.items().len;
     const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
         break :blk expr_var_for_method;
     } else blk: {
@@ -49225,7 +49241,7 @@ fn instantiateDispatchTargetMethodVar(
         target_requires_record = true;
     }
     if (target_requires_record and
-        self.cir.scheme_uses.items.items.len == records_before)
+        self.cir.scheme_uses.items().len == records_before)
     {
         try self.cir.recordSchemeUse(
             evidence.dispatch_target.node_idx,
@@ -49630,8 +49646,8 @@ fn freezeDispatchReplaySource(
     const root = try self.freezeTypeGraph(instantiation.method_var) orelse return null;
     const pairs_start: u32 = @intCast(self.dispatch_replay_frozen_pairs.items.len);
     if (scheme_use) |record_idx| {
-        const record = self.cir.scheme_uses.items.items[record_idx];
-        for (self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]) |pair| {
+        const record = self.cir.scheme_uses.items()[record_idx];
+        for (self.cir.scheme_use_pairs.items()[record.pairs_start..][0..record.pairs_len]) |pair| {
             const fresh_var: Var = @fromBackingInt(@intCast(pair.fresh_var));
             if (self.scratch_freeze_map.get(self.types.resolveVar(fresh_var).var_)) |frozen_var| {
                 try self.dispatch_replay_frozen_pairs.append(self.gpa, .{ .old_var = pair.old_var, .fresh_var = @backingInt(frozen_var) });
@@ -50167,8 +50183,8 @@ fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCop
     // recorded it.
     const replayed = use.state == .replayed;
     if (!replayed) {
-        const record = self.cir.scheme_uses.items.items[use.record];
-        try self.scratch_evidence_pairs.appendSlice(self.gpa, self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]);
+        const record = self.cir.scheme_uses.items()[use.record];
+        try self.scratch_evidence_pairs.appendSlice(self.gpa, self.cir.scheme_use_pairs.items()[record.pairs_start..][0..record.pairs_len]);
     }
     try self.scratch_use_owned.appendSlice(self.gpa, self.use_owned_fns.items[use.owned_start..][0..use.owned_len]);
     const var_context: InstantiatedVarContext = .{
@@ -50188,11 +50204,11 @@ fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCop
     // A replayed use's record names its source's substitution.
     if (!replayed) {
         try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
-        const pairs_start: u32 = @intCast(self.cir.scheme_use_pairs.items.items.len);
+        const pairs_start: u32 = @intCast(self.cir.scheme_use_pairs.items().len);
         for (self.scratch_evidence_pairs.items) |pair| {
             _ = try self.cir.scheme_use_pairs.append(self.gpa, pair);
         }
-        const record = &self.cir.scheme_uses.items.items[use.record];
+        const record = &self.cir.scheme_uses.items()[use.record];
         record.pairs_start = pairs_start;
         record.pairs_len = @intCast(self.scratch_evidence_pairs.items.len);
     }
@@ -50371,7 +50387,7 @@ fn useRelationsUntouched(self: *const Self, use_idx: u32) bool {
 fn finishUseSettling(self: *Self, use_idx: u32) Allocator.Error!void {
     const use = &self.use_instances.items[use_idx];
     use.state = .settled;
-    use.records_end = @intCast(self.cir.scheme_uses.items.items.len);
+    use.records_end = @intCast(self.cir.scheme_uses.items().len);
     try self.recordUseReplaySource(use_idx);
 }
 
@@ -50512,12 +50528,12 @@ fn recordUseReplaySource(self: *Self, use_idx: u32) Allocator.Error!void {
 fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Error!void {
     self.use_replay_sources.items[source_idx].freeze = .unusable;
     const use = self.use_instances.items[self.use_replay_sources.items[source_idx].use];
-    const record = self.cir.scheme_uses.items.items[use.record];
+    const record = self.cir.scheme_uses.items()[use.record];
     var root_list: std.ArrayListUnmanaged(Var) = .empty;
     defer root_list.deinit(self.gpa);
     const roots = &root_list;
     try self.appendUseInstanceParts(use.instance_root, roots);
-    for (self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]) |pair| {
+    for (self.cir.scheme_use_pairs.items()[record.pairs_start..][0..record.pairs_len]) |pair| {
         try roots.append(self.gpa, @fromBackingInt(@intCast(pair.fresh_var)));
     }
     self.scratch_replay_sources.clearRetainingCapacity();
@@ -50543,7 +50559,7 @@ fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Erro
     // restated, so a record that cannot be restated leaves nothing behind.
     var record_idx = use.record + 1;
     while (record_idx < use.records_end) : (record_idx += 1) {
-        const written = self.cir.scheme_uses.items.items[record_idx];
+        const written = self.cir.scheme_uses.items()[record_idx];
         switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(written.slot_kind)))) {
             .dispatch_target => {},
             .recursive_dispatch_target => {
@@ -50561,7 +50577,7 @@ fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Erro
     defer frozen_edges.deinit(self.gpa);
     record_idx = use.record + 1;
     while (record_idx < use.records_end) : (record_idx += 1) {
-        const written = self.cir.scheme_uses.items.items[record_idx];
+        const written = self.cir.scheme_uses.items()[record_idx];
         if (written.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
         const edge_fn: Var = @fromBackingInt(@intCast(written.slot_data));
         const frozen_class = self.scratch_freeze_map.get(self.types.resolveVar(edge_fn).var_) orelse continue;
@@ -50574,20 +50590,20 @@ fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Erro
         }
         try frozen_edges.put(self.gpa, edge_fn, edge_var);
     }
-    const pairs_start: u32 = @intCast(self.cir.scheme_use_pairs.items.items.len);
+    const pairs_start: u32 = @intCast(self.cir.scheme_use_pairs.items().len);
     var pair_idx: u32 = 0;
     while (pair_idx < record.pairs_len) : (pair_idx += 1) {
-        const pair = self.cir.scheme_use_pairs.items.items[record.pairs_start + pair_idx];
+        const pair = self.cir.scheme_use_pairs.items()[record.pairs_start + pair_idx];
         const frozen = self.frozenUseVar(&frozen_edges, @fromBackingInt(@intCast(pair.fresh_var))).?;
         _ = try self.cir.scheme_use_pairs.append(self.gpa, .{ .old_var = pair.old_var, .fresh_var = @backingInt(frozen) });
     }
     record_idx = use.record + 1;
     while (record_idx < use.records_end) : (record_idx += 1) {
-        const written = self.cir.scheme_uses.items.items[record_idx];
+        const written = self.cir.scheme_uses.items()[record_idx];
         if (written.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
         const edge_var = frozen_edges.get(@fromBackingInt(@intCast(written.slot_data))) orelse continue;
         self.scratch_replay_pairs.clearRetainingCapacity();
-        for (self.cir.scheme_use_pairs.items.items[written.pairs_start..][0..written.pairs_len]) |pair| {
+        for (self.cir.scheme_use_pairs.items()[written.pairs_start..][0..written.pairs_len]) |pair| {
             const frozen = self.frozenUseVar(&frozen_edges, @fromBackingInt(@intCast(pair.fresh_var)));
             try self.scratch_replay_pairs.append(self.gpa, .{
                 .old_var = pair.old_var,
@@ -50600,7 +50616,7 @@ fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Erro
     const tree_start: u32 = @intCast(self.use_replay_trees.items.len);
     if (std.debug.runtime_safety) {
         try self.appendReplayTree(frozen_root, &self.use_replay_trees);
-        for (self.cir.scheme_use_pairs.items.items[pairs_start..][0..record.pairs_len]) |pair| {
+        for (self.cir.scheme_use_pairs.items()[pairs_start..][0..record.pairs_len]) |pair| {
             try self.appendReplayTree(@fromBackingInt(@intCast(pair.fresh_var)), &self.use_replay_trees);
         }
     }
@@ -50625,7 +50641,7 @@ fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Erro
 /// callable, and checked evidence reads the payload by the callable's class
 /// (`Store.derivedMapPlan`).
 fn restateFrozenDerivedMapPlans(self: *Self) Allocator.Error!void {
-    for (self.types.static_dispatch_constraints.items.items) |constraint| {
+    for (self.types.static_dispatch_constraints.items()) |constraint| {
         const plan = self.types.derivedMapPlan(constraint.fn_var) orelse continue;
         const frozen = self.scratch_freeze_map.get(self.types.resolveVar(constraint.fn_var).var_) orelse continue;
         try self.types.setDerivedMapPlan(frozen, plan);
@@ -50699,11 +50715,11 @@ fn replayUse(self: *Self, source_idx: u32, use_idx: u32, env: *Env) Allocator.Er
     }
     const source = self.use_replay_sources.items[source_idx];
     const use = self.use_instances.items[use_idx];
-    const record = self.cir.scheme_uses.items.items[use.record];
+    const record = self.cir.scheme_uses.items()[use.record];
     // Both substitutions are ordered by scheme variable. A use whose
     // deferred callables are not linked names a subset of the source's: it
     // has copied nothing that only those callables reach.
-    const all_pairs = self.cir.scheme_use_pairs.items.items;
+    const all_pairs = self.cir.scheme_use_pairs.items();
     const use_pairs = all_pairs[record.pairs_start..][0..record.pairs_len];
     // The source position of each of the use's pairs, when the use names a
     // proper subset.
@@ -50770,7 +50786,7 @@ fn replayUse(self: *Self, source_idx: u32, use_idx: u32, env: *Env) Allocator.Er
     // The use's own substitution range is no longer named by any record, but
     // every pair is still a type root of the module; it names the frozen
     // nodes too, so it adds no types of its own.
-    const pairs = self.cir.scheme_use_pairs.items.items;
+    const pairs = self.cir.scheme_use_pairs.items();
     if (subset) {
         for (matched.items, 0..) |source_offset, use_offset| {
             pairs[record.pairs_start + use_offset] = pairs[source.pairs_start + source_offset];
@@ -50778,7 +50794,7 @@ fn replayUse(self: *Self, source_idx: u32, use_idx: u32, env: *Env) Allocator.Er
     } else {
         @memcpy(pairs[record.pairs_start..][0..record.pairs_len], pairs[source.pairs_start..][0..source.pairs_len]);
     }
-    const replayed = &self.cir.scheme_uses.items.items[use.record];
+    const replayed = &self.cir.scheme_uses.items()[use.record];
     replayed.pairs_start = source.pairs_start;
     replayed.pairs_len = source.pairs_len;
     return true;
@@ -50860,7 +50876,7 @@ fn replayDispatchTarget(
     }
     const replay_source = self.dispatch_replay_sources.items[replay_source_idx];
     const source_record: ?ModuleEnv.SchemeUseRecord = if (replay_source.scheme_use.get()) |record_idx|
-        self.cir.scheme_uses.items.items[record_idx]
+        self.cir.scheme_uses.items()[record_idx]
     else
         null;
 
@@ -51061,7 +51077,7 @@ fn finishDispatchReplayFreezes(self: *Self) Allocator.Error!void {
             if (source.freeze != .frozen) continue;
             tree.clearRetainingCapacity();
             try self.appendReplayTree(source.frozen_root, &tree);
-            for (self.cir.scheme_use_pairs.items.items[source.pairs_start..][0..source.pairs_len]) |pair| {
+            for (self.cir.scheme_use_pairs.items()[source.pairs_start..][0..source.pairs_len]) |pair| {
                 try self.appendReplayTree(@fromBackingInt(@intCast(pair.fresh_var)), &tree);
             }
             if (!replayShapeEql(self.use_replay_trees.items[source.tree_start..][0..source.tree_len], tree.items)) {
@@ -51265,7 +51281,7 @@ noinline fn attemptDispatchReplay(
 /// The dispatch-target scheme-use record written for `fn_var` since
 /// `records_start`, if any.
 fn dispatchTargetSchemeUse(self: *const Self, records_start: usize, fn_var: Var) ?u32 {
-    const records = self.cir.scheme_uses.items.items;
+    const records = self.cir.scheme_uses.items();
     var index = records.len;
     while (index > records_start) {
         index -= 1;
@@ -51561,7 +51577,7 @@ fn dispatchStateVarIsSettled(self: *Self, var_: Var) Allocator.Error!bool {
 fn settleDispatchRepeats(self: *Self, env: *Env) Allocator.Error!void {
     self.settling_dispatch_repeats = true;
     defer self.settling_dispatch_repeats = false;
-    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+    if (env.deferred_static_dispatch_constraints.items().len > 0) {
         try self.checkStaticDispatchConstraints(env, true);
     }
     var index: usize = 0;
@@ -51932,7 +51948,7 @@ fn syncCleanDeferredPrefix(self: *Self, env: *Env) void {
 /// when they continue it, indexing each by the triggers that may change it.
 fn extendCleanDeferredPrefix(self: *Self, env: *Env, rebuilt_from: usize) Allocator.Error!void {
     if (rebuilt_from != env.clean_len) return;
-    const items = env.deferred_static_dispatch_constraints.items.items;
+    const items = env.deferred_static_dispatch_constraints.items();
     while (env.clean_len < items.len) {
         const entry = items[env.clean_len];
         if (!entry.retained_unchanged) return;
@@ -52014,7 +52030,7 @@ fn resumeStaticDispatchDrain(
     // still attributed to the relation the caller is in, as entering the
     // drain's relation would.
     if (drain.index == drain.start and drain.stopped_children == null and
-        drain.start >= env.deferred_static_dispatch_constraints.items.items.len and
+        drain.start >= env.deferred_static_dispatch_constraints.items().len and
         self.scratch_deferred_static_dispatch_constraints.top() == drain.scratch_top)
     {
         try self.claimRecordedProblems();
@@ -52059,7 +52075,7 @@ fn resumeStaticDispatchDrain(
     var indexed_to: usize = drain.index;
     while (true) {
         const entry_index: usize = if (settling) |*active| pick: {
-            const entries = env.deferred_static_dispatch_constraints.items.items;
+            const entries = env.deferred_static_dispatch_constraints.items();
             if (indexed_to <= active.first) indexed_to = active.first + 1;
             while (indexed_to < entries.len) : (indexed_to += 1) {
                 try self.indexDeferredEntryUses(&use_positions, entries[indexed_to], indexed_to);
@@ -52077,11 +52093,11 @@ fn resumeStaticDispatchDrain(
             self.settling_use = settling_before;
             continue;
         } else pick: {
-            if (drain.index >= env.deferred_static_dispatch_constraints.items.items.len) break;
+            if (drain.index >= env.deferred_static_dispatch_constraints.items().len) break;
             const index = drain.index;
             drain.index += 1;
             if (self.use_settled_entries.count() != 0 and self.use_settled_entries.remove(index)) continue;
-            if (try self.beginDeferredEntryUse(env.deferred_static_dispatch_constraints.items.items[index], env)) |begin| switch (begin) {
+            if (try self.beginDeferredEntryUse(env.deferred_static_dispatch_constraints.items()[index], env)) |begin| switch (begin) {
                 .skip => continue,
                 .process => {},
                 .settle => |use_idx| {
@@ -52091,7 +52107,7 @@ fn resumeStaticDispatchDrain(
             };
             break :pick index;
         };
-        try self.linkEntryUses(env.deferred_static_dispatch_constraints.items.items[entry_index]);
+        try self.linkEntryUses(env.deferred_static_dispatch_constraints.items()[entry_index]);
         switch (try self.processDeferredDispatchEntry(env, drain, entry_index)) {
             .next => {},
             .stopped => {
@@ -52106,10 +52122,10 @@ fn resumeStaticDispatchDrain(
 
     // Preserve the enclosing drain's prefix, if this is a method-local drain.
     env.truncateClean(start);
-    env.deferred_static_dispatch_constraints.items.shrinkRetainingCapacity(start);
+    env.deferred_static_dispatch_constraints.shrinkRetainingCapacity(start);
 
     // Copy any flex constraints to try again later
-    try env.deferred_static_dispatch_constraints.items.appendSlice(
+    _ = try env.deferred_static_dispatch_constraints.appendSlice(
         self.gpa,
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
@@ -52137,7 +52153,7 @@ inline fn processDeferredDispatchEntry(
     entry_index: usize,
 ) std.mem.Allocator.Error!DeferredEntryOutcome {
     const is_numeric_default_pass = drain.is_numeric_default_pass;
-    var deferred_constraint = env.deferred_static_dispatch_constraints.items.items[entry_index];
+    var deferred_constraint = env.deferred_static_dispatch_constraints.items()[entry_index];
     deferred_constraint.retained_unchanged = false;
     deferred_constraint.waiting_on_repeated_state = false;
     // A receiver's relation can be queued once by the unification that
@@ -52170,7 +52186,7 @@ inline fn processDeferredDispatchEntry(
     const implicit_parse_requests_before = self.implicit_parse_requests.items.len;
     var ownership: DeferredEntryOwnership = .{
         .entry = deferred_constraint,
-        .children_start = env.deferred_static_dispatch_constraints.items.items.len,
+        .children_start = env.deferred_static_dispatch_constraints.items().len,
     };
     defer self.passOnDeferredEntryFailureExpr(env, &ownership);
 
@@ -52293,7 +52309,7 @@ inline fn processDeferredDispatchEntry(
                         // range indices stay valid.
                         const rc_start: usize = @backingInt(rigid.constraints.start);
                         const rc_len: usize = rigid.constraints.len();
-                        const backing = self.types.static_dispatch_constraints.items.items;
+                        const backing = self.types.static_dispatch_constraints.items();
                         for (rc_start..rc_start + rc_len) |i| {
                             if (backing[i].origin == .where_clause and backing[i].fn_name.eql(constraint.fn_name)) {
                                 backing[i].origin.where_clause.body_required = true;
@@ -52351,7 +52367,7 @@ inline fn processDeferredDispatchEntry(
             while (constraint_i < constraints_len) : (constraint_i += 1) {
                 // Re-fetch by index each iteration because nested unification can append
                 // constraints and reallocate the backing array.
-                const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                const constraint = self.types.static_dispatch_constraints.items()[constraints_start + constraint_i];
                 self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
@@ -52667,7 +52683,7 @@ inline fn processDeferredDispatchEntry(
             const constraints_start: usize = @backingInt(constraints_range.start);
             var constraint_i: usize = 0;
             while (constraint_i < constraints_len) : (constraint_i += 1) {
-                const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                const constraint = self.types.static_dispatch_constraints.items()[constraints_start + constraint_i];
                 self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
@@ -55435,7 +55451,7 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
     var visited: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer visited.deinit(self.gpa);
 
-    try self.cir.dispatch_relation_merges.items.ensureUnusedCapacity(self.gpa, first_fold.count());
+    try self.cir.dispatch_relation_merges.ensureUnusedCapacity(self.gpa, first_fold.count());
     for (merges, 0..) |merge, index| {
         const dropped = merge.dropped_fn_var;
         // Visit each dropped var once, at its first fold.
@@ -55485,7 +55501,7 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
             try self.markStaticDispatchFnRejected(dropped);
             continue;
         }
-        self.cir.dispatch_relation_merges.items.appendAssumeCapacity(.{
+        _ = self.cir.dispatch_relation_merges.appendAssumeCapacity(.{
             .dropped_fn_var = @backingInt(dropped),
             .retained_fn_var = @backingInt(retained),
         });
@@ -55511,7 +55527,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     // two elements of one list) shares the target that relation selected.
     var folded_fn_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer folded_fn_vars.deinit();
-    const merges = self.cir.dispatch_relation_merges.items.items;
+    const merges = self.cir.dispatch_relation_merges.items();
     try folded_fn_vars.ensureTotalCapacity(@intCast(merges.len));
     for (merges) |merge| {
         try folded_fn_vars.put(@fromBackingInt(merge.dropped_fn_var), {});
@@ -58606,7 +58622,7 @@ fn instantiateGeneratedCodecMethodTarget(
     else
         try self.importedMethodScheme(method_lookup);
 
-    const records_before = self.cir.scheme_uses.items.items.len;
+    const records_before = self.cir.scheme_uses.items().len;
     const evidence: InstantiationEvidence = .{
         .dispatch_target = .{
             // Generated calls are identified by their callable relation.
@@ -58653,7 +58669,7 @@ fn instantiateGeneratedCodecMethodTarget(
             region,
             env,
         );
-    } else if (self.cir.scheme_uses.items.items.len == records_before and
+    } else if (self.cir.scheme_uses.items().len == records_before and
         try self.schemeHasEvidenceParams(scheme_var))
     {
         try self.recordSharedSchemeUse(
@@ -58706,14 +58722,14 @@ fn stepParseSettle(
                 self.instantiation_dispatchers.items[idx].deferred_enqueued = true;
                 settle.appended = true;
             }
-            if (env.deferred_static_dispatch_constraints.items.items.len == settle.deferred_start) {
+            if (env.deferred_static_dispatch_constraints.items().len == settle.deferred_start) {
                 self.leaveParseSettle(settle);
                 return .{ .done = try self.finishParseSettle(inputs, settle.post) };
             }
             inheritDeferredConstraintFailureExpr(env, settle.deferred_start, failure_expr_idx);
             settle.settled_before = self.settled_static_dispatch_constraint_fns.count();
             settle.dispatchers_before = self.instantiation_dispatchers.items.len;
-            settle.deferred_before = env.deferred_static_dispatch_constraints.items.items.len;
+            settle.deferred_before = env.deferred_static_dispatch_constraints.items().len;
             settle.drain = self.beginStaticDispatchDrain(false, settle.deferred_start);
             settle.requests_start = self.implicit_parse_requests.items.len;
             settle.next_request = settle.requests_start;
@@ -58733,7 +58749,7 @@ fn stepParseSettle(
                     settle.phase = .enqueue;
                     if (!settle.appended and self.settled_static_dispatch_constraint_fns.count() == settle.settled_before and
                         self.instantiation_dispatchers.items.len == settle.dispatchers_before and
-                        env.deferred_static_dispatch_constraints.items.items.len == settle.deferred_before)
+                        env.deferred_static_dispatch_constraints.items().len == settle.deferred_before)
                     {
                         self.leaveParseSettle(settle);
                         return .{ .done = try self.finishParseSettle(inputs, settle.post) };
@@ -59109,7 +59125,7 @@ fn beginParseFormatMethod(
         => shape_var,
     };
     const dispatchers_start = self.instantiation_dispatchers.items.len;
-    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items().len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr) };
     };
@@ -59297,7 +59313,7 @@ fn beginParseDictProtocolMethod(
         => |known| try self.protocolMethodName(@tagName(known)),
     };
     const dispatchers_start = self.instantiation_dispatchers.items.len;
-    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items().len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr) };
     };
@@ -59343,7 +59359,7 @@ fn beginParseKeyMethod(
     const method_text = try self.dictKeyMethodText(key_var, "parse") orelse return .{ .done = .ok };
     const method_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_text));
     const dispatchers_start = self.instantiation_dispatchers.items.len;
-    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items().len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr) };
     };
@@ -59541,7 +59557,7 @@ fn beginParseErrorMethod(
     const method_name = try self.protocolMethodName(@tagName(kind));
     if (self.hasReusableGeneratedCodecCall(method_name, inputs.walk)) return .{ .done = .ok };
     const dispatchers_start = self.instantiation_dispatchers.items.len;
-    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items().len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, inputs.constraint, env, inputs.failure_expr) };
     };
@@ -59585,7 +59601,7 @@ fn beginSkipRecordFieldMethod(self: *Self, inputs: DerivedCodecInputs) Allocator
     const method_name = try self.protocolMethodName("skip_record_field");
     if (self.hasReusableGeneratedCodecCall(method_name, inputs.walk)) return .{ .done = .ok };
     const dispatchers_start = self.instantiation_dispatchers.items.len;
-    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items().len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr) };
     };
@@ -60761,7 +60777,7 @@ fn stepDerivedParseNominal(
     const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
     const dispatchers_start = self.instantiation_dispatchers.items.len;
-    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items().len;
     const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, nominal_var, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
@@ -61481,7 +61497,7 @@ fn checkFlexVarConstraintCompatibility(
     while (constraint_i < constraints_range.len()) : (constraint_i += 1) {
         // Instantiating and unifying the method below can grow the constraint
         // store, so re-fetch each entry instead of retaining a backing slice.
-        const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+        const constraint = self.types.static_dispatch_constraints.items()[constraints_start + constraint_i];
 
         // A constraint already rejected durably has its diagnostic; the
         // receiver stays flex after a rejected validation (the commit-probe
@@ -62317,11 +62333,9 @@ test "issue 11393: imported codec methods instantiate independently and reject u
     _ = try writer.writeToBuffer(bytes);
     const frozen: *ModuleEnv.Serialized = @ptrCast(@alignCast(bytes.ptr));
     try frozen.validate(bytes.len);
-    const cached = try frozen.deserializeWithMutableTypes(@intFromPtr(bytes.ptr), gpa, source.module_env.common.source, "Browser");
-    defer {
-        cached.deinitCachedModule();
-        gpa.destroy(cached);
-    }
+    var cached_env = try frozen.deserializeInPlace(@intFromPtr(bytes.ptr), gpa, source.module_env.common.source, "Browser", .sealed);
+    defer cached_env.deinit();
+    const cached = &cached_env;
 
     for ([_]*ModuleEnv{ source.module_env, cached }) |source_env| {
         // initWithImport only borrows the source environment and its builtins.

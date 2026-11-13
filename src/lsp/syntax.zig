@@ -1724,7 +1724,7 @@ pub const SyntaxChecker = struct {
             }
         }
 
-        const file_deps = module_env.file_dependencies.items.items;
+        const file_deps = module_env.file_dependencies.items();
         for (file_deps) |dep| {
             if (cir_queries.regionContainsOffset(dep.region(), target_offset)) {
                 const path_text = module_env.getString(dep.relative_path);
@@ -1961,7 +1961,7 @@ pub const SyntaxChecker = struct {
         if (store.nodes.get(node_idx).tag != .def) return null;
         const def = store.getDef(@fromBackingInt(value_node));
         const ident = module_lookup.extractIdentFromPattern(store, def.pattern) orelse return null;
-        for (module_env.method_idents.entries.items) |entry| {
+        for (module_env.method_idents.entries.items()) |entry| {
             if (entry.value.eql(ident)) return entry.key.owner;
         }
         return null;
@@ -1969,7 +1969,7 @@ pub const SyntaxChecker = struct {
 
     /// The checked environment `module_env`'s import `import_idx` resolved to.
     fn importedEnvForImport(env: *BuildEnv, module_env: *ModuleEnv, doc_path: []const u8, import_idx: CIR.Import.Idx) ?*ModuleEnv {
-        const import_name = module_env.common.getString(module_env.imports.imports.items.items[@backingInt(import_idx)]);
+        const import_name = module_env.common.getString(module_env.imports.imports.items()[@backingInt(import_idx)]);
         return env.importedModuleEnv(doc_path, import_name);
     }
 
@@ -2103,7 +2103,7 @@ pub const SyntaxChecker = struct {
                 .import => |import_idx| blk: {
                     const import_idx_int = @backingInt(import_idx);
                     if (import_idx_int >= module_env.imports.imports.len()) break :blk null;
-                    const string_idx = module_env.imports.imports.items.items[import_idx_int];
+                    const string_idx = module_env.imports.imports.items()[import_idx_int];
                     const module_name = module_env.common.getString(string_idx);
                     const importing_pkg = build_env.findPackageForModulePath(doc_path);
                     break :blk if (std.mem.find(u8, module_name, ".") != null)

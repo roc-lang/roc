@@ -233,7 +233,11 @@ pub fn assertSerializedRelocatable(comptime T: type) void {
     }
 }
 
-/// Validates every relocatable marker reachable from a serialized value.
+/// Validates every relocatable marker reachable from a serialized value. A
+/// struct that declares `validateShape` has it called after its fields are
+/// validated, for constant-time facts its lists must satisfy together (such
+/// as a probe table holding fewer entries than cells), so a corrupt entry is
+/// rejected before any lookup walks it.
 pub fn validateSerializedRelocations(comptime T: type, self: *const T, backing_len: u64) error{CorruptArtifact}!void {
     switch (@typeInfo(T)) {
         .@"struct" => |s| {
@@ -251,6 +255,7 @@ pub fn validateSerializedRelocations(comptime T: type, self: *const T, backing_l
             inline for (s.field_names, s.field_types) |field_name, field_type| {
                 try validateSerializedRelocations(field_type, &@field(self, field_name), backing_len);
             }
+            if (@hasDecl(T, "validateShape")) try self.validateShape();
         },
         .array => |a| {
             for (self) |*elem| try validateSerializedRelocations(a.child, elem, backing_len);
@@ -563,4 +568,22 @@ fn digits(comptime value: usize) []const u8 {
         const frozen = buf;
         break :blk frozen[end..];
     };
+}
+
+/// Whether a serialized open-addressed probe table of `table_len` cells
+/// holding `count` entries has the shape every probe relies on: a
+/// power-of-two length, and fewer entries than cells, so a table whose
+/// occupied cells are its entries keeps an empty cell where every probe
+/// stops. An empty table must hold no entries.
+pub fn probeTableShapeValid(table_len: u64, count: u64) bool {
+    if (table_len == 0) return count == 0;
+    return @import("std").math.isPowerOfTwo(table_len) and count < table_len;
+}
+
+test "probeTableShapeValid accepts tables with an empty cell and rejects the rest" {
+    try @import("std").testing.expect(probeTableShapeValid(0, 0));
+    try @import("std").testing.expect(!probeTableShapeValid(0, 1));
+    try @import("std").testing.expect(probeTableShapeValid(16, 15));
+    try @import("std").testing.expect(!probeTableShapeValid(16, 16));
+    try @import("std").testing.expect(!probeTableShapeValid(12, 3));
 }

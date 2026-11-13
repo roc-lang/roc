@@ -11,8 +11,8 @@
 //! x86_64 target the code laid out once more as a unit image
 //! (`backend.dev.UnitImage`), which a fast dev link places directly and
 //! compile-time evaluation loads, with the image's code locations. The
-//! image starts at a page-aligned offset in the entry, so a mapped entry
-//! serves it in place. Nothing in it refers to another cache.
+//! image starts at a page-aligned offset in the entry's cache file, so a
+//! mapped entry serves it in place. Nothing in it refers to another cache.
 
 const std = @import("std");
 const base = @import("base");
@@ -21,13 +21,22 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 19;
+pub const format_version: u32 = 20;
 
 const magic = "RBXO";
 
-/// The offset alignment of an entry's image, so a page-aligned mapping of
-/// the entry holds the image at a page-aligned address.
+/// The offset alignment of an entry's image within its cache file, so a
+/// page-aligned mapping of the file holds the image at a page-aligned address.
 pub const image_alignment: usize = 4096;
+
+/// Where an entry begins in its cache file: after the file's length prefix.
+const file_offset = @import("artifact_store.zig").length_prefix_len;
+
+/// Zero bytes after `len` entry bytes that put the next byte at an
+/// `image_alignment` offset in the cache file.
+fn imagePadding(len: usize) usize {
+    return std.mem.alignForward(usize, file_offset + len, image_alignment) - (file_offset + len);
+}
 
 /// The cache scope the entries are filed under.
 pub const scope = "boxy";
@@ -219,9 +228,6 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, magic);
     try appendU32(&bytes, allocator, format_version);
-    // Completeness admission reads this length from the already-loaded bytes.
-    const length_at = bytes.items.len;
-    try appendU64(&bytes, allocator, 0);
     try bytes.appendSlice(allocator, &entry.exports_digest);
     try appendU32(&bytes, allocator, @intCast(entry.exports.len));
     for (entry.exports) |record| {
@@ -267,10 +273,9 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     try bytes.appendSlice(allocator, entry.function_metadata);
     try appendU64(&bytes, allocator, entry.image.len);
     if (entry.image.len != 0) {
-        try bytes.appendNTimes(allocator, 0, std.mem.alignForward(usize, bytes.items.len, image_alignment) - bytes.items.len);
+        try bytes.appendNTimes(allocator, 0, imagePadding(bytes.items.len));
         try bytes.appendSlice(allocator, entry.image);
     }
-    std.mem.writeInt(u64, bytes.items[length_at..][0..8], @intCast(bytes.items.len), .little);
     return try bytes.toOwnedSlice(allocator);
 }
 
@@ -320,13 +325,14 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
 
 /// Decode an entry's bytes, borrowing its pieces, code locations and image
 /// from `bytes`; every other slice is allocated from `allocator`. Free them
-/// with `deinitEntryView`. A page-aligned `bytes` holds the image page-aligned.
+/// with `deinitEntryView`. `bytes` is the payload of a cache file, which
+/// begins after the file's length prefix; when the file is mapped at a page
+/// boundary, the image is page-aligned.
 pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     var reader = Reader{ .bytes = bytes };
     const found_magic = try reader.take(magic.len);
     if (!std.mem.eql(u8, found_magic, magic)) return error.InvalidEntry;
     if (try reader.word32() != format_version) return error.InvalidEntry;
-    if (try reader.word64() != bytes.len) return error.InvalidEntry;
     const exports_digest = (try reader.take(32))[0..32].*;
     const export_count = try reader.word32();
     if (export_count > (bytes.len - reader.at) / min_export_record_size) return error.InvalidEntry;
@@ -401,9 +407,8 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     const function_metadata = try reader.take(@intCast(metadata_len));
     const image_len = try reader.word64();
     if (image_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    if (image_len != 0) _ = try reader.take(std.mem.alignForward(usize, reader.at, image_alignment) - reader.at);
+    if (image_len != 0) _ = try reader.take(imagePadding(reader.at));
     const image = try reader.take(@intCast(image_len));
-    if (reader.at != bytes.len) return error.InvalidEntry;
     return .{
         .exports = exports,
         .exports_digest = exports_digest,
@@ -607,9 +612,9 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectEqualStrings(entry.function_metadata, decoded.function_metadata);
     try std.testing.expectEqualStrings(entry.code_locations, decoded.code_locations);
     try std.testing.expectEqualStrings(entry.image, decoded.image);
-    try std.testing.expectEqual(@as(usize, 0), (bytes.len - entry.image.len) % image_alignment);
+    try std.testing.expectEqual(@as(usize, 0), (file_offset + bytes.len - entry.image.len) % image_alignment);
 
-    // Truncation, wrong magic, and the old layout are not entries.
+    // A body cut short, wrong magic, and the old layout are not entries.
     try std.testing.expectError(error.InvalidEntry, decode(allocator, bytes[0 .. bytes.len - 1]));
     var altered = try allocator.dupe(u8, bytes);
     defer allocator.free(altered);
@@ -632,10 +637,6 @@ test "a Boxy object entry round-trips through its bytes" {
     const needs_decoded = try decode(allocator, needs_bytes);
     defer deinitEntry(allocator, needs_decoded);
     try std.testing.expectEqualDeep(needs_entry.exports, needs_decoded.exports);
-
-    // A size mismatch is rejected without reading or hashing the payload.
-    std.mem.writeInt(u64, needs_bytes[8..16], @intCast(needs_bytes.len + 1), .little);
-    try std.testing.expectError(error.InvalidEntry, decode(allocator, needs_bytes));
 }
 
 test "an export records digest is a function of the records in identity order" {
@@ -687,7 +688,7 @@ test "a count larger than the bytes behind it is a miss, not an allocation" {
     const gpa = std.testing.allocator;
     const encoded = try encode(gpa, .{ .exports = &.{}, .exports_digest = try exportRecordsDigest(gpa, &.{}), .hosted_symbols = &.{}, .pieces = "pieces" });
     defer gpa.free(encoded);
-    const count_offset = magic.len + @sizeOf(u32) + @sizeOf(u64) + 32;
+    const count_offset = magic.len + @sizeOf(u32) + 32;
     for ([_]usize{ count_offset, count_offset + @sizeOf(u32) }) |offset| {
         const damaged = try gpa.dupe(u8, encoded);
         defer gpa.free(damaged);

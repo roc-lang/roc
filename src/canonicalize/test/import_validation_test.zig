@@ -136,7 +136,7 @@ test "file imports reject absolute paths before recording dependencies" {
     }
 
     try testing.expect(found_absolute_path);
-    try expectEqual(@as(usize, 0), result.parse_env.file_dependencies.items.items.len);
+    try expectEqual(@as(usize, 0), result.parse_env.file_dependencies.items().len);
 }
 
 test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT EXPOSED, and working imports" {
@@ -673,7 +673,7 @@ test "aliased package-qualified import resolves before the import statement" {
         const external = app_env.store.getExpr(@fromBackingInt(@intCast(raw_node_idx))).e_lookup_external;
         if (!external.ident_idx.eql(make_ident)) continue;
 
-        const import_name_idx = app_env.imports.imports.items.items[@backingInt(external.module_idx)];
+        const import_name_idx = app_env.imports.imports.items()[@backingInt(external.module_idx)];
         try testing.expectEqualStrings("pf.Lib", app_env.getString(import_name_idx));
         found_make_lookup = true;
     }
@@ -835,7 +835,7 @@ test "import interner - Import.Idx functionality" {
     var found_dict = false;
     var found_json_decode = false;
     var found_set = false;
-    for (result.parse_env.imports.imports.items.items) |import_string_idx| {
+    for (result.parse_env.imports.imports.items()) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
         if (CIR.Import.isCompilerBuiltinImportName(module_name)) continue;
 
@@ -888,7 +888,7 @@ test "import interner - many imports keep stable module identity keys" {
     try result.can.canonicalizeFile();
 
     var explicit_import_count: usize = 0;
-    for (result.parse_env.imports.imports.items.items) |import_string_idx| {
+    for (result.parse_env.imports.imports.items()) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
         if (CIR.Import.isCompilerBuiltinImportName(module_name)) continue;
 

@@ -388,7 +388,7 @@ pub const Pattern = union(enum) {
             .deferred_import_ref => |n| {
                 const begin = try ir.beginSExprNodeAt(tree, "p-deferred-import-ref", pattern_idx);
 
-                const entry = ir.deferred_import_refs.items.items[@backingInt(n.ref)];
+                const entry = ir.deferred_import_refs.items()[@backingInt(n.ref)];
                 try tree.pushStringPair("module", ir.getIdent(entry.moduleName()));
                 try tree.pushStringPair("path", ir.getIdent(entry.path()));
 

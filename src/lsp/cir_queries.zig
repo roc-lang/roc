@@ -903,7 +903,7 @@ pub fn collectReferences(
     var results: std.ArrayList(LspRange) = .empty;
     errdefer results.deinit(allocator);
 
-    for (module_env.store.write_occurrences.items.items) |write| {
+    for (module_env.store.write_occurrences.items()) |write| {
         if (write.pattern_idx == target_pattern) {
             if (regionToRange(module_env, write.region())) |range| {
                 try results.append(allocator, range);
@@ -1372,7 +1372,7 @@ fn findPatternByAnnotationName(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern
 /// Find the exact source occurrence that writes an existing local binding.
 /// A structural reassignment's surrounding pattern is not the written name.
 pub fn findWriteAtOffset(module_env: *const ModuleEnv, offset: u32) ?NodeStore.WriteOccurrence {
-    for (module_env.store.write_occurrences.items.items) |write| {
+    for (module_env.store.write_occurrences.items()) |write| {
         if (regionContainsOffset(write.region(), offset)) return write;
     }
     return null;

@@ -4361,7 +4361,7 @@ test "check type - tuple access batch retires discarded defaults and preserves i
         try testing.expect(problem == .tuple_access_needs_annotation);
     }
     try test_env.assertDefTypeOptions("independent", "Foo", .{ .allow_type_errors = true });
-    const omissions = test_env.module_env.record_omitted_defaults.items.items;
+    const omissions = test_env.module_env.record_omitted_defaults.items();
     try testing.expectEqual(1, omissions.len);
     const independent = test_env.module_env.store.getDef(test_env.module_env.store.defAt(test_env.module_env.all_defs, 3));
     try testing.expectEqual(independent.expr, omissions[0].expr);
