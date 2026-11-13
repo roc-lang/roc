@@ -12139,7 +12139,7 @@ fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
             continue;
         }
         visit.value_ptr.* = @intCast(seen.count() - 1);
-        std.hash.autoHash(&hasher, @as(u16, @bitCast(resolved.desc.flags.copied())));
+        std.hash.autoHash(&hasher, @as(u16, @as(u10, @bitCast(resolved.desc.flags.copied()))));
         std.hash.autoHash(&hasher, std.meta.activeTag(resolved.desc.content));
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return null,
@@ -12218,7 +12218,7 @@ fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Er
         const l = self.types.resolveVar(pair.left);
         const r = self.types.resolveVar(pair.right);
         if ((try seen.getOrPut(self.gpa, .{ .left = l.var_, .right = r.var_ })).found_existing) continue;
-        if (@as(u16, @bitCast(l.desc.flags.copied())) != @as(u16, @bitCast(r.desc.flags.copied()))) return false;
+        if (l.desc.flags.copied() != r.desc.flags.copied()) return false;
         switch (l.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
             .alias => |la| {
@@ -49155,7 +49155,7 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
             continue;
         }
         seen.value_ptr.* = @intCast(self.scratch_replay_shape_vars.count() - 1);
-        const relational_flags: u16 = @bitCast(resolved.desc.flags.relational());
+        const relational_flags: u16 = @as(u10, @bitCast(resolved.desc.flags.relational()));
         try out.appendSlice(self.gpa, &.{ @truncate(relational_flags), @truncate(relational_flags >> 8) });
         // Children are pushed in reverse, so they are encoded in order.
         switch (resolved.desc.content) {

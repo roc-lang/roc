@@ -29,8 +29,9 @@ const savepoint_verification: SavepointVerification =
 
 /// One journaled in-place write to a pre-existing slot (for trail rollback).
 const SlotUndo = struct { idx: SlotStore.Idx, old: Slot };
-/// One journaled in-place write to a pre-existing descriptor.
-const DescUndo = struct { idx: DescStore.Idx, old: Desc };
+/// One journaled in-place write to a pre-existing descriptor, holding the
+/// stored row it replaced.
+const DescUndo = struct { idx: DescStore.Idx, old: Desc.Row };
 /// One journaled in-place write to a pre-existing equivalence-class root.
 const RootMetaUndo = struct { idx: DescStore.Idx, old: RootMeta };
 /// One journaled in-place write to a structural union rank.
@@ -350,9 +351,9 @@ pub const Store = struct {
     pub fn rebindSourceReferences(store: *Store, mapper: anytype) @TypeOf(mapper.*).Error!void {
         store.debugAssertUnsealed();
         for (0..store.descs.backing.len()) |i| {
-            var desc = store.descs.backing.get(@fromBackingInt(@intCast(i)));
+            var desc = store.descs.get(@fromBackingInt(@intCast(i)));
             try rebindSourceReferenceValue(&desc.content, mapper);
-            store.descs.backing.set(@fromBackingInt(@intCast(i)), desc);
+            store.descs.set(@fromBackingInt(@intCast(i)), desc);
         }
         for (store.nominal_decls.items.items) |*decl| try rebindSourceReferenceValue(decl, mapper);
         for (store.nominal_decl_index.items.items) |*entry| entry.statement = try mapper.node(entry.origin_module, entry.statement);
@@ -738,7 +739,7 @@ pub const Store = struct {
         for (self.slots.kinds.items, self.slots.payloads.items) |kind, payload| {
             switch (kind) {
                 .root => {
-                    if (self.descs.get(@fromBackingInt(payload)).content == .err) return true;
+                    if (self.descs.getWord(@fromBackingInt(payload)).kind == .err) return true;
                 },
                 .redirect => {},
             }
@@ -780,7 +781,7 @@ pub const Store = struct {
     /// trail restored all union-find state to exactly its pre-savepoint values.
     const VerifyClone = struct {
         slots: []Slot,
-        descs: collections.ReservedColumns(Desc, .dense),
+        descs: DescStore.Rows,
         root_metas: RootMetaSafeMultiList,
         union_ranks: []u8,
         derived_map_plans: []DerivedMapPlanEntry,
@@ -929,7 +930,7 @@ pub const Store = struct {
         while (di > savepoint.desc_trail_len) {
             di -= 1;
             const u = self.desc_trail.items[di];
-            self.descs.set(u.idx, u.old);
+            self.descs.setRow(u.idx, u.old);
         }
         self.desc_trail.shrinkRetainingCapacity(savepoint.desc_trail_len);
 
@@ -1056,23 +1057,49 @@ pub const Store = struct {
 
     /// In-place descriptor write. See setSlot.
     fn setDesc(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
-        if (std.debug.runtime_safety and self.descs.get(idx).flags.frozen) {
+        self.debugAssertUnfrozenWrite(idx);
+        try self.setDescUnguarded(idx, val);
+    }
+
+    fn debugAssertUnfrozenWrite(self: *const Self, idx: DescStore.Idx) void {
+        if (std.debug.runtime_safety and self.descs.getWord(idx).flags.frozen) {
             base.invariant("a frozen type class was written in place", .{});
         }
-        try self.setDescUnguarded(idx, val);
     }
 
     /// `setDesc` without the frozen-class guard, for freezing and thawing.
     fn setDescUnguarded(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
-        self.debugAssertUnsealed();
-        if (self.savepoint_active and @backingInt(idx) < self.savepoint_baseline_descs) {
-            try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.get(idx) });
-        }
-        self.class_watch.noteWrite(idx);
-        if (self.settled_descs.contains(idx) and !std.meta.eql(self.descs.get(idx).content, val.content)) {
+        const row = val.encode();
+        try self.journalDescWrite(idx);
+        if (self.settled_descs.contains(idx) and !DescStore.sameContent(self.descs.getRow(idx), row)) {
             self.settled_descs.clear();
         }
-        self.descs.set(idx, val);
+        self.descs.setRow(idx, row);
+    }
+
+    /// In-place write of a descriptor's word alone: its flags or rank, never
+    /// its kind, so its content stays as it was. Journaled and watched like
+    /// every descriptor write (see setSlot).
+    fn setDescWord(self: *Self, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
+        self.debugAssertUnfrozenWrite(idx);
+        try self.setDescWordUnguarded(idx, word);
+    }
+
+    /// `setDescWord` without the frozen-class guard, for freezing and thawing.
+    fn setDescWordUnguarded(self: *Self, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
+        std.debug.assert(word.kind == self.descs.getWord(idx).kind);
+        try self.journalDescWrite(idx);
+        self.descs.setWord(idx, word);
+    }
+
+    /// Before an in-place write to descriptor `idx`: journal its row while a
+    /// probe that predates it is open, and note the write for class watches.
+    fn journalDescWrite(self: *Self, idx: DescStore.Idx) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        if (self.savepoint_active and @backingInt(idx) < self.savepoint_baseline_descs) {
+            try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.getRow(idx) });
+        }
+        self.class_watch.noteWrite(idx);
     }
 
     /// Record the class of each of `vars` as settled. The caller guarantees
@@ -1174,7 +1201,7 @@ pub const Store = struct {
         const index: u32 = @backingInt(desc_idx);
         if (index < self.settled_descs.bits.bit_length) self.settled_descs.bits.unset(index);
         if (index < self.class_watch.watched.bit_length) self.class_watch.watched.unset(index);
-        if (self.descs.get(desc_idx).flags.frozen) _ = self.frozen_anchors.remove(desc_idx);
+        if (self.descs.getWord(desc_idx).flags.frozen) _ = self.frozen_anchors.remove(desc_idx);
         const plan_slot = self.derivedMapPlanSlot(desc_idx);
         if (plan_slot.found) _ = self.derived_map_plans.items.orderedRemove(plan_slot.index);
         self.free_descs.appendAssumeCapacity(desc_idx);
@@ -1366,10 +1393,10 @@ pub const Store = struct {
         const storage = self.resolveStorageRoot(var_);
         std.debug.assert(!storage.desc.flags.frozen);
         std.debug.assert(storage.meta.checked_var == var_);
-        var desc = storage.desc;
-        desc.flags.frozen = true;
+        var word = self.descs.getWord(storage.desc_idx);
+        word.flags.frozen = true;
         try self.frozen_anchors.put(storage.desc_idx, var_);
-        try self.setDescUnguarded(storage.desc_idx, desc);
+        try self.setDescWordUnguarded(storage.desc_idx, word);
     }
 
     /// End every class's freeze; afterwards the store holds no frozen class.
@@ -1378,9 +1405,9 @@ pub const Store = struct {
         var anchors = self.frozen_anchors.constIterator();
         while (anchors.next()) |entry| {
             const idx = entry.key_ptr.*;
-            var desc = self.descs.get(idx);
-            desc.flags.frozen = false;
-            try self.setDescUnguarded(idx, desc);
+            var word = self.descs.getWord(idx);
+            word.flags.frozen = false;
+            try self.setDescWordUnguarded(idx, word);
         }
         self.frozen_anchors.clearRetainingCapacity();
     }
@@ -1514,7 +1541,7 @@ pub const Store = struct {
     /// Whether two descriptors agree on every flag an instantiated copy
     /// carries over.
     fn sameCopiedFlags(a: types.DescriptorFlags, b: types.DescriptorFlags) bool {
-        return @as(u16, @bitCast(a.copied())) == @as(u16, @bitCast(b.copied()));
+        return a.copied() == b.copied();
     }
 
     pub fn groundEpoch(self: *const Self) u64 {
@@ -1557,11 +1584,11 @@ pub const Store = struct {
         self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         try self.isolateWriteTarget(target_var);
-        const resolved = self.resolveVar(target_var);
-        if (resolved.desc.flags.static_dispatch_rejected) return false;
-        var desc = resolved.desc;
-        desc.flags.static_dispatch_rejected = true;
-        try self.setDesc(resolved.desc_idx, desc);
+        const desc_idx = self.resolveDescIdx(target_var);
+        var word = self.descs.getWord(desc_idx);
+        if (word.flags.static_dispatch_rejected) return false;
+        word.flags.static_dispatch_rejected = true;
+        try self.setDescWord(desc_idx, word);
         return true;
     }
 
@@ -1570,11 +1597,11 @@ pub const Store = struct {
     pub fn markVarDefaultDecided(self: *Self, target_var: Var) Allocator.Error!void {
         self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
-        const resolved = self.resolveVar(target_var);
-        if (resolved.desc.flags.default_decided) return;
-        var desc = resolved.desc;
-        desc.flags.default_decided = true;
-        try self.setDesc(resolved.desc_idx, desc);
+        const desc_idx = self.resolveDescIdx(target_var);
+        var word = self.descs.getWord(desc_idx);
+        if (word.flags.default_decided) return;
+        word.flags.default_decided = true;
+        try self.setDescWord(desc_idx, word);
     }
 
     /// Withdraw a `markVarDefaultDecided` whose decision left the class
@@ -1582,24 +1609,24 @@ pub const Store = struct {
     pub fn clearVarDefaultDecided(self: *Self, target_var: Var) Allocator.Error!void {
         self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
-        const resolved = self.resolveVar(target_var);
-        if (!resolved.desc.flags.default_decided) return;
-        var desc = resolved.desc;
-        desc.flags.default_decided = false;
-        try self.setDesc(resolved.desc_idx, desc);
+        const desc_idx = self.resolveDescIdx(target_var);
+        var word = self.descs.getWord(desc_idx);
+        if (!word.flags.default_decided) return;
+        word.flags.default_decided = false;
+        try self.setDescWord(desc_idx, word);
     }
 
     /// Whether a defaulting decision chose `target_var`'s equivalence class.
     pub fn varDefaultDecided(self: *const Self, target_var: Var) bool {
         std.debug.assert(@backingInt(target_var) < self.len());
-        return self.resolveVar(target_var).desc.flags.default_decided;
+        return self.flagsOf(target_var).default_decided;
     }
 
     /// Whether checking rejected a static-dispatch obligation on `target_var`'s
     /// equivalence class.
     pub fn varStaticDispatchRejected(self: *const Self, target_var: Var) bool {
         std.debug.assert(@backingInt(target_var) < self.len());
-        return self.resolveVar(target_var).desc.flags.static_dispatch_rejected;
+        return self.flagsOf(target_var).static_dispatch_rejected;
     }
 
     /// Record that the vars in `[start, end)`, minted by opening a nominal
@@ -1621,9 +1648,9 @@ pub const Store = struct {
             if (root < start or root >= end) continue;
             if (resolved.desc.flags.nominal_backing_structure) continue;
             self.ground_epoch +%= 1;
-            var desc = resolved.desc;
-            desc.flags.nominal_backing_structure = true;
-            try self.setDesc(resolved.desc_idx, desc);
+            var word = self.descs.getWord(resolved.desc_idx);
+            word.flags.nominal_backing_structure = true;
+            try self.setDescWord(resolved.desc_idx, word);
         }
     }
 
@@ -1632,11 +1659,11 @@ pub const Store = struct {
     pub fn markAnnotationTagExt(self: *Self, target_var: Var) Allocator.Error!void {
         self.debugAssertUnsealed();
         try self.isolateWriteTarget(target_var);
-        const resolved = self.resolveVar(target_var);
-        std.debug.assert(resolved.desc.content == .flex);
-        var desc = resolved.desc;
-        desc.flags.annotation_tag_ext = true;
-        try self.setDesc(resolved.desc_idx, desc);
+        const desc_idx = self.resolveDescIdx(target_var);
+        var word = self.descs.getWord(desc_idx);
+        std.debug.assert(word.kind == .flex);
+        word.flags.annotation_tag_ext = true;
+        try self.setDescWord(desc_idx, word);
     }
 
     /// Mark a tag row a host-boundary annotation wrote (design.md "Row
@@ -1645,9 +1672,9 @@ pub const Store = struct {
     pub fn markHostFixedRow(self: *Self, target_var: Var) Allocator.Error!void {
         self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
-        var desc = resolved.desc;
-        desc.flags.host_fixed_row = true;
-        try self.setDesc(resolved.desc_idx, desc);
+        var word = self.descs.getWord(resolved.desc_idx);
+        word.flags.host_fixed_row = true;
+        try self.setDescWord(resolved.desc_idx, word);
     }
 
     /// Bound an annotated definition's implicitly opened row (design.md
@@ -1655,9 +1682,9 @@ pub const Store = struct {
     pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
         self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
-        var desc = resolved.desc;
-        desc.flags.bounded_row_ext = true;
-        try self.setDesc(resolved.desc_idx, desc);
+        var word = self.descs.getWord(resolved.desc_idx);
+        word.flags.bounded_row_ext = true;
+        try self.setDescWord(resolved.desc_idx, word);
     }
 
     /// End the bound on a row: a platform-required definition's rows are
@@ -1666,9 +1693,9 @@ pub const Store = struct {
     pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
         self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
-        var desc = resolved.desc;
-        desc.flags.bounded_row_ext = false;
-        try self.setDesc(resolved.desc_idx, desc);
+        var word = self.descs.getWord(resolved.desc_idx);
+        word.flags.bounded_row_ext = false;
+        try self.setDescWord(resolved.desc_idx, word);
     }
 
     /// The declared rule a `dangerousSetVarRedirect` call site bends the solved
@@ -2384,20 +2411,65 @@ pub const Store = struct {
     /// so no use can lift it and it stays shared.
     pub fn markPerUseStructure(self: *Self, desc_idx: DescStore.Idx) Allocator.Error!void {
         self.debugAssertUnsealed();
-        var desc = self.descs.get(desc_idx);
-        if (desc.flags.frozen or desc.flags.per_use_structure) return;
-        desc.flags.per_use_structure = true;
-        try self.setDesc(desc_idx, desc);
+        var word = self.descs.getWord(desc_idx);
+        if (word.flags.frozen or word.flags.per_use_structure) return;
+        word.flags.per_use_structure = true;
+        try self.setDescWord(desc_idx, word);
     }
 
-    /// Set the rank for a descriptor
+    /// Set the rank for a descriptor. Writes the descriptor's word alone.
     pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) Allocator.Error!void {
         self.debugAssertUnsealed();
-        var desc = self.descs.get(desc_idx);
+        var word = self.descs.getWord(desc_idx);
         // A frozen class is ground, so no rank changes what it means.
-        if (desc.flags.frozen) return;
-        desc.rank = rank;
-        try self.setDesc(desc_idx, desc);
+        if (word.flags.frozen) return;
+        word.rank = rank;
+        try self.setDescWord(desc_idx, word);
+    }
+
+    // word readers //
+
+    /// The descriptor `var_`'s class resolves to, decoding nothing.
+    pub fn resolveDescIdx(self: *const Self, var_: Var) DescStore.Idx {
+        var slot_idx = Self.varToSlotIdx(var_);
+        var guard = debug.IterationGuard.init("resolveDescIdx");
+        while (true) {
+            guard.tick();
+            switch (self.slots.get(slot_idx)) {
+                .redirect => |next| slot_idx = Self.varToSlotIdx(next),
+                .root => |desc_idx| return desc_idx,
+            }
+        }
+    }
+
+    /// The kind of content `var_`'s class holds.
+    pub fn kindOf(self: *const Self, var_: Var) types.ContentKind {
+        return self.descs.getWord(self.resolveDescIdx(var_)).kind;
+    }
+
+    /// The kind of content descriptor `desc_idx` holds.
+    pub fn kindAt(self: *const Self, desc_idx: DescStore.Idx) types.ContentKind {
+        return self.descs.getWord(desc_idx).kind;
+    }
+
+    /// The rank of `var_`'s class.
+    pub fn rankOf(self: *const Self, var_: Var) Rank {
+        return self.descs.getWord(self.resolveDescIdx(var_)).rank;
+    }
+
+    /// The rank of descriptor `desc_idx`.
+    pub fn rankAt(self: *const Self, desc_idx: DescStore.Idx) Rank {
+        return self.descs.getWord(desc_idx).rank;
+    }
+
+    /// The flags of `var_`'s class.
+    pub fn flagsOf(self: *const Self, var_: Var) types.DescriptorFlags {
+        return self.descs.getWord(self.resolveDescIdx(var_)).flags;
+    }
+
+    /// The flags of descriptor `desc_idx`.
+    pub fn flagsAt(self: *const Self, desc_idx: DescStore.Idx) types.DescriptorFlags {
+        return self.descs.getWord(desc_idx).flags;
     }
 
     // resolvers //
@@ -2649,8 +2721,9 @@ pub const Store = struct {
         const settled_before = self.settled_descs.list.items.len;
         const a_settled = self.settled_descs.contains(a_data.desc_idx);
         const b_settled = self.settled_descs.contains(b_data.desc_idx);
-        const a_kept = std.meta.eql(a_data.desc.content, merged_desc.content);
-        const b_kept = std.meta.eql(b_data.desc.content, merged_desc.content);
+        const merged_row = merged_desc.encode();
+        const a_kept = DescStore.sameContent(self.descs.getRow(a_data.desc_idx), merged_row);
+        const b_kept = DescStore.sameContent(self.descs.getRow(b_data.desc_idx), merged_row);
         if (a_settled and !a_kept) self.settled_descs.clear();
 
         // The unifier computes merged content for b's descriptor destination.
@@ -3134,7 +3207,10 @@ const SlotStore = struct {
 /// Indexes into the list are typesafe
 const DescStore = struct {
     const Self = @This();
-    const DescSafeMultiList = collections.ReservedColumns(Desc, .dense);
+    /// One stored row per descriptor (`Descriptor.Row`): a column of words and
+    /// a column of payloads.
+    const Rows = collections.ReservedColumns(Desc.Row, .dense);
+    const DescSafeMultiList = Rows;
 
     backing: DescSafeMultiList,
     /// False only while no descriptor in `backing` has ever held `.err`.
@@ -3149,10 +3225,16 @@ const DescStore = struct {
 
     fn fromContents(backing: DescSafeMultiList) Self {
         var err_written = false;
-        for (backing.items(.content)) |content| {
-            if (content == .err) err_written = true;
+        for (backing.items(.word)) |word| {
+            if (word.kind == .err) err_written = true;
         }
         return .{ .backing = backing, .err_written = err_written };
+    }
+
+    /// Whether two rows hold the same content, whatever their words' flags
+    /// and ranks.
+    fn sameContent(a: Desc.Row, b: Desc.Row) bool {
+        return a.word.kind == b.word.kind and std.mem.eql(u32, &a.payload, &b.payload);
     }
 
     /// Deinit & free allocated memory
@@ -3192,27 +3274,51 @@ const DescStore = struct {
 
     /// Insert a value into the store
     fn insert(self: *Self, gpa: Allocator, typ: Desc) std.mem.Allocator.Error!Idx {
-        if (typ.content == .err) self.err_written = true;
-        const safe_idx = try self.backing.append(gpa, typ);
-        return @fromBackingInt(@intCast(@backingInt(safe_idx)));
+        try self.backing.ensureUnusedCapacity(gpa, 1);
+        return self.appendAssumeCapacity(typ);
     }
 
     /// Appends a value to the store assuming there is capacity
     fn appendAssumeCapacity(self: *Self, typ: Desc) Idx {
-        if (typ.content == .err) self.err_written = true;
-        const safe_idx = self.backing.appendAssumeCapacity(typ);
+        const row = typ.encode();
+        if (row.word.kind == .err) self.err_written = true;
+        const safe_idx = self.backing.appendAssumeCapacity(row);
         return @fromBackingInt(@intCast(@backingInt(safe_idx)));
     }
 
     /// Set a value in the store
     fn set(self: *Self, idx: Idx, val: Desc) void {
-        if (val.content == .err) self.err_written = true;
-        self.backing.set(@fromBackingInt(@intCast(@backingInt(idx))), val);
+        self.setRow(idx, val.encode());
     }
 
     /// Get a value from the store
-    fn get(self: *const Self, idx: Idx) Desc {
-        return self.backing.get(@fromBackingInt(@intCast(@backingInt(idx))));
+    inline fn get(self: *const Self, idx: Idx) Desc {
+        return Desc.decode(self.getRow(idx));
+    }
+
+    /// The stored row of descriptor `idx`.
+    inline fn getRow(self: *const Self, idx: Idx) Desc.Row {
+        return self.backing.get(rowIdx(idx));
+    }
+
+    /// Overwrite the stored row of descriptor `idx`.
+    fn setRow(self: *Self, idx: Idx, row: Desc.Row) void {
+        if (row.word.kind == .err) self.err_written = true;
+        self.backing.set(rowIdx(idx), row);
+    }
+
+    /// The word of descriptor `idx`: its kind, flags and rank.
+    inline fn getWord(self: *const Self, idx: Idx) Desc.Word {
+        return self.backing.fieldItem(.word, rowIdx(idx));
+    }
+
+    /// Overwrite the word of descriptor `idx`, keeping its payload.
+    fn setWord(self: *Self, idx: Idx, word: Desc.Word) void {
+        self.backing.items(.word)[@backingInt(idx)] = word;
+    }
+
+    inline fn rowIdx(idx: Idx) Rows.Idx {
+        return @fromBackingInt(@intCast(@backingInt(idx)));
     }
 
     /// A type-safe index into the store

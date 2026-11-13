@@ -37,6 +37,9 @@ test {
     // scopes past it are checked without being generalized
     // (`VarPool.pushRank`).
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
+    // The stored form: one word of kind, flags and rank, then the payload.
+    try std.testing.expectEqual(4, @sizeOf(Descriptor.Word));
+    try std.testing.expectEqual(24, @sizeOf(Descriptor.Row));
     try std.testing.expectEqual(28, @sizeOf(Content));
     try std.testing.expectEqual(20, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
@@ -98,10 +101,10 @@ pub const Var = enum(u32) {
 /// A mapping from polymorphic type variables to concrete type variables
 pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
 
-/// Checker decisions a descriptor carries alongside its content. Descriptors
-/// live in a struct-of-arrays keyed by every union-find resolve, so these share
-/// one byte-wide column instead of one column each.
-pub const DescriptorFlags = packed struct(u16) {
+/// Checker decisions a descriptor carries alongside its content. They share
+/// the stored descriptor's word with its kind and rank (`Descriptor.Word`),
+/// which has room for exactly these ten: a new flag must find room there.
+pub const DescriptorFlags = packed struct(u10) {
     /// The checker closed this otherwise-unresolved variable to `[]` after
     /// proving that no runtime constructor can inhabit it. The checked output
     /// preserves the variable identity and carries `[]` only as its row default.
@@ -161,7 +164,6 @@ pub const DescriptorFlags = packed struct(u16) {
     /// rank, so instantiation does not carry the flag, and a merge keeps it
     /// only when both sides had it.
     per_use_structure: bool = false,
-    _padding: u6 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -188,11 +190,171 @@ pub const DescriptorFlags = packed struct(u16) {
     }
 };
 
-/// A type descriptor
+/// A type descriptor: the decoded view of one stored row (`Descriptor.Row`).
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
     flags: DescriptorFlags = .{},
+
+    /// The first word of a stored descriptor: what kind of content the class
+    /// holds, its flags and its rank, so a reader that needs only those
+    /// decodes nothing else.
+    pub const Word = packed struct(u32) {
+        kind: ContentKind,
+        flags: DescriptorFlags,
+        /// Unused, always zero.
+        spare: u2 = 0,
+        rank: Rank,
+    };
+
+    /// The rest of a stored descriptor: the content's payload, laid out per
+    /// kind by `encode`. Words a kind does not use are zero, so a row's bytes
+    /// are a function of the descriptor alone.
+    pub const Payload = [5]u32;
+
+    /// A stored descriptor. Every byte belongs to a field.
+    pub const Row = struct {
+        word: Word,
+        payload: Payload,
+    };
+
+    comptime {
+        std.debug.assert(@bitSizeOf(ContentKind) + @bitSizeOf(DescriptorFlags) + 2 + @bitSizeOf(Rank) == @bitSizeOf(Word));
+        std.debug.assert(@sizeOf(Row) == @sizeOf(Word) + @sizeOf(Payload));
+    }
+
+    /// This descriptor as a stored row.
+    pub inline fn encode(self: Descriptor) Row {
+        var payload: Payload = @splat(0);
+        const kind: ContentKind = switch (self.content) {
+            .flex => |flex| kind: {
+                payload[0] = @backingInt(collections.OptionalU32.of(if (flex.name) |name| name.denseIndex() else null));
+                putRange(&payload, 1, flex.constraints);
+                payload[3] = @backingInt(flex.literal);
+                break :kind .flex;
+            },
+            .rigid => |rigid| kind: {
+                payload[0] = rigid.name.denseIndex();
+                putRange(&payload, 1, rigid.constraints);
+                break :kind .rigid;
+            },
+            .alias => |alias| kind: {
+                payload[0] = alias.ident.ident_idx.denseIndex();
+                putRange(&payload, 1, alias.vars.nonempty);
+                payload[3] = @backingInt(alias.origin_module);
+                payload[4] = @bitCast(alias.source_decl);
+                break :kind .alias;
+            },
+            .field_presence => |presence| kind: {
+                switch (presence) {
+                    .required => payload[0] = 0,
+                    .optional => payload[0] = 1,
+                    .defaulted => |id| {
+                        payload[0] = 2;
+                        payload[1] = @backingInt(id.origin_module);
+                        payload[2] = id.expr_node;
+                    },
+                }
+                break :kind .field_presence;
+            },
+            .err => .err,
+            .structure => |flat| switch (flat) {
+                .record => |record| kind: {
+                    putRange(&payload, 0, record.fields);
+                    payload[2] = @backingInt(record.ext);
+                    break :kind .record;
+                },
+                .tuple => |tuple| kind: {
+                    putRange(&payload, 0, tuple.elems);
+                    break :kind .tuple;
+                },
+                .nominal_type => |nominal| kind: {
+                    payload[0] = nominal.ident.ident_idx.denseIndex();
+                    putRange(&payload, 1, nominal.args);
+                    payload[3] = @backingInt(nominal.origin_module);
+                    payload[4] = @bitCast(nominal.source);
+                    break :kind .nominal_type;
+                },
+                inline .fn_pure, .fn_effectful, .fn_unbound => |func, tag| kind: {
+                    putRange(&payload, 0, func.args);
+                    payload[2] = @backingInt(func.ret);
+                    putRange(&payload, 3, func.effect_deps);
+                    break :kind @field(ContentKind, @tagName(tag));
+                },
+                .empty_record => .empty_record,
+                .tag_union => |tag_union| kind: {
+                    putRange(&payload, 0, tag_union.tags);
+                    payload[2] = @backingInt(tag_union.ext);
+                    break :kind .tag_union;
+                },
+                .empty_tag_union => .empty_tag_union,
+            },
+        };
+        return .{ .word = .{ .kind = kind, .flags = self.flags, .rank = self.rank }, .payload = payload };
+    }
+
+    /// The descriptor a stored row holds.
+    pub inline fn decode(row: Row) Descriptor {
+        const p = row.payload;
+        const content: Content = switch (row.word.kind) {
+            .flex => .{ .flex = .{
+                .name = if (@as(collections.OptionalU32, @fromBackingInt(p[0])).get()) |dense| Ident.Idx.fromDenseIndex(dense) else null,
+                .constraints = getRange(StaticDispatchConstraint.SafeList.Range, p, 1),
+                .literal = @fromBackingInt(@intCast(p[3])),
+            } },
+            .rigid => .{ .rigid = .{
+                .name = Ident.Idx.fromDenseIndex(p[0]),
+                .constraints = getRange(StaticDispatchConstraint.SafeList.Range, p, 1),
+            } },
+            .alias => .{ .alias = .{
+                .ident = .{ .ident_idx = Ident.Idx.fromDenseIndex(p[0]) },
+                .vars = .{ .nonempty = getRange(Var.SafeList.Range, p, 1) },
+                .origin_module = @fromBackingInt(p[3]),
+                .source_decl = @bitCast(p[4]),
+            } },
+            .field_presence => .{
+                .field_presence = switch (p[0]) {
+                    0 => .required,
+                    1 => .optional,
+                    2 => .{ .defaulted = .{ .origin_module = @fromBackingInt(p[1]), .expr_node = p[2] } },
+                    else => unreachable, // `encode` writes only the three field-presence kinds
+                },
+            },
+            .err => .err,
+            .record => .{ .structure = .{ .record = .{
+                .fields = getRange(RecordField.SafeMultiList.Range, p, 0),
+                .ext = @fromBackingInt(p[2]),
+            } } },
+            .tuple => .{ .structure = .{ .tuple = .{ .elems = getRange(Var.SafeList.Range, p, 0) } } },
+            .nominal_type => .{ .structure = .{ .nominal_type = .{
+                .ident = .{ .ident_idx = Ident.Idx.fromDenseIndex(p[0]) },
+                .args = getRange(Var.SafeList.Range, p, 1),
+                .origin_module = @fromBackingInt(p[3]),
+                .source = @bitCast(p[4]),
+            } } },
+            inline .fn_pure, .fn_effectful, .fn_unbound => |tag| .{ .structure = @unionInit(FlatType, @tagName(tag), .{
+                .args = getRange(Var.SafeList.Range, p, 0),
+                .ret = @fromBackingInt(p[2]),
+                .effect_deps = getRange(Var.SafeList.Range, p, 3),
+            }) },
+            .empty_record => .{ .structure = .empty_record },
+            .tag_union => .{ .structure = .{ .tag_union = .{
+                .tags = getRange(Tag.SafeMultiList.Range, p, 0),
+                .ext = @fromBackingInt(p[2]),
+            } } },
+            .empty_tag_union => .{ .structure = .empty_tag_union },
+        };
+        return .{ .content = content, .rank = row.word.rank, .flags = row.word.flags };
+    }
+
+    inline fn putRange(payload: *Payload, at: usize, range: anytype) void {
+        payload[at] = @backingInt(range.start);
+        payload[at + 1] = range.count;
+    }
+
+    inline fn getRange(comptime Range: type, payload: Payload, at: usize) Range {
+        return .{ .start = @fromBackingInt(payload[at]), .count = payload[at + 1] };
+    }
 
     /// Whether unification can lift this class into a nominal type whose
     /// backing matches, rewriting it to that nominal: an anonymous record or
@@ -209,6 +371,48 @@ pub const Descriptor = struct {
                 .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => false,
             },
             .flex, .rigid, .alias, .field_presence, .err => false,
+        };
+    }
+};
+
+/// The kind of a descriptor's content: the tags of `Content` and of its
+/// `structure` payload `FlatType`, flattened into one. A stored descriptor
+/// keeps it in its word (`Descriptor.Word`).
+pub const ContentKind = enum(u4) {
+    flex,
+    rigid,
+    alias,
+    field_presence,
+    err,
+    record,
+    tuple,
+    nominal_type,
+    fn_pure,
+    fn_effectful,
+    fn_unbound,
+    empty_record,
+    tag_union,
+    empty_tag_union,
+
+    /// The kind of `content`.
+    pub fn of(content: Content) ContentKind {
+        return switch (content) {
+            .flex => .flex,
+            .rigid => .rigid,
+            .alias => .alias,
+            .field_presence => .field_presence,
+            .err => .err,
+            .structure => |flat| switch (flat) {
+                .record => .record,
+                .tuple => .tuple,
+                .nominal_type => .nominal_type,
+                .fn_pure => .fn_pure,
+                .fn_effectful => .fn_effectful,
+                .fn_unbound => .fn_unbound,
+                .empty_record => .empty_record,
+                .tag_union => .tag_union,
+                .empty_tag_union => .empty_tag_union,
+            },
         };
     }
 };

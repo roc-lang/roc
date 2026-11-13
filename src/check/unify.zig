@@ -1084,7 +1084,7 @@ const Unifier = struct {
     }
 
     fn isBoundedRowExt(self: *Self, var_: Var) bool {
-        return self.types_store.resolveVar(var_).desc.flags.bounded_row_ext;
+        return self.types_store.flagsOf(var_).bounded_row_ext;
     }
 
     /// The bounded extension a row reaches along its extension chain, so that
