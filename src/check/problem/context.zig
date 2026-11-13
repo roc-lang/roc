@@ -161,8 +161,8 @@ pub const Context = union(enum) {
         arg_index: u32,
         /// Total number of arguments
         num_args: u32,
-        /// The type variable of the argument (for type display)
-        arg_var: Var,
+        /// Region of the argument
+        arg_region: base.Region,
     };
 
     /// Context for if branch type errors
@@ -263,9 +263,9 @@ pub const Context = union(enum) {
         /// Name of the record field
         field_name: Ident.Idx,
         /// Region of the record field
-        field_region_idx: base.Region.Idx,
+        field_region: base.Region,
         /// Region of the record being update
-        record_region_idx: base.Region.Idx,
+        record_region: base.Region,
         /// Name of the record being update
         record_name: ?Ident.Idx,
     };
@@ -310,8 +310,8 @@ pub const Context = union(enum) {
         fn_name: ?Ident.Idx,
         /// Type variable of the first argument
         first_arg_var: Var,
-        /// Type variable of the second argument
-        second_arg_var: Var,
+        /// Region of the second argument
+        second_arg_region: base.Region,
         /// 0-based index of the first argument
         first_arg_index: u32,
         /// 0-based index of the second argument
@@ -330,8 +330,8 @@ pub const Context = union(enum) {
 
     /// Context for method type mismatch (where clause)
     pub const MethodTypeContext = struct {
-        /// The dispatcher type variable
-        constraint_var: Var,
+        /// Region of the dispatcher type variable
+        constraint_region: base.Region,
         /// Exact owning use for a copied relation. Direct constraints retain
         /// their historical type-var-derived region when this is null.
         source_region: ?base.Region = null,

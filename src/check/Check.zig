@@ -8439,6 +8439,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     // needs the same owner the absorption will later be attributed to.
     var unify_opts = opts;
     unify_opts.record_construction_var = construction_var;
+    unify_opts.actual_region = self.getRegionAt(b);
     // A row repeating a label whose occurrences do not relate conflicts on
     // its own, whatever it is related to: normalizing it reports that
     // conflict once (design.md "Row Union Normalization"), and the operands
@@ -8713,6 +8714,7 @@ fn appendTypeMismatch(
             .actual_var = actual,
             .actual_snapshot = actual_snapshot,
         },
+        .actual_region = self.getRegionAt(actual),
         .context = diagnostic_ctx,
         .evidence = evidence,
         .leaf = leaf,
@@ -8941,6 +8943,7 @@ fn checkForInfiniteType(
     const err_var = self.occurs_scratch.err_var.?;
     const data: problem.VarWithSnapshot = .{
         .var_ = var_,
+        .region = self.getRegionAt(var_),
         .snapshot = try self.snapshotVarForError(err_var),
         .def_name = self.bindingRootName(Idx, idx),
     };
@@ -9513,6 +9516,7 @@ fn validateSettledValueRows(self: *Self, env: *Env, walk: *SettledWalk) std.mem.
             // The row head introduces the content that conflicts with its
             // extension. Keep the offending suffix snapshot, but blame that head.
             self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = row_root;
+            self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.actual_region = self.getRegionAt(row_root);
             try invalid_rows.append(self.gpa, row_root);
         } else if (repeats) {
             try repeating_rows.append(self.gpa, row_root);
@@ -9947,8 +9951,10 @@ fn rejectSettledInfiniteTypes(self: *Self, cycles: []const SettledCycle, repl_ro
         const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, cycle.head);
         if (occurs_result == .valid) continue;
         const err_var = self.occurs_scratch.err_var.?;
+        const source_var = self.infiniteTypeSourceVar(cycle, err_var);
         const data: problem.VarWithSnapshot = .{
-            .var_ = self.infiniteTypeSourceVar(cycle, err_var),
+            .var_ = source_var,
+            .region = self.getRegionAt(source_var),
             .snapshot = try self.snapshotVarForError(err_var),
             .def_name = null,
         };
@@ -10611,7 +10617,7 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
         // just the type's name).
         const snapshot = try self.snapshotVarForError(decl.backing);
         _ = try self.problems.appendProblem(.{ .invalid_nominal_decl_recursion = .{
-            .decl_var = decl_var,
+            .region = self.getRegionAt(decl_var),
             .snapshot = snapshot,
             .type_name = decl.ident.ident_idx,
             .kind = kind,
@@ -10980,7 +10986,7 @@ fn reportChangingNominalDecl(
     const decl_var: Var = @fromBackingInt(@intCast(decl.statement()));
     const snapshot = try self.snapshotVarForError(decl.backing);
     _ = try self.problems.appendProblem(.{ .invalid_nominal_decl_recursion = .{
-        .decl_var = decl_var,
+        .region = self.getRegionAt(decl_var),
         .snapshot = snapshot,
         .type_name = decl.ident.ident_idx,
         .kind = kind,
@@ -19559,6 +19565,7 @@ fn reportPolymorphicValueProblem(
     const snapshot = try self.snapshotVarForError(snapshot_var);
     _ = try self.problems.appendProblem(.{ .polymorphic_value = .{
         .var_ = region_var,
+        .region = self.getRegionAt(region_var),
         .snapshot = snapshot,
         .def_name = def_name,
     } });
@@ -25402,6 +25409,7 @@ fn reportImplicitOpenExtExtension(
             .actual_var = actual_var,
             .actual_snapshot = actual_snapshot,
         },
+        .actual_region = self.getRegionAt(actual_var),
         .context = .{ .tag_not_in_annotation = .{
             .region = entry.region,
             .tag_name = tag_name,
@@ -28503,6 +28511,7 @@ fn reportInvalidRow(
             .actual_var = actual_var,
             .actual_snapshot = actual_snapshot,
         },
+        .actual_region = self.getRegionAt(actual_var),
         .context = context,
     } });
 }
@@ -31884,14 +31893,15 @@ const RecordUpdateCheck = struct {
 };
 
 fn recordUpdateFieldContext(
+    self: *Self,
     field: CIR.RecordField,
     record_being_updated_var: Var,
     record_being_updated_name: ?Ident.Idx,
 ) problem.Context {
     return .{ .record_update = .{
         .field_name = field.name,
-        .field_region_idx = @fromBackingInt(@intCast(@backingInt(field.value))),
-        .record_region_idx = @fromBackingInt(@intCast(@backingInt(record_being_updated_var))),
+        .field_region = self.getRegionAt(ModuleEnv.varFrom(field.value)),
+        .record_region = self.getRegionAt(record_being_updated_var),
         .record_name = record_being_updated_name,
     } };
 }
@@ -31927,7 +31937,7 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
                 state.field_index += 1;
                 break :field_relation;
             }
-            const update_context = recordUpdateFieldContext(field, record_being_updated_var, state.record_being_updated_name);
+            const update_context = self.recordUpdateFieldContext(field, record_being_updated_var, state.record_being_updated_name);
             const field_value_var = try self.storedValueVar(field.value, env);
 
             // The base row owns the final update judgment and its
@@ -31975,7 +31985,7 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
         // The child borrows this field's structural context. A construction
         // resolves it on demand; a stored lookup proceeds directly to the
         // actual update judgment after the child.
-        const update_context = recordUpdateFieldContext(field, record_being_updated_var, state.record_being_updated_name);
+        const update_context = self.recordUpdateFieldContext(field, record_being_updated_var, state.record_being_updated_name);
         const field_expected = child_expected.withContextualType(.{
             .var_ = record_being_updated_var,
             .record_field = field.name,
@@ -32019,8 +32029,8 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
         // Unify this record update with the record we're updating
         _ = try self.unifyRecordInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
             .field_name = field.name,
-            .field_region_idx = @fromBackingInt(@intCast(@backingInt(field_idx))),
-            .record_region_idx = @fromBackingInt(@intCast(@backingInt(record_being_updated_var))),
+            .field_region = self.getRegionAt(ModuleEnv.varFrom(field_idx)),
+            .record_region = self.getRegionAt(record_being_updated_var),
             .record_name = state.record_being_updated_name,
         } });
     }
@@ -33656,7 +33666,7 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
                             .fn_args_bound_var = .{
                                 .fn_name = self.enclosing_func_name,
                                 .first_arg_var = arg_1,
-                                .second_arg_var = arg_2,
+                                .second_arg_region = self.getRegionAt(arg_2),
                                 .first_arg_index = @intCast(i),
                                 .second_arg_index = @intCast(j),
                                 .num_args = @intCast(arg_count),
@@ -34014,7 +34024,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
             .call_expr = expr_idx,
             .arg_index = @intCast(arg_index),
             .num_args = @intCast(call_arg_expr_idxs.len),
-            .arg_var = ModuleEnv.varFrom(call_arg_idx),
+            .arg_region = self.getRegionAt(ModuleEnv.varFrom(call_arg_idx)),
         } };
         const arg_expected = if (state.shape_result.isEstablished())
             child_expected.withContextualType(.{
@@ -34043,7 +34053,7 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
                 .call_expr = expr_idx,
                 .arg_index = @intCast(arg_index),
                 .num_args = @intCast(call_arg_expr_idxs.len),
-                .arg_var = ModuleEnv.varFrom(call_arg_idx),
+                .arg_region = self.getRegionAt(ModuleEnv.varFrom(call_arg_idx)),
             } };
             const arg_result = try self.unifyOwnedRelation(
                 expected_arg_var,
@@ -34494,7 +34504,7 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
             .expected = if (state.resolve_method_first)
                 child_expected.withContextualType(.{
                     .var_ = self.scratch_vars.sliceFromStart(state.arg_vars_top.?)[i],
-                    .context = methodCallArgContext(method_call.method_name, expr_idx, i, arg_expr_idxs),
+                    .context = self.methodCallArgContext(method_call.method_name, expr_idx, i, arg_expr_idxs),
                 })
             else
                 child_expected,
@@ -34527,7 +34537,7 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
                     self.scratch_vars.sliceFromStart(arg_vars_top)[i],
                     ModuleEnv.varFrom(arg_expr_idx),
                     env,
-                    methodCallArgContext(method_call.method_name, expr_idx, i, arg_expr_idxs),
+                    self.methodCallArgContext(method_call.method_name, expr_idx, i, arg_expr_idxs),
                     if (self.exprIsFreshRecordConstruction(arg_expr_idx)) .construction else .exact,
                 );
                 if (arg_result.isProblem()) {
@@ -36929,7 +36939,7 @@ fn enforceRecordBuilderMap2Return(
         .call_expr = call_expr,
         .arg_index = 2,
         .num_args = 3,
-        .arg_var = mapper_var,
+        .arg_region = self.getRegionAt(mapper_var),
     } }, .exact);
 }
 
@@ -37888,6 +37898,7 @@ fn varResolvesToKnownType(self: *const Self, var_: Var) bool {
 /// The problem context for relating one argument of a method call to the
 /// parameter type the resolved method declares for it.
 fn methodCallArgContext(
+    self: *Self,
     method_name: Ident.Idx,
     call_expr: CIR.Expr.Idx,
     arg_index: usize,
@@ -37898,7 +37909,7 @@ fn methodCallArgContext(
         .call_expr = call_expr,
         .arg_index = @intCast(arg_index),
         .num_args = @intCast(arg_expr_idxs.len),
-        .arg_var = ModuleEnv.varFrom(arg_expr_idxs[arg_index]),
+        .arg_region = self.getRegionAt(ModuleEnv.varFrom(arg_expr_idxs[arg_index])),
     } };
 }
 
@@ -39364,6 +39375,7 @@ fn prepareNominalTypeUsage(
         if (!nominal_type.canLiftInner(self.cir.selfModuleIdentity())) {
             _ = try self.problems.appendProblem(.{ .cannot_access_opaque_nominal = .{
                 .var_ = target_var,
+                .region = self.getRegionAt(target_var),
                 .nominal_type_name = nominal_type.ident.ident_idx,
             } });
 
@@ -39401,6 +39413,7 @@ fn prepareNominalTypeUsage(
         // structure, report the error and set the expression to error type.
         _ = try self.problems.appendProblem(.{ .nominal_type_resolution_failed = .{
             .var_ = target_var,
+            .region = self.getRegionAt(target_var),
             .nominal_type_decl_var = nominal_type_decl_var,
         } });
         try self.markErroneous(target_var);
@@ -43797,6 +43810,7 @@ fn methodConflictProblem(
             .actual_var = use_var,
             .actual_snapshot = try self.snapshotVarForError(second_fn_var),
         },
+        .actual_region = self.getRegionAt(use_var),
         .method_conflict = conflict,
     } };
 }
@@ -46054,6 +46068,7 @@ fn checkReturnRelation(
         std.debug.assert(result == .problem);
         const result_expr = self.resultValueExpr(actual_expr);
         self.problems.problems.items[@backingInt(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+        self.problems.problems.items[@backingInt(result.problem)].type_mismatch.actual_region = self.getRegionAt(ModuleEnv.varFrom(result_expr));
         try self.markErroneousValueExpr(result_expr);
     }
 }
@@ -46082,6 +46097,7 @@ fn relateResultValue(
     const result_expr = self.resultValueExpr(actual_expr);
     const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
     self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+    self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.actual_region = self.getRegionAt(ModuleEnv.varFrom(result_expr));
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(expected, actual);
     try self.markErroneousValueExpr(result_expr);
@@ -46126,6 +46142,7 @@ fn relateWidenedResultValue(
     const result_expr = self.resultValueExpr(actual_expr);
     const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
     self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+    self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.actual_region = self.getRegionAt(ModuleEnv.varFrom(result_expr));
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(expected, actual);
     try self.markErroneousValueExpr(result_expr);
@@ -46608,6 +46625,7 @@ fn refineAnnotatedBodyMismatch(self: *Self, body_result: unifier.Result, body: C
     self.refinePlatformRequirementReturnContext(body_result);
     const result_expr = self.resultValueExpr(body);
     self.problems.problems.items[@backingInt(body_result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+    self.problems.problems.items[@backingInt(body_result.problem)].type_mismatch.actual_region = self.getRegionAt(ModuleEnv.varFrom(result_expr));
     try self.markErroneousValueExpr(result_expr);
 }
 
@@ -48839,6 +48857,7 @@ fn rejectRecursiveStaticDispatch(
         .recursive_dispatch = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
+            .fn_region = self.getRegionAt(constraint.fn_var),
             .method_name = constraint.fn_name,
             .grown_from_snapshot = grown_from_snapshot,
         },
@@ -48894,6 +48913,7 @@ fn rejectLocalValueMethodDispatch(
         .local_value_method = .{
             .dispatcher_snapshot = try self.snapshotVarForError(dispatcher_var),
             .fn_var = constraint.fn_var,
+            .fn_region = self.getRegionAt(constraint.fn_var),
             .method_name = constraint.fn_name,
         },
     } });
@@ -52299,7 +52319,7 @@ inline fn processDeferredDispatchEntry(
                 if (constraint_fn_resolved.unwrapFunc() == null) {
                     _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
-                            .constraint_var = constraint.fn_var,
+                            .constraint_region = self.getRegionAt(constraint.fn_var),
                             .dispatcher_name = nominal_type.ident.ident_idx,
                             .method_name = constraint.fn_name,
                         },
@@ -52311,7 +52331,7 @@ inline fn processDeferredDispatchEntry(
 
                 const fn_ctx: problem.Context = .{
                     .method_type = .{
-                        .constraint_var = deferred_constraint.var_,
+                        .constraint_region = self.getRegionAt(deferred_constraint.var_),
                         .dispatcher_name = nominal_type.ident.ident_idx,
                         .method_name = constraint.fn_name,
                         .requirement_fn_var = constraint.fn_var,
@@ -52519,7 +52539,7 @@ inline fn processDeferredDispatchEntry(
                 if (constraint_fn_resolved.unwrapFunc() == null) {
                     _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
-                            .constraint_var = constraint.fn_var,
+                            .constraint_region = self.getRegionAt(constraint.fn_var),
                             .dispatcher_name = alias.ident.ident_idx,
                             .method_name = constraint.fn_name,
                         },
@@ -52531,7 +52551,7 @@ inline fn processDeferredDispatchEntry(
 
                 const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                     .method_type = .{
-                        .constraint_var = deferred_constraint.var_,
+                        .constraint_region = self.getRegionAt(deferred_constraint.var_),
                         .dispatcher_name = alias.ident.ident_idx,
                         .method_name = constraint.fn_name,
                     },
@@ -52676,6 +52696,7 @@ fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_va
             .actual_var = actual_var,
             .actual_snapshot = actual_snapshot,
         },
+        .actual_region = self.getRegionAt(actual_var),
         .context = .{ .interpolation_part = region },
         .str_conversion = try self.strConversionFor(
             .{ .interpolation_part = region },
@@ -58892,7 +58913,7 @@ fn beginParseFormatMethod(
     };
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = encoding_var,
+            .constraint_region = self.getRegionAt(encoding_var),
             .dispatcher_name = method.dispatcher_name,
             .method_name = method_name,
         },
@@ -58968,7 +58989,7 @@ fn validateEncodeFormatMethod(
     };
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = encoding_var,
+            .constraint_region = self.getRegionAt(encoding_var),
             .dispatcher_name = method.dispatcher_name,
             .method_name = method_name,
         },
@@ -59000,7 +59021,7 @@ fn validateEncodeDictProtocolMethod(
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = encoding_var,
+            .constraint_region = self.getRegionAt(encoding_var),
             .dispatcher_name = method.dispatcher_name,
             .method_name = method_name,
         },
@@ -59047,7 +59068,7 @@ fn beginParseDictProtocolMethod(
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, child_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = encoding_var,
+            .constraint_region = self.getRegionAt(encoding_var),
             .dispatcher_name = method.dispatcher_name,
             .method_name = method_name,
         },
@@ -59092,7 +59113,7 @@ fn beginParseKeyMethod(
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = encoding_var,
+            .constraint_region = self.getRegionAt(encoding_var),
             .dispatcher_name = method.dispatcher_name,
             .method_name = method_name,
         },
@@ -59132,7 +59153,7 @@ fn validateEncodeKeyMethod(
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, key_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = encoding_var,
+            .constraint_region = self.getRegionAt(encoding_var),
             .dispatcher_name = method.dispatcher_name,
             .method_name = method_name,
         },
@@ -59293,7 +59314,7 @@ fn beginParseErrorMethod(
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, argument_var }, child_err_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = encoding_var,
+            .constraint_region = self.getRegionAt(encoding_var),
             .dispatcher_name = method.dispatcher_name,
             .method_name = method_name,
         },
@@ -59334,7 +59355,7 @@ fn beginSkipRecordFieldMethod(self: *Self, inputs: DerivedCodecInputs) Allocator
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = encoding_var,
+            .constraint_region = self.getRegionAt(encoding_var),
             .dispatcher_name = method.dispatcher_name,
             .method_name = method_name,
         },
@@ -59373,7 +59394,7 @@ fn validateRenameFieldMethod(
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, str_var }, str_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = encoding_var,
+            .constraint_region = self.getRegionAt(encoding_var),
             .dispatcher_name = method.dispatcher_name,
             .method_name = method_name,
         },
@@ -60505,7 +60526,7 @@ fn stepDerivedParseNominal(
     const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, nominal_var, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = nominal_var,
+            .constraint_region = self.getRegionAt(nominal_var),
             .dispatcher_name = nominal.ident.ident_idx,
             .method_name = constraint.fn_name,
         },
@@ -60757,7 +60778,7 @@ fn validateGeneratedNominalMethodCall(
     const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, dispatcher_var, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = dispatcher_var,
+            .constraint_region = self.getRegionAt(dispatcher_var),
             .dispatcher_name = nominal.ident.ident_idx,
             .method_name = method_name,
         },
@@ -61080,7 +61101,7 @@ fn stepDerivedEncodeNominal(
     const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, nominal_var, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
-            .constraint_var = nominal_var,
+            .constraint_region = self.getRegionAt(nominal_var),
             .dispatcher_name = nominal.ident.ident_idx,
             .method_name = constraint.fn_name,
         },
@@ -61331,8 +61352,9 @@ fn checkFlexVarConstraintCompatibility(
                     .actual_var = constraint.fn_var,
                     .actual_snapshot = actual_snapshot,
                 },
+                .actual_region = self.getRegionAt(constraint.fn_var),
                 .context = .{ .method_type = .{
-                    .constraint_var = var_,
+                    .constraint_region = self.getRegionAt(var_),
                     .source_region = if (options.error_expr) |expr_idx|
                         self.cir.store.getExprRegion(expr_idx)
                     else
@@ -61385,6 +61407,7 @@ fn recordRolledBackTypeMismatch(self: *Self, actual: Var, expected: Var, ctx: pr
             .actual_var = actual,
             .actual_snapshot = actual_snapshot,
         },
+        .actual_region = self.getRegionAt(actual),
         .context = context,
         .str_conversion = try self.strConversionFor(
             context,
@@ -61732,9 +61755,11 @@ fn reportConstraintErrorAt(
             .static_dispatch = .{
                 .dispatcher_does_not_impl_method = .{
                     .dispatcher_var = dispatcher_var,
+                    .dispatcher_region = self.getRegionAt(dispatcher_var),
                     .dispatcher_snapshot = snapshot,
                     .dispatcher_type = dispatcher_type,
                     .fn_var = constraint.fn_var,
+                    .fn_region = self.getRegionAt(constraint.fn_var),
                     .method_name = constraint.fn_name,
                     .origin = constraint.origin,
                     .owner_region = owner_region,
@@ -61757,8 +61782,10 @@ fn reportConstraintErrorAt(
         .not_nominal => problem.Problem{ .static_dispatch = .{
             .dispatcher_not_nominal = .{
                 .dispatcher_var = dispatcher_var,
+                .dispatcher_region = self.getRegionAt(dispatcher_var),
                 .dispatcher_snapshot = snapshot,
                 .fn_var = constraint.fn_var,
+                .fn_region = self.getRegionAt(constraint.fn_var),
                 .method_name = constraint.fn_name,
                 .origin = constraint.origin,
                 .owner_region = owner_region,
@@ -61822,6 +61849,7 @@ fn reportEqualityError(
             .dispatcher_var = dispatcher_var,
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
+            .fn_region = self.getRegionAt(constraint.fn_var),
             .origin = constraint.origin,
             .owner_region = self.constraintOwnerRegion(failure_expr),
         },
@@ -61848,6 +61876,7 @@ fn reportUndeterminedCodecType(
         .undetermined_codec_type = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
+            .fn_region = self.getRegionAt(constraint.fn_var),
             .method_name = constraint.fn_name,
             .owner_region = self.constraintOwnerRegion(owner_expr),
         },
@@ -61886,6 +61915,7 @@ fn reportDerivedMapError(
         .type_does_not_support_map = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
+            .fn_region = self.getRegionAt(constraint.fn_var),
             .method_name = constraint.fn_name,
             .owner_region = self.constraintOwnerRegion(owner_expr),
         },
