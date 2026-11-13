@@ -541,7 +541,10 @@ pub const Store = struct {
             live_descs.set(@backingInt(storage.desc_idx));
         }
 
-        for (self.vars.items) |*var_| var_.* = self.representativeVar(var_.*);
+        for (self.vars.items) |*var_| {
+            if (isRangeLengthSlot(var_.*)) continue;
+            var_.* = self.representativeVar(var_.*);
+        }
         for (0..self.record_fields.len()) |index| {
             var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
             field.presence.var_ = self.representativeVar(field.presence.var_);
@@ -1365,15 +1368,15 @@ pub const Store = struct {
             },
             .flex, .rigid, .field_presence, .err => 0,
         };
-        return desc.encode(identity);
+        return desc.encode(identity, self);
     }
 
     /// `desc` as a stored row, for content that is neither a nominal type nor
     /// an alias and so names no identity.
-    fn encodeDescWithoutIdentity(_: *const Self, desc: Desc) Desc.Row {
+    fn encodeDescWithoutIdentity(self: *const Self, desc: Desc) Desc.Row {
         const kind = types.ContentKind.of(desc.content);
         std.debug.assert(kind != .alias and kind != .nominal_type);
-        return desc.encode(0);
+        return desc.encode(0, self);
     }
 
     /// The identity row a stored nominal descriptor names.
@@ -1975,7 +1978,7 @@ pub const Store = struct {
 
     /// Make alias content whose first `source_arg_count` args are source
     /// arguments and the rest hidden implicit-row parameters. Appends
-    /// `[backing, args...]` to the vars pool as the alias's vars.
+    /// `[backing, args...]` to the vars pool as the alias's vars range.
     pub fn mkAliasWithPackedSourceDecl(
         self: *Self,
         ident: TypeIdent,
@@ -1990,7 +1993,8 @@ pub const Store = struct {
         if (builtin.mode == .debug and self.sliceAliasesVars(args)) {
             base.invariant("mkAlias: argument slice aliases the var list it is appended to", .{});
         }
-        try self.vars.ensureUnusedCapacity(self.gpa, args.len + 1);
+        try self.vars.ensureUnusedCapacity(self.gpa, args.len + 2);
+        _ = self.vars.appendAssumeCapacity(rangeLengthSlot(@intCast(args.len + 1)));
         const backing_idx = self.vars.appendAssumeCapacity(backing_var);
         for (args) |arg| _ = self.vars.appendAssumeCapacity(arg);
 
@@ -2113,13 +2117,10 @@ pub const Store = struct {
 
     // sub list setters //
 
-    /// Append a var to the backing list, returning the idx
-    pub fn appendVar(self: *Self, v: Var) std.mem.Allocator.Error!VarSafeList.Idx {
-        self.debugAssertUnsealed();
-        return try self.vars.append(self.gpa, v);
-    }
-
-    /// Append a var to the backing list, returning the idx
+    /// Append `s` to the vars pool as a range: its length goes in the slot
+    /// just before it (`varRange`), so a stored descriptor keeps only the
+    /// range's start. Every range of the pool is made here or by
+    /// `mkAliasWithPackedSourceDecl`.
     pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
         self.debugAssertUnsealed();
         const trace = tracy.traceNamed(@src(), "typesStore.appendVars");
@@ -2130,7 +2131,48 @@ pub const Store = struct {
         if (builtin.mode == .debug and self.sliceAliasesVars(s)) {
             base.invariant("appendVars: source slice aliases the var list it is appended to", .{});
         }
-        return try self.vars.appendSlice(self.gpa, s);
+        try self.vars.ensureUnusedCapacity(self.gpa, s.len + 1);
+        _ = self.vars.appendAssumeCapacity(rangeLengthSlot(@intCast(s.len)));
+        return self.vars.appendSliceAssumeCapacity(s);
+    }
+
+    /// The bit marking a vars-pool slot that holds the length of the range
+    /// after it rather than a variable. Every variable is below it (the
+    /// checked synthesized-type bit, see `representativeVar`), so a pass over
+    /// the whole pool tells the two apart.
+    const range_length_bit: u32 = @as(u32, 1) << 31;
+
+    fn rangeLengthSlot(count: u32) Var {
+        std.debug.assert(count < range_length_bit);
+        return @fromBackingInt(count | range_length_bit);
+    }
+
+    fn isRangeLengthSlot(slot: Var) bool {
+        return @backingInt(slot) & range_length_bit != 0;
+    }
+
+    /// What a stored descriptor keeps of the vars range `range`: its start,
+    /// or the empty range's start for `Range.empty()`. Every other range of
+    /// a stored descriptor came from `appendVars`, so its length is in the
+    /// slot before its start.
+    pub inline fn storedVarRange(self: *const Self, range: VarSafeList.Range) u32 {
+        if (range.start == VarSafeList.Range.empty_start) {
+            std.debug.assert(range.count == 0);
+            return @backingInt(range.start);
+        }
+        const start: u32 = @backingInt(range.start);
+        if (std.debug.runtime_safety) {
+            if (start == 0 or self.vars.items[start - 1] != rangeLengthSlot(range.count)) {
+                base.invariant("a stored descriptor holds vars range {d}+{d}, which appendVars did not make", .{ start, range.count });
+            }
+        }
+        return start;
+    }
+
+    /// The vars range a stored descriptor keeps as `stored` (`storedVarRange`).
+    pub inline fn varRange(self: *const Self, stored: u32) VarSafeList.Range {
+        if (stored == @backingInt(VarSafeList.Range.empty_start)) return .empty();
+        return .{ .start = @fromBackingInt(stored), .count = @backingInt(self.vars.items[stored - 1]) & ~range_length_bit };
     }
 
     fn sliceAliasesVars(self: *const Self, s: []const Var) bool {
@@ -4941,8 +4983,10 @@ test "DescStore.Serialized roundtrip" {
         .rank = Rank.outermost,
     };
 
-    const row1 = desc1.encode(0);
-    const row2 = desc2.encode(0);
+    var store = try Store.init(gpa);
+    defer store.deinit();
+    const row1 = store.encodeDescWithoutIdentity(desc1);
+    const row2 = store.encodeDescWithoutIdentity(desc2);
     try desc_store.backing.ensureUnusedCapacity(gpa, 2);
     const desc_idx_1 = desc_store.appendRowAssumeCapacity(row1);
     const desc_idx_2 = desc_store.appendRowAssumeCapacity(row2);

@@ -39,7 +39,7 @@ test {
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     // The stored form: one word of kind, flags and rank, then the payload.
     try std.testing.expectEqual(4, @sizeOf(Descriptor.Word));
-    try std.testing.expectEqual(24, @sizeOf(Descriptor.Row));
+    try std.testing.expectEqual(20, @sizeOf(Descriptor.Row));
     try std.testing.expectEqual(28, @sizeOf(Content));
     try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
@@ -210,7 +210,7 @@ pub const Descriptor = struct {
     /// The rest of a stored descriptor: the content's payload, laid out per
     /// kind by `encode`. Words a kind does not use are zero, so a row's bytes
     /// are a function of the descriptor alone.
-    pub const Payload = [5]u32;
+    pub const Payload = [4]u32;
 
     /// A stored descriptor. Every byte belongs to a field.
     pub const Row = struct {
@@ -223,10 +223,12 @@ pub const Descriptor = struct {
         std.debug.assert(@sizeOf(Row) == @sizeOf(Word) + @sizeOf(Payload));
     }
 
-    /// This descriptor as a stored row. A nominal type or alias stores
-    /// `identity`, the index of its identity row in its type store
-    /// (`NominalIdentity`, `AliasIdentity`); other kinds ignore it.
-    pub inline fn encode(self: Descriptor, identity: u32) Row {
+    /// This descriptor as a stored row in `store`, the type store that holds
+    /// it. A nominal type or alias stores `identity`, the index of its
+    /// identity row in that store (`NominalIdentity`, `AliasIdentity`); other
+    /// kinds ignore it. A vars range keeps only its start
+    /// (`Store.storedVarRange`).
+    pub inline fn encode(self: Descriptor, identity: u32, store: anytype) Row {
         var payload: Payload = @splat(0);
         const kind: ContentKind = switch (self.content) {
             .flex => |flex| kind: {
@@ -242,7 +244,7 @@ pub const Descriptor = struct {
             },
             .alias => |alias| kind: {
                 payload[0] = identity;
-                putRange(&payload, 1, alias.vars.nonempty);
+                payload[1] = store.storedVarRange(alias.vars.nonempty);
                 break :kind .alias;
             },
             .field_presence => |presence| kind: {
@@ -265,18 +267,18 @@ pub const Descriptor = struct {
                     break :kind .record;
                 },
                 .tuple => |tuple| kind: {
-                    putRange(&payload, 0, tuple.elems);
+                    payload[0] = store.storedVarRange(tuple.elems);
                     break :kind .tuple;
                 },
                 .nominal_type => |nominal| kind: {
                     payload[0] = identity;
-                    putRange(&payload, 1, nominal.args);
+                    payload[1] = store.storedVarRange(nominal.args);
                     break :kind .nominal_type;
                 },
                 inline .fn_pure, .fn_effectful, .fn_unbound => |func, tag| kind: {
-                    putRange(&payload, 0, func.args);
-                    payload[2] = @backingInt(func.ret);
-                    putRange(&payload, 3, func.effect_deps);
+                    payload[0] = store.storedVarRange(func.args);
+                    payload[1] = @backingInt(func.ret);
+                    payload[2] = store.storedVarRange(func.effect_deps);
                     break :kind @field(ContentKind, @tagName(tag));
                 },
                 .empty_record => .empty_record,
@@ -291,10 +293,11 @@ pub const Descriptor = struct {
         return .{ .word = .{ .kind = kind, .flags = self.flags, .rank = self.rank }, .payload = payload };
     }
 
-    /// The descriptor a stored row holds. `identities` is the type store
-    /// that holds the row, which gives a nominal type's or alias's identity
-    /// row by index (`nominalIdentity`, `aliasIdentity`).
-    pub inline fn decode(row: Row, identities: anytype) Descriptor {
+    /// The descriptor a stored row holds. `store` is the type store that
+    /// holds the row, which gives a nominal type's or alias's identity row by
+    /// index (`nominalIdentity`, `aliasIdentity`) and a vars range by its
+    /// stored start (`varRange`).
+    pub inline fn decode(row: Row, store: anytype) Descriptor {
         const p = row.payload;
         const content: Content = switch (row.word.kind) {
             .flex => .{ .flex = .{
@@ -307,10 +310,10 @@ pub const Descriptor = struct {
                 .constraints = getRange(StaticDispatchConstraint.SafeList.Range, p, 1),
             } },
             .alias => alias: {
-                const identity = identities.aliasIdentity(p[0]);
+                const identity = store.aliasIdentity(p[0]);
                 break :alias .{ .alias = .{
                     .ident = .{ .ident_idx = identity.ident },
-                    .vars = .{ .nonempty = getRange(Var.SafeList.Range, p, 1) },
+                    .vars = .{ .nonempty = store.varRange(p[1]) },
                     .source_arg_count = identity.source_arg_count,
                     .origin_module = identity.origin_module,
                     .source_decl = identity.source_decl,
@@ -329,20 +332,20 @@ pub const Descriptor = struct {
                 .fields = getRange(RecordField.SafeMultiList.Range, p, 0),
                 .ext = @fromBackingInt(p[2]),
             } } },
-            .tuple => .{ .structure = .{ .tuple = .{ .elems = getRange(Var.SafeList.Range, p, 0) } } },
+            .tuple => .{ .structure = .{ .tuple = .{ .elems = store.varRange(p[0]) } } },
             .nominal_type => nominal: {
-                const identity = identities.nominalIdentity(p[0]);
+                const identity = store.nominalIdentity(p[0]);
                 break :nominal .{ .structure = .{ .nominal_type = .{
                     .ident = .{ .ident_idx = identity.ident },
-                    .args = getRange(Var.SafeList.Range, p, 1),
+                    .args = store.varRange(p[1]),
                     .origin_module = identity.origin_module,
                     .source = identity.source,
                 } } };
             },
             inline .fn_pure, .fn_effectful, .fn_unbound => |tag| .{ .structure = @unionInit(FlatType, @tagName(tag), .{
-                .args = getRange(Var.SafeList.Range, p, 0),
-                .ret = @fromBackingInt(p[2]),
-                .effect_deps = getRange(Var.SafeList.Range, p, 3),
+                .args = store.varRange(p[0]),
+                .ret = @fromBackingInt(p[1]),
+                .effect_deps = store.varRange(p[2]),
             }) },
             .empty_record => .{ .structure = .empty_record },
             .tag_union => .{ .structure = .{ .tag_union = .{

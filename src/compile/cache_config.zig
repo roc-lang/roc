@@ -373,7 +373,9 @@ pub const Constants = struct {
     ///      and a payload of five words.
     /// 186: a type store interns the identities of its nominal types and
     ///      aliases, and their descriptors name an identity row.
-    pub const CACHE_VERSION = 186;
+    /// 187: every vars range of a type store has its length in the pool slot
+    ///      just before it, and a stored descriptor keeps only a range's start.
+    pub const CACHE_VERSION = 187;
 };
 
 /// Configuration for the Roc cache system.
