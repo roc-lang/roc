@@ -6448,10 +6448,41 @@ pub const ReportBuilder = struct {
     }
 
     fn buildUnmatchablePatternReport(self: *Self, data: UnmatchablePattern) Allocator.Error!Report {
-        return self.buildUselessPatternReport("Unmatchable Pattern", data.match_expr, data.branch_index, data.part, "can never match.", .{
-            .one = "This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it.",
-            .many = "Each of these patterns matches a type that has no possible values (an uninhabited type), so no value can ever match it.",
-        });
+        switch (data.reason) {
+            .uninhabited => return self.buildUselessPatternReport("Unmatchable Pattern", data.match_expr, data.branch_index, data.part, "can never match.", .{
+                .one = "This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it.",
+                .many = "Each of these patterns matches a type that has no possible values (an uninhabited type), so no value can ever match it.",
+            }),
+            .tag_never_produced => |tag| {
+                var report = try self.beginUselessPatternReport("Unmatchable Pattern", data.match_expr, data.branch_index, data.part, "can never match.");
+                errdefer report.deinit();
+                if (self.uselessPatternCount(data.match_expr, data.branch_index, data.part) > 1) {
+                    try D.renderSlice(&.{
+                        D.bytes("Each of these patterns needs a tag that the value it matches never has, such as"),
+                        D.ident(tag).withAnnotation(.inline_code),
+                        D.bytes(". Only").withNoPrecedingSpace(),
+                        D.bytes("match").withAnnotation(.keyword),
+                        D.bytes("patterns mention these tags; nothing ever produces them."),
+                    }, self, &report);
+                } else {
+                    try D.renderSlice(&.{
+                        D.bytes("The value this pattern matches never has the"),
+                        D.ident(tag).withAnnotation(.inline_code),
+                        D.bytes("tag. Only"),
+                        D.bytes("match").withAnnotation(.keyword),
+                        D.bytes("patterns mention it; nothing ever produces it."),
+                    }, self, &report);
+                }
+                try report.document.addLineBreaks(2);
+                try D.renderSlice(&.{
+                    D.bytes("Hint:").withAnnotation(.emphasized),
+                    D.bytes("If"),
+                    D.ident(tag).withAnnotation(.inline_code),
+                    D.bytes("should be possible here, add a type annotation to the value that lists it."),
+                }, self, &report);
+                return report;
+            },
+        }
     }
 
     /// A warning about a match branch, or one `|` alternative of it, that can
@@ -6464,6 +6495,34 @@ pub const ReportBuilder = struct {
         part: problem_mod.MatchBranchPart,
         verdict: []const u8,
         explanation: struct { one: []const u8, many: []const u8 },
+    ) Allocator.Error!Report {
+        var report = try self.beginUselessPatternReport(title, match_expr, branch_index, part, verdict);
+        errdefer report.deinit();
+        try D.renderSlice(&.{
+            D.bytes(if (self.uselessPatternCount(match_expr, branch_index, part) > 1) explanation.many else explanation.one),
+        }, self, &report);
+        return report;
+    }
+
+    /// How many patterns a useless-pattern warning is about: one alternative,
+    /// or every alternative of its branch.
+    fn uselessPatternCount(self: *Self, match_expr: CIR.Expr.Idx, branch_index: u32, part: problem_mod.MatchBranchPart) usize {
+        if (part != .whole_branch) return 1;
+        const store = &self.can_ir.store;
+        const match = store.getExpr(match_expr).e_match;
+        const branch = store.getMatchBranch(store.matchBranchSlice(match.branches)[branch_index]);
+        return store.sliceMatchBranchPatterns(branch.patterns).len;
+    }
+
+    /// A useless-pattern warning's headline and highlighted patterns, before
+    /// its explanation.
+    fn beginUselessPatternReport(
+        self: *Self,
+        title: []const u8,
+        match_expr: CIR.Expr.Idx,
+        branch_index: u32,
+        part: problem_mod.MatchBranchPart,
+        verdict: []const u8,
     ) Allocator.Error!Report {
         const store = &self.can_ir.store;
         const match = store.getExpr(match_expr).e_match;
@@ -6497,11 +6556,6 @@ pub const ReportBuilder = struct {
             try self.addSourceWarningRegion(&report, Region.from_raw_offsets(first.start.offset, last.end.offset));
         }
         try report.document.addLineBreak();
-
-        try D.renderSlice(&.{
-            D.bytes(if (part == .whole_branch and branch_patterns.len > 1) explanation.many else explanation.one),
-        }, self, &report);
-
         return report;
     }
 

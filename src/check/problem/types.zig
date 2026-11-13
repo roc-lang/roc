@@ -830,11 +830,22 @@ pub const RedundantPattern = struct {
     part: MatchBranchPart,
 };
 
-/// Problem data for an unmatchable pattern (pattern on uninhabited type)
+/// Problem data for a match pattern that no value can ever match
 pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     branch_index: u32,
     part: MatchBranchPart,
+    reason: Reason = .uninhabited,
+
+    /// Why no value can match the pattern.
+    pub const Reason = union(enum) {
+        /// The pattern matches a type that has no possible values.
+        uninhabited,
+        /// The pattern needs this tag, which the matched value's type holds
+        /// only because `match` patterns asked for it: nothing in the module
+        /// produces it (design.md "Pattern-Only Tags").
+        tag_never_produced: Ident.Idx,
+    };
 };
 
 /// A name bound by one `|` alternative of a match branch but not by another,

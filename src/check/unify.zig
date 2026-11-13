@@ -2069,12 +2069,10 @@ const Unifier = struct {
     }
 
     fn mergeRowEntriesIntoScratch(self: *Self, comptime kind: RowKind, range: *kind.Entry().SafeList.Range, entries: kind.Entry().SafeMultiList.Range) std.mem.Allocator.Error!void {
-        const next = kind.storeEntries(self.types_store).sliceRange(entries);
         try self.scratch.mergeSortedExtension(
             kind,
             range,
-            next.items(.name),
-            next.items(kind.payloadField()),
+            kind.storeEntries(self.types_store).sliceRange(entries),
             self.ident_store,
         );
     }
@@ -2156,9 +2154,13 @@ const Unifier = struct {
         const range_start: u32 = @intCast(self.types_store.tags.len());
 
         for (self.scratch.in_both_tags.sliceRange(post.shared_tags_range)) |tags| {
+            // A tag both rows hold is pattern-only exactly when both rows
+            // hold it only because match patterns asked for it (design.md
+            // "Pattern-Only Tags").
             _ = try self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
+                .pattern_only = tags.a.pattern_only and tags.b.pattern_only,
             }});
         }
 
@@ -4273,13 +4275,6 @@ const RowKind = enum {
         };
     }
 
-    fn entry(comptime kind: RowKind, name: Ident.Idx, payload: kind.Payload()) kind.Entry() {
-        return switch (kind) {
-            .record => .{ .name = name, .presence = payload },
-            .tag_union => .{ .name = name, .args = payload },
-        };
-    }
-
     fn payloadOf(comptime kind: RowKind, e: kind.Entry()) kind.Payload() {
         return @field(e, @tagName(kind.payloadField()));
     }
@@ -4741,8 +4736,9 @@ pub const Scratch = struct {
         const gathered = self.rowList(kind, "gathered_");
         const start_int = gathered.len();
         const slice = multi_list.sliceRange(range);
-        for (slice.items(.name), slice.items(kind.payloadField())) |name, payload| {
-            _ = try gathered.append(self.gpa, kind.entry(name, payload));
+        // Whole entries are copied so a tag's pattern-only mark travels with it.
+        for (0..slice.len) |index| {
+            _ = try gathered.append(self.gpa, slice.get(index));
         }
         return gathered.rangeToEnd(@intCast(start_int));
     }
@@ -4750,17 +4746,18 @@ pub const Scratch = struct {
     /// Merge sorted extension entries into an already-sorted gathered range.
     /// Maintains sorted order; an entry already gathered keeps its first
     /// occurrence, and the repeat is recorded in the kind's chain-duplicate list.
+    /// A repeated tag names the same tag, so the kept occurrence is
+    /// pattern-only only when the repeat is too (design.md "Pattern-Only Tags").
     /// The range is updated in-place to reflect the new count.
     fn mergeSortedExtension(
         self: *Self,
         comptime kind: RowKind,
         range: *kind.Entry().SafeList.Range,
-        ext_names: []const Ident.Idx,
-        ext_payloads: []const kind.Payload(),
+        ext_entries: kind.Entry().SafeMultiList.Slice,
         ident_store: *const Ident.Store,
     ) std.mem.Allocator.Error!void {
-        std.debug.assert(ext_names.len == ext_payloads.len);
-        if (ext_names.len == 0) return;
+        if (ext_entries.len == 0) return;
+        const ext_names = ext_entries.items(.name);
 
         const gathered = self.rowList(kind, "gathered_");
         const chain_duplicates = self.rowList(kind, "chain_duplicate_");
@@ -4772,12 +4769,14 @@ pub const Scratch = struct {
         // Count the extension entries that are not already gathered, recording
         // each repeated one against its first occurrence.
         var new_count: usize = 0;
-        for (ext_names, ext_payloads) |ext_name, ext_payload| {
-            const first = for (current) |existing| {
-                if (existing.name.eql(ext_name)) break existing;
+        for (0..ext_entries.len) |ext_index| {
+            const ext_entry = ext_entries.get(ext_index);
+            const first = for (current) |*existing| {
+                if (existing.name.eql(ext_entry.name)) break existing;
             } else null;
             if (first) |existing| {
-                try chain_duplicates.append(self.gpa, .{ .first = kind.payloadOf(existing), .repeated = ext_payload });
+                if (comptime kind == .tag_union) existing.pattern_only = existing.pattern_only and ext_entry.pattern_only;
+                try chain_duplicates.append(self.gpa, .{ .first = kind.payloadOf(existing.*), .repeated = kind.payloadOf(ext_entry) });
             } else new_count += 1;
         }
 
@@ -4795,12 +4794,12 @@ pub const Scratch = struct {
         // 2. Then do an in-place merge of the two sorted regions
 
         // Append non-duplicate extension entries
-        for (ext_names, ext_payloads) |name, payload| {
+        for (ext_names, 0..) |name, ext_index| {
             const is_dup = for (current_after) |existing| {
                 if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
-                gathered.items.appendAssumeCapacity(kind.entry(name, payload));
+                gathered.items.appendAssumeCapacity(ext_entries.get(ext_index));
             }
         }
 

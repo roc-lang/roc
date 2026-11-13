@@ -402,6 +402,60 @@ test "unify - a tag repeated along one row's chain relates its payloads" {
     }
 }
 
+/// Whether the first occurrence of `name` along `row`'s chain is pattern-only.
+fn rowTagPatternOnly(env: *TestEnv, row: Var, name: []const u8) !bool {
+    const ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text(name));
+    const store = &env.module_env.types;
+    var current = row;
+    while (true) {
+        const tag_union = store.resolveVar(current).desc.content.structure.tag_union;
+        const tags = store.getTagsSlice(tag_union.tags);
+        for (tags.items(.name), tags.items(.pattern_only)) |tag_name, pattern_only| {
+            if (tag_name.eql(ident)) return pattern_only;
+        }
+        current = tag_union.ext;
+    }
+}
+
+test "unify - a shared tag is pattern-only only when both rows' tags are" {
+    for ([_][2]bool{ .{ true, true }, .{ true, false }, .{ false, true }, .{ false, false } }) |marks| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const store = &env.module_env.types;
+        var shared_a = try env.mkTag("Shared", &.{});
+        shared_a.pattern_only = marks[0];
+        var shared_b = try env.mkTag("Shared", &.{});
+        shared_b.pattern_only = marks[1];
+        var only_a = try env.mkTag("OnlyA", &.{});
+        only_a.pattern_only = true;
+        const only_b = try env.mkTag("OnlyB", &.{});
+        const a = try store.freshFromContent((try env.mkTagUnionOpen(&.{ shared_a, only_a })).content);
+        const b = try store.freshFromContent((try env.mkTagUnionOpen(&.{ shared_b, only_b })).content);
+        try std.testing.expectEqual(.unified, try env.unify(a, b));
+        try std.testing.expectEqual(marks[0] and marks[1], try rowTagPatternOnly(&env, a, "Shared"));
+        // A tag only one row holds keeps its own mark.
+        try std.testing.expect(try rowTagPatternOnly(&env, a, "OnlyA"));
+        try std.testing.expect(!try rowTagPatternOnly(&env, a, "OnlyB"));
+    }
+}
+
+test "unify - a tag repeated along one row's chain is pattern-only only when every occurrence is" {
+    for ([_][2]bool{ .{ true, true }, .{ true, false }, .{ false, true } }) |marks| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const store = &env.module_env.types;
+        var inner_tag = try env.mkTag("Oops", &.{});
+        inner_tag.pattern_only = marks[1];
+        var outer_tag = try env.mkTag("Oops", &.{});
+        outer_tag.pattern_only = marks[0];
+        const inner = try store.freshFromContent((try env.mkTagUnionOpen(&.{inner_tag})).content);
+        const row = try store.freshFromContent((try env.mkTagUnion(&.{outer_tag}, inner)).content);
+        const other = try store.freshFromContent((try env.mkTagUnionOpen(&.{try env.mkTag("Other", &.{})})).content);
+        try std.testing.expectEqual(.unified, try env.unify(row, other));
+        try std.testing.expectEqual(marks[0] and marks[1], try rowTagPatternOnly(&env, row, "Oops"));
+    }
+}
+
 test "unify - a field repeated along one row's chain relates its value and kind" {
     for ([_]enum { related, conflicting, kind }{ .related, .conflicting, .kind }) |case| {
         var env = try TestEnv.init(std.testing.allocator);

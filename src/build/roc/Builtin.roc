@@ -27057,7 +27057,6 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 
 		match next_acc {
 			Err(Overflow) => Err(Overflow)
-			Err(Underflow) => Err(Underflow)
 			Ok(updated_acc) => {
 				next_exponent = exponent / two
 				if next_exponent == zero {

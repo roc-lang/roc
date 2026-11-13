@@ -1623,6 +1623,19 @@ bench_conflicted_default_records: usize = 0,
 /// Union-find roots resolve at consumption time (eager roots would go stale).
 /// Duplicates are harmless—the consumer inserts into a set.
 checked_lambda_params: std.ArrayListUnmanaged(CIR.Pattern.Span) = .empty,
+/// Every tag pattern of a user-written `match` branch, in check order. Each is
+/// judged once the module's types are settled (`reportPatternOnlyMatchTags`):
+/// whether its tag is still pattern-only depends on every later relation of
+/// the matched value, such as a `var` reassigned with the tag after a loop
+/// body's match was checked, so judging any earlier would warn about tags the
+/// module does produce.
+match_tag_patterns: std.ArrayListUnmanaged(MatchTagPattern) = .empty,
+/// Param-pattern spans of every checked lambda whose body checked a recorded
+/// match tag pattern. Their types count as produced by callers when
+/// `reportPatternOnlyMatchTags` judges, so they are walked then, once the
+/// rows they reach are settled; a walk when the lambda finishes would miss
+/// row parts that later relations split off.
+matching_lambda_params: std.ArrayListUnmanaged(CIR.Pattern.Span) = .empty,
 /// Lambdas whose bodies actually perform effects. This records direct checker
 /// output so binding-name diagnostics do not infer effectfulness from
 /// annotations that only make a pure body have an effectful function type.
@@ -2092,6 +2105,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .bench_probe_refuted = .keyed,
     .bench_conflicted_default_records = .keyed,
     .checked_lambda_params = .keyed,
+    .match_tag_patterns = .settled,
+    .matching_lambda_params = .settled,
     .effectful_lambda_bodies = .keyed,
     .pending_function_effect_dependencies = .frame_partitioned,
     .function_effect_dependency_frame_starts = .frame_stack,
@@ -9548,6 +9563,9 @@ const RowUnionScratch = struct {
     labels: std.ArrayListUnmanaged(Label) = .empty,
     latest: std.AutoHashMapUnmanaged(Ident.Idx, RowLabelOccurrence) = .empty,
     omitted: std.ArrayListUnmanaged(RowLabelOccurrence) = .empty,
+    /// Kept tag occurrences whose pattern-only mark clears because an omitted
+    /// occurrence of the same tag was not pattern-only.
+    unmarked: std.ArrayListUnmanaged(RowLabelOccurrence) = .empty,
     pairs: std.ArrayListUnmanaged(RowLabelConflict) = .empty,
 
     const Label = struct { name: Ident.Idx, occurrence: RowLabelOccurrence };
@@ -9558,6 +9576,7 @@ const RowUnionScratch = struct {
         self.labels.deinit(gpa);
         self.latest.deinit(gpa);
         self.omitted.deinit(gpa);
+        self.unmarked.deinit(gpa);
         self.pairs.deinit(gpa);
     }
 
@@ -9567,6 +9586,7 @@ const RowUnionScratch = struct {
         self.labels.clearRetainingCapacity();
         self.latest.clearRetainingCapacity();
         self.omitted.clearRetainingCapacity();
+        self.unmarked.clearRetainingCapacity();
         self.pairs.clearRetainingCapacity();
     }
 };
@@ -9585,6 +9605,7 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
     const labels = &scratch.labels;
     const latest = &scratch.latest;
     const omitted = &scratch.omitted;
+    const unmarked = &scratch.unmarked;
     const pairs = &scratch.pairs;
 
     while (true) {
@@ -9593,6 +9614,7 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
         labels.clearRetainingCapacity();
         latest.clearRetainingCapacity();
         omitted.clearRetainingCapacity();
+        unmarked.clearRetainingCapacity();
 
         var current = row;
         var row_kind: ?enum { tags, fields } = null;
@@ -9655,8 +9677,17 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
             if (!std.meta.eql(self.types.resolveVar(part_var).desc.content, content)) break false;
         } else true;
         if (!unchanged) continue;
+        // The kept occurrence is the same tag as every omitted one, so it is
+        // pattern-only only if they all were (design.md "Pattern-Only Tags").
+        // Pairs run outermost first, so an occurrence's own clearing is known
+        // before the next one in reads it.
+        for (pairs.items) |pair| {
+            if (pair.inner.payload != .tag) continue;
+            const outer_pattern_only = self.rowLabelPatternOnly(pair.outer) and !isListedRowLabel(unmarked.items, pair.outer.part, pair.outer.index);
+            if (!outer_pattern_only and self.rowLabelPatternOnly(pair.inner)) try unmarked.append(self.gpa, pair.inner);
+        }
         for (parts.items, 0..) |part_var, part| {
-            try self.omitRowLabels(part_var, @intCast(part), omitted.items);
+            try self.omitRowLabels(part_var, @intCast(part), omitted.items, unmarked.items);
         }
     }
 }
@@ -9733,15 +9764,25 @@ fn relateRepeatedRowLabel(self: *Self, outer: RowLabelOccurrence, inner: RowLabe
     }
 }
 
-/// Rewrite one row part without the labels `omitted` assigns to it. A part
-/// left with no labels is its extension, so it redirects there with the
-/// lower of the two ranks, as unification would join them.
-fn omitRowLabels(self: *Self, part_var: Var, part: u32, omitted: []const RowLabelOccurrence) Allocator.Error!void {
+/// Whether a scanned tag occurrence is pattern-only.
+fn rowLabelPatternOnly(self: *const Self, occurrence: RowLabelOccurrence) bool {
+    const tag_union = self.types.resolveVar(occurrence.part_var).desc.content.structure.tag_union;
+    return self.types.getTagAt(tag_union.tags, occurrence.index).pattern_only;
+}
+
+/// Rewrite one row part without the labels `omitted` assigns to it, and with
+/// the tags `unmarked` assigns to it no longer pattern-only. A part left with
+/// no labels is its extension, so it redirects there with the lower of the
+/// two ranks, as unification would join them.
+fn omitRowLabels(self: *Self, part_var: Var, part: u32, omitted: []const RowLabelOccurrence, unmarked: []const RowLabelOccurrence) Allocator.Error!void {
     var omitted_count: usize = 0;
     for (omitted) |occurrence| {
         if (occurrence.part == part) omitted_count += 1;
     }
-    if (omitted_count == 0) return;
+    const unmarks_part = for (unmarked) |occurrence| {
+        if (occurrence.part == part) break true;
+    } else false;
+    if (omitted_count == 0 and !unmarks_part) return;
 
     const resolved = self.types.resolveVar(part_var);
     switch (resolved.desc.content.structure) {
@@ -9750,9 +9791,11 @@ fn omitRowLabels(self: *Self, part_var: Var, part: u32, omitted: []const RowLabe
             if (omitted_count == tags.len) return self.redirectEmptiedRowPart(resolved.var_, tag_union.ext);
             var kept: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
             defer kept.deinit(self.gpa);
-            for (tags.items(.name), tags.items(.args), 0..) |name, args, index| {
-                if (isOmittedRowLabel(omitted, part, index)) continue;
-                try kept.append(self.gpa, .{ .name = name, .args = args });
+            for (0..tags.len) |index| {
+                if (isListedRowLabel(omitted, part, index)) continue;
+                var tag = tags.get(index);
+                if (isListedRowLabel(unmarked, part, index)) tag.pattern_only = false;
+                try kept.append(self.gpa, tag);
             }
             const range = try self.types.appendTags(kept.items);
             try self.types.setVarContent(resolved.var_, .{ .structure = .{ .tag_union = .{ .tags = range, .ext = tag_union.ext } } });
@@ -9763,7 +9806,7 @@ fn omitRowLabels(self: *Self, part_var: Var, part: u32, omitted: []const RowLabe
             var kept: std.ArrayListUnmanaged(types_mod.RecordField) = .empty;
             defer kept.deinit(self.gpa);
             for (fields.items(.name), fields.items(.presence), 0..) |name, presence, index| {
-                if (isOmittedRowLabel(omitted, part, index)) continue;
+                if (isListedRowLabel(omitted, part, index)) continue;
                 try kept.append(self.gpa, .{ .name = name, .presence = presence });
             }
             const range = try self.types.appendRecordFields(kept.items);
@@ -9773,8 +9816,8 @@ fn omitRowLabels(self: *Self, part_var: Var, part: u32, omitted: []const RowLabe
     }
 }
 
-fn isOmittedRowLabel(omitted: []const RowLabelOccurrence, part: u32, index: usize) bool {
-    for (omitted) |occurrence| {
+fn isListedRowLabel(occurrences: []const RowLabelOccurrence, part: u32, index: usize) bool {
+    for (occurrences) |occurrence| {
         if (occurrence.part == part and occurrence.index == index) return true;
     }
     return false;
@@ -14668,6 +14711,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.recheckNominalConstructorBackings(&env);
     try self.rejectEscapingLocalTypes();
     try self.rejectPolymorphicRecursion();
+    try self.reportPatternOnlyMatchTags();
 
     try self.rejectEffectfulCompileTimeExecutableRoots();
     // Publish diagnostic origins while the producer still owns its private
@@ -20567,6 +20611,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     }
     try self.recheckNominalConstructorBackings(&env);
     try self.rejectPolymorphicRecursion();
+    try self.reportPatternOnlyMatchTags();
 
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
@@ -25024,6 +25069,257 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
+/// A recorded match tag pattern whose tag is still pattern-only in the
+/// settled row of the value it matches.
+const PatternOnlyCandidate = struct {
+    record: MatchTagPattern,
+    tag: Ident.Idx,
+    /// The row part that lists the tag.
+    row_part: Var,
+};
+
+/// Warn about every match branch alternative that needs a tag no producer
+/// gives the value it matches (design.md "Pattern-Only Tags"). Runs once the
+/// module's types are settled: after deferred constraints, literal defaulting,
+/// and generated-codec finalization, before any row is closed or any type is
+/// poisoned. A recorded tag pattern is reported when its tag is still
+/// pattern-only in the row of the value it matches and that row is not
+/// produced by a caller or a derived parser (`markProducedTagRows`). A match
+/// that was rejected, or whose scrutinee is erroneous, is skipped, and so is a
+/// branch part the exhaustiveness check already reported as redundant or
+/// unmatchable.
+fn reportPatternOnlyMatchTags(self: *Self) std.mem.Allocator.Error!void {
+    if (self.match_tag_patterns.items.len == 0) return;
+
+    var candidates: std.ArrayListUnmanaged(PatternOnlyCandidate) = .empty;
+    defer candidates.deinit(self.gpa);
+    for (self.match_tag_patterns.items) |record| {
+        if (self.matchHadTypeError(record.alternative.match_expr)) continue;
+        const tag_name = self.cir.store.getPattern(record.pattern).applied_tag.name;
+        const found = self.findRowTag(ModuleEnv.varFrom(record.pattern), tag_name) orelse continue;
+        if (!found.pattern_only) continue;
+        // A row no producer gave any tag is the type of a value the module
+        // never produces at all, such as a stub's result. No single pattern
+        // of its match is the mistaken one.
+        if (!self.rowHasProducedTag(ModuleEnv.varFrom(record.pattern))) continue;
+        try candidates.append(self.gpa, .{ .record = record, .tag = tag_name, .row_part = found.row_part });
+    }
+    if (candidates.items.len == 0) return;
+
+    try self.markProducedTagRows();
+
+    // `var_set` holds every row a caller or a derived parser produces until
+    // the next walk clears it; nothing below walks types.
+    var start: usize = 0;
+    while (start < candidates.items.len) {
+        const first = candidates.items[start].record.alternative;
+        var end = start + 1;
+        while (end < candidates.items.len) : (end += 1) {
+            const next = candidates.items[end].record.alternative;
+            if (next.match_expr != first.match_expr or next.branch_index != first.branch_index) break;
+        }
+        try self.reportPatternOnlyBranchTags(candidates.items[start..end]);
+        start = end;
+    }
+}
+
+/// Report the never-matching alternatives among one branch's candidates,
+/// which `reportPatternOnlyMatchTags` passes contiguously. A branch whose
+/// every alternative needs a tag nothing produces gets one report for the
+/// whole branch; otherwise each such alternative gets its own.
+fn reportPatternOnlyBranchTags(self: *Self, candidates: []const PatternOnlyCandidate) std.mem.Allocator.Error!void {
+    const site = candidates[0].record.alternative;
+    const match = self.cir.store.getExpr(site.match_expr).e_match;
+    const branch = self.cir.store.getMatchBranch(self.cir.store.matchBranchSlice(match.branches)[site.branch_index]);
+    const alternative_count = self.cir.store.sliceMatchBranchPatterns(branch.patterns).len;
+
+    if (self.uselessMatchPartReported(site.match_expr, site.branch_index, .whole_branch)) return;
+
+    // The first tag nothing produces of each alternative the exhaustiveness
+    // check did not already report, in check order.
+    var unmatchable_tags: std.ArrayListUnmanaged(struct { alternative: u32, tag: Ident.Idx }) = .empty;
+    defer unmatchable_tags.deinit(self.gpa);
+    var reported_alternatives: usize = 0;
+    for (candidates) |candidate| {
+        if (self.var_set.contains(self.types.resolveVar(candidate.row_part).var_)) continue;
+        const alternative = candidate.record.alternative.alternative_index;
+        const already = for (unmatchable_tags.items) |entry| {
+            if (entry.alternative == alternative) break true;
+        } else false;
+        if (already) continue;
+        try unmatchable_tags.append(self.gpa, .{ .alternative = alternative, .tag = candidate.tag });
+        if (self.uselessMatchPartReported(site.match_expr, site.branch_index, .alternative(alternative))) reported_alternatives += 1;
+    }
+    if (unmatchable_tags.items.len == 0) return;
+
+    if (unmatchable_tags.items.len == alternative_count and reported_alternatives == 0) {
+        _ = try self.problems.appendProblem(.{ .unmatchable_pattern = .{
+            .match_expr = site.match_expr,
+            .branch_index = site.branch_index,
+            .part = .whole_branch,
+            .reason = .{ .tag_never_produced = unmatchable_tags.items[0].tag },
+        } });
+        return;
+    }
+    for (unmatchable_tags.items) |entry| {
+        const part: problem.MatchBranchPart = .alternative(entry.alternative);
+        if (self.uselessMatchPartReported(site.match_expr, site.branch_index, part)) continue;
+        _ = try self.problems.appendProblem(.{ .unmatchable_pattern = .{
+            .match_expr = site.match_expr,
+            .branch_index = site.branch_index,
+            .part = part,
+            .reason = .{ .tag_never_produced = entry.tag },
+        } });
+    }
+}
+
+/// Whether a match, its scrutinee, or one of its branch guards or values was
+/// rejected. A rejection found after the match was checked, such as a literal
+/// whose deferred conversion fails at finalization, retires the expression it
+/// belongs to without retiring the match.
+fn matchHadTypeError(self: *const Self, match_expr: CIR.Expr.Idx) bool {
+    if (self.erroneous_value_exprs.contains(match_expr)) return true;
+    const match = self.cir.store.getExpr(match_expr).e_match;
+    if (self.erroneous_value_exprs.contains(match.cond)) return true;
+    for (self.cir.store.matchBranchSlice(match.branches)) |branch_idx| {
+        const branch = self.cir.store.getMatchBranch(branch_idx);
+        if (self.erroneous_value_exprs.contains(branch.value)) return true;
+        if (branch.guard) |guard| if (self.erroneous_value_exprs.contains(guard)) return true;
+    }
+    return false;
+}
+
+/// Whether the exhaustiveness check already reported this branch part as
+/// redundant or unmatchable.
+fn uselessMatchPartReported(self: *const Self, match_expr: CIR.Expr.Idx, branch_index: u32, part: problem.MatchBranchPart) bool {
+    for (self.problems.problems.items) |reported| {
+        const match_expr_reported, const branch_reported, const part_reported = switch (reported) {
+            .redundant_pattern => |data| .{ data.match_expr, data.branch_index, data.part },
+            .unmatchable_pattern => |data| .{ data.match_expr, data.branch_index, data.part },
+            else => continue,
+        };
+        if (match_expr_reported == match_expr and branch_reported == branch_index and part_reported == part) return true;
+    }
+    return false;
+}
+
+/// Whether the tag row `var_` resolves to lists a tag that is not
+/// pattern-only.
+fn rowHasProducedTag(self: *const Self, var_: Var) bool {
+    var current = self.types.resolveThroughAliases(var_);
+    var guard = types_mod.debug.IterationGuard.init("rowHasProducedTag");
+    while (true) {
+        guard.tick();
+        if (current.desc.content != .structure or current.desc.content.structure != .tag_union) return false;
+        const tag_union = current.desc.content.structure.tag_union;
+        for (self.types.getTagsSlice(tag_union.tags).items(.pattern_only)) |pattern_only| {
+            if (!pattern_only) return true;
+        }
+        current = self.types.resolveThroughAliases(tag_union.ext);
+    }
+}
+
+/// A tag found in a row: the row part that lists it, and its mark.
+const FoundRowTag = struct {
+    row_part: Var,
+    pattern_only: bool,
+};
+
+/// The first occurrence of `tag_name` along the tag row `var_` resolves to,
+/// or null when `var_` is not a structural tag row (a nominal type, or an
+/// erroneous one). A recorded tag pattern's own tag is always in its row.
+fn findRowTag(self: *const Self, var_: Var, tag_name: Ident.Idx) ?FoundRowTag {
+    var current = self.types.resolveThroughAliases(var_);
+    if (current.desc.content != .structure or current.desc.content.structure != .tag_union) return null;
+    var guard = types_mod.debug.IterationGuard.init("findRowTag");
+    while (true) {
+        guard.tick();
+        switch (current.desc.content) {
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.name), tags.items(.pattern_only)) |name, pattern_only| {
+                        if (name.eql(tag_name)) return .{ .row_part = current.var_, .pattern_only = pattern_only };
+                    }
+                    current = self.types.resolveThroughAliases(tag_union.ext);
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => break,
+            },
+            .flex, .rigid, .field_presence, .err, .alias => break,
+        }
+    }
+    base.invariant("type checker invariant violated: a match tag pattern's row does not list its tag", .{});
+}
+
+/// Collect in `var_set` every type reachable from a value the module does not
+/// produce itself (design.md "Pattern-Only Tags"): the parameters of each
+/// lambda whose body matches tag patterns (`matching_lambda_params`), whose
+/// values come from callers the module may not see, each derived parser's
+/// shape, whose values the parser builds from its input, and each rejected
+/// expression's type, whose value its error report is already about. The walk
+/// follows aliases, record fields, tuple items, tag payloads, function
+/// arguments and results, nominal type arguments, and the static-dispatch
+/// constraints of type variables, since a `where` method's result is reachable
+/// only through its constraint's function type. Every row part reached is a
+/// produced row.
+fn markProducedTagRows(self: *Self) std.mem.Allocator.Error!void {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    self.var_set.clearRetainingCapacity();
+    for (self.matching_lambda_params.items) |params| {
+        for (self.cir.store.slicePatterns(params)) |param| try stack.append(self.gpa, ModuleEnv.varFrom(param));
+    }
+    for (self.cir.generated_codec_derivations.items.items) |derivation| {
+        if (derivation.kind != @backingInt(ModuleEnv.GeneratedCodecDerivation.Kind.parser)) continue;
+        try stack.append(self.gpa, @fromBackingInt(derivation.source_shape_var));
+    }
+    // A rejected expression already owns an error report about the value it
+    // was meant to produce, so a pattern-only tag of that value's type is not
+    // reported as well.
+    var erroneous = self.erroneous_value_exprs.constKeyIterator();
+    while (erroneous.next()) |expr| try stack.append(self.gpa, ModuleEnv.varFrom(expr));
+    while (stack.items.len > stack_base) {
+        const resolved = self.types.resolveVar(stack.pop().?);
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+        switch (resolved.desc.content) {
+            .field_presence, .err => {},
+            .flex => |flex| for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                try stack.append(self.gpa, constraint.fn_var);
+            },
+            .rigid => |rigid| for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                try stack.append(self.gpa, constraint.fn_var);
+            },
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
+}
+
 /// After the module solves, ground every still-open implicitly opened
 /// extension of a top-level weak value binding to `[]` (design.md
 /// "Polarity"). Nothing in this module can widen the row any further, and
@@ -28308,6 +28604,26 @@ const RowOpenness = enum { open, closed };
 const PatternCtx = struct {
     row_openness: RowOpenness,
     failure_owner: CIR.Node.Idx,
+    /// The user-written `match` branch alternative this pattern is, when it
+    /// is one. Every tag pattern in it, nested ones included, mints its tag
+    /// pattern-only and is recorded for the settled-module judgment (design.md
+    /// "Pattern-Only Tags").
+    match_alternative: ?MatchAlternative = null,
+};
+
+/// One `|` alternative of one branch of a `match`.
+const MatchAlternative = struct {
+    match_expr: CIR.Expr.Idx,
+    branch_index: u32,
+    alternative_index: u32,
+};
+
+/// A tag pattern of a user-written `match` branch, recorded when it is checked
+/// and judged once the module's types are settled
+/// (`reportPatternOnlyMatchTags`).
+const MatchTagPattern = struct {
+    pattern: CIR.Pattern.Idx,
+    alternative: MatchAlternative,
 };
 
 /// A pattern rejected while it was checked binds nothing, so every name it
@@ -28567,11 +28883,19 @@ fn stepPatternCheck(
                 .closed => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, pattern_region),
             };
 
-            const tag = types_mod.Tag{ .name = applied_tag.name, .args = arg_vars_slice };
+            // A match branch's tag pattern asks for its tag without producing
+            // it, so its tag is pattern-only (design.md "Pattern-Only Tags").
+            const tag = types_mod.Tag{ .name = applied_tag.name, .args = arg_vars_slice, .pattern_only = ctx.match_alternative != null };
             const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
 
             // Update the expr to point to the new type
             try self.unifyWith(pattern_var, tag_union_content, env);
+            if (ctx.match_alternative) |alternative| {
+                // Pattern checking never runs inside a speculative probe, so
+                // no rollback has to drop a recorded pattern.
+                std.debug.assert(self.probe_depth == 0);
+                try self.match_tag_patterns.append(self.gpa, .{ .pattern = pattern_idx, .alternative = alternative });
+            }
         },
         // nominal //
         .nominal => |nominal| {
@@ -32902,6 +33226,8 @@ const LambdaCheck = struct {
     body_is_delayed_dependency: bool = false,
     return_frame_pushed: bool = false,
     effect_dependencies_start: ?usize = null,
+    /// `match_tag_patterns`' length when the body's check began.
+    match_tag_patterns_start: usize = 0,
 };
 
 fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
@@ -32972,6 +33298,13 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
                     break;
                 }
             }
+        }
+
+        // A body that matches tag patterns may match its parameters' values,
+        // which come from callers the module may not see, so their rows count
+        // as produced (design.md "Pattern-Only Tags").
+        if (self.match_tag_patterns.items.len != state.match_tag_patterns_start) {
+            try self.matching_lambda_params.append(self.gpa, lambda.args);
         }
 
         // Create the function type
@@ -33156,6 +33489,7 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
     const effect_dependencies_start = self.pending_function_effect_dependencies.items.len;
     try self.function_effect_dependency_frame_starts.append(self.gpa, effect_dependencies_start);
     state.effect_dependencies_start = effect_dependencies_start;
+    state.match_tag_patterns_start = self.match_tag_patterns.items.len;
 
     // The body's value is this function's result, so a lambda there is
     // consumed by this function and takes no scheme of its own.
@@ -34387,7 +34721,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                         .parent_if_expr = if_expr_idx,
                         .last_if_branch = first_branch_idx,
                     } };
-                    try self.checkBranchBodyAgainstExpected(first_branch.body, expected_ret, state.branch_acc.?, branch_ctx, env, expected.branch_target);
+                    _ = try self.checkBranchBodyAgainstExpected(first_branch.body, expected_ret, state.branch_acc.?, branch_ctx, env, expected.branch_target);
                 }
                 state.branch_var = if (self.branchValueIsErroneous(first_branch.body))
                     try self.fresh(env, frame.expr_region)
@@ -34426,7 +34760,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                         .parent_if_expr = if_expr_idx,
                         .last_if_branch = state.last_if_branch,
                     } };
-                    try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, state.branch_acc.?, branch_ctx, env, expected.branch_target);
+                    _ = try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, state.branch_acc.?, branch_ctx, env, expected.branch_target);
                 } else if (!self.branchValueIsErroneous(branch.body)) {
                     const body_var: Var = ModuleEnv.varFrom(branch.body);
                     const previous_relation = try self.enterRelation(.of(.branch, if_expr_idx, @intCast(state.branch_index)));
@@ -34505,7 +34839,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
                         .parent_if_expr = if_expr_idx,
                         .last_if_branch = state.last_if_branch,
                     } };
-                    try self.checkBranchBodyAgainstExpected(
+                    _ = try self.checkBranchBodyAgainstExpected(
                         if_.final_else,
                         expected_ret,
                         state.branch_acc.?,
@@ -34564,6 +34898,11 @@ const MatchCheck = struct {
     branch_scope: ?HoistLexicalScope = null,
     mismatch_scope: ?HoistLexicalScope = null,
     saved_call_position: ?CallPositionFlags = null,
+    /// A branch value was rejected against the match's expected result. That
+    /// does not retire the match, but its tag patterns are not judged.
+    branch_value_rejected: bool = false,
+    /// `match_tag_patterns`' length when the match began.
+    match_tag_patterns_start: usize = 0,
 };
 
 fn abortMatchCheck(self: *Self, state: *MatchCheck) void {
@@ -34598,6 +34937,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             // `expected_ret` stays the untouched reference that step-(1)
             // probes and error reports compare against (design.md "Field
             // Kinds (All-Dynamic Optional Fields)").
+            state.match_tag_patterns_start = self.match_tag_patterns.items.len;
             state.branch_acc = if (expected_branch_ret) |expected_ret|
                 try self.instantiateVarOrphanFlexed(expected_ret, env, .use_last_var)
             else
@@ -34726,7 +35066,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                             .num_branches = @intCast(match.branches.span.len),
                             .match_expr = expr_idx,
                         } };
-                    try self.checkBranchBodyAgainstExpected(branch.value, expected_ret, state.branch_acc.?, branch_ctx, env, expected.branch_target);
+                    if (try self.checkBranchBodyAgainstExpected(branch.value, expected_ret, state.branch_acc.?, branch_ctx, env, expected.branch_target) == .rejected) state.branch_value_rejected = true;
                 }
             } else {
                 // Check branch body against expected return type BEFORE
@@ -34740,7 +35080,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                         .num_branches = @intCast(match.branches.span.len),
                         .match_expr = expr_idx,
                     } };
-                    try self.checkBranchBodyAgainstExpected(branch.value, expected_ret, state.branch_acc.?, branch_ctx, env, expected.branch_target);
+                    if (try self.checkBranchBodyAgainstExpected(branch.value, expected_ret, state.branch_acc.?, branch_ctx, env, expected.branch_target) == .rejected) state.branch_value_rejected = true;
                 } else if (!self.branchValueIsErroneous(branch.value)) {
                     const previous_relation = try self.enterRelation(.of(.branch, expr_idx, @intCast(branch_cur_index)));
                     const branch_result = try self.unifyInContext(state.val_var, ModuleEnv.varFrom(branch.value), env, .{ .match_branch = .{
@@ -34800,6 +35140,14 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         _ = try self.unify(ModuleEnv.varFrom(expr_idx), expected_ret, env);
     } else {
         _ = try self.unify(ModuleEnv.varFrom(expr_idx), state.val_var, env);
+    }
+
+    // A match that had a type error is not judged for pattern-only tags
+    // (design.md "Pattern-Only Tags"). A retired match is skipped when the
+    // judgment runs; a rejected branch value does not retire the match, so its
+    // recorded patterns are dropped here. Nested matches' records stay.
+    if (state.branch_value_rejected and !state.had_type_error) {
+        self.dropMatchTagPatterns(expr_idx, state.match_tag_patterns_start);
     }
 
     // Perform exhaustiveness and redundancy checking
@@ -34997,6 +35345,29 @@ fn checkShortCircuitOperand(
     if (result.isProblem()) try self.markErroneousValueExpr(operator_expr);
 }
 
+/// Drop the tag patterns `match_expr` recorded at or after `start`, keeping
+/// every other record in order.
+fn dropMatchTagPatterns(self: *Self, match_expr: CIR.Expr.Idx, start: usize) void {
+    var kept = start;
+    for (self.match_tag_patterns.items[start..]) |record| {
+        if (record.alternative.match_expr == match_expr) continue;
+        self.match_tag_patterns.items[kept] = record;
+        kept += 1;
+    }
+    self.match_tag_patterns.shrinkRetainingCapacity(kept);
+}
+
+/// The alternative a match branch pattern is, or null when its tag patterns
+/// are not judged: a match the compiler generated (`?` and `??`
+/// desugarings), whose patterns are not the user's, or one whose patterns are
+/// never related to its scrutinee.
+fn matchAlternative(match: CIR.Expr.Match, state: *const MatchCheck, expr_idx: CIR.Expr.Idx, branch_index: u32, alternative_index: usize) ?MatchAlternative {
+    if (match.skip_exhaustiveness) return null;
+    // A scrutinee that always crashes is never related to the patterns.
+    if (state.cond_always_crashes) return null;
+    return .{ .match_expr = expr_idx, .branch_index = branch_index, .alternative_index = @intCast(alternative_index) };
+}
+
 /// Check branch `state.branch_index`'s patterns inside a fresh hoist scope,
 /// then request its guard (if checked) or its value.
 fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
@@ -35016,7 +35387,11 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         for (branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
             // Check the pattern's sub types
             const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-            const valid_pattern = try self.checkPattern(other_branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env);
+            const valid_pattern = try self.checkPattern(other_branch_ptrn.pattern, .{
+                .row_openness = .open,
+                .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx),
+                .match_alternative = matchAlternative(match, state, expr_idx, branch_cur_index, other_cur_ptrn_index),
+            }, env);
             if (!valid_pattern) state.had_type_error = true;
             if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(other_branch_ptrn.pattern);
 
@@ -35042,7 +35417,11 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
     // type.
     for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        const valid_pattern = try self.checkPattern(branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env);
+        const valid_pattern = try self.checkPattern(branch_ptrn.pattern, .{
+            .row_openness = .open,
+            .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx),
+            .match_alternative = matchAlternative(match, state, expr_idx, branch_cur_index, cur_ptrn_index),
+        }, env);
         if (!valid_pattern) state.had_type_error = true;
         // Matching an erroneous value binds nothing.
         if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(branch_ptrn.pattern);
@@ -61305,6 +61684,10 @@ fn reportBranchMismatchAndPoison(
     try self.markErroneousValueExpr(result_expr);
 }
 
+/// Whether a branch body was related to its expected result, or rejected and
+/// reported.
+const BranchBodyRelation = enum { related, rejected };
+
 /// Check one if/match branch body against the shared expected return type, and
 /// fold a compatible body into the per-expression accumulator `acc`.
 ///
@@ -61345,7 +61728,7 @@ fn checkBranchBodyAgainstExpected(
     ctx: problem.Context,
     env: *Env,
     target: ResultTarget,
-) std.mem.Allocator.Error!void {
+) std.mem.Allocator.Error!BranchBodyRelation {
     const body_var = ModuleEnv.varFrom(body_expr_idx);
 
     // Cheap guards: already-unified or already-erroneous pairs need no work.
@@ -61355,11 +61738,11 @@ fn checkBranchBodyAgainstExpected(
     // this accumulator design exists to avoid).
     const rb = self.types.resolveVar(body_var);
     const re = self.types.resolveVar(expected_ret);
-    if (rb.var_ == re.var_) return;
-    if (rb.desc.content == .err or re.desc.content == .err) return;
+    if (rb.var_ == re.var_) return .related;
+    if (rb.desc.content == .err or re.desc.content == .err) return .related;
     // An erroneous body already owns its report and does not join the result
     // (Every Rejection Is Explicit Recovery).
-    if (self.branchValueIsErroneous(body_expr_idx)) return;
+    if (self.branchValueIsErroneous(body_expr_idx)) return .related;
 
     // A body whose type reaches a closed tag union relates to the result
     // through a widening copy and crosses into it through a row coercion
@@ -61380,7 +61763,7 @@ fn checkBranchBodyAgainstExpected(
         const previous_relation = try self.enterRelation(.of(.value, body_expr_idx, 0));
         try self.reportBranchMismatchAndPoison(body_expr_idx, expected_ret, ctx);
         try self.leaveRelation(previous_relation);
-        return;
+        return .rejected;
     }
 
     // The fold relates this branch to the result its earlier branches joined.
@@ -61402,7 +61785,7 @@ fn checkBranchBodyAgainstExpected(
             try commit_probe.commit();
             if (widening) |w| try self.recordResultWidening(w, acc, ctx);
             try self.claimRecordedProblems();
-            return;
+            return .related;
         }
         if (widening) |w| self.discardResultWidening(w);
     }
@@ -61413,6 +61796,7 @@ fn checkBranchBodyAgainstExpected(
     // than `acc`.)
     try self.reportBranchMismatchAndPoison(body_expr_idx, acc, ctx);
     try self.claimRecordedProblems();
+    return .rejected;
 }
 
 /// The branch relation a branch's problem context names.
