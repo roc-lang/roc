@@ -1362,6 +1362,16 @@ checker recovery. The recovery rules:
   rejects is reported once, as the `undetermined_type` problem for its class
   (Diagnostics About Defaulted Types), and the warning that announced the
   default is withdrawn once every problem is recorded.
+- A scheme requirement that a literal's default rejects is retired at the
+  use whose instantiation copied it, whichever step committed the default. A
+  default commits at a generalization boundary or at module finalization, and
+  neither is a use of a scheme, so the committing unification has no
+  instantiation source (`commitLiteralDefault`) and each requirement it makes
+  concrete keeps the owner its own instantiation recorded. The definition
+  whose boundary committed the default stays a valid value: in
+  `main = || overflows(3, 2)`, where `overflows` calls a method on its first
+  argument that `Dec` lacks, the call's callee and the literal become the
+  runtime error and `main` remains a function that lowers.
 - A relation that read a name bound from a value rejected later reports
   nothing, decided once at the settled state
   (`Check.withdrawProblemsOfVoidRelations`). The relations that read such a

@@ -45349,7 +45349,17 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
 /// number literal becomes `Dec` and a string literal `Str`, through the normal
 /// unify path, so the literal's method constraints defer as usual and the
 /// dispatch pass checks each against the default type.
+///
+/// A default is the boundary's decision, not a use of any scheme, so no
+/// expression is the instantiation source while it commits: a scheme
+/// requirement the default makes concrete keeps the owner its own
+/// instantiation recorded, and a requirement the default then fails retires
+/// that use alone. The expression whose checking reached the boundary is the
+/// generalizing definition's whole value, which made none of those uses.
 fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConstraint.LiteralKind, env: *Env) Allocator.Error!Var {
+    const boundary_expr = self.instantiation_source_expr;
+    self.instantiation_source_expr = null;
+    defer self.instantiation_source_expr = boundary_expr;
     switch (kind) {
         .numeral => {
             const default_var = try self.commitNumeralDefault(literal_var, env);
