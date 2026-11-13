@@ -139,12 +139,12 @@ run = |f| {
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "y"))
-					(e-call (constraint-fn-var 253)
+					(e-call (constraint-fn-var 247)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-string
 							(e-literal (string "world")))))
-				(e-dispatch-call (method "concat") (constraint-fn-var 256)
+				(e-dispatch-call (method "concat") (constraint-fn-var 250)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "y"))))

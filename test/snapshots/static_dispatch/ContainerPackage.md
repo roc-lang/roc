@@ -739,7 +739,7 @@ main = {
 								(value
 									(e-tag (name "Value")
 										(args
-											(e-call (constraint-fn-var 634)
+											(e-call (constraint-fn-var 628)
 												(e-lookup-local
 													(p-assign (ident "f")))
 												(e-lookup-local
@@ -807,7 +807,7 @@ main = {
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-call (constraint-fn-var 674)
+									(e-call (constraint-fn-var 668)
 										(e-lookup-local
 											(p-assign (ident "f")))
 										(e-lookup-local
@@ -836,10 +836,10 @@ main = {
 				(p-assign (ident "g"))
 				(p-assign (ident "f"))
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 689)
+			(e-call (constraint-fn-var 683)
 				(e-lookup-local
 					(p-assign (ident "g")))
-				(e-call (constraint-fn-var 688)
+				(e-call (constraint-fn-var 682)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -865,7 +865,7 @@ main = {
 			(e-block
 				(s-let
 					(p-assign (ident "first"))
-					(e-call (constraint-fn-var 696)
+					(e-call (constraint-fn-var 690)
 						(e-lookup-local
 							(p-assign (ident "compose")))
 						(e-lookup-local
@@ -876,7 +876,7 @@ main = {
 							(p-assign (ident "x")))))
 				(s-let
 					(p-assign (ident "second"))
-					(e-call (constraint-fn-var 703)
+					(e-call (constraint-fn-var 697)
 						(e-lookup-local
 							(p-assign (ident "compose")))
 						(e-lookup-local
@@ -908,14 +908,14 @@ main = {
 							(e-block
 								(s-let
 									(p-assign (ident "step1"))
-									(e-call (constraint-fn-var 713)
+									(e-call (constraint-fn-var 707)
 										(e-lookup-local
 											(p-assign (ident "f1")))
 										(e-lookup-local
 											(p-assign (ident "x")))))
 								(s-let
 									(p-assign (ident "step2"))
-									(e-call (constraint-fn-var 717)
+									(e-call (constraint-fn-var 711)
 										(e-lookup-local
 											(p-assign (ident "f2")))
 										(e-lookup-local
@@ -954,20 +954,20 @@ main = {
 							(p-assign (ident "x")))))
 				(s-let
 					(p-assign (ident "_test1"))
-					(e-call (constraint-fn-var 728)
+					(e-call (constraint-fn-var 722)
 						(e-lookup-local
 							(p-assign (ident "id")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "_test2"))
-					(e-call (constraint-fn-var 731)
+					(e-call (constraint-fn-var 725)
 						(e-lookup-local
 							(p-assign (ident "id")))
 						(e-string
 							(e-literal (string "test")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "map") (constraint-fn-var 732)
+					(e-dispatch-call (method "map") (constraint-fn-var 726)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "container"))))
@@ -1027,14 +1027,14 @@ main = {
 									(e-block
 										(s-let
 											(p-assign (ident "mapped"))
-											(e-dispatch-call (method "map") (constraint-fn-var 752)
+											(e-dispatch-call (method "map") (constraint-fn-var 746)
 												(receiver
 													(e-lookup-local
 														(p-assign (ident "container"))))
 												(args
 													(e-lookup-local
 														(p-assign (ident "f"))))))
-										(e-dispatch-call (method "get_or") (constraint-fn-var 754)
+										(e-dispatch-call (method "get_or") (constraint-fn-var 748)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "mapped"))))
@@ -1060,20 +1060,20 @@ main = {
 					(e-tag (name "Empty"))))
 			(s-let
 				(p-assign (ident "id_num"))
-				(e-call (constraint-fn-var 778)
+				(e-call (constraint-fn-var 772)
 					(e-lookup-local
 						(p-assign (ident "id")))
 					(e-num (value "42"))))
 			(s-let
 				(p-assign (ident "id_str"))
-				(e-call (constraint-fn-var 781)
+				(e-call (constraint-fn-var 775)
 					(e-lookup-local
 						(p-assign (ident "id")))
 					(e-string
 						(e-literal (string "world")))))
 			(s-let
 				(p-assign (ident "id_bool"))
-				(e-call (constraint-fn-var 785)
+				(e-call (constraint-fn-var 779)
 					(e-lookup-local
 						(p-assign (ident "id")))
 					(e-tag (name "True"))))
@@ -1082,7 +1082,7 @@ main = {
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 786)
+					(e-dispatch-call (method "plus") (constraint-fn-var 780)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -1090,8 +1090,8 @@ main = {
 							(e-num (value "10"))))))
 			(s-let
 				(p-assign (ident "processor"))
-				(e-call (constraint-fn-var 818)
-					(e-call (constraint-fn-var 810)
+				(e-call (constraint-fn-var 812)
+					(e-call (constraint-fn-var 804)
 						(e-lookup-local
 							(p-assign (ident "make_processor")))
 						(e-lookup-local
@@ -1100,13 +1100,13 @@ main = {
 						(p-assign (ident "add_ten")))))
 			(s-let
 				(p-assign (ident "processed"))
-				(e-call (constraint-fn-var 819)
+				(e-call (constraint-fn-var 813)
 					(e-lookup-local
 						(p-assign (ident "processor")))
 					(e-num (value "5"))))
 			(s-let
 				(p-assign (ident "num_result"))
-				(e-dispatch-call (method "map") (constraint-fn-var 822)
+				(e-dispatch-call (method "map") (constraint-fn-var 816)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "num_container"))))
@@ -1114,7 +1114,7 @@ main = {
 						(e-lambda
 							(args
 								(p-assign (ident "x")))
-							(e-dispatch-call (method "plus") (constraint-fn-var 832)
+							(e-dispatch-call (method "plus") (constraint-fn-var 826)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -1122,7 +1122,7 @@ main = {
 									(e-num (value "1"))))))))
 			(s-let
 				(p-assign (ident "_str_result"))
-				(e-dispatch-call (method "map") (constraint-fn-var 836)
+				(e-dispatch-call (method "map") (constraint-fn-var 830)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "str_container"))))
@@ -1134,11 +1134,11 @@ main = {
 								(p-assign (ident "s")))))))
 			(s-let
 				(p-assign (ident "chained"))
-				(e-dispatch-call (method "get_or") (constraint-fn-var 883)
+				(e-dispatch-call (method "get_or") (constraint-fn-var 877)
 					(receiver
-						(e-dispatch-call (method "flat_map") (constraint-fn-var 862)
+						(e-dispatch-call (method "flat_map") (constraint-fn-var 856)
 							(receiver
-								(e-dispatch-call (method "map") (constraint-fn-var 848)
+								(e-dispatch-call (method "map") (constraint-fn-var 842)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num_container"))))
@@ -1146,7 +1146,7 @@ main = {
 										(e-lambda
 											(args
 												(p-assign (ident "x")))
-											(e-dispatch-call (method "plus") (constraint-fn-var 858)
+											(e-dispatch-call (method "plus") (constraint-fn-var 852)
 												(receiver
 													(e-lookup-local
 														(p-assign (ident "x"))))
@@ -1159,7 +1159,7 @@ main = {
 									(e-nominal (nominal "Container")
 										(e-tag (name "Value")
 											(args
-												(e-dispatch-call (method "plus") (constraint-fn-var 878)
+												(e-dispatch-call (method "plus") (constraint-fn-var 872)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "x"))))
@@ -1172,7 +1172,7 @@ main = {
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 888)
+					(e-dispatch-call (method "plus") (constraint-fn-var 882)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -1181,7 +1181,7 @@ main = {
 								(p-assign (ident "x")))))))
 			(s-let
 				(p-assign (ident "transformed"))
-				(e-call (constraint-fn-var 896)
+				(e-call (constraint-fn-var 890)
 					(e-lookup-local
 						(p-assign (ident "transform_twice")))
 					(e-lookup-local
@@ -1208,7 +1208,7 @@ main = {
 						(e-lookup-local
 							(p-assign (ident "transformed"))))
 					(field (name "final")
-						(e-dispatch-call (method "get_or") (constraint-fn-var 903)
+						(e-dispatch-call (method "get_or") (constraint-fn-var 897)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "num_result"))))

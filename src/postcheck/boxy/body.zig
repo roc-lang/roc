@@ -4311,9 +4311,29 @@ pub const Builder = struct {
     /// Arguments"). An interpolation's argument produces its assembler.
     pub fn lowerInstanceLiteral(self: *Builder, node: u32, lit_ty: TypeId) Allocator.Error!void {
         const index = self.ownLiteralRequirementIndex(node) orelse invariantFmt("a literal whose conversion depends on its instance has no literal_requirement in its scope (worker {s} #{d}, module {d}, expr {d}, alias scopes {d}, foreign {?}, literal scopes {d}, frames {?})", .{ @tagName(self.currentWorker().key), @backingInt(self.worker_id), @backingInt(self.module), node, self.alias_scopes.items.len, self.foreign_scopes, self.currentWorker().literal_scopes.len, self.thunk_frames });
-        const thunk = try self.materialize(try self.scopeLiteral(.{ .depth = 0, .index = index }));
+        const thunk = try self.literalThunkLocal(try self.scopeLiteral(.{ .depth = 0, .index = index }));
         const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = lit_ty, .effectful = false } });
         try self.pushValue(try self.emitErasedCall(thunk, fn_ty, &.{}, lit_ty));
+    }
+
+    /// The local holding `word`, the thunk of the literal being lowered. A
+    /// literal argument of this worker is read from its type table where its
+    /// literal is, not in the entry chain: only that literal reads it, so
+    /// the body holds each of its literal arguments only across the call
+    /// that converts it, however many it takes (design.md "Literal
+    /// Arguments").
+    fn literalThunkLocal(self: *Builder, word: Word) Allocator.Error!LocalId {
+        const index = switch (word) {
+            .static => return try self.materialize(word),
+            .recipe => |named| switch (self.recipes.get(self.recipes.resolve(named))) {
+                .input => |index| index,
+                .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => return try self.materialize(word),
+            },
+        };
+        const table = self.table_local orelse invariant("a worker without a type table read a literal argument");
+        const local = try self.closedLocal(try self.erasedLayout());
+        try self.emitDyn(local, .{ .table_entry = .{ .table = table, .index = index } });
+        return local;
     }
 
     /// The literal requirement of the innermost scope whose literal is at

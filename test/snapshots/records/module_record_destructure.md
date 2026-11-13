@@ -89,9 +89,9 @@ extract_age = |person| {
 									(p-assign (ident "age"))))))
 					(e-lookup-local
 						(p-assign (ident "person"))))
-				(e-dispatch-call (method "minus") (constraint-fn-var 271)
+				(e-dispatch-call (method "minus") (constraint-fn-var 265)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 264)
+						(e-dispatch-call (method "plus") (constraint-fn-var 258)
 							(receiver
 								(e-field-access
 									(receiver

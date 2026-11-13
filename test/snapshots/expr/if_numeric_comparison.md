@@ -50,7 +50,7 @@ if (5 > 3) 1 else 2
 (e-if
 	(if-branches
 		(if-branch
-			(e-dispatch-call (method "is_gt") (constraint-fn-var 221)
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 215)
 				(receiver
 					(e-num (value "5")))
 				(args
