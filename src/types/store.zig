@@ -2646,10 +2646,19 @@ pub const Store = struct {
         meta: RootMeta,
     };
 
-    fn resolveStorageRoot(self: *const Self, initial_var: Var) ResolvedStorageRoot {
+    /// `ResolvedStorageRoot` without the descriptor: what the union-find walk
+    /// finds, small enough to return in registers.
+    const StorageRoot = struct {
+        storage_var: Var,
+        desc_idx: DescStore.Idx,
+        meta: RootMeta,
+    };
+
+    /// The storage root of `initial_var`'s tree, decoding nothing.
+    fn findStorageRoot(self: *const Self, initial_var: Var) StorageRoot {
         var redirected_slot_idx = Self.varToSlotIdx(initial_var);
         var redirected_slot: Slot = self.slots.get(redirected_slot_idx);
-        var guard = debug.IterationGuard.init("resolveStorageRoot");
+        var guard = debug.IterationGuard.init("findStorageRoot");
 
         while (true) {
             guard.tick();
@@ -2662,7 +2671,6 @@ pub const Store = struct {
                     return .{
                         .storage_var = Self.slotIdxToVar(redirected_slot_idx),
                         .desc_idx = desc_idx,
-                        .desc = self.descAt(desc_idx),
                         .meta = self.getRootMeta(desc_idx),
                     };
                 },
@@ -2670,7 +2678,23 @@ pub const Store = struct {
         }
     }
 
-    fn publicResolved(initial_var: Var, storage: ResolvedStorageRoot) ResolvedVarDesc {
+    /// The storage root of `initial_var`'s tree with its descriptor. The walk
+    /// stays out of line and the decode is inlined into the caller, so the
+    /// fields a caller never reads are never loaded.
+    inline fn resolveStorageRoot(self: *const Self, initial_var: Var) ResolvedStorageRoot {
+        return self.withDesc(self.findStorageRoot(initial_var));
+    }
+
+    inline fn withDesc(self: *const Self, root: StorageRoot) ResolvedStorageRoot {
+        return .{
+            .storage_var = root.storage_var,
+            .desc_idx = root.desc_idx,
+            .desc = self.descAt(root.desc_idx),
+            .meta = root.meta,
+        };
+    }
+
+    inline fn publicResolved(initial_var: Var, storage: ResolvedStorageRoot) ResolvedVarDesc {
         return .{
             .var_ = storage.meta.checked_var,
             .is_root = initial_var == storage.meta.checked_var,
@@ -2683,9 +2707,14 @@ pub const Store = struct {
     ///
     /// Mutates storage redirects in place to compress the storage path. This
     /// never changes the checked representative returned to callers.
-    pub fn resolveVarAndCompressPath(self: *Self, initial_var: Var) ResolvedVarDesc {
+    pub inline fn resolveVarAndCompressPath(self: *Self, initial_var: Var) ResolvedVarDesc {
+        return publicResolved(initial_var, self.withDesc(self.findStorageRootAndCompressPath(initial_var)));
+    }
+
+    /// `findStorageRoot`, compressing the storage path on the way.
+    fn findStorageRootAndCompressPath(self: *Self, initial_var: Var) StorageRoot {
         self.debugAssertUnsealed();
-        const storage = self.resolveStorageRoot(initial_var);
+        const storage = self.findStorageRoot(initial_var);
 
         // Compress the chain so future resolves are O(1). Skipped during a probe:
         // compression is a pure optimization (it never changes what a var
@@ -2709,13 +2738,11 @@ pub const Store = struct {
             }
         }
 
-        return publicResolved(initial_var, storage);
+        return storage;
     }
 
     /// Given a type var, find its class descriptor and checked representative.
-    pub fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
-        const trace = tracy.traceNamed(@src(), "typesStore.resolveVar");
-        defer trace.end();
+    pub inline fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
         return publicResolved(initial_var, self.resolveStorageRoot(initial_var));
     }
 
@@ -3061,7 +3088,7 @@ pub const Store = struct {
 
     /// Get the descriptor for the provided idx
     /// Used in tests
-    pub fn getDesc(self: *Self, desc_idx: DescStore.Idx) Desc {
+    pub inline fn getDesc(self: *Self, desc_idx: DescStore.Idx) Desc {
         return self.descAt(desc_idx);
     }
 
