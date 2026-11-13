@@ -403,7 +403,7 @@ test "unify - a tag repeated along one row's chain relates its payloads" {
 }
 
 /// Whether the first occurrence of `name` along `row`'s chain is pattern-only.
-fn rowTagPatternOnly(env: *TestEnv, row: Var, name: []const u8) !bool {
+fn rowTagPatternOnly(env: *TestEnv, row: Var, name: []const u8) std.mem.Allocator.Error!bool {
     const ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text(name));
     const store = &env.module_env.types;
     var current = row;

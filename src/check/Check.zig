@@ -1643,6 +1643,10 @@ checked_lambda_params: std.ArrayListUnmanaged(CIR.Pattern.Span) = .empty,
 /// body's match was checked, so judging any earlier would warn about tags the
 /// module does produce.
 match_tag_patterns: std.ArrayListUnmanaged(MatchTagPattern) = .empty,
+/// Every match branch part the exhaustiveness check reported as redundant or
+/// unmatchable (`appendUselessMatchPattern`), so the pattern-only tag judgment
+/// reports no part twice.
+useless_match_parts: std.AutoHashMapUnmanaged(UselessMatchPart, void) = .empty,
 /// Param-pattern spans of every checked lambda whose body checked a recorded
 /// match tag pattern. Their types count as produced by callers when
 /// `reportPatternOnlyMatchTags` judges, so they are walked then, once the
@@ -2124,6 +2128,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .bench_conflicted_default_records = .keyed,
     .checked_lambda_params = .keyed,
     .match_tag_patterns = .settled,
+    .useless_match_parts = .keyed,
     .matching_lambda_params = .settled,
     .effectful_lambda_bodies = .keyed,
     .pending_function_effect_dependencies = .frame_partitioned,
@@ -25387,15 +25392,7 @@ fn matchHadTypeError(self: *const Self, match_expr: CIR.Expr.Idx) bool {
 /// Whether the exhaustiveness check already reported this branch part as
 /// redundant or unmatchable.
 fn uselessMatchPartReported(self: *const Self, match_expr: CIR.Expr.Idx, branch_index: u32, part: problem.MatchBranchPart) bool {
-    for (self.problems.problems.items) |reported| {
-        const match_expr_reported, const branch_reported, const part_reported = switch (reported) {
-            .redundant_pattern => |data| .{ data.match_expr, data.branch_index, data.part },
-            .unmatchable_pattern => |data| .{ data.match_expr, data.branch_index, data.part },
-            else => continue,
-        };
-        if (match_expr_reported == match_expr and branch_reported == branch_index and part_reported == part) return true;
-    }
-    return false;
+    return self.useless_match_parts.contains(.{ .match_expr = match_expr, .branch_index = branch_index, .part = part });
 }
 
 /// Whether the tag row `var_` resolves to lists a tag that is not
@@ -35452,6 +35449,13 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
 
 const UselessPatternKind = enum { redundant, unmatchable };
 
+/// A part of one branch of a `match`.
+const UselessMatchPart = struct {
+    match_expr: CIR.Expr.Idx,
+    branch_index: u32,
+    part: problem.MatchBranchPart,
+};
+
 /// Report the redundant or unmatchable alternatives of a match. A branch whose
 /// every alternative is useless for this reason gets one report for the whole
 /// branch; otherwise each useless alternative gets its own report.
@@ -35492,6 +35496,7 @@ fn appendUselessMatchPattern(
     part: problem.MatchBranchPart,
     comptime kind: UselessPatternKind,
 ) std.mem.Allocator.Error!void {
+    try self.useless_match_parts.put(self.gpa, .{ .match_expr = expr_idx, .branch_index = branch_index, .part = part }, {});
     _ = try self.problems.appendProblem(switch (kind) {
         .redundant => .{ .redundant_pattern = .{ .match_expr = expr_idx, .branch_index = branch_index, .part = part } },
         .unmatchable => .{ .unmatchable_pattern = .{ .match_expr = expr_idx, .branch_index = branch_index, .part = part } },
