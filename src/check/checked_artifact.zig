@@ -14706,7 +14706,7 @@ const EvidencePass = struct {
             try self.evidence_params_pool.append(self.allocator, .{
                 .callable_contracts = .{ .start = contract_start, .len = @intCast(param.callable_contracts.len) },
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
-                .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, if (source == .open_row_value) self.openRowValueOf(param.constraint) else param.dispatcher_var) orelse
+                .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, if (source == .open_row_value) self.openRowValueOf(param.constraint) orelse param.dispatcher_var else param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
@@ -14904,7 +14904,9 @@ const EvidencePass = struct {
             // ending in it; the relation's own value names which.
             if (param.constraint.receiver == .open_row_value) {
                 if (constraint_fn_var) |fn_var| {
-                    if (self.types.resolveVar(self.openRowValueOf(param.constraint)).var_ != self.types.resolveVar(self.openRowValueOfCallable(fn_var)).var_) continue;
+                    const stated = self.openRowValueOf(param.constraint) orelse continue;
+                    const called = self.openRowValueOfCallable(fn_var) orelse continue;
+                    if (self.types.resolveVar(stated).var_ != self.types.resolveVar(called).var_) continue;
                 }
             }
             if (same_method_fallback == null) same_method_fallback = @intCast(k);
@@ -16144,14 +16146,17 @@ const EvidencePass = struct {
 
     /// The record or tag union a requirement a row variable holds is about:
     /// its method's first argument.
-    fn openRowValueOf(self: *EvidencePass, constraint: types.StaticDispatchConstraint) Var {
+    fn openRowValueOf(self: *EvidencePass, constraint: types.StaticDispatchConstraint) ?Var {
         return self.openRowValueOfCallable(constraint.fn_var);
     }
 
-    /// The value a method callable is called on: its first argument.
-    fn openRowValueOfCallable(self: *EvidencePass, fn_var: Var) Var {
-        const func = self.types.resolveThroughAliases(fn_var).desc.content.unwrapFunc() orelse unreachable; // a requirement's callable is a function type
-        return self.types.sliceVars(func.args)[0];
+    /// The value a method callable is called on: its first argument; null
+    /// for an erroneous signature.
+    fn openRowValueOfCallable(self: *EvidencePass, fn_var: Var) ?Var {
+        const func = self.types.resolveThroughAliases(fn_var).desc.content.unwrapFunc() orelse return null;
+        const args = self.types.sliceVars(func.args);
+        if (args.len == 0) return null;
+        return args[0];
     }
 
     /// The row variable a record's or tag union's row ends in, when that row
@@ -36781,8 +36786,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x8A, 0xB3, 0x84, 0x39, 0x6B, 0xFE, 0xF4, 0x71, 0xC8, 0x2D, 0x3F, 0xEC, 0x9E, 0x4D, 0x10, 0x18,
-        0xBD, 0xD2, 0x31, 0x92, 0xB7, 0x2B, 0xBA, 0xBF, 0xD1, 0x92, 0x3E, 0x46, 0x7D, 0x9C, 0x30, 0xBF,
+        0x46, 0xA7, 0xD4, 0xAF, 0x0E, 0x72, 0x83, 0xF9, 0x4B, 0x68, 0x12, 0xB9, 0xDC, 0xFE, 0x91, 0x0A,
+        0xE6, 0x14, 0x20, 0x44, 0x6B, 0xFD, 0x5E, 0x0B, 0xB4, 0x4C, 0xAC, 0x96, 0x9A, 0x11, 0xBE, 0xE9,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

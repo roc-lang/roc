@@ -44817,6 +44817,9 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
 
     try self.relateSameMethodRequirementsAtBoundary(roots, env);
     try self.relateUndischargedInterpolationParts(env);
+    // Before literals take their defaults, so a decision can still give them
+    // their types; relations this boundary's own work queues are decided at
+    // its end (`quiesceSchemeRequirementsAtBoundary`).
     try self.decidePlainMethodsAtBoundary(env);
 
     try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
@@ -44922,6 +44925,7 @@ fn quiesceSchemeRequirementsAtBoundary(
             try self.checkStaticDispatchConstraints(env, false);
             try self.checkAllConstraints(env);
         }
+        try self.decidePlainMethodsAtBoundary(env);
         try self.decideUnreachedOpenRowsAtBoundary(roots, env);
         try self.checkGroundedSchemeRequirementsAtBoundary(env);
         try self.captureSchemeDispatchRequirements(roots, env, boundary_codecs);
@@ -54480,10 +54484,14 @@ fn holdsOpenRowValueRelations(self: *Self, range: StaticDispatchConstraint.SafeL
 }
 
 /// The record or tag union a requirement a row variable holds is about:
-/// its method's first argument.
-fn openRowValueReceiver(self: *Self, constraint: StaticDispatchConstraint) Var {
-    const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse unreachable;
-    return self.types.sliceVars(func.args)[0];
+/// its method's first argument; null while the requirement's callable is not
+/// yet a function type (an instantiation's placeholder still unlinked, or an
+/// erroneous signature).
+fn openRowValueReceiver(self: *Self, constraint: StaticDispatchConstraint) ?Var {
+    const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return null;
+    const args = self.types.sliceVars(func.args);
+    if (args.len == 0) return null;
+    return args[0];
 }
 
 /// Queue each requirement `entry`'s row variable holds as a relation on the
@@ -54494,7 +54502,15 @@ fn redispatchOpenRowValueRelations(self: *Self, env: *Env, entry: DeferredConstr
         var at_value = constraint;
         at_value.receiver = .holder;
         var redirected = entry;
-        redirected.var_ = self.openRowValueReceiver(at_value);
+        redirected.var_ = self.openRowValueReceiver(at_value) orelse {
+            // An erroneous signature was reported where it failed; a
+            // placeholder waits until its use links it.
+            if (self.types.resolveThroughAliases(constraint.fn_var).desc.content == .err) continue;
+            var waiting = entry;
+            waiting.constraints = try self.types.appendStaticDispatchConstraints(&.{constraint});
+            try self.scratch_deferred_static_dispatch_constraints.append(waiting);
+            continue;
+        };
         if (self.open_row_failure_exprs.get(at_value.fn_var)) |failure_expr| redirected.failure_expr = failure_expr;
         redirected.constraints = try self.types.appendStaticDispatchConstraints(&.{at_value});
         _ = try env.deferred_static_dispatch_constraints.append(self.gpa, redirected);
@@ -54641,7 +54657,8 @@ fn decideOpenRowAsPlain(self: *Self, row: Var, env: *Env) Allocator.Error!bool {
     var decided = false;
     var constraints = self.types.static_dispatch_constraints.iterRange(flex.constraints);
     while (constraints.next()) |constraint| {
-        if (constraint.receiver != .open_row_value) {
+        const value = if (constraint.receiver == .open_row_value) self.openRowValueReceiver(constraint) else null;
+        if (value == null) {
             try kept.append(self.gpa, constraint);
             continue;
         }
@@ -54649,7 +54666,7 @@ fn decideOpenRowAsPlain(self: *Self, row: Var, env: *Env) Allocator.Error!bool {
         var at_value = constraint;
         at_value.receiver = .holder;
         _ = try env.deferred_static_dispatch_constraints.append(self.gpa, .{
-            .var_ = self.openRowValueReceiver(constraint),
+            .var_ = value.?,
             .constraints = try self.types.appendStaticDispatchConstraints(&.{at_value}),
             .failure_expr = self.open_row_failure_exprs.get(constraint.fn_var) orelse .none,
         });
@@ -54776,7 +54793,8 @@ fn annotatedRowRequirementFor(self: *Self, range: StaticDispatchConstraint.SafeL
     const value_root = self.types.resolveVar(value).var_;
     for (self.types.sliceStaticDispatchConstraints(range)) |stated| {
         if (stated.receiver != .open_row_value or !stated.fn_name.eql(fn_name)) continue;
-        if (self.types.resolveVar(self.openRowValueReceiver(stated)).var_ == value_root) return stated.fn_var;
+        const stated_value = self.openRowValueReceiver(stated) orelse continue;
+        if (self.types.resolveVar(stated_value).var_ == value_root) return stated.fn_var;
     }
     return null;
 }

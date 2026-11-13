@@ -12422,8 +12422,10 @@ meets the literal's uncommitted tail, the merged class is that uncommitted
 tail, and `keep`'s type has no row variable to carry a requirement, so a
 method call on it is decided at the definition and comparing or hashing it
 commits the tail. A method call on it is decided at the boundary of the definition that built
-it, against the plain type, once everything in that definition, its
-annotation included, has said what the value is (a function annotated to
+it (before the boundary's literals take their defaults, and again once the
+boundary's own work has queued all it will, before anything generalizes),
+against the plain type, once everything in that definition, its annotation
+included, has said what the value is (a function annotated to
 return `Tagged` makes the record it builds and compares a `Tagged` first):
 `is_eq` and `to_hash` are derived, and any other method is the
 missing-method error it is for any structural value. A requirement a generic

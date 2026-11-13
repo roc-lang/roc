@@ -706,9 +706,11 @@ fn pushTagChildren(
 
 /// The record or tag union a row variable's requirement is about: its
 /// method's first argument.
-fn openRowValueRoot(store: *const types_mod.Store, constraint: StaticDispatchConstraint) Var {
-    const func = store.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse unreachable; // a requirement's callable is a function type
-    return store.resolveVar(store.sliceVars(func.args)[0]).var_;
+fn openRowValueRoot(store: *const types_mod.Store, constraint: StaticDispatchConstraint) ?Var {
+    const func = store.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return null;
+    const args = store.sliceVars(func.args);
+    if (args.len == 0) return null;
+    return store.resolveVar(args[0]).var_;
 }
 
 fn emitConstraints(
@@ -729,7 +731,7 @@ fn emitConstraints(
         // tag union ending in it (design.md "Methods On Open Rows"); any other
         // variable's are one per method.
         const existing: ?u32 = if (constraint.receiver == .open_row_value) blk: {
-            const value = openRowValueRoot(store, constraint);
+            const value = openRowValueRoot(store, constraint) orelse break :blk null;
             for (out.items[first_param..], first_param..) |param, index| {
                 if (param.constraint.receiver != .open_row_value or !param.constraint.fn_name.eql(constraint.fn_name)) continue;
                 if (openRowValueRoot(store, param.constraint) == value) break :blk @intCast(index);

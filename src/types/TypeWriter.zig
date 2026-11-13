@@ -559,10 +559,10 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
             const saved_polarity = self.polarity;
             self.polarity = .pos;
             const saved_display = self.row_value_display;
-            self.row_value_display = if (item.constraint.receiver == .open_row_value) .{
-                .value = self.openRowValueOf(item.constraint),
+            self.row_value_display = if (item.constraint.receiver == .open_row_value) if (self.openRowValueOf(item.constraint)) |value| .{
+                .value = value,
                 .row = self.types.resolveVar(item.dispatcher_var).var_,
-            } else null;
+            } else null else null;
             try self.writeVar(tmp_writer, item.constraint.fn_var, root_var);
             self.row_value_display = saved_display;
             self.polarity = saved_polarity;
@@ -1688,9 +1688,11 @@ fn holdsOpenRowValue(self: *const TypeWriter, var_: Var) bool {
 
 /// The record or tag union a requirement a row variable holds is about: its
 /// method's first argument.
-fn openRowValueOf(self: *const TypeWriter, constraint: types_mod.StaticDispatchConstraint) Var {
-    const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse unreachable; // a requirement's callable is a function type
-    return self.types.resolveVar(self.types.sliceVars(func.args)[0]).var_;
+fn openRowValueOf(self: *const TypeWriter, constraint: types_mod.StaticDispatchConstraint) ?Var {
+    const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return null;
+    const args = self.types.sliceVars(func.args);
+    if (args.len == 0) return null;
+    return self.types.resolveVar(args[0]).var_;
 }
 
 /// Write the name of a row variable that holds requirements: the name an
