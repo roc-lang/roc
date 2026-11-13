@@ -25,7 +25,7 @@ const Adapter = struct {
         // Platform for-clause aliases carry an abstract rigid backing. Their
         // application arguments are explicit source bookkeeping, with no
         // structural function position supplied by the abstract declaration.
-        for (key.owner.for_clause_aliases.items.items) |alias| {
+        for (key.owner.for_clause_aliases.items()) |alias| {
             if (alias.alias_stmt_idx == key.statement) return .builtin;
         }
         return .{ .declaration = key };
@@ -36,7 +36,7 @@ const Adapter = struct {
             .builtin => .builtin,
             .local => |local| declarationReference(.{ .owner = owner, .statement = local.decl_idx }),
             .external => |external| blk: {
-                const import_name = owner.common.getString(owner.imports.imports.items.items[@backingInt(external.module_idx)]);
+                const import_name = owner.common.getString(owner.imports.imports.items()[@backingInt(external.module_idx)]);
                 if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
                     break :blk declarationReference(.{
                         .owner = self.resolver.builtin_owner orelse base.invariant("check invariant violated: a compiler-builtin import is resolved only by modules checked with the Builtin module available", .{}),

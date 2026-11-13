@@ -633,7 +633,7 @@ pub fn findLookupNoWiderThan(module_env: *ModuleEnv, offset: u32, narrowest: Reg
 
 /// External nominal reference information for a tag.
 pub const TagNominalExternal = struct {
-    module_idx: CIR.Import.Idx,
+    module: CIR.Expr.NominalExternalModule,
     target_node_idx: u32,
 };
 
@@ -661,7 +661,7 @@ const FindTagAtOffsetContext = struct {
         switch (expr) {
             .e_tag => |tag| ctx.result = ctx.tagRef(tag.name, ModuleEnv.varFrom(expr_idx)),
             .e_nominal => |nom| ctx.findNominalBackingTag(nom.backing_expr, nom.nominal_type_decl, null),
-            .e_nominal_external => |nom| ctx.findNominalBackingTag(nom.backing_expr, null, .{ .module_idx = nom.module_idx, .target_node_idx = nom.target_node_idx }),
+            .e_nominal_external => |nom| ctx.findNominalBackingTag(nom.backing_expr, null, .{ .module = nom.module, .target_node_idx = nom.target_node_idx }),
             .e_match => |match_expr| {
                 // A tag that a match branch pattern matches carries the match condition's type.
                 const cond_var = ModuleEnv.varFrom(match_expr.cond);
@@ -842,7 +842,7 @@ const FindTagAtOffsetContext = struct {
                 },
                 .nominal_external => |nom| {
                     nominal_decl = null;
-                    nominal_external = .{ .module_idx = nom.module_idx, .target_node_idx = nom.target_node_idx };
+                    nominal_external = .{ .module = nom.module, .target_node_idx = nom.target_node_idx };
                     current = nom.backing_pattern;
                 },
                 .as => |as_pat| current = as_pat.pattern,
@@ -903,7 +903,7 @@ pub fn collectReferences(
     var results: std.ArrayList(LspRange) = .empty;
     errdefer results.deinit(allocator);
 
-    for (module_env.store.write_occurrences.items.items) |write| {
+    for (module_env.store.write_occurrences.items()) |write| {
         if (write.pattern_idx == target_pattern) {
             if (regionToRange(module_env, write.region())) |range| {
                 try results.append(allocator, range);
@@ -1372,7 +1372,7 @@ fn findPatternByAnnotationName(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern
 /// Find the exact source occurrence that writes an existing local binding.
 /// A structural reassignment's surrounding pattern is not the written name.
 pub fn findWriteAtOffset(module_env: *const ModuleEnv, offset: u32) ?NodeStore.WriteOccurrence {
-    for (module_env.store.write_occurrences.items.items) |write| {
+    for (module_env.store.write_occurrences.items()) |write| {
         if (regionContainsOffset(write.region(), offset)) return write;
     }
     return null;

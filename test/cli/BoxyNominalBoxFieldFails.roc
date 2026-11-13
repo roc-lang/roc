@@ -5,7 +5,7 @@ BoxyNominalBoxFieldFails := [].{}
 
 Boxed :: Box({ prop : U64 }).{
 	make : U64 -> Boxed
-	make = |prop| Boxed.(Box.box({ prop: prop }))
+	make = |value| Boxed.(Box.box({ prop: value }))
 
 	prop : Boxed -> U64
 	prop = |Boxed.(boxed)| Box.unbox(boxed).prop

@@ -357,7 +357,7 @@ pub const SealedConstraintRows = struct {
             .fn_name = self.view.methodName(source.fn_name),
             .fn_ty = type_ids.fromVar(type_store.resolveVar(source.fn_var).var_),
             .origin = source.origin,
-            .numeral = type_store.constraintNumeralInfo(source),
+            .numeral = .of(type_store.constraintNumeralInfo(source)),
         };
     }
 };
@@ -365,10 +365,10 @@ pub const SealedConstraintRows = struct {
 /// The columns a module's sealed checked types are read through, owned by
 /// its checked type store.
 pub const SealedTypeColumns = struct {
-    names: *std.ArrayList(SealedNameRow),
-    origins: *std.ArrayList(SealedOriginRow),
-    nominals: *std.ArrayList(SealedNominalRow),
-    var_facts: *std.ArrayList(SealedVarFacts),
+    names: *collections.SafeList(SealedNameRow),
+    origins: *collections.SafeList(SealedOriginRow),
+    nominals: *collections.SafeList(SealedNominalRow),
+    var_facts: *collections.SafeList(SealedVarFacts),
 };
 
 /// Fill `columns` for `env`, whose solver store checking sealed: intern the
@@ -423,7 +423,7 @@ pub fn buildColumns(
             .source = declaration.source,
         };
         const builtin = try builder.origins.builtinNominal(env, imports, application);
-        columns.nominals.appendAssumeCapacity(.{
+        _ = columns.nominals.appendAssumeCapacity(.{
             .builtin = builtin,
             .representation = try checked_artifact.checkedNominalRepresentationIfAvailable(
                 env,
@@ -447,8 +447,8 @@ const ColumnBuilder = struct {
 
     fn row(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!*SealedNameRow {
         const index: usize = ident.idx;
-        if (index >= self.columns.names.items.len) try self.columns.names.appendNTimes(self.allocator, .{}, index + 1 - self.columns.names.items.len);
-        return &self.columns.names.items[index];
+        if (index >= self.columns.names.items().len) try self.columns.names.appendNTimes(self.allocator, .{}, index + 1 - self.columns.names.items().len);
+        return &self.columns.names.items()[index];
     }
 
     fn typeName(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
@@ -477,8 +477,8 @@ const ColumnBuilder = struct {
 
     fn origin(self: *ColumnBuilder, origin_module: base.ModuleIdentity.Idx) Allocator.Error!void {
         const index: usize = @backingInt(origin_module);
-        if (index >= self.columns.origins.items.len) try self.columns.origins.appendNTimes(self.allocator, .{}, index + 1 - self.columns.origins.items.len);
-        const origin_row = &self.columns.origins.items[index];
+        if (index >= self.columns.origins.items().len) try self.columns.origins.appendNTimes(self.allocator, .{}, index + 1 - self.columns.origins.items().len);
+        const origin_row = &self.columns.origins.items()[index];
         if (origin_row.identity != SealedNameRow.none) return;
         origin_row.identity = @backingInt(try self.names.internModuleIdentity(self.env.moduleIdentityHash(origin_module)));
         if (try self.origins.ownerIfAvailable(self.env, self.imports, origin_module)) |owner| {
@@ -617,7 +617,6 @@ const ViewTestError = @import("test/TestEnv.zig").TestEnvError || error{ Corrupt
 fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     const TestEnv = @import("test/TestEnv.zig");
     const compiled_builtins = @import("compiled_builtins");
-    const CompactWriter = collections.CompactWriter;
     const CheckedModuleArtifact = checked_artifact.CheckedModuleArtifact;
     const allocator = std.testing.allocator;
 
@@ -626,13 +625,7 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     try test_env.assertNoErrors();
     try std.testing.expect(test_env.module_env.types.isSealed());
 
-    const blob = compiled_builtins.builtin_artifact_bin[0..];
-    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(blob);
-    const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-        @alignCast(blob[0..serialized_bytes.len]);
-    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
-    try serialized.validate(backing.len);
-    var builtin_artifact = serialized.deserializeStatic(backing, allocator, .{ .static_builtin = test_env.builtin_module.env });
+    var builtin_artifact = try CheckedModuleArtifact.viewStaticBuiltin(compiled_builtins.builtin_artifact_bin, allocator, .{ .static_builtin = test_env.builtin_module.env });
     try builtin_artifact.attachSealedTypes(allocator, std.testing.io);
     defer builtin_artifact.deinitRetainingModuleEnv(allocator);
 

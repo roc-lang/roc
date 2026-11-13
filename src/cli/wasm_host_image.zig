@@ -230,6 +230,7 @@ pub const ImageJob = struct {
         };
         _ = WasmUnitImage.View.init(mapping) catch {
             link_output.unmapReadOnly(mapping);
+            manager.rejectEntry(.checked, .prelinked_host, key, scope, artifact.stamp(), "it is not a wasm unit image", .{});
             artifact.deinit();
             return .miss;
         };

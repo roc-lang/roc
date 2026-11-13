@@ -15,6 +15,10 @@
 //! specialization may drop code the lifted program still has.
 
 const std = @import("std");
+const collections = @import("collections");
+/// A position in the closure's effect groups.
+const EffectGroup = enum(u32) { _ };
+const EffectGroupColumn = collections.OptionalIndexColumn(EffectGroup);
 const base = @import("base");
 const check = @import("check");
 const Lifted = @import("monotype_lifted/ast.zig");
@@ -200,15 +204,14 @@ pub fn build(allocator: Allocator, program: *const Lifted.Program, producers: []
     // Close each function's effects over its calls: a strongly connected
     // group of functions has what its members have and what everything it
     // calls has. Tarjan's algorithm finishes a group after everything it calls.
-    const closed = try allocator.alloc(?u32, fn_count);
-    defer allocator.free(closed);
-    @memset(closed, null);
+    var closed = try EffectGroupColumn.initFilled(allocator, fn_count);
+    defer closed.deinit(allocator);
     var groups = std.ArrayList(Effects).empty;
     defer {
         for (groups.items) |*effects| effects.deinit(allocator);
         groups.deinit(allocator);
     }
-    try closeOverCalls(allocator, callees, own, scanned, closed, &groups);
+    try closeOverCalls(allocator, callees, own, scanned, &closed, &groups);
 
     // A producer's evaluation has its function's effects. When it calls a
     // function value, every function value it creates or a value it reads
@@ -220,7 +223,7 @@ pub fn build(allocator: Allocator, program: *const Lifted.Program, producers: []
     }
     for (totals, producers) |*total, producer| {
         total.* = .{};
-        _ = try total.add(allocator, &groups.items[closed[@backingInt(producer.fn_id)].?]);
+        _ = try total.add(allocator, &groups.items[@backingInt(closed.get(@backingInt(producer.fn_id)).?)]);
     }
     var changed = true;
     while (changed) {
@@ -233,7 +236,7 @@ pub fn build(allocator: Allocator, program: *const Lifted.Program, producers: []
             var index: usize = 0;
             while (index < total.values.items.len) : (index += 1) {
                 const value = total.values.items[index];
-                if (try total.add(allocator, &groups.items[closed[value].?])) changed = true;
+                if (try total.add(allocator, &groups.items[@backingInt(closed.get(value).?)])) changed = true;
             }
         }
     }
@@ -256,10 +259,11 @@ fn closeOverCalls(
     callees: []const std.ArrayList(u32),
     own: []const Effects,
     scanned: []const bool,
-    closed: []?u32,
+    closed: *EffectGroupColumn,
     groups: *std.ArrayList(Effects),
 ) Allocator.Error!void {
-    const unvisited = std.math.maxInt(u32);
+    // Visit indices are issued from one, so zero marks an unvisited node.
+    const unvisited: u32 = 0;
     const fn_count = callees.len;
     const index = try allocator.alloc(u32, fn_count);
     defer allocator.free(index);
@@ -274,7 +278,7 @@ fn closeOverCalls(
     const Frame = struct { node: u32, next: usize };
     var frames = std.ArrayList(Frame).empty;
     defer frames.deinit(allocator);
-    var next_index: u32 = 0;
+    var next_index: u32 = 1;
     for (0..fn_count) |start_index| {
         if (!scanned[start_index] or index[start_index] != unvisited) continue;
         const start: u32 = @intCast(start_index);
@@ -316,13 +320,13 @@ fn closeOverCalls(
                 member_start -= 1;
                 const member = stack.items[member_start];
                 on_stack[member] = false;
-                closed[member] = group;
+                closed.set(member, @fromBackingInt(group));
                 if (member == node) break;
             }
             for (stack.items[member_start..]) |member| {
                 _ = try effects.add(allocator, &own[member]);
                 for (callees[member].items) |callee| {
-                    const callee_group = closed[callee].?;
+                    const callee_group: u32 = @backingInt(closed.get(callee).?);
                     if (callee_group != group) _ = try effects.add(allocator, &groups.items[callee_group]);
                 }
             }

@@ -132,7 +132,7 @@ pub fn solvingCanChange(allocator: Allocator, store: *const Type.Store, root: Ty
                 if (Builder.namedLayout(named) == .itself) continue;
                 const args = store.span(named.args);
                 for (0..args.len) |index| try pending.append(allocator, GuardedList.at(args, index));
-                if (named.backing) |backing| try pending.append(allocator, backing.ty);
+                if (named.backing.get()) |backing| try pending.append(allocator, backing.ty);
                 const declared = store.declaredFieldSpan(named.declared_order);
                 for (0..declared.len) |index| switch (GuardedList.at(declared, index)) {
                     .named => {},
@@ -229,14 +229,14 @@ const Builder = struct {
     };
 
     fn namedLayout(named: Type.NamedContent) NamedLayout {
-        if (named.builtin_owner) |owner| switch (owner) {
+        if (named.builtin_owner.get()) |owner| switch (owner) {
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return .itself,
             // These representations follow their arguments' structure.
             .iter, .stream, .parse_tag_union_spec, .fields, .field => return .none,
             .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
         };
         if (named.declared_order.len != 0) return .none;
-        const backing = named.backing orelse return .none;
+        const backing = named.backing.get() orelse return .none;
         return .{ .backing = backing.ty };
     }
 
@@ -297,12 +297,12 @@ test "records, tuples, and nominal wrappers with one layout share a representati
     const u64_ty = try store.internPrimitive(&name_store, .u64);
     const u8_ty = try store.internPrimitive(&name_store, .u8);
     const point = try store.internRecord(&name_store, &.{
-        .{ .name = x_field, .ty = u64_ty, .default = null },
-        .{ .name = y_field, .ty = u8_ty, .default = null },
+        .{ .name = x_field, .ty = u64_ty, .default = .none },
+        .{ .name = y_field, .ty = u8_ty, .default = .none },
     });
     const other = try store.internRecord(&name_store, &.{
-        .{ .name = a_field, .ty = u64_ty, .default = null },
-        .{ .name = b_field, .ty = u8_ty, .default = null },
+        .{ .name = a_field, .ty = u64_ty, .default = .none },
+        .{ .name = b_field, .ty = u8_ty, .default = .none },
     });
     const pair = try store.internTuple(&name_store, &.{ u64_ty, u8_ty });
     const flipped = try store.internTuple(&name_store, &.{ u8_ty, u64_ty });
@@ -363,7 +363,7 @@ test "solving can change a type holding a function or a tag row and no other" {
     const hole = try store.internHole(&name_store);
     const holes = try store.internList(&name_store, hole);
     const x_field = try name_store.internRecordFieldLabel("x");
-    const point = try store.internRecord(&name_store, &.{.{ .name = x_field, .ty = u64_ty, .default = null }});
+    const point = try store.internRecord(&name_store, &.{.{ .name = x_field, .ty = u64_ty, .default = .none }});
     const func = try store.internFunc(&name_store, &.{u64_ty}, u64_ty);
     const a_tag = try name_store.internTagLabel("A");
     const row = try store.internTagUnion(&name_store, &.{.{ .name = a_tag, .checked_name = a_tag, .payloads = &.{u64_ty} }});

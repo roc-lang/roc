@@ -30,7 +30,7 @@ ranges: std.ArrayList(Range) = .empty,
 // next procedure (see `Indexes`) allocates only past its earlier sizes.
 blocks: std.ArrayList(Block) = .empty,
 block_states: std.ArrayList(BlockState) = .empty,
-loop_epochs: std.ArrayList(u32) = .empty,
+loop_epochs: collections.EpochSet(u32, .stamps, .internal) = .{},
 units: std.ArrayList(Unit) = .empty,
 write_loops: std.ArrayList(u32) = .empty,
 slot_order: std.ArrayList(u32) = .empty,
@@ -533,7 +533,7 @@ const BlockStructure = struct {
         defer side.deinit(allocator);
         for (0..count) |target_index| {
             for (preds[pred_starts[target_index]..pred_starts[target_index + 1]]) |pred| {
-                var loop = forest.innermost[target_index];
+                var loop = forest.innermostOf(target_index);
                 while (loop != LoopForest.none and !forest.containsNode(loop, pred)) : (loop = forest.loops[loop].parent) {
                     if (forest.loops[loop].header != target_index) try side.append(allocator, .{ .loop = loop, .pred = pred });
                 }
@@ -572,7 +572,7 @@ const BlockStructure = struct {
         const LoopOrder = struct {
             forest: *const LoopForest,
             fn key(ctx: @This(), block: u32) u64 {
-                const loop = ctx.forest.innermost[block];
+                const loop = ctx.forest.innermostOf(block);
                 const position: u64 = if (loop == LoopForest.none) std.math.maxInt(u32) else ctx.forest.loops[loop].enter;
                 return (position << 32) | block;
             }
@@ -619,7 +619,7 @@ const BlockStructure = struct {
             @memset(end_position, 0);
             @memset(covered, 0);
             for (blocks, 0..) |block, index| {
-                const loop = forest.innermost[index];
+                const loop = forest.innermostOf(index);
                 if (loop == LoopForest.none) continue;
                 first_position[loop] = @min(first_position[loop], block.start);
                 end_position[loop] = @max(end_position[loop], block.end);
@@ -682,7 +682,7 @@ const BlockStructure = struct {
         var high: usize = self.blocks_by_loop.len;
         while (low < high) {
             const mid = low + (high - low) / 2;
-            const loop = self.forest.innermost[self.blocks_by_loop[mid]];
+            const loop = self.forest.innermostOf(self.blocks_by_loop[mid]);
             const position = if (loop == LoopForest.none) std.math.maxInt(u32) else self.forest.loops[loop].enter;
             if (position < order) low = mid + 1 else high = mid;
         }
@@ -753,28 +753,47 @@ fn lastNodeOf(self: *const Self, block: Block) u32 {
 /// solving the control-flow graph a second time.
 /// Set physical sizes and call `assignSlots` after this operation.
 pub fn solveAliasLifetimes(self: *Self, entry: u32) Allocator.Error!void {
+    const aliases = try self.prepareAliases();
+    defer if (aliases) |items| self.allocator.free(items);
+    try self.solveLifetimes();
+    if (aliases) |items| try self.applyAliases(entry, items);
+}
+
+/// Extend already-solved lifetimes through the caller's proposed aliases.
+/// Pointer slots can consume the independent ranges first; backing storage
+/// then consumes their owner unions without rebuilding or solving the CFG.
+pub fn extendAliasLifetimes(self: *Self, entry: u32) Allocator.Error!void {
+    const aliases = try self.prepareAliases() orelse return;
+    defer self.allocator.free(aliases);
+    try self.applyAliases(entry, aliases);
+}
+
+const Alias = struct {
+    source: u32,
+    state: enum { pending, visiting, resolved },
+    start: usize = 0,
+    end: usize = 0,
+    definition: ?u32 = null,
+};
+
+fn prepareAliases(self: *Self) Allocator.Error!?[]Alias {
     var has_candidates = false;
     for (self.values.items, 0..) |*value, i| {
         has_candidates = has_candidates or value.representative != i;
         // Even externally allocated parameters participate in the proof.
         value.size = 1;
     }
-    if (!has_candidates) return self.solveLifetimes();
+    if (!has_candidates) return null;
 
-    const Alias = struct {
-        source: u32,
-        state: enum { pending, visiting, resolved },
-        start: usize = 0,
-        end: usize = 0,
-        definition: ?u32 = null,
-    };
     const aliases = try self.allocator.alloc(Alias, self.values.items.len);
-    defer self.allocator.free(aliases);
     for (self.values.items, 0..) |*v, i| {
         aliases[i] = .{ .source = v.representative, .state = if (v.representative == i) .resolved else .pending };
         v.representative = @intCast(i);
     }
-    try self.solveLifetimes();
+    return aliases;
+}
+
+fn applyAliases(self: *Self, entry: u32, aliases: []Alias) Allocator.Error!void {
     const accesses = self.sortedAccesses();
     var begin: usize = 0;
     while (begin < accesses.len) {
@@ -905,9 +924,8 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
     try self.block_states.resize(self.allocator, blocks.items.len);
     const states = self.block_states.items;
     @memset(states, .{});
-    try self.loop_epochs.resize(self.allocator, structure.forest.loops.len);
-    const loop_epochs = self.loop_epochs.items;
-    @memset(loop_epochs, none);
+    try self.loop_epochs.ensureLen(self.allocator, structure.forest.loops.len);
+    const loop_epochs = &self.loop_epochs;
     const work = &self.units;
     work.clearRetainingCapacity();
     const write_loops = &self.write_loops;
@@ -921,6 +939,7 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
         while (end < self.accesses.items.len and self.accesses.items[end].value == value) : (end += 1) {}
         defer begin = end;
         if (self.values.items[value].size == 0) continue;
+        loop_epochs.reset();
         const range_start = ranges.items.len;
 
         // The loop-tree positions of the loops holding the value's writes:
@@ -928,7 +947,7 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
         write_loops.clearRetainingCapacity();
         for (self.accesses.items[begin..end]) |a| {
             if (!a.write) continue;
-            const loop = structure.forest.innermost[self.nodes.items[a.node].block];
+            const loop = structure.forest.innermostOf(self.nodes.items[a.node].block);
             if (loop != LoopForest.none) try write_loops.append(self.allocator, structure.forest.loops[loop].enter);
         }
         std.mem.sort(u32, write_loops.items, {}, std.sort.asc(u32));
@@ -962,9 +981,8 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
             }
             if (needed_until) |limit| {
                 try ranges.append(self.allocator, .{ .start = blocks.items[block].start, .end = limit });
-                if (transparency.outermost(structure.forest.innermost[block])) |loop| {
-                    if (loop_epochs[loop] != value) {
-                        loop_epochs[loop] = value;
+                if (transparency.outermost(structure.forest.innermostOf(block))) |loop| {
+                    if (!loop_epochs.testAndInsert(loop)) {
                         try work.append(self.allocator, .{ .loop = true, .index = loop });
                     }
                 } else {
@@ -980,9 +998,8 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
                 structure.blockPreds(unit.index);
             if (unit.loop) try structure.appendCoverage(self.allocator, unit.index, blocks.items, ranges);
             for (entries) |pred| {
-                if (transparency.outermost(structure.forest.innermost[pred])) |loop| {
-                    if (loop_epochs[loop] == value) continue;
-                    loop_epochs[loop] = value;
+                if (transparency.outermost(structure.forest.innermostOf(pred))) |loop| {
+                    if (loop_epochs.testAndInsert(loop)) continue;
                     try work.append(self.allocator, .{ .loop = true, .index = loop });
                     continue;
                 }
@@ -1157,8 +1174,17 @@ fn valueLess(self: *Self, a: u32, b: u32) bool {
     const y = self.liveRanges(b)[0].start;
     return if (x == y) a < b else x < y;
 }
+/// Discard only placement, preserving the CFG and solved lifetimes for another
+/// storage domain. Ordinary single-domain users do not pay for a second reset.
+pub fn resetSlots(self: *Self) void {
+    self.slots.clearRetainingCapacity();
+    self.class_of_size.clearRetainingCapacity();
+    for (self.values.items) |*value| value.slot = none;
+}
+
 /// Assign physical storage to the already solved nonzero-sized values.
 pub fn assignSlots(self: *Self) Allocator.Error!void {
+    std.debug.assert(self.slots.items.len == 0);
     const order = &self.slot_order;
     order.clearRetainingCapacity();
     for (self.values.items, 0..) |v, i| if (v.range_len != 0 and v.size != 0) {
@@ -1482,6 +1508,34 @@ test "stack plan keeps alias storage live through the final alias read" {
     plan.values.items[1].representative = 0;
     try plan.solve();
     try std.testing.expect(plan.values.items[0].slot != plan.values.items[2].slot);
+}
+
+test "stack plan reuses one lifetime solve for pointer and backing placements" {
+    var plan = init(std.testing.allocator);
+    defer plan.deinit();
+    for (0..5) |_| _ = try plan.node();
+    for (0..4) |i| try plan.edge(@intCast(i), @intCast(i + 1));
+    try plan.access(0, testLocal(0), false, true);
+    try plan.access(1, testLocal(0), true, false);
+    try plan.access(1, testLocal(1), false, true);
+    try plan.access(2, testLocal(2), false, true);
+    try plan.access(3, testLocal(1), true, false);
+    try plan.access(4, testLocal(2), true, false);
+    for (plan.values.items) |*value| value.size = 1;
+    try plan.solve();
+    // The source pointer is dead, even though its bytes remain observable
+    // through the alias. Pointer-slot reuse must not imply backing reuse.
+    try std.testing.expectEqual(plan.values.items[0].slot, plan.values.items[2].slot);
+    plan.values.items[1].representative = 0;
+    try plan.extendAliasLifetimes(0);
+    for (plan.values.items, 0..) |*value, i| {
+        value.size = if (value.representative == i) 32 else 0;
+    }
+    plan.resetSlots();
+    try plan.assignSlots();
+    try std.testing.expectEqual(@as(usize, 2), plan.slots.items.len);
+    try std.testing.expect(plan.values.items[0].slot != plan.values.items[2].slot);
+    try std.testing.expectEqual(@as(?u32, null), plan.values.items[1].slotIndex());
 }
 
 test "stack plan uses linear interval storage for a wide straight-line block" {

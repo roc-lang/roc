@@ -72,9 +72,9 @@ pub fn intrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) ?Intrin
     if (ident.eql(env.idents.builtin_str_inspect)) return .str_inspect;
 
     const entries = [_]struct { name: []const u8, intrinsic: IntrinsicId }{
-        .{ .name = "Builtin.Str.Utf8Problem.is_eq", .intrinsic = .structural_eq },
-        .{ .name = "Builtin.Str.Utf16Problem.is_eq", .intrinsic = .structural_eq },
-        .{ .name = "Builtin.Str.Utf32Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.StrUtf8Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.StrUtf16Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.StrUtf32Problem.is_eq", .intrinsic = .structural_eq },
         .{ .name = "Builtin.Encoding.ParseTagUnionSpec.parse", .intrinsic = .parse_tag_union },
         .{ .name = "Builtin.Encoding.FieldName.FieldNames.rename_fields", .intrinsic = .field_names_rename_fields },
         .{ .name = "Builtin.Encoding.FieldName.FieldNames.shortest_name", .intrinsic = .field_names_shortest_name },
@@ -987,12 +987,12 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
                 const def_data_idx = def_node.getPayload().def.def_data_idx;
 
                 // Update the expr field in def_data
-                env.store.def_data.items.items[def_data_idx].expr = @backingInt(expr_idx);
+                env.store.def_data.items()[def_data_idx].expr = @backingInt(expr_idx);
 
                 // Track this replaced def index
                 try new_def_indices.append(gpa, def_idx);
-                if (env.provided_low_level_defs.items.items.len > 0) {
-                    const previous = env.provided_low_level_defs.items.items[env.provided_low_level_defs.items.items.len - 1];
+                if (env.provided_low_level_defs.items().len > 0) {
+                    const previous = env.provided_low_level_defs.items()[env.provided_low_level_defs.items().len - 1];
                     std.debug.assert(previous.def_idx < @backingInt(def_idx));
                 }
                 _ = try env.provided_low_level_defs.append(gpa, .{

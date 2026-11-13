@@ -146,19 +146,46 @@ pub const ExtractOptions = struct {
     /// Exact source type represented by a public package/platform module name.
     public_type: ?PublicTypeProjection = null,
     /// Every exact public type projection in the generated package docs,
-    /// sorted once with `sortPublicTypeProjections` before extraction.
+    /// including the nominal types `adoptRenamedNominals` found, sorted once
+    /// with `sortPublicTypeProjections` before extraction.
     public_types: []const PublicTypeProjection = &.{},
 };
 
 /// A borrowed mapping from one exact source type to its public docs namespace.
 pub const PublicTypeProjection = struct {
+    /// The name the source type's entry has in its page. Items the type owns
+    /// are named under it.
     public_name: []const u8,
+    /// The public module whose page documents this type: the type's own page
+    /// for a public module's type, and the renaming alias's page for a nominal
+    /// type a public alias renames.
+    page_name: []const u8,
     package_name: []const u8,
     source_env: *const ModuleEnv,
     source_identity: *const [32]u8,
     source_decl: CIR.Statement.Idx,
     /// Declaration order in the owning package's public surface.
     public_order: u32,
+    /// The public alias that gives this nominal type its public name, when
+    /// `adoptRenamedNominals` found one.
+    renamed_by: ?RenamingAlias = null,
+
+    pub const RenamingAlias = struct {
+        env: *const ModuleEnv,
+        decl: CIR.Statement.Idx,
+    };
+};
+
+/// One public module of the documented package, as its docs page presents it.
+pub const DocumentedModule = struct {
+    name: []const u8,
+    package_name: []const u8,
+    env: *const ModuleEnv,
+    /// Exact source type the module's public name stands for, if it is one.
+    public_type_decl: ?CIR.Statement.Idx = null,
+    /// Restrict a non-type root module to these names and their children.
+    exposed_names: ?[]const []const u8 = null,
+    public_order: u32 = 0,
 };
 
 /// Sort projections for binary-search routing by exact source identity.
@@ -176,7 +203,351 @@ fn publicTypeProjectionLessThan(_: void, a: PublicTypeProjection, b: PublicTypeP
 const PublicReferenceRouting = struct {
     current: ?PublicTypeProjection,
     all: []const PublicTypeProjection,
+    /// The page being extracted, and the path its own types are referenced by.
+    page_name: []const u8,
+    page_path: []const u8,
 };
+
+/// The module path a reference to `projection`'s type renders with.
+fn projectionModulePath(
+    gpa: Allocator,
+    routing: PublicReferenceRouting,
+    projection: PublicTypeProjection,
+) Allocator.Error![]const u8 {
+    // A renamed nominal type of this page is one of the page's own types.
+    if (projection.renamed_by != null and std.mem.eql(u8, projection.page_name, routing.page_name)) {
+        return try gpa.dupe(u8, routing.page_path);
+    }
+    return try std.fmt.allocPrint(gpa, "{s}.{s}", .{ projection.package_name, projection.page_name });
+}
+
+/// One public namespace of the documented package while renamed nominal types
+/// are being found: a documented module, or a nominal type already adopted.
+const PublicNamespace = struct {
+    page_name: []const u8,
+    package_name: []const u8,
+    env: *const ModuleEnv,
+    identity: *const [32]u8,
+    projection: ?PublicTypeProjection,
+    exposed_names: ?[]const []const u8,
+    public_order: u32,
+};
+
+/// A public alias that applies a nominal type with no public name of its own
+/// to exactly the alias's parameters makes the alias that nominal's public
+/// name: users reach the nominal's methods and associated items through the
+/// alias. This appends one projection per such nominal, naming it as the
+/// alias's entry in the alias's page, so the nominal and the items it owns
+/// are documented there. `roc bump` applies the same rule to a package's
+/// public API (`adoptRenamedNominals` in src/bump/extract.zig).
+///
+/// Adopted namespaces can rename further nominals, so this runs in rounds.
+/// A nominal named by several aliases takes the name from the earliest
+/// round, and within a round the lexicographically smallest name.
+///
+/// `package_modules` holds every module of the documented package, public or
+/// not. `arena` owns the appended projections' names.
+pub fn adoptRenamedNominals(
+    gpa: Allocator,
+    arena: Allocator,
+    documented: []const DocumentedModule,
+    package_modules: []const *const ModuleEnv,
+    projections: *std.ArrayList(PublicTypeProjection),
+) Allocator.Error!void {
+    var namespaces = std.ArrayList(PublicNamespace).empty;
+    defer namespaces.deinit(gpa);
+    for (documented) |module| {
+        const identity = module.env.contentIdentityHash() orelse
+            base.invariant("docs invariant violated: documented module `{s}` has no content identity", .{module.name});
+        try namespaces.append(gpa, .{
+            .page_name = module.name,
+            .package_name = module.package_name,
+            .env = module.env,
+            .identity = identity,
+            .projection = if (module.public_type_decl) |source_decl| .{
+                .public_name = module.name,
+                .page_name = module.name,
+                .package_name = module.package_name,
+                .source_env = module.env,
+                .source_identity = identity,
+                .source_decl = source_decl,
+                .public_order = module.public_order,
+            } else null,
+            .exposed_names = module.exposed_names,
+            .public_order = module.public_order,
+        });
+    }
+
+    var renames = std.AutoArrayHashMapUnmanaged(TypeDeclKey, PublicNamespace).empty;
+    defer renames.deinit(gpa);
+
+    var round_start: usize = 0;
+    var round_end = namespaces.items.len;
+    while (round_start < round_end) {
+        renames.clearRetainingCapacity();
+        for (round_start..round_end) |namespace_index| {
+            try collectRenames(gpa, arena, namespaces.items, namespace_index, package_modules, &renames);
+        }
+        for (renames.values()) |adopted| {
+            try namespaces.append(gpa, adopted);
+            try projections.append(gpa, adopted.projection.?);
+        }
+        round_start = round_end;
+        round_end = namespaces.items.len;
+    }
+}
+
+const TypeDeclKey = struct {
+    identity: [32]u8,
+    decl: CIR.Statement.Idx,
+};
+
+/// A type declaration together with the module that declares it.
+const TypeDeclSite = struct {
+    env: *const ModuleEnv,
+    identity: *const [32]u8,
+    decl: CIR.Statement.Idx,
+};
+
+fn collectRenames(
+    gpa: Allocator,
+    arena: Allocator,
+    namespaces: []const PublicNamespace,
+    namespace_index: usize,
+    package_modules: []const *const ModuleEnv,
+    renames: *std.AutoArrayHashMapUnmanaged(TypeDeclKey, PublicNamespace),
+) Allocator.Error!void {
+    const namespace = namespaces[namespace_index];
+    const env = namespace.env;
+    for (env.store.sliceStatements(env.all_statements)) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        if (stmt != .s_alias_decl) continue;
+        if (!namespaceIncludes(namespace, stmt_idx)) continue;
+        const nominal = unnamedNominalBehind(namespaces, package_modules, env, stmt_idx) orelse continue;
+
+        const alias_name = env.getIdentText(env.store.getTypeHeader(stmt.s_alias_decl.header).relative_name);
+        const public_name = try projectedEntryName(arena, env, namespace.projection, alias_name);
+        const gop = try renames.getOrPut(gpa, .{ .identity = nominal.identity.*, .decl = nominal.decl });
+        if (gop.found_existing and std.mem.order(u8, gop.value_ptr.projection.?.public_name, public_name) != .gt) continue;
+        gop.value_ptr.* = .{
+            .page_name = namespace.page_name,
+            .package_name = namespace.package_name,
+            .env = nominal.env,
+            .identity = nominal.identity,
+            .projection = .{
+                .public_name = public_name,
+                .page_name = namespace.page_name,
+                .package_name = namespace.package_name,
+                .source_env = nominal.env,
+                .source_identity = nominal.identity,
+                .source_decl = nominal.decl,
+                .public_order = namespace.public_order,
+                .renamed_by = .{ .env = env, .decl = stmt_idx },
+            },
+            .exposed_names = null,
+            .public_order = namespace.public_order,
+        };
+    }
+}
+
+/// Whether `namespace` gives the type declaration `statement` of its own
+/// module a public name.
+fn namespaceIncludes(namespace: PublicNamespace, statement: CIR.Statement.Idx) bool {
+    const env = namespace.env;
+    const name = typeDeclName(env, statement) orelse return false;
+    if (entryIsUndocumented(namespace.package_name, env.module_name, name)) return false;
+    if (namespace.exposed_names) |exposed_names| {
+        const root_name = if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
+        for (exposed_names) |exposed_name| {
+            if (std.mem.eql(u8, root_name, exposed_name)) return true;
+        }
+        return false;
+    }
+    const root = documentedRootDecl(env, namespace.projection) orelse return true;
+    return regionEncloses(env.store.getStatementRegion(root), env.store.getStatementRegion(statement));
+}
+
+fn isPubliclyNamed(namespaces: []const PublicNamespace, site: TypeDeclSite) bool {
+    for (namespaces) |namespace| {
+        if (!std.mem.eql(u8, namespace.identity, site.identity)) continue;
+        if (namespaceIncludes(namespace, site.decl)) return true;
+    }
+    return false;
+}
+
+/// The module of the documented package that declares a type `env` records
+/// with this origin, if the type is the package's own.
+fn packageDeclSite(
+    env: *const ModuleEnv,
+    package_modules: []const *const ModuleEnv,
+    origin_module: base.ModuleIdentity.Idx,
+    source_decl: types_mod.SourceDecl,
+) ?TypeDeclSite {
+    if (!source_decl.present) return null;
+    const decl: CIR.Statement.Idx = @fromBackingInt(@intCast(source_decl.statement));
+    if (source_decl.originIsBuiltin()) {
+        // The Builtin module is its own whole package.
+        if (env.module_role != .builtin) return null;
+        return .{ .env = env, .identity = env.contentIdentityHash() orelse return null, .decl = decl };
+    }
+    const identity = env.moduleIdentityHash(origin_module);
+    for (package_modules) |module| {
+        const module_identity = module.contentIdentityHash() orelse continue;
+        if (std.mem.eql(u8, module_identity, identity)) return .{ .env = module, .identity = module_identity, .decl = decl };
+    }
+    return null;
+}
+
+/// The nominal type of this package that the alias declaration `alias_stmt`
+/// applies to exactly its own parameters, once private aliases are seen
+/// through, if no public namespace names it.
+fn unnamedNominalBehind(
+    namespaces: []const PublicNamespace,
+    package_modules: []const *const ModuleEnv,
+    env: *const ModuleEnv,
+    alias_stmt: CIR.Statement.Idx,
+) ?TypeDeclSite {
+    const alias_var = ModuleEnv.varFrom(alias_stmt);
+    if (@backingInt(alias_var) >= env.types.len()) return null;
+    const declared = env.types.resolveVar(alias_var).desc.content;
+    if (declared != .alias) return null;
+    const public_alias = declared.alias;
+
+    var current = env.types.getAliasBackingVar(public_alias);
+    while (true) {
+        const content = env.types.resolveVar(current).desc.content;
+        if (content == .alias) {
+            const alias = content.alias;
+            const site = packageDeclSite(env, package_modules, alias.origin_module, alias.source_decl) orelse return null;
+            if (isPubliclyNamed(namespaces, site)) return null;
+            current = env.types.getAliasBackingVar(alias);
+            continue;
+        }
+        if (content != .structure or content.structure != .nominal_type) return null;
+        const nominal = content.structure.nominal_type;
+        const site = packageDeclSite(env, package_modules, nominal.origin_module, nominal.source.sourceDecl()) orelse return null;
+        if (isPubliclyNamed(namespaces, site)) return null;
+
+        const alias_args = env.types.sliceAliasArgs(public_alias);
+        const nominal_args = env.types.sliceNominalArgs(nominal);
+        if (alias_args.len != nominal_args.len) return null;
+        for (alias_args, nominal_args) |alias_arg, nominal_arg| {
+            if (env.types.resolveVar(alias_arg).var_ != env.types.resolveVar(nominal_arg).var_) return null;
+        }
+        return site;
+    }
+}
+
+/// The projection of the nominal type that the alias declaration `alias_stmt`
+/// of `alias_env` renames, if it renames one.
+fn renamingProjection(
+    public_types: []const PublicTypeProjection,
+    alias_env: *const ModuleEnv,
+    alias_stmt: CIR.Statement.Idx,
+) ?PublicTypeProjection {
+    for (public_types) |projection| {
+        const renamed_by = projection.renamed_by orelse continue;
+        if (renamed_by.env == alias_env and renamed_by.decl == alias_stmt) return projection;
+    }
+    return null;
+}
+
+/// The path a reference to one of `source_env`'s own types renders with while
+/// the page of `page_env` is extracted.
+fn sourceModulePath(
+    gpa: Allocator,
+    source_env: *const ModuleEnv,
+    page_env: *const ModuleEnv,
+    page_module_path: []const u8,
+    package_name: []const u8,
+) Allocator.Error![]const u8 {
+    if (source_env == page_env) return try gpa.dupe(u8, page_module_path);
+    return try std.fmt.allocPrint(gpa, "{s}.{s}", .{ package_name, source_env.module_name });
+}
+
+/// The entry of a nominal type that a public alias renames: the nominal's
+/// kind, parameters and backing type under the alias's name. Takes ownership
+/// of `name` and `alias_doc` when it returns an entry.
+fn renamedNominalEntry(
+    gpa: Allocator,
+    alias_scope: EntryScope,
+    renamed: PublicTypeProjection,
+    name: []const u8,
+    alias_doc: ?DocCommentExtract,
+) Allocator.Error!DocModel.DocEntry {
+    const nominal_env = renamed.source_env;
+    const nominal = nominal_env.store.getStatement(renamed.source_decl).s_nominal_decl;
+
+    const nominal_module_path = try sourceModulePath(
+        gpa,
+        nominal_env,
+        alias_scope.module_env,
+        alias_scope.local_module_path,
+        alias_scope.package_name,
+    );
+    defer gpa.free(nominal_module_path);
+    const type_sig = try extractDeclTypeSig(gpa, nominal_env, nominal_module_path, .{
+        .current = renamed,
+        .all = alias_scope.routing.all,
+        .page_name = alias_scope.routing.page_name,
+        .page_path = alias_scope.routing.page_path,
+    }, nominal.anno);
+    errdefer if (type_sig) |sig| {
+        sig.deinit(gpa);
+        gpa.destroy(sig);
+    };
+
+    const type_header = try render_type.renderRenamedTypeHeaderToString(gpa, name, nominal_env, nominal.header);
+    errdefer gpa.free(type_header);
+
+    // The alias is the public declaration, so its comment documents the
+    // type; a bare alias leaves that to the comment on the nominal type.
+    const nominal_doc: ?DocCommentExtract = if (alias_doc == null) blk: {
+        const nominal_source = nominal_env.getSourceAll();
+        const nominal_lines = try LineIndex.build(gpa, nominal_source);
+        defer nominal_lines.deinit(gpa);
+        const region = nominal_env.store.getStatementRegion(renamed.source_decl);
+        break :blk try extractDocComment(gpa, nominal_source, region.start.offset, nominal_lines);
+    } else null;
+    errdefer if (nominal_doc) |doc| gpa.free(doc.text);
+    const doc = alias_doc orelse nominal_doc;
+
+    const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
+    return .{
+        .name = name,
+        .type_header = type_header,
+        .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
+        .type_signature = type_sig,
+        .doc_comment = if (doc) |d| d.text else null,
+        .children = empty_children,
+        .doc_comment_start_line = if (doc) |d| d.start_line else 0,
+    };
+}
+
+/// Extract documentation for the compiler's Builtin module, which is a whole
+/// package of its own: the declarations it publishes through aliases are
+/// documented under those aliases.
+pub fn extractBuiltinDocs(
+    gpa: Allocator,
+    builtin_env: *const ModuleEnv,
+    package_name: []const u8,
+    source_path: ?[]const u8,
+) Allocator.Error!DocModel.ModuleDocs {
+    std.debug.assert(builtin_env.module_role == .builtin);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var projections = std.ArrayList(PublicTypeProjection).empty;
+    defer projections.deinit(gpa);
+    try adoptRenamedNominals(gpa, arena.allocator(), &.{.{
+        .name = builtin_env.module_name,
+        .package_name = package_name,
+        .env = builtin_env,
+    }}, &.{builtin_env}, &projections);
+    sortPublicTypeProjections(projections.items);
+    return try extractModuleDocsWithOptions(gpa, builtin_env, package_name, source_path, .{
+        .public_types = projections.items,
+    });
+}
 
 /// Extract documentation for all exported definitions in a module.
 ///
@@ -251,12 +622,9 @@ pub fn extractModuleDocsWithOptions(
     const reference_routing = PublicReferenceRouting{
         .current = options.public_type,
         .all = options.public_types,
+        .page_name = name,
+        .page_path = if (module_env.qualified_module_name.len != 0) local_module_path else module_env.module_name,
     };
-
-    const documented_region: ?base.Region = if (documentedRootDecl(module_env, options.public_type)) |root|
-        module_env.store.getStatementRegion(root)
-    else
-        null;
 
     // Collect entries from exported defs
     var entries_list = std.ArrayList(DocModel.DocEntry).empty;
@@ -265,215 +633,54 @@ pub fn extractModuleDocsWithOptions(
         entries_list.deinit(gpa);
     }
 
-    var exposed_names: std.StringHashMapUnmanaged(void) = .empty;
-    defer exposed_names.deinit(gpa);
-    if (options.exposed_names) |names_to_expose| {
-        try exposed_names.ensureTotalCapacity(gpa, @intCast(names_to_expose.len));
-        for (names_to_expose) |exposed_name| exposed_names.putAssumeCapacity(exposed_name, {});
-    }
-
-    // For documentation purposes, show all accessible definitions, not just
-    // what's explicitly exported. Exports control compilation/linking (what
-    // other modules can import), but docs should be comprehensive.
-    const defs_slice = if (options.exposed_names != null)
-        module_env.store.sliceDefs(module_env.all_defs)
-    else switch (module_env.module_kind) {
-        .platform, .hosted => blk: {
-            // Platforms and hosted modules: only document explicitly provided items
-            const exports_slice = module_env.store.sliceDefs(module_env.exports);
-            break :blk if (exports_slice.len > 0)
-                exports_slice
-            else
-                module_env.store.sliceDefs(module_env.all_defs);
-        },
-        .type_module, .default_app, .app, .package, .module, .malformed => module_env.store.sliceDefs(module_env.all_defs),
-    };
-
-    for (defs_slice) |def_idx| {
-        if (options.exposed_names != null) {
-            const entry_name = defEntryName(module_env, def_idx) orelse continue;
-            if (!isUnderExposedName(&exposed_names, entry_name)) continue;
+    // A nominal type that a public alias of this page renames is documented
+    // here, under the alias: its entry stands at the alias's declaration, and
+    // the items it owns are collected from the nominal's own declaration.
+    // Building the hierarchy below moves an item under a parent that is
+    // still top-level when the item is reached, so the items of the deepest
+    // renamed type come first and the page's own entries last. A renamed
+    // type nested in another has the longer name of the two.
+    {
+        var renamed_types = std.ArrayList(PublicTypeProjection).empty;
+        defer renamed_types.deinit(gpa);
+        for (options.public_types) |renamed| {
+            if (renamed.renamed_by == null) continue;
+            if (!std.mem.eql(u8, renamed.page_name, name) or !std.mem.eql(u8, renamed.package_name, package_name)) continue;
+            try renamed_types.append(gpa, renamed);
         }
-        if (documented_region) |root_region| {
-            if (!regionEncloses(root_region, module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def_idx)))) continue;
-        }
-        if (try extractDefEntry(gpa, module_env, local_module_path, reference_routing, def_idx, source, line_index)) |entry| {
-            var public_entry = entry;
-            var public_entry_moved = false;
-            errdefer if (!public_entry_moved) public_entry.deinit(gpa);
-            if (options.public_type) |projection| {
-                try rebaseEntryForProjection(gpa, module_env, projection, &public_entry);
+        std.mem.sort(PublicTypeProjection, renamed_types.items, {}, struct {
+            fn lessThan(_: void, a: PublicTypeProjection, b: PublicTypeProjection) bool {
+                if (a.public_name.len != b.public_name.len) return a.public_name.len > b.public_name.len;
+                return std.mem.order(u8, a.public_name, b.public_name) == .lt;
             }
-            // Skip internal Builtin functions
-            if (entryIsUndocumented(package_name, module_env.module_name, public_entry.name)) {
-                public_entry.deinit(gpa);
-                public_entry_moved = true;
-            } else {
-                try entries_list.append(gpa, public_entry);
-                public_entry_moved = true;
-            }
+        }.lessThan);
+        for (renamed_types.items) |renamed| {
+            const renamed_module_path = try sourceModulePath(gpa, renamed.source_env, module_env, local_module_path, package_name);
+            defer gpa.free(renamed_module_path);
+            try collectScopeEntries(gpa, .{
+                .module_env = renamed.source_env,
+                .package_name = package_name,
+                .local_module_path = renamed_module_path,
+                .routing = .{
+                    .current = renamed,
+                    .all = options.public_types,
+                    .page_name = reference_routing.page_name,
+                    .page_path = reference_routing.page_path,
+                },
+                .exposed_names = null,
+                .projection = renamed,
+            }, &entries_list);
         }
     }
 
-    // Also scan all_statements for type declarations (alias, nominal)
-    // that may not appear in the defs list
-    const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
-    for (stmts_slice) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_alias_decl => |decl| {
-                const header = module_env.store.getTypeHeader(decl.header);
-                const entry_name = module_env.getIdentText(header.relative_name);
-                if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
-                if (documented_region) |root_region| {
-                    if (!regionEncloses(root_region, module_env.store.getStatementRegion(stmt_idx))) continue;
-                }
-                // Skip if already in entries
-                if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
-                // Skip internal Builtin types
-                if (entryIsUndocumented(package_name, module_env.module_name, entry_name)) continue;
-
-                const region = module_env.store.getStatementRegion(stmt_idx);
-                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
-                errdefer if (doc_extract) |d| gpa.free(d.text);
-
-                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, reference_routing, decl.anno);
-                errdefer if (type_sig) |s| {
-                    s.deinit(gpa);
-                    gpa.destroy(s);
-                };
-
-                const duped_name = try projectedEntryName(gpa, module_env, options.public_type, entry_name);
-                errdefer gpa.free(duped_name);
-
-                const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
-                errdefer gpa.free(empty_children);
-
-                try entries_list.append(gpa, DocModel.DocEntry{
-                    .name = duped_name,
-                    .kind = .alias,
-                    .type_signature = type_sig,
-                    .doc_comment = if (doc_extract) |d| d.text else null,
-                    .children = empty_children,
-                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
-                });
-            },
-            .s_nominal_decl => |decl| {
-                const header = module_env.store.getTypeHeader(decl.header);
-                const entry_name = module_env.getIdentText(header.relative_name);
-                if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
-                if (documented_region) |root_region| {
-                    if (!regionEncloses(root_region, module_env.store.getStatementRegion(stmt_idx))) continue;
-                }
-                if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
-                // Skip internal Builtin types
-                if (entryIsUndocumented(package_name, module_env.module_name, entry_name)) continue;
-
-                const region = module_env.store.getStatementRegion(stmt_idx);
-                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
-                errdefer if (doc_extract) |d| gpa.free(d.text);
-
-                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, reference_routing, decl.anno);
-                errdefer if (type_sig) |s| {
-                    s.deinit(gpa);
-                    gpa.destroy(s);
-                };
-
-                const duped_name = try projectedEntryName(gpa, module_env, options.public_type, entry_name);
-                errdefer gpa.free(duped_name);
-
-                const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
-                errdefer gpa.free(type_header);
-
-                const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
-                errdefer gpa.free(empty_children);
-
-                try entries_list.append(gpa, DocModel.DocEntry{
-                    .name = duped_name,
-                    .type_header = type_header,
-                    .kind = if (decl.is_opaque) .@"opaque" else .nominal,
-                    .type_signature = type_sig,
-                    .doc_comment = if (doc_extract) |d| d.text else null,
-                    .children = empty_children,
-                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
-                });
-            },
-            .s_where_alias_decl => |decl| {
-                const header = module_env.store.getTypeHeader(decl.header);
-                const entry_name = module_env.getIdentText(header.relative_name);
-                if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
-                if (documented_region) |root_region| {
-                    if (!regionEncloses(root_region, module_env.store.getStatementRegion(stmt_idx))) continue;
-                }
-                if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
-                if (entryIsUndocumented(package_name, module_env.module_name, entry_name)) continue;
-
-                const region = module_env.store.getStatementRegion(stmt_idx);
-                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
-                errdefer if (doc_extract) |d| gpa.free(d.text);
-
-                // The signature is the receiver together with every constraint
-                // the alias names, so the docs list what an implementor must
-                // provide.
-                const receiver = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, decl.receiver);
-                var receiver_moved = false;
-                errdefer if (receiver) |r| if (!receiver_moved) {
-                    r.deinit(gpa);
-                    gpa.destroy(r);
-                };
-                const type_sig: ?*const DocType = if (receiver) |r| wrap: {
-                    // A where alias with no renderable constraints still has a
-                    // receiver to show, and `wrapInWhereClause` leaves it owned
-                    // by this caller.
-                    const wrapped = try wrapInWhereClause(gpa, module_env, local_module_path, reference_routing, r, decl.where);
-                    receiver_moved = true;
-                    break :wrap wrapped orelse r;
-                } else null;
-                errdefer if (type_sig) |sig| {
-                    sig.deinit(gpa);
-                    gpa.destroy(sig);
-                };
-
-                const duped_name = try projectedEntryName(gpa, module_env, options.public_type, entry_name);
-                errdefer gpa.free(duped_name);
-
-                const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
-                errdefer gpa.free(type_header);
-
-                const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
-                errdefer gpa.free(empty_children);
-
-                try entries_list.append(gpa, DocModel.DocEntry{
-                    .name = duped_name,
-                    .type_header = type_header,
-                    .kind = .where_alias,
-                    .type_signature = type_sig,
-                    .doc_comment = if (doc_extract) |d| d.text else null,
-                    .children = empty_children,
-                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
-                });
-            },
-            .s_decl,
-            .s_var,
-            .s_var_uninitialized,
-            .s_reassign,
-            .s_crash,
-            .s_dbg,
-            .s_expr,
-            .s_expect,
-            .s_for,
-            .s_while,
-            .s_break,
-            .s_return,
-            .s_import,
-            .s_infinite_loop,
-            .s_breakable_loop,
-            .s_type_anno,
-            .s_type_var_alias,
-            .s_runtime_error,
-            => {},
-        }
-    }
+    try collectScopeEntries(gpa, .{
+        .module_env = module_env,
+        .package_name = package_name,
+        .local_module_path = local_module_path,
+        .routing = reference_routing,
+        .exposed_names = options.exposed_names,
+        .projection = options.public_type,
+    }, &entries_list);
 
     // Build hierarchical structure: move methods under their parent types
     var i: usize = 0;
@@ -534,6 +741,274 @@ pub fn extractModuleDocsWithOptions(
         .source_path = duped_source_path,
         .module_doc_start_line = module_doc_start_line,
     };
+}
+
+/// The entries one public namespace contributes to a docs page.
+const EntryScope = struct {
+    module_env: *const ModuleEnv,
+    package_name: []const u8,
+    /// Path a reference to one of `module_env`'s own types renders with.
+    local_module_path: []const u8,
+    routing: PublicReferenceRouting,
+    /// When set, retain only these top-level entries and their children.
+    exposed_names: ?[]const []const u8,
+    /// The source type this namespace presents, if it is one type's.
+    projection: ?PublicTypeProjection,
+};
+
+/// Append the entries of `scope` to `entries_list`, named as the page shows
+/// them. A renamed nominal type contributes only the items it owns: its own
+/// entry is appended where the renaming alias is declared.
+fn collectScopeEntries(
+    gpa: Allocator,
+    scope: EntryScope,
+    entries_list: *std.ArrayList(DocModel.DocEntry),
+) Allocator.Error!void {
+    const module_env = scope.module_env;
+    const local_module_path = scope.local_module_path;
+    const reference_routing = scope.routing;
+    const renamed_root: ?CIR.Statement.Idx = if (scope.projection) |projection|
+        (if (projection.renamed_by != null) projection.source_decl else null)
+    else
+        null;
+
+    const source = module_env.getSourceAll();
+    const line_index = try LineIndex.build(gpa, source);
+    defer line_index.deinit(gpa);
+
+    const documented_region: ?base.Region = if (documentedRootDecl(module_env, scope.projection)) |root|
+        module_env.store.getStatementRegion(root)
+    else
+        null;
+
+    var exposed_names: std.StringHashMapUnmanaged(void) = .empty;
+    defer exposed_names.deinit(gpa);
+    if (scope.exposed_names) |names_to_expose| {
+        try exposed_names.ensureTotalCapacity(gpa, @intCast(names_to_expose.len));
+        for (names_to_expose) |exposed_name| exposed_names.putAssumeCapacity(exposed_name, {});
+    }
+
+    // For documentation purposes, show all accessible definitions, not just
+    // what's explicitly exported. Exports control compilation/linking (what
+    // other modules can import), but docs should be comprehensive.
+    const defs_slice = if (scope.exposed_names != null)
+        module_env.store.sliceDefs(module_env.all_defs)
+    else switch (module_env.module_kind) {
+        .platform, .hosted => blk: {
+            // Platforms and hosted modules: only document explicitly provided items
+            const exports_slice = module_env.store.sliceDefs(module_env.exports);
+            break :blk if (exports_slice.len > 0)
+                exports_slice
+            else
+                module_env.store.sliceDefs(module_env.all_defs);
+        },
+        .type_module, .default_app, .app, .package, .module, .malformed => module_env.store.sliceDefs(module_env.all_defs),
+    };
+
+    for (defs_slice) |def_idx| {
+        if (scope.exposed_names != null) {
+            const entry_name = defEntryName(module_env, def_idx) orelse continue;
+            if (!isUnderExposedName(&exposed_names, entry_name)) continue;
+        }
+        if (documented_region) |root_region| {
+            if (!regionEncloses(root_region, module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def_idx)))) continue;
+        }
+        if (try extractDefEntry(gpa, module_env, local_module_path, reference_routing, def_idx, source, line_index)) |entry| {
+            var public_entry = entry;
+            var public_entry_moved = false;
+            errdefer if (!public_entry_moved) public_entry.deinit(gpa);
+            if (scope.projection) |projection| {
+                try rebaseEntryForProjection(gpa, module_env, projection, &public_entry);
+            }
+            // Skip internal Builtin functions, and a renamed nominal type's
+            // own entry, which stands at its alias.
+            const is_renamed_root = if (scope.projection) |projection|
+                renamed_root != null and std.mem.eql(u8, public_entry.name, projection.public_name)
+            else
+                false;
+            if (is_renamed_root or entryIsUndocumented(scope.package_name, module_env.module_name, public_entry.name)) {
+                public_entry.deinit(gpa);
+                public_entry_moved = true;
+            } else {
+                try entries_list.append(gpa, public_entry);
+                public_entry_moved = true;
+            }
+        }
+    }
+
+    // Also scan all_statements for type declarations (alias, nominal)
+    // that may not appear in the defs list
+    const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
+    for (stmts_slice) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_alias_decl => |decl| {
+                const header = module_env.store.getTypeHeader(decl.header);
+                const entry_name = module_env.getIdentText(header.relative_name);
+                if (scope.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
+                if (documented_region) |root_region| {
+                    if (!regionEncloses(root_region, module_env.store.getStatementRegion(stmt_idx))) continue;
+                }
+                // Skip if already in entries
+                if (findProjectedEntryByName(entries_list.items, module_env, scope.projection, entry_name)) continue;
+                // Skip internal Builtin types
+                if (entryIsUndocumented(scope.package_name, module_env.module_name, entry_name)) continue;
+
+                const region = module_env.store.getStatementRegion(stmt_idx);
+                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
+                errdefer if (doc_extract) |d| gpa.free(d.text);
+
+                const duped_name = try projectedEntryName(gpa, module_env, scope.projection, entry_name);
+                errdefer gpa.free(duped_name);
+
+                // An alias that renames a nominal type documents that type:
+                // its kind and its backing type, under the alias's name.
+                if (renamingProjection(reference_routing.all, module_env, stmt_idx)) |renamed| {
+                    try entries_list.append(gpa, try renamedNominalEntry(
+                        gpa,
+                        scope,
+                        renamed,
+                        duped_name,
+                        if (doc_extract) |d| d else null,
+                    ));
+                    continue;
+                }
+
+                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, reference_routing, decl.anno);
+                errdefer if (type_sig) |s| {
+                    s.deinit(gpa);
+                    gpa.destroy(s);
+                };
+
+                const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
+                errdefer gpa.free(empty_children);
+
+                try entries_list.append(gpa, DocModel.DocEntry{
+                    .name = duped_name,
+                    .kind = .alias,
+                    .type_signature = type_sig,
+                    .doc_comment = if (doc_extract) |d| d.text else null,
+                    .children = empty_children,
+                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
+                });
+            },
+            .s_nominal_decl => |decl| {
+                const header = module_env.store.getTypeHeader(decl.header);
+                const entry_name = module_env.getIdentText(header.relative_name);
+                if (scope.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
+                if (documented_region) |root_region| {
+                    if (!regionEncloses(root_region, module_env.store.getStatementRegion(stmt_idx))) continue;
+                }
+                if (findProjectedEntryByName(entries_list.items, module_env, scope.projection, entry_name)) continue;
+                // Skip internal Builtin types
+                if (entryIsUndocumented(scope.package_name, module_env.module_name, entry_name)) continue;
+                if (renamed_root == stmt_idx) continue;
+
+                const region = module_env.store.getStatementRegion(stmt_idx);
+                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
+                errdefer if (doc_extract) |d| gpa.free(d.text);
+
+                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, reference_routing, decl.anno);
+                errdefer if (type_sig) |s| {
+                    s.deinit(gpa);
+                    gpa.destroy(s);
+                };
+
+                const duped_name = try projectedEntryName(gpa, module_env, scope.projection, entry_name);
+                errdefer gpa.free(duped_name);
+
+                const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
+                errdefer gpa.free(type_header);
+
+                const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
+                errdefer gpa.free(empty_children);
+
+                try entries_list.append(gpa, DocModel.DocEntry{
+                    .name = duped_name,
+                    .type_header = type_header,
+                    .kind = if (decl.is_opaque) .@"opaque" else .nominal,
+                    .type_signature = type_sig,
+                    .doc_comment = if (doc_extract) |d| d.text else null,
+                    .children = empty_children,
+                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
+                });
+            },
+            .s_where_alias_decl => |decl| {
+                const header = module_env.store.getTypeHeader(decl.header);
+                const entry_name = module_env.getIdentText(header.relative_name);
+                if (scope.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
+                if (documented_region) |root_region| {
+                    if (!regionEncloses(root_region, module_env.store.getStatementRegion(stmt_idx))) continue;
+                }
+                if (findProjectedEntryByName(entries_list.items, module_env, scope.projection, entry_name)) continue;
+                if (entryIsUndocumented(scope.package_name, module_env.module_name, entry_name)) continue;
+
+                const region = module_env.store.getStatementRegion(stmt_idx);
+                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
+                errdefer if (doc_extract) |d| gpa.free(d.text);
+
+                // The signature is the receiver together with every constraint
+                // the alias names, so the docs list what an implementor must
+                // provide.
+                const receiver = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, decl.receiver);
+                var receiver_moved = false;
+                errdefer if (receiver) |r| if (!receiver_moved) {
+                    r.deinit(gpa);
+                    gpa.destroy(r);
+                };
+                const type_sig: ?*const DocType = if (receiver) |r| wrap: {
+                    // A where alias with no renderable constraints still has a
+                    // receiver to show, and `wrapInWhereClause` leaves it owned
+                    // by this caller.
+                    const wrapped = try wrapInWhereClause(gpa, module_env, local_module_path, reference_routing, r, decl.where);
+                    receiver_moved = true;
+                    break :wrap wrapped orelse r;
+                } else null;
+                errdefer if (type_sig) |sig| {
+                    sig.deinit(gpa);
+                    gpa.destroy(sig);
+                };
+
+                const duped_name = try projectedEntryName(gpa, module_env, scope.projection, entry_name);
+                errdefer gpa.free(duped_name);
+
+                const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
+                errdefer gpa.free(type_header);
+
+                const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
+                errdefer gpa.free(empty_children);
+
+                try entries_list.append(gpa, DocModel.DocEntry{
+                    .name = duped_name,
+                    .type_header = type_header,
+                    .kind = .where_alias,
+                    .type_signature = type_sig,
+                    .doc_comment = if (doc_extract) |d| d.text else null,
+                    .children = empty_children,
+                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
+                });
+            },
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
+        }
+    }
 }
 
 fn projectionRootName(module_env: *const ModuleEnv, projection: PublicTypeProjection) []const u8 {
@@ -606,12 +1081,30 @@ fn projectedEntryName(
     source_name: []const u8,
 ) Allocator.Error![]const u8 {
     const selected = projection orelse return try gpa.dupe(u8, source_name);
-    const root = projectionRootName(module_env, selected);
-    std.debug.assert(nameIsAtOrUnder(root, source_name));
-    return if (source_name.len == root.len)
+    const root_len = projectionRootLen(module_env, selected, source_name);
+    return if (source_name.len == root_len)
         try gpa.dupe(u8, selected.public_name)
     else
-        try std.fmt.allocPrint(gpa, "{s}{s}", .{ selected.public_name, source_name[root.len..] });
+        try std.fmt.allocPrint(gpa, "{s}{s}", .{ selected.public_name, source_name[root_len..] });
+}
+
+/// The length of the prefix of `source_name`, the name of an item
+/// `projection`'s source type owns, that spells the source type. A type
+/// declaration is named relative to its module. So is a value, except that a
+/// value owned by a type declared beside a type module's main type carries
+/// the module's name first.
+fn projectionRootLen(
+    module_env: *const ModuleEnv,
+    projection: PublicTypeProjection,
+    source_name: []const u8,
+) usize {
+    const root = projectionRootName(module_env, projection);
+    if (nameIsAtOrUnder(root, source_name)) return root.len;
+    const module_name = module_env.module_name;
+    std.debug.assert(std.mem.startsWith(u8, source_name, module_name) and
+        source_name.len > module_name.len and source_name[module_name.len] == '.' and
+        nameIsAtOrUnder(root, source_name[module_name.len + 1 ..]));
+    return module_name.len + 1 + root.len;
 }
 
 fn rebaseEntryForProjection(
@@ -738,7 +1231,7 @@ fn annotatedTypeReferenceDisplay(
         const statement = typeReferenceStatement(base_ref) orelse unreachable; // projectedTypeReference returns null for builtin references, so base_ref names a statement
         const target_name = typeDeclName(projection.source_env, statement) orelse
             base.invariant("docs invariant violated: projected type reference does not target a type declaration in `{s}`", .{projection.public_name});
-        const module_path = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ projection.package_name, projection.public_name });
+        const module_path = try projectionModulePath(gpa, routing, projection);
         errdefer gpa.free(module_path);
         return .{
             .module_path = module_path,
@@ -1400,14 +1893,14 @@ fn resolveModulePathFromBase(
             module_env.module_name,
         .external => |ext| blk: {
             const idx = @backingInt(ext.module_idx);
-            if (idx >= module_env.imports.imports.items.items.len) break :blk "";
-            const str_idx = module_env.imports.imports.items.items[idx];
+            if (idx >= module_env.imports.imports.items().len) break :blk "";
+            const str_idx = module_env.imports.imports.items()[idx];
             break :blk getModulePath(module_env.common.getString(str_idx));
         },
         .pending => |pend| blk: {
             const idx = @backingInt(pend.module_idx);
-            if (idx >= module_env.imports.imports.items.items.len) break :blk "";
-            const str_idx = module_env.imports.imports.items.items[idx];
+            if (idx >= module_env.imports.imports.items().len) break :blk "";
+            const str_idx = module_env.imports.imports.items()[idx];
             break :blk getModulePath(module_env.common.getString(str_idx));
         },
         .external_identity => |ext| module_env.moduleIdentityDisplayText(ext.module_identity),
@@ -2298,11 +2791,7 @@ fn inferredTypeReferenceDisplay(
         )) |projection| {
             const source_name = typeDeclName(projection.source_env, statement) orelse
                 base.invariant("docs invariant violated: projected alias source does not name a type declaration in `{s}`", .{projection.public_name});
-            const module_path = try std.fmt.allocPrint(
-                ctx.gpa,
-                "{s}.{s}",
-                .{ projection.package_name, projection.public_name },
-            );
+            const module_path = try projectionModulePath(ctx.gpa, ctx.reference_routing, projection);
             errdefer ctx.gpa.free(module_path);
             return .{
                 .module_path = module_path,
@@ -3134,7 +3623,7 @@ test "issue 11592: inferred nested function tag payloads stay compact" {
     const result = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = tags, .ext = closed } } });
     const inner = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{b}), .ret = result } } });
     const outer = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{a}), .ret = inner } } });
-    const doc = (try extractDocType(gpa, &store, &env, "Test", .{ .current = null, .all = &.{} }, outer)).?;
+    const doc = (try extractDocType(gpa, &store, &env, "Test", .{ .current = null, .all = &.{}, .page_name = "Test", .page_path = "Test" }, outer)).?;
     defer {
         doc.deinit(gpa);
         gpa.destroy(doc);

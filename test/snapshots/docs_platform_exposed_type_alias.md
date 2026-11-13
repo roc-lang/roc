@@ -35,8 +35,8 @@ Container :: [].{
     (kind platform)
     (entry
       (name "Blub")
-      (kind alias)
-      (type "Blub : " (type-ref (mod "Container") (name "Blub")))
+      (kind opaque)
+      (type "Blub :: " (tag-union))
     )
   )
 )

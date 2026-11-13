@@ -6,7 +6,7 @@ BoxyNominalBoxField := [].{}
 
 Span :: { length : U64, start : U64 }.{
 	make : U64, U64 -> Span
-	make = |start, length| Span.{ start, length }
+	make = |begin, count| Span.{ start: begin, length: count }
 
 	start : Span -> U64
 	start = |r| r.start
@@ -26,7 +26,7 @@ Boxed :: Box({ prop : U64, bytes : Span }).{
 ## Two nominals, with a refcounted payload the box's release must walk.
 Named :: Boxed2.{
 	make : Str -> Named
-	make = |text| Named.(Boxed2.make(text))
+	make = |content| Named.(Boxed2.make(content))
 
 	text : Named -> Str
 	text = |Named.(inner)| Boxed2.text(inner)
@@ -34,7 +34,7 @@ Named :: Boxed2.{
 
 Boxed2 :: Box({ text : Str }).{
 	make : Str -> Boxed2
-	make = |text| Boxed2.(Box.box({ text: text }))
+	make = |content| Boxed2.(Box.box({ text: content }))
 
 	text : Boxed2 -> Str
 	text = |Boxed2.(boxed)| Box.unbox(boxed).text
