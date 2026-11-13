@@ -11490,6 +11490,7 @@ fn runExprKernel(
                     const unset_work = &kernel_scratch.unset_fields;
                     const fields_start = field_work.items.len;
                     const unsets_start = unset_work.items.len;
+                    var supplied_count: usize = 0;
 
                     for (fields_slice) |field_idx| {
                         const ast_field = self.parse_ir.store.getRecordField(field_idx);
@@ -11505,16 +11506,12 @@ fn runExprKernel(
                             continue;
                         }
 
-                        const value_expr_idx = switch (ast_field.value) {
-                            .supplied => |value_idx| value_idx,
-                            .punned => blk: {
-                                const ident_expr_idx = try self.parse_ir.store.addExpr(AST.Expr{ .ident = .{
-                                    .token = ast_field.name,
-                                    .qualifiers = .{ .span = .{ .start = 0, .len = 0 } },
-                                    .region = ast_field.region,
-                                } });
-                                break :blk ident_expr_idx;
+                        const value_expr_idx: ?AST.Expr.Idx = switch (ast_field.value) {
+                            .supplied => |value_idx| blk: {
+                                supplied_count += 1;
+                                break :blk value_idx;
                             },
+                            .punned => null,
                             .unset => {
                                 try unset_work.append(frame_allocator, .{
                                     .name = field_name_ident,
@@ -11537,20 +11534,19 @@ fn runExprKernel(
                         .ext = e.ext,
                         .fields = .{ .start = fields_start, .len = field_work.items.len - fields_start },
                         .unsets = .{ .start = unsets_start, .len = unset_work.items.len - unsets_start },
+                        .supplied_count = supplied_count,
                     });
                     const fields = field_work.items[fields_start..];
 
-                    var child_count = fields.len;
-                    if (e.ext != null) child_count += 1;
-                    var child_i = child_count;
-                    while (child_i > 0) {
-                        child_i -= 1;
-                        if (e.ext != null and child_i == 0) {
-                            try stacks.push(.parse, frame_allocator, .{ .idx = e.ext.?, .target = .scratch });
-                        } else {
-                            const field_i = if (e.ext != null) child_i - 1 else child_i;
-                            try stacks.push(.parse, frame_allocator, .{ .idx = fields[field_i].value_expr_idx, .target = .scratch });
+                    var field_i = fields.len;
+                    while (field_i > 0) {
+                        field_i -= 1;
+                        if (fields[field_i].value_expr_idx) |value_expr_idx| {
+                            try stacks.push(.parse, frame_allocator, .{ .idx = value_expr_idx, .target = .scratch });
                         }
+                    }
+                    if (e.ext) |ext| {
+                        try stacks.push(.parse, frame_allocator, .{ .idx = ext, .target = .scratch });
                     }
                 },
                 .nominal_record => |nr| {
@@ -11679,6 +11675,7 @@ fn runExprKernel(
                         if (field.value == .supplied) explicit_value_count += 1;
                         try field_work.append(frame_allocator, .{
                             .name = field_name,
+                            .name_token = field.name,
                             .value_expr = field.value.asSupplied(),
                         });
                     }
@@ -13738,7 +13735,7 @@ fn runExprKernel(
             defer kernel_scratch.record_fields.shrinkRetainingCapacity(state.fields.start);
             defer kernel_scratch.unset_fields.shrinkRetainingCapacity(state.unsets.start);
 
-            const child_count = state.fields.len + @as(usize, @intFromBool(state.ext != null));
+            const child_count = state.supplied_count + @as(usize, @intFromBool(state.ext != null));
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
             var child_i: usize = 0;
@@ -13761,14 +13758,20 @@ fn runExprKernel(
             const scratch_top = self.env.store.scratch.?.record_fields.top();
             for (state_fields) |field_work| {
                 const ast_field = self.parse_ir.store.getRecordField(field_work.field_idx);
-                const cir_field = RecordField{
-                    .name = field_work.name,
-                    .value = child_slice[child_i].expr.idx,
-                };
                 const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
-                const can_field_idx = try self.env.addRecordField(cir_field, field_region);
+                const value = if (field_work.value_expr_idx != null) blk: {
+                    const supplied = child_slice[child_i].expr.idx;
+                    child_i += 1;
+                    break :blk supplied;
+                } else blk: {
+                    // A punned field is a use of the name it spells, resolved
+                    // exactly as that identifier is anywhere else. Its free
+                    // variables land in the record's span of the scratch.
+                    const punned = try self.canonicalizeUnqualifiedIdentExpr(field_work.name, field_region);
+                    break :blk punned.idx;
+                };
+                const can_field_idx = try self.env.addRecordField(.{ .name = field_work.name, .value = value }, field_region);
                 try self.env.store.scratch.?.record_fields.append(can_field_idx);
-                child_i += 1;
             }
 
             const fields_span = try self.env.store.recordFieldSpanFrom(scratch_top);
@@ -13850,18 +13853,18 @@ fn runExprKernel(
                     for (value_free_vars) |fv| {
                         try self.appendPropagatedFreeVar(state.captures_top, fv);
                     }
-                } else if (self.scopeContains(.ident, field.name)) |pattern_idx| {
-                    const lookup_idx = try self.env.addExpr(CIR.Expr{
-                        .e_lookup_local = .{ .pattern_idx = pattern_idx },
-                    }, state.region);
-                    try self.scratch_expr_ids.append(lookup_idx);
-                    try self.appendPropagatedFreeVar(state.captures_top, pattern_idx);
                 } else {
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
-                        .ident = field.name,
-                        .region = state.region,
-                    } });
-                    try self.scratch_expr_ids.append(malformed_idx);
+                    // A punned field is a use of the name it spells, resolved
+                    // exactly as that identifier is anywhere else.
+                    const can_value = try self.canonicalizeUnqualifiedIdentExpr(
+                        field.name,
+                        self.parse_ir.tokens.resolve(field.name_token),
+                    );
+                    try self.scratch_expr_ids.append(can_value.idx);
+
+                    for (self.scratch_free_vars.sliceFromSpan(can_value.free_vars)) |fv| {
+                        try self.appendPropagatedFreeVar(state.captures_top, fv);
+                    }
                 }
             }
 
@@ -16850,6 +16853,9 @@ const ExprFinishRecordWork = struct {
     ext: ?AST.Expr.Idx,
     fields: ExprWorkSpan,
     unsets: ExprWorkSpan,
+    /// How many of `fields` have a value expression, each of which leaves one
+    /// result for the finish.
+    supplied_count: usize,
 };
 
 const ExprFinishLambdaWork = struct {
@@ -17214,7 +17220,9 @@ fn releaseExprKernelScratch(self: *Self, scratch: *ExprKernelScratch) void {
 const ExprRecordFieldWork = struct {
     field_idx: AST.RecordField.Idx,
     name: base.Ident.Idx,
-    value_expr_idx: AST.Expr.Idx,
+    /// The field's value, or null for a punned field, which reads the
+    /// variable of the field's name.
+    value_expr_idx: ?AST.Expr.Idx,
 };
 
 const ExprUnsetFieldWork = struct {
@@ -17230,6 +17238,9 @@ const ExprIfBranchWork = struct {
 
 const ExprRecordBuilderFieldWork = struct {
     name: Ident.Idx,
+    /// The token spelling the field's name, which is where a punned field
+    /// reads the variable of that name.
+    name_token: Token.Idx,
     value_expr: ?AST.Expr.Idx,
 };
 

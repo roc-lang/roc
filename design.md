@@ -12722,7 +12722,14 @@ including a generated codec call, waits and records when that generation
 happens, so checking order is unchanged. Each site keeps the record policy it
 applies to every other scheme: a value use or generated codec call with an
 empty substitution is recorded only when the scheme has evidence params, and
-a source dispatch edge to a same-module target is always recorded.
+a source dispatch edge to a same-module target is always recorded. A
+group-start predeclaration that shares hole variables adds one case: its use
+is recorded even with an empty substitution and no evidence params. The
+binding's own scheme can quantify a hole, which no slot enumerates, and the
+record's substitution maps every unpaired variable to itself, which states
+that the use shares the hole with the body. Post-check stages read that
+identity to forward what the body's instantiation supplies, such as a literal
+argument whose type a hole decides.
 A receiver already at `Rank.generalized` is never captured as an outer-rank
 pending requirement. Generalization boundaries cannot run inside a commit
 probe; probes may append candidates, but rollback rewinds those candidates and
