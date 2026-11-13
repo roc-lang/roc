@@ -7299,13 +7299,14 @@ const Inserter = struct {
         return null;
     }
 
-    /// A retained aggregate argument of an owned call position gives the
-    /// callee one unit of every field and leaves the caller's unit intact.
-    /// The fields of that unit that nothing reads after the call are dead at
-    /// the call, so they are released before it rather than at the
-    /// aggregate's last read: the callee then holds their only unit. Returns
-    /// that release and removes the fields from the aggregate's residual mask,
-    /// or null when the operand keeps its ordinary whole retain.
+    /// An aggregate retained for an owned call position, or for an owned
+    /// same-value binding (`position` zero), gives the receiver one unit of
+    /// every field and leaves the aggregate's own unit intact. The fields of
+    /// that unit that nothing reads afterwards are dead there, so they are
+    /// released before the receiver runs rather than at the aggregate's last
+    /// read: the receiver then holds their only unit. Returns that release
+    /// and removes the fields from the aggregate's residual mask, or null
+    /// when the operand keeps its ordinary whole retain.
     fn wholeMoveResidual(
         self: *Inserter,
         owned: *OwnedSet,
@@ -17007,6 +17008,41 @@ test "RC a record moved into a call releases the fields nothing reads afterwards
     try f.run();
 
     try f.expectRc(pair, 1, 0, 0);
+    try f.expectRc(kept, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 2), f.countAllRc());
+    try testing.expectEqual(@as(u32, 0), try takenFieldReleasedBeforeCall(&f, f.procBody()));
+}
+
+test "RC a record bound to an owned alias for a call releases its unread fields at the binding" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Lowering passes a record through a same-value binding. The binding
+    // owns the argument's unit, retained because the pair's second list is
+    // read after the call, and the pair releases its first list right after
+    // that retain, before the call receives the binding.
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const arg = try f.local(f.pair_list);
+    const sunk = try f.local(.i64);
+    const kept = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const ret = try f.ret(appended);
+    const append = try f.assignLowLevel(appended, &.{ kept, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const read_kept = try f.assignRefField(kept, pair, 1, elem_assign);
+    const sink = try f.assignCall(sunk, &.{arg}, read_kept);
+    const bind_arg = try f.assignRefLocal(arg, pair, sink);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, bind_arg);
+    const b_assign = try f.assignList(b, &.{}, pair_assign);
+    const body = try f.assignList(a, &.{}, b_assign);
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+
+    try f.expectRc(arg, 1, 0, 0);
+    try f.expectRc(pair, 0, 0, 0);
     try f.expectRc(kept, 0, 0, 0);
     try testing.expectEqual(@as(usize, 2), f.countAllRc());
     try testing.expectEqual(@as(u32, 0), try takenFieldReleasedBeforeCall(&f, f.procBody()));
