@@ -164,6 +164,11 @@ const Decoder = struct {
             return bytes[0..len];
         }
         if (length_word == 0 or length_word >= 3 * size) return null;
+        // An allocated string this short is either a view into a longer
+        // allocation, whose capacity word is a relocation naming it, or a
+        // string that records more capacity than it could hold inline. The
+        // second needs target storage: its literal would drop the capacity.
+        if (relocationAt(data_export, offset + size) == null) return null;
         const len: usize = @intCast(length_word);
         const frozen = self.frozen orelse return null;
         const relocation = relocationAt(data_export, offset) orelse return null;

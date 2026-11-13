@@ -150,7 +150,7 @@ pub const OpenRows = struct {
         };
         errdefer self.deinit();
 
-        const tags = ast.store.nodes.items.items(.tag);
+        const tags = ast.store.nodes.field(.tag);
         for (tags, 0..) |tag, node_index| {
             const is_type_decl = tag == .type_decl or tag == .type_decl_nominal or
                 tag == .type_decl_opaque or tag == .type_decl_where_alias;

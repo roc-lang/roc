@@ -203,13 +203,13 @@ pub const InvalidTargetPathDiagnostic = struct {
         try report.document.addReflowingTextWithBackticks(
             "Paths in a platform's `targets` section must be relative paths that stay inside the platform directory, so they cannot be absolute, start with a drive letter or network share, or contain `..` components.",
         );
-        const region_info = base.RegionInfo.position(env.source, env.line_starts.items.items, self.region.start.offset, self.region.end.offset) catch {
+        const region_info = base.RegionInfo.position(env.source, env.line_starts.items(), self.region.start.offset, self.region.end.offset) catch {
             return report;
         };
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
-        try report.addSourceContext(region_info, owned_filename, env.source, env.line_starts.items.items);
+        try report.addSourceContext(region_info, owned_filename, env.source, env.line_starts.items());
         return report;
     }
 };
@@ -328,13 +328,13 @@ pub const InvalidTargetEntryDiagnostic = struct {
                 "Every address below `global_base` belongs to the host. A platform whose host reserves no low memory leaves `global_base` out.",
             ),
         }
-        const region_info = base.RegionInfo.position(env.source, env.line_starts.items.items, self.region.start.offset, self.region.end.offset) catch {
+        const region_info = base.RegionInfo.position(env.source, env.line_starts.items(), self.region.start.offset, self.region.end.offset) catch {
             return report;
         };
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
-        try report.addSourceContext(region_info, owned_filename, env.source, env.line_starts.items.items);
+        try report.addSourceContext(region_info, owned_filename, env.source, env.line_starts.items());
         return report;
     }
 };

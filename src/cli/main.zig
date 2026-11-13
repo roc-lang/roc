@@ -7774,7 +7774,7 @@ fn discoverAndAddBundleInputs(
                 // on both fresh builds and cache hits. Preserve their logical
                 // paths so extraction keeps each import relative to its module.
                 const env = mod_state.moduleEnv().?;
-                for (env.file_dependencies.items.items) |dep| {
+                for (env.file_dependencies.items()) |dep| {
                     const dep_path = try std.fs.path.resolve(ctx.arena, &.{
                         mod_state.canonicalSourceDir(),
                         env.fileDependencyRelativePath(dep),
@@ -10737,17 +10737,18 @@ fn composeBoxyProgramObject(
     const program_scope = "boxy-program";
     // A record is the object's identity, then the object: the identity was
     // computed from these bytes by the build that composed them.
-    if (program_key) |key| if (cache_manager) |manager| if (manager.loadFamilyBytes(.boxy_object, key, program_scope)) |record| {
+    if (program_key) |key| if (cache_manager) |manager| if (manager.loadFamilyBytes(.boxy_object, key, program_scope)) |loaded| {
+        const record = loaded.bytes;
         defer manager.allocator.free(record);
-        if (record.len >= 40) {
-            const identity: link_artifacts.Identity = .{ .digest = record[0..32].*, .size = std.mem.readInt(u64, record[32..40], .little) };
-            if (identity.size == record.len - 40) {
-                reporter.begin("Object Materialization");
-                const path = link_objects.materializeKnown(record[40..], identity) catch return error.NativeCompilationFailed;
-                reporter.end();
-                return path;
-            }
-        }
+        // The object's size is part of its identity; it must fit the record.
+        const identity: ?link_artifacts.Identity = if (record.len >= 40) .{ .digest = record[0..32].*, .size = std.mem.readInt(u64, record[32..40], .little) } else null;
+        if (identity) |known| if (known.size <= record.len - 40) {
+            reporter.begin("Object Materialization");
+            const path = link_objects.materializeKnown(record[40..][0..@intCast(known.size)], known) catch return error.NativeCompilationFailed;
+            reporter.end();
+            return path;
+        };
+        manager.rejectEntry(.checked, .boxy_object, key, program_scope, loaded.stamp, "its object does not fit the record", .{});
     };
     reporter.begin("Composing Program Object");
     const inputs = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, library.pieces.len + 1);
@@ -13324,7 +13325,7 @@ fn admitCliTestOutcomes(
     var reused_count: usize = 0;
     for (plan.modules) |*planned| {
         const key = cliTestOutcomeFileKey(planned.artifact, strategy, opt);
-        const bytes = manager.loadFamilyBytes(.test_outcomes, key, cli_test_outcome_scope);
+        const bytes = if (manager.loadFamilyBytes(.test_outcomes, key, cli_test_outcome_scope)) |loaded| loaded.bytes else null;
         const outcomes: test_outcome_file.Outcomes = if (bytes) |owned| test_outcome_file.parse(ctx.gpa, owned) catch |err| {
             manager.allocator.free(owned);
             return err;
@@ -13839,7 +13840,7 @@ test "only optimized builds emit thread-confined count updates" {
     }
 }
 
-test "only optimized builds prove uniqueness" {
+test "only optimized builds prove uniqueness and drop string literal reference counts" {
     for ([_]struct { opt: cli_args.OptLevel, proves: bool }{
         .{ .opt = .speed, .proves = true },
         .{ .opt = .size, .proves = true },
@@ -13850,6 +13851,8 @@ test "only optimized builds prove uniqueness" {
             const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, strategy, RocTarget.detectNative(), false);
             try std.testing.expectEqual(case.proves, config.target.prove_uniqueness);
             try std.testing.expectEqual(case.proves, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).prove_uniqueness);
+            try std.testing.expectEqual(case.proves, config.target.immortal_string_literals);
+            try std.testing.expectEqual(case.proves, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).immortal_string_literals);
         }
     }
 }
@@ -14005,6 +14008,7 @@ fn checkedRuntimeLoweringConfig(
             .reuse_boxes = optimizeLirForOpt(opt),
             .thread_confined_rc = optimizeLirForOpt(opt),
             .prove_uniqueness = optimizeLirForOpt(opt),
+            .immortal_string_literals = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names,
         },
     };

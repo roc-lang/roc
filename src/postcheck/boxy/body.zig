@@ -186,7 +186,7 @@ pub const Task = union(enum) {
     finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const Word, dicts: []const Word, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
-    finish_static_list: struct { ty: TypeId, count: u32 },
+    finish_static_list: struct { ty: TypeId, count: u32, capacity: u64 },
     finish_static_box: struct { ty: TypeId, sequence_step_offset: ?u32 = null },
     remember_static_value: lower.Program.StoredValueKey,
     /// Push a value of `ty` for an expression whose evaluation diverged.
@@ -1639,7 +1639,7 @@ pub const Builder = struct {
     pub fn lowerBody(self: *Builder) Allocator.Error!void {
         const worker = self.currentWorker().*;
         const template = switch (worker.key) {
-            .template => |key| self.view.view.checked_procedure_templates.templates.items[@backingInt(key.template)],
+            .template => |key| self.view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)],
             .lambda => |key| return try self.lowerLambdaBody(key.expr),
             .adapter => |key| return try self.lowerAdapterBody(key.from),
             .method_entry => |target| return try self.lowerMethodEntry(target),
@@ -2527,7 +2527,7 @@ pub const Builder = struct {
         // root crashes with the checked runtime error when called.
         const callee: ?Callee = if (request.procedure_template) |template|
             .{ .worker = try self.program.templateRefWorker(template) }
-        else if (request.procedure_binding) |binding| switch (self.view.view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
+        else if (request.procedure_binding) |binding| switch (self.view.view.top_level_procedure_bindings.bindings.items()[@backingInt(binding)].body) {
             .direct_template => |direct| .{ .worker = try self.program.templateRefWorker(Program.directTemplate(direct.template)) },
             // An exact procedure alias calls what it names.
             .callable_eval_template => |template| if (self.view.view.callable_eval_templates.templates[@backingInt(template)].forwarded_lookup != .none)
@@ -3180,7 +3180,7 @@ pub const Builder = struct {
                 } else invariant("a stored tag has no declared variant");
                 try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .{ .tag = @intCast(variant) }, values));
             },
-            .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .list),
+            .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .{ .list = value.capacity }),
             .finish_static_box => |value| try self.finishStaticParts(value.ty, 1, if (value.sequence_step_offset) |offset| .{ .boxed_sequence = offset } else .box),
             .remember_static_value => |key| {
                 const value = self.popValue();
@@ -4118,7 +4118,7 @@ pub const Builder = struct {
         return switch (self.program.worker(id).key) {
             .template => |key| blk: {
                 const view = self.program.module(key.module);
-                const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+                const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
                 const export_name = view.nameStore().procBase(template.proc_base).export_name.get() orelse break :blk "a template";
                 break :blk view.nameStore().exportNameText(export_name);
             },
@@ -5799,9 +5799,9 @@ pub const Builder = struct {
                     .list => |elem| elem,
                     .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a stored list restored at a non-List type"),
                 };
-                switch (list) {
+                switch (list.items) {
                     .nodes => |nodes| {
-                        try self.push(.{ .finish_static_list = .{ .ty = raw_ty, .count = @intCast(nodes.len) } });
+                        try self.push(.{ .finish_static_list = .{ .ty = raw_ty, .count = @intCast(nodes.len), .capacity = list.capacity } });
                         var index = nodes.len;
                         while (index > 0) {
                             index -= 1;
@@ -6189,7 +6189,7 @@ pub const Builder = struct {
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("evidence parameters of a worker that is not a procedure template's"),
         };
         const view = self.program.module(key.module).view;
-        const template = view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+        const template = view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
         return lower.poolSlice(static_dispatch.EvidenceParamRecord, view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
     }
 
@@ -6973,7 +6973,7 @@ pub const Builder = struct {
         const templates = self.program.module(key.module).view.checked_procedure_templates;
         return .{
             .module = key.module,
-            .params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params),
+            .params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items()[@backingInt(key.template)].evidence_params),
             .env = .{ .module = key.module, .vars = target.scheme_vars, .bound = bound },
         };
     }
@@ -7478,7 +7478,7 @@ pub const Builder = struct {
             invariant("a callable-eval template's root has no entry wrapper");
         const owner = self.program.moduleByKey(.{ .bytes = wrapper.artifact.bytes });
         const templates = owner.view.checked_procedure_templates;
-        const wrapper_template = templates.templates.items[@backingInt(wrapper.template)];
+        const wrapper_template = templates.templates.items()[@backingInt(wrapper.template)];
         return .{
             .module = module_index,
             .lookup = template.forwarded_lookup.get() orelse invariant("a method's alias binding is not an exact procedure alias"),
@@ -8005,7 +8005,7 @@ pub const Builder = struct {
         if (worker.key == .template) {
             const key = worker.key.template;
             const owner = self.program.module(key.module);
-            const template = owner.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+            const template = owner.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
             if (template.provided_low_level) |op| {
                 try self.emitLowLevelCall(op, explicit, ret, arg_types);
                 const value = self.popValue();
@@ -8447,7 +8447,7 @@ pub const Builder = struct {
             .callable_eval_template, .checked_error => return null,
         };
         const owner = self.program.moduleByKey(.{ .bytes = template_ref.artifact.bytes });
-        const op = (owner.view.checked_procedure_templates.templates.items[@backingInt(template_ref.template)].provided_low_level orelse return null).layoutResolved() orelse return null;
+        const op = (owner.view.checked_procedure_templates.templates.items()[@backingInt(template_ref.template)].provided_low_level orelse return null).layoutResolved() orelse return null;
         for (call.args) |arg| switch (self.bodies().exprData(arg)) {
             .lookup_local => {},
             .numeral, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,

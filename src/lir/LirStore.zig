@@ -645,7 +645,6 @@ pub fn cloneForBodyShard(self: *const Self, allocator: Allocator) Allocator.Erro
     result.body_coordinator = self;
     result.runtime_contract = self.runtime_contract;
     result.body_prefix = self.captureBodyPrefix();
-    result.strings_insertable = true;
     result.next_synthetic_symbol = self.next_synthetic_symbol;
     return result;
 }
@@ -986,9 +985,6 @@ stmt_rows: StmtRowColumns,
 proc_specs: GuardedList.List(LirProcSpec, "LirStore.proc_specs"),
 strings: base.StringLiteral.Store,
 string_builder: base.StringLiteral.BuilderState,
-/// Retained in the serialized store layout; body shards now keep it enabled
-/// because their strings are relocated during ordered commit.
-strings_insertable: bool,
 allocator: Allocator,
 next_synthetic_symbol: u64,
 /// Source file table (module display names) for `SourceLoc.file`, flattened
@@ -1072,7 +1068,6 @@ pub fn init(allocator: Allocator) Self {
         .proc_specs = .empty,
         .strings = base.StringLiteral.Store{},
         .string_builder = .{},
-        .strings_insertable = true,
         .allocator = allocator,
         .next_synthetic_symbol = 0xf000_0000_0000_0000,
         .source_file_bytes = .empty,
@@ -1565,7 +1560,6 @@ pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLi
 
 /// Interns string backing bytes with the requested minimum alignment.
 pub fn insertStringAligned(self: *Self, text: []const u8, alignment: u32) Allocator.Error!base.StringLiteral.Idx {
-    self.assertStringsInsertable();
     const local = try self.string_builder.insertAligned(&self.strings, self.allocator, text, alignment);
     if (self.body_coordinator == null) return local;
     return @fromBackingInt(@intCast(std.math.add(
@@ -1631,11 +1625,6 @@ pub fn getStringLiteral(self: *const Self, literal: lir_defs.StrLiteral) []const
 /// Returns the full backing bytes for one string literal view.
 pub fn getStringLiteralBacking(self: *const Self, literal: lir_defs.StrLiteral) []const u8 {
     return self.getString(literal.backing);
-}
-
-fn assertStringsInsertable(self: *const Self) void {
-    if (self.strings_insertable) return;
-    base.invariant("LirStore invariant violated: attempted to insert into frozen string literal store", .{});
 }
 
 fn assertBodyMetadataImmutable(self: *const Self) void {
@@ -2166,7 +2155,8 @@ pub fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         },
         .assign_literal => |assign| switch (assign.value) {
             .static_data, .bytes_literal => self.shapes.static_literal = true,
-            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref => {},
+            .str_literal => self.shapes.str_literal = true,
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .proc_ref => {},
         },
         .assign_low_level => |assign| {
             if (assign.op == .box_box) self.shapes.box_box = true;

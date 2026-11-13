@@ -1116,9 +1116,17 @@ pub const Program = struct {
                 if (record.declared.get()) |declared| {
                     hasher.update(&[_]u8{1});
                     try self.hashTypes(&hasher, store.span(declared.padding));
-                    const slots = store.declaredSlots(declared);
-                    hashWord(&hasher, @intCast(slots.len));
-                    for (slots) |slot| hashWord(&hasher, slot);
+                    // The entries identify the order; the slots derived
+                    // from them can coincide for different entries.
+                    const entries = store.declaredEntries(declared);
+                    hashWord(&hasher, @intCast(entries.len));
+                    for (entries) |entry| {
+                        hasher.update(&[_]u8{@backingInt(std.meta.activeTag(entry))});
+                        switch (entry) {
+                            .named => |name| hashLengthPrefixed(&hasher, store.nameText(name)),
+                            .padding => |ordinal| hashWord(&hasher, ordinal),
+                        }
+                    }
                 } else hasher.update(&[_]u8{0});
             },
             .tuple => |items| try self.hashTypes(&hasher, store.span(items)),
@@ -1413,7 +1421,7 @@ pub const Program = struct {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
+        const template = view.view.checked_procedure_templates.templates.items()[@backingInt(template_id)];
         const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
         // A sealed variable (design.md "Sealed Result Rows"), which checking
         // records (`CheckedProcedureTemplate.sealed_slots`), is no hidden
@@ -1530,7 +1538,7 @@ pub const Program = struct {
         const slot = (try self.listItemSlot(generic_id)) orelse invariant("an integer list worker was requested for a template with no list item variable");
         const generic = self.worker(generic_id).*;
         const view = self.module(module_index);
-        const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
+        const template = view.view.checked_procedure_templates.templates.items()[@backingInt(template_id)];
         const bound = try self.arena.allocator().alloc(TypeId, generic.scheme_vars.len);
         for (bound, 0..) |*entry, index| entry.* = try self.store.variable(@intCast(index));
         bound[slot] = try self.store.primitive(item.primitive());
@@ -1592,7 +1600,7 @@ pub const Program = struct {
     fn computeListItemSlot(self: *Program, key: TemplateKey, target: Worker) Allocator.Error!?u32 {
         const view = self.module(key.module);
         if (view.view.module_env.module_role != .builtin) return null;
-        const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+        const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
         if (template.provided_low_level != null) return null;
         switch (template.body) {
             .checked_body => {},
@@ -2138,6 +2146,26 @@ pub const Program = struct {
         return try self.store.intern(.{ .function = .{ .args = &.{}, .ret = try self.store.emptyRecord(), .effectful = false } });
     }
 
+    /// Sorts `fields` by label, given that `fields[0..own]` and
+    /// `fields[own..]` are each sorted already.
+    fn mergeSortedFields(allocator: Allocator, store: *const types.Store, fields: []types.Field, own: usize) Allocator.Error!void {
+        if (own == 0 or own == fields.len) return;
+        if (store.nameLessThan(fields[own - 1].name, fields[own].name)) return;
+        const first = try allocator.dupe(types.Field, fields[0..own]);
+        defer allocator.free(first);
+        var left: usize = 0;
+        var right: usize = own;
+        for (fields) |*out| {
+            if (right == fields.len or (left < first.len and store.nameLessThan(first[left].name, fields[right].name))) {
+                out.* = first[left];
+                left += 1;
+            } else {
+                out.* = fields[right];
+                right += 1;
+            }
+        }
+    }
+
     fn rewriteType(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId) Allocator.Error!TypeId {
         return try self.rewriteTypeWithRowNodes(allocator, root, bound, function_as, &.{});
     }
@@ -2224,17 +2252,23 @@ pub const Program = struct {
                         }
                     }
                     var ext: ?TypeId = if (record.ext.get()) |ext| done.get(ext).? else null;
+                    // The row's own fields stay sorted by label under
+                    // substitution, and so do the remainder's, so a
+                    // remainder that substituted to a record merges in.
                     if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
                         .empty_record => ext = null,
                         .record => |ext_record| {
+                            const own = fields.items.len;
                             try fields.appendSlice(allocator, self.store.fieldSpan(ext_record.fields));
+                            try mergeSortedFields(allocator, &self.store, fields.items, own);
                             ext = ext_record.ext.get();
                         },
                         .variable => {},
                         .primitive, .tuple, .tag_union, .list, .box, .nominal, .function => invariant("a record row's remainder substituted to a non-record type"),
                     };
-                    // A declared order's slots index its row, which no
-                    // substitution of its closed remainder extends.
+                    // A padded record's store derives its slots from its
+                    // entries, so the fields a remainder brings get slots
+                    // just as they would had the row been closed already.
                     if (record.declared.get()) |declared| {
                         const padding = try allocator.alloc(TypeId, declared.padding.len);
                         defer allocator.free(padding);
@@ -2242,16 +2276,10 @@ pub const Program = struct {
                         break :blk try self.store.intern(.{ .record = .{
                             .fields = fields.items,
                             .ext = ext,
-                            .declared = .{ .padding = padding, .slots = self.store.declaredSlots(declared) },
+                            .declared = .{ .padding = padding, .entries = self.store.declaredEntries(declared) },
                         } });
                     }
                     if (fields.items.len == 0 and ext == null) break :blk try self.store.emptyRecord();
-                    const store = &self.store;
-                    std.mem.sort(types.Field, fields.items, store, struct {
-                        fn lessThan(s: *types.Store, a: types.Field, b: types.Field) bool {
-                            return s.nameLessThan(a.name, b.name);
-                        }
-                    }.lessThan);
                     break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
                 },
                 .tag_union => |tag_union| blk: {
@@ -2484,7 +2512,7 @@ pub const Program = struct {
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
-        const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+        const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items()[@backingInt(key.template)].evidence_params);
         const env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = bound };
         for (target_worker.dictionary_params, requirements) |param_index, *requirement| {
             const param = params[param_index];
@@ -2644,7 +2672,7 @@ pub const Program = struct {
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
-        const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+        const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items()[@backingInt(key.template)].evidence_params);
         const params = try self.allocator.alloc(static_dispatch.EvidenceParamRecord, target_worker.dictionary_params.len);
         defer self.allocator.free(params);
         for (target_worker.dictionary_params, params) |param_index, *param| param.* = all_params[param_index];
@@ -3231,7 +3259,7 @@ pub const Program = struct {
         return switch (binding) {
             .top_level => |top| blk: {
                 const owner = self.moduleByKey(top.artifact);
-                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(top.binding)].body };
+                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items()[@backingInt(top.binding)].body };
             },
             .imported => |imported| blk: {
                 const owner = self.moduleByKey(imported.artifact);
@@ -3241,7 +3269,7 @@ pub const Program = struct {
             },
             .platform_required => |required| blk: {
                 const owner = self.moduleByKey(required.artifact);
-                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(required.procedure_binding)].body };
+                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items()[@backingInt(required.procedure_binding)].body };
             },
             .hosted => |hosted| .{ .module = self.moduleByIdx(hosted.module_idx).index, .body = .{ .direct_template = .{ .proc_value = hosted.proc, .template = .{ .checked = hosted.template } } } },
         };
@@ -3588,7 +3616,7 @@ fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerI
     const module_name = view.nameStore().moduleNameText(view.view.module_identity.module_name);
     const label: PerfNameLabel = switch (worker.key) {
         .template => |key| blk: {
-            const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+            const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
             const name_store = view.nameStore();
             const suffix: []const u8 = switch (key.binding) {
                 .generic => "",
@@ -3732,7 +3760,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         for (view.view.callable_eval_templates.templates) |template| {
             try program.callable_eval_by_pattern.put(allocator, .{ .module = view.index, .pattern = template.pattern }, template.id);
         }
-        for (view.view.entry_wrappers.wrappers.items) |wrapper| {
+        for (view.view.entry_wrappers.wrappers.items()) |wrapper| {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
         }
     }
@@ -3855,7 +3883,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 },
                 .template => |key| blk: {
                     const view = program.module(key.module);
-                    const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+                    const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
                     const names = view.nameStore();
                     const export_name = names.procBase(template.proc_base).export_name.get() orelse break :blk switch (key.binding) {
                         .generic => "boxy.template",
@@ -3904,7 +3932,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         for (view.view.callable_eval_templates.templates) |callable| {
             if (callable.forwarded_lookup.get() != null) forwarded_roots[@backingInt(callable.root)] = true;
         }
-        for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
+        for (view.view.checked_procedure_templates.templates.items(), 0..) |template, index| {
             if (!unitEmitsTemplate(view, template, forwarded_roots)) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
@@ -4086,7 +4114,7 @@ fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source
     // A root whose target takes no hidden arguments is the target itself.
     const direct: ?checked_names.ProcedureTemplateRef = if (request.procedure_template) |template|
         template
-    else if (request.procedure_binding) |binding| switch (program.module(source_module).view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
+    else if (request.procedure_binding) |binding| switch (program.module(source_module).view.top_level_procedure_bindings.bindings.items()[@backingInt(binding)].body) {
         .direct_template => |direct| Program.directTemplate(direct.template),
         // A rejected binding's root is a wrapper that crashes.
         .callable_eval_template, .checked_error => null,

@@ -1277,7 +1277,7 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
         };
         while (true) {
             switch (resources.checked_artifact.const_store.get(node)) {
-                .str => |str| return resources.checked_artifact.const_store.strBytes(str),
+                .str => |str| return resources.checked_artifact.const_store.strBytes(str.bytes),
                 .nominal => |nominal| node = nominal.backing,
                 .boxy_fn,
                 .pending,
@@ -2023,7 +2023,7 @@ fn directImportsArePublished(
     published: []const check.CheckedArtifact.PublishImportArtifact,
 ) bool {
     const module_env = module.moduleEnvConst();
-    for (module_env.imports.imports.items.items, 0..) |_, i| {
+    for (module_env.imports.imports.items(), 0..) |_, i| {
         const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
         var found = false;
@@ -2227,7 +2227,7 @@ fn makeModuleSource(
 fn resolveImportsByModuleIndex(module_envs: []const *ModuleEnv) void {
     for (module_envs) |module_env| {
         module_env.imports.clearResolvedModules();
-        for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
+        for (module_env.imports.imports.items(), 0..) |str_idx, i| {
             const import_name = module_env.getString(str_idx);
             const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(i));
             if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
@@ -2252,7 +2252,7 @@ fn resolveImportsByModuleIndex(module_envs: []const *ModuleEnv) void {
 
 fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const ModuleEnv) void {
     module_env.imports.clearResolvedModules();
-    for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
+    for (module_env.imports.imports.items(), 0..) |str_idx, i| {
         const import_name = module_env.getString(str_idx);
         const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(i));
         if (CIR.Import.isCompilerBuiltinImportName(import_name)) {

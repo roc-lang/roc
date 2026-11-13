@@ -815,7 +815,7 @@ pub const Instantiator = struct {
     fn visitReachConstraints(self: *Self, parent: Var, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < constraints.len()) : (i += 1) {
-            const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
+            const constraint = self.store.static_dispatch_constraints.items()[@backingInt(constraints.start) + i];
             try self.visitReachChild(parent, constraint.fn_var);
             if (constraint.interpolation.isPresent()) {
                 const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
@@ -995,7 +995,7 @@ pub const Instantiator = struct {
         const allocator = self.store.gpa;
         var i: u32 = 0;
         while (i < constraints.len()) : (i += 1) {
-            const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
+            const constraint = self.store.static_dispatch_constraints.items()[@backingInt(constraints.start) + i];
             // A method signature is its own annotation root, generated at the
             // output polarity whatever position its dispatcher occupies.
             try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = .pos, .reach = .nested });
@@ -1497,20 +1497,20 @@ pub const Instantiator = struct {
     /// Append a copy of the constraint run `source` for a flex-like frame to
     /// rewrite in place, returning its raw base index.
     fn appendConstraintRunCopy(self: *Self, source: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!u32 {
-        const constraints = &self.store.static_dispatch_constraints.items;
-        const fresh_start = std.math.cast(u32, constraints.items.len) orelse return error.OutOfMemory;
+        const constraints = &self.store.static_dispatch_constraints;
+        const fresh_start = std.math.cast(u32, constraints.items().len) orelse return error.OutOfMemory;
         try constraints.ensureUnusedCapacity(self.store.gpa, source.count);
         // The source run lives in the same list, so it is sliced only once
         // the list can no longer move.
         const source_start: usize = @backingInt(source.start);
-        constraints.appendSliceAssumeCapacity(constraints.items[source_start..][0..source.count]);
+        _ = constraints.appendSliceAssumeCapacity(constraints.items()[source_start..][0..source.count]);
         return fresh_start;
     }
 
     /// The fresh copy of the frame's current constraint. Re-fetched on every
     /// use, since child copies append to the same list.
     fn freshConstraint(self: *Self, frame: *const FlexLikeFrame) *StaticDispatchConstraint {
-        return &self.store.static_dispatch_constraints.items.items[frame.fresh_start + frame.cons_idx];
+        return &self.store.static_dispatch_constraints.items()[frame.fresh_start + frame.cons_idx];
     }
 
     fn stepFlexLike(self: *Self, frame: *FlexLikeFrame) std.mem.Allocator.Error!bool {
@@ -1531,7 +1531,7 @@ pub const Instantiator = struct {
                         try self.finishFrame(frame.common, fresh_content);
                         return true;
                     }
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    const constraint = self.store.static_dispatch_constraints.items()[frame.cons_start + frame.cons_idx];
                     frame.stage = .await_fn;
                     if (self.deferredCallable(constraint)) |source| {
                         frame.has_deferred = true;
@@ -1546,7 +1546,7 @@ pub const Instantiator = struct {
                 },
                 .await_fn => {
                     frame.fresh_fn_var = machine.value_stack.pop().?;
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    const constraint = self.store.static_dispatch_constraints.items()[frame.cons_start + frame.cons_idx];
                     try self.carryDerivedMapPlan(constraint.fn_var, frame.fresh_fn_var);
                     if (!constraint.interpolation.isPresent()) {
                         self.freshConstraint(frame).fn_var = frame.fresh_fn_var;
@@ -1559,7 +1559,7 @@ pub const Instantiator = struct {
                     }
                 },
                 .dispatch_part_or_item => {
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    const constraint = self.store.static_dispatch_constraints.items()[frame.cons_start + frame.cons_idx];
                     const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                     self.current_reach = .nested;
                     if (frame.part_idx == metadata.interpolated_parts.len()) {
@@ -1573,7 +1573,7 @@ pub const Instantiator = struct {
                 },
                 .await_part => {
                     const fresh_part_var = machine.value_stack.pop().?;
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    const constraint = self.store.static_dispatch_constraints.items()[frame.cons_start + frame.cons_idx];
                     const part = self.store.getInterpolationPartAt(self.store.getInterpolationMetadata(constraint.interpolation).interpolated_parts, frame.part_idx);
                     try machine.pending_parts.append(self.store.gpa, .{
                         .var_ = fresh_part_var,

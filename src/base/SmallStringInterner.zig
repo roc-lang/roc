@@ -8,7 +8,6 @@
 //! e.g. regions.
 
 const std = @import("std");
-const invariant = @import("invariant.zig").invariant;
 const collections = @import("collections");
 
 const CompactWriter = collections.CompactWriter;
@@ -29,11 +28,6 @@ index: collections.SafeList(Idx) = .{},
 fingerprints: collections.SafeList(u8) = .{},
 /// The current number of entries in the hash table.
 entry_count: u32 = 0,
-/// Flag to track whether this interner supports inserts (true) or is deserialized (false).
-/// Deserialized interners have memory owned by the deserialization buffer, so:
-/// - deinit() must NOT free memory (would double-free)
-/// - insert operations are invalid (buffer is immutable)
-supports_inserts: bool = true,
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
@@ -60,13 +54,11 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
     var index = try collections.SafeList(Idx).initCapacity(gpa, hash_table_capacity);
     errdefer index.deinit(gpa);
-    index.items.items.len = hash_table_capacity;
-    @memset(index.items.items, .unused);
+    index.appendNTimesAssumeCapacity(.unused, hash_table_capacity);
 
     var fingerprints = try collections.SafeList(u8).initCapacity(gpa, hash_table_capacity);
     errdefer fingerprints.deinit(gpa);
-    fingerprints.items.items.len = hash_table_capacity;
-    @memset(fingerprints.items.items, 0);
+    fingerprints.appendNTimesAssumeCapacity(0, hash_table_capacity);
 
     return .{
         .bytes = bytes,
@@ -105,17 +97,16 @@ const Policy = struct {
         return self.getText(id);
     }
     pub fn appendEntry(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
-        assertSupportsInserts(self.supports_inserts);
         // Every offset in `ends` is a u32, so the text past that range has
         // exhausted the representable memory.
-        const start = self.bytes.items.items.len;
+        const start = self.bytes.items().len;
         const end = std.math.cast(u32, start + string.len) orelse return error.OutOfMemory;
-        const new_idx: Idx = @fromBackingInt(std.math.cast(u32, self.ends.items.items.len) orelse return error.OutOfMemory);
+        const new_idx: Idx = @fromBackingInt(std.math.cast(u32, self.ends.items().len) orelse return error.OutOfMemory);
         // Reserve both columns first, so a failed allocation leaves no text
         // that the next entry's span would absorb.
-        try self.bytes.items.ensureUnusedCapacity(gpa, string.len);
-        try self.ends.items.ensureUnusedCapacity(gpa, 1);
-        self.bytes.items.appendSliceAssumeCapacity(string);
+        try self.bytes.ensureUnusedCapacity(gpa, string.len);
+        try self.ends.ensureUnusedCapacity(gpa, 1);
+        _ = self.bytes.appendSliceAssumeCapacity(string);
         _ = self.ends.appendAssumeCapacity(end);
         self.entry_count += 1;
         return new_idx;
@@ -125,33 +116,11 @@ const Policy = struct {
     }
 };
 
-fn assertSupportsInserts(supports_inserts: bool) void {
-    if (supports_inserts) return;
-    invariant("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
-}
-
-/// Enable inserts on a deserialized interner for runtime use.
-/// Normally deserialized interners are read-only, but the interpreter needs to
-/// insert new identifiers at runtime for type name translation and method lookup.
-/// This copies the deserialized data into newly allocated memory that can be grown.
-/// Call this after deserialization but before using the interner for runtime operations.
-pub fn enableRuntimeInserts(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
-    // Skip if already supports inserts (avoid memory leak from double-call)
-    if (self.supports_inserts) {
-        return;
-    }
-    self.* = try self.clone(gpa);
-}
-
 /// Free all memory consumed by this interner.
-/// Will invalidate all slices referencing the interner.
-/// NOTE: For deserialized interners, this is a no-op since memory is owned by the deserialization buffer.
+/// Will invalidate all slices referencing the interner. A loaded interner's
+/// columns borrow the serialized bytes until they grow, and a borrowed column
+/// frees nothing.
 pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
-    // Deserialized interners have supports_inserts = false.
-    // Their memory is owned by the deserialization buffer, so we must not free it.
-    if (!self.supports_inserts) {
-        return;
-    }
     self.bytes.deinit(gpa);
     self.ends.deinit(gpa);
     self.index.deinit(gpa);
@@ -159,8 +128,8 @@ pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
 }
 
 fn cloneColumn(comptime T: type, gpa: std.mem.Allocator, column: *const collections.SafeList(T)) std.mem.Allocator.Error!collections.SafeList(T) {
-    var copy = try collections.SafeList(T).initCapacity(gpa, column.items.items.len);
-    copy.items.appendSliceAssumeCapacity(column.items.items);
+    var copy = try collections.SafeList(T).initCapacity(gpa, column.items().len);
+    _ = copy.appendSliceAssumeCapacity(column.items());
     return copy;
 }
 
@@ -180,7 +149,6 @@ pub fn clone(self: *const SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
         .index = index,
         .fingerprints = fingerprints,
         .entry_count = self.entry_count,
-        .supports_inserts = true,
     };
 }
 
@@ -228,8 +196,8 @@ pub fn isInBounds(self: *const SmallStringInterner, idx: Idx) bool {
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
     const serial: usize = @backingInt(idx);
-    const ends = self.ends.items.items;
-    return self.bytes.items.items[ends[serial - 1]..ends[serial]];
+    const ends = self.ends.items();
+    return self.bytes.items()[ends[serial - 1]..ends[serial]];
 }
 
 /// Serialized representation of a SmallStringInterner
@@ -259,8 +227,20 @@ pub const Serialized = extern struct {
         self._padding = 0;
     }
 
-    /// Deserialize into a SmallStringInterner value (no in-place modification of cache buffer).
-    /// The base parameter is the base address of the serialized buffer in memory.
+    /// Reject columns that disagree with the entry count or a probe table a
+    /// lookup could walk forever. Constant time: no entry is read.
+    pub fn validateShape(self: *const Serialized) error{CorruptArtifact}!void {
+        // `ends` holds a leading 0 before the end of each entry, except in an
+        // interner that was never given storage.
+        const ends_ok = if (self.ends.len == 0) self.entry_count == 0 else self.ends.len == @as(u64, self.entry_count) + 1;
+        if (!ends_ok) return error.CorruptArtifact;
+        if (self.fingerprints.len != self.hash_table.len) return error.CorruptArtifact;
+        if (!collections.serde_validation.probeTableShapeValid(self.hash_table.len, self.entry_count)) return error.CorruptArtifact;
+    }
+
+    /// An interner whose columns borrow the serialized columns at `base`. It
+    /// reads and writes them in place, and a column copies itself into owned
+    /// memory the first time it grows.
     pub fn deserializeInto(self: *const Serialized, base: usize) SmallStringInterner {
         return SmallStringInterner{
             .bytes = self.bytes.deserializeInto(base),
@@ -268,8 +248,6 @@ pub const Serialized = extern struct {
             .index = self.hash_table.deserializeInto(base),
             .fingerprints = self.fingerprints.deserializeInto(base),
             .entry_count = self.entry_count,
-            // Mark as not supporting inserts - deserialized interners have memory owned by the buffer
-            .supports_inserts = false,
         };
     }
 };
@@ -627,14 +605,13 @@ test "SmallStringInterner lookup survives deserialize with no rebuild" {
     var roundtrip = try roundTripSerialized(gpa, &original);
     defer gpa.free(roundtrip.buffer);
 
-    try std.testing.expect(!roundtrip.interner.supports_inserts);
     try std.testing.expectEqual(alpha, roundtrip.interner.lookup("alpha").?);
     try std.testing.expectEqual(beta, roundtrip.interner.lookup("beta").?);
     try std.testing.expectEqual(gamma, roundtrip.interner.lookup("gamma").?);
     try std.testing.expectEqual(@as(?Idx, null), roundtrip.interner.lookup("delta"));
 }
 
-test "SmallStringInterner enableRuntimeInserts copies frozen data and permits insertion" {
+test "SmallStringInterner inserts into a loaded interner without touching other bytes it borrows" {
     const gpa = std.testing.allocator;
 
     var original = try SmallStringInterner.initCapacity(gpa, 4);
@@ -644,16 +621,45 @@ test "SmallStringInterner enableRuntimeInserts copies frozen data and permits in
 
     var roundtrip = try roundTripSerialized(gpa, &original);
     defer gpa.free(roundtrip.buffer);
-
-    try roundtrip.interner.enableRuntimeInserts(gpa);
     defer roundtrip.interner.deinit(gpa);
 
-    try std.testing.expect(roundtrip.interner.supports_inserts);
     try std.testing.expectEqual(alpha, roundtrip.interner.lookup("alpha").?);
+    try std.testing.expectEqual(alpha, try roundtrip.interner.insert(gpa, "alpha"));
 
+    // The text and end columns grow by copying, and the probe table takes the
+    // new entry in place; every entry stays findable.
     const beta = try roundtrip.interner.insert(gpa, "beta");
+    try std.testing.expect(roundtrip.interner.bytes.capacity != 0);
     try std.testing.expectEqual(beta, roundtrip.interner.lookup("beta").?);
+    try std.testing.expectEqual(alpha, roundtrip.interner.lookup("alpha").?);
     try std.testing.expectEqualStrings("beta", roundtrip.interner.getText(beta));
+    try std.testing.expectEqualStrings("alpha", roundtrip.interner.getText(alpha));
+}
+
+test "SmallStringInterner validateShape rejects a probe table with no empty cell" {
+    const gpa = std.testing.allocator;
+
+    var original = try SmallStringInterner.initCapacity(gpa, 4);
+    defer original.deinit(gpa);
+    _ = try original.insert(gpa, "alpha");
+
+    const roundtrip = try roundTripSerialized(gpa, &original);
+    defer gpa.free(roundtrip.buffer);
+    const serialized: *SmallStringInterner.Serialized = @ptrCast(@alignCast(roundtrip.buffer.ptr));
+    try serialized.validateShape();
+
+    const intact = serialized.*;
+    serialized.entry_count = @intCast(serialized.hash_table.len);
+    serialized.ends.len = serialized.entry_count + 1;
+    try std.testing.expectError(error.CorruptArtifact, serialized.validateShape());
+
+    serialized.* = intact;
+    serialized.fingerprints.len -= 1;
+    try std.testing.expectError(error.CorruptArtifact, serialized.validateShape());
+
+    serialized.* = intact;
+    serialized.ends.len += 1;
+    try std.testing.expectError(error.CorruptArtifact, serialized.validateShape());
 }
 
 test "SmallStringInterner multiple interners CompactWriter roundtrip" {

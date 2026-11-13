@@ -141,7 +141,7 @@ x = same(Fn(|z| z), Fn(|z| z))
 									(p-assign (ident "b"))))))))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 269)
+		(e-call (constraint-fn-var 272)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-tag (name "Fn")
 				(args

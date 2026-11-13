@@ -626,6 +626,16 @@ pub const FnDef = union(enum) {
 /// so equal strings share it and no string is a view into a longer one.
 pub const ConstStr = ConstBlobDataId;
 
+/// A string: its bytes and the capacity it was evaluated with.
+pub const ConstString = struct {
+    bytes: ConstStr,
+    /// How many bytes the string had room for when its evaluation finished,
+    /// never fewer than it holds. A string held inline in its descriptor, or
+    /// viewing another string's bytes, has none beyond its length. Capacity
+    /// is part of the value, as a list's is (`ConstList.capacity`).
+    capacity: u64,
+};
+
 /// Packed list with little-endian scalar leaves in semantic field order.
 /// Product bytes omit padding. `blobData(bytes).len == len * byteWidth()`.
 pub const ConstPackedList = struct {
@@ -642,15 +652,37 @@ pub const ConstPackedList = struct {
     }
 };
 
-/// List data stored either as child nodes or packed fixed-product bytes.
-pub const ConstList = union(enum) {
+/// A list's items, stored either as child nodes or packed fixed-product
+/// bytes.
+pub const ConstListItems = union(enum) {
     nodes: []const ConstNodeId,
     packed_bytes: ConstPackedList,
-    /// An empty list, with the capacity it was evaluated with. A frozen or
-    /// restored descriptor cannot carry a capacity beyond its length, so the
-    /// request travels on the value and the runtime rebuilds the list as
-    /// the `with_capacity` it came from.
-    empty: u64,
+    empty,
+
+    /// The number of items.
+    pub fn len(self: ConstListItems) u64 {
+        return switch (self) {
+            .nodes => |items| items.len,
+            .packed_bytes => |packed_list| packed_list.len,
+            .empty => 0,
+        };
+    }
+};
+
+/// A list: its items and the capacity it was evaluated with.
+pub const ConstList = struct {
+    items: ConstListItems,
+    /// How many items the list had room for when its evaluation finished,
+    /// never fewer than it holds. Capacity is part of the value: the
+    /// descriptor a runtime program reads records it, and the copy that
+    /// first gives the program storage of its own keeps it, so a list
+    /// built by `List.with_capacity` at compile time still reserves once.
+    capacity: u64,
+
+    /// A list holding `items` with no spare capacity.
+    pub fn exact(items: ConstListItems) ConstList {
+        return .{ .items = items, .capacity = items.len() };
+    }
 };
 
 /// Compile-time constant stored in checked module data.
@@ -658,7 +690,7 @@ pub const ConstValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    str: ConstStr,
+    str: ConstString,
     list: ConstList,
     box: ConstNodeId,
     tuple: []const ConstNodeId,
@@ -693,11 +725,14 @@ const StoredValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    str: ConstStr,
-    list: union(enum) {
-        nodes: ConstRange,
-        packed_bytes: ConstPackedList,
-        empty: u64,
+    str: ConstString,
+    list: struct {
+        items: union(enum) {
+            nodes: ConstRange,
+            packed_bytes: ConstPackedList,
+            empty,
+        },
+        capacity: u64,
     },
     box: ConstNodeId,
     tuple: ConstRange,
@@ -756,51 +791,49 @@ comptime {
 /// Store of monomorphic type evidence attached to compile-time constants.
 pub const ConstTypeStore = struct {
     allocator: Allocator,
-    types: std.ArrayList(StoredConstType),
+    types: collections.SafeList(StoredConstType),
     /// Out-of-line payloads of `named` and `erased` nodes.
-    named_pool: std.ArrayList(ConstNamedType),
-    erased_pool: std.ArrayList(names.TypeDigest),
+    named_pool: collections.SafeList(ConstNamedType),
+    erased_pool: collections.SafeList(names.TypeDigest),
     /// Flat pool of `ConstTypeId`s for tuple/function args and tag payloads.
-    type_pool: std.ArrayList(ConstTypeId),
+    type_pool: collections.SafeList(ConstTypeId),
     /// Flat pool of record fields.
-    field_pool: std.ArrayList(TypeField),
+    field_pool: collections.SafeList(TypeField),
     /// Flat pool of tag-union variants.
-    tag_pool: std.ArrayList(TypeTag),
+    tag_pool: collections.SafeList(TypeTag),
     /// Flat pool of nominal declared field entries.
-    declared_field_pool: std.ArrayList(TypeDeclaredField),
-    /// True for a store reconstructed from a serialized buffer.
-    serialized: bool = false,
+    declared_field_pool: collections.SafeList(TypeDeclaredField),
 
     pub fn init(allocator: Allocator) ConstTypeStore {
         return .{
             .allocator = allocator,
-            .types = .empty,
-            .named_pool = .empty,
-            .erased_pool = .empty,
-            .type_pool = .empty,
-            .field_pool = .empty,
-            .tag_pool = .empty,
-            .declared_field_pool = .empty,
+            .types = .{},
+            .named_pool = .{},
+            .erased_pool = .{},
+            .type_pool = .{},
+            .field_pool = .{},
+            .tag_pool = .{},
+            .declared_field_pool = .{},
         };
     }
 
     pub fn reserve(self: *ConstTypeStore) Allocator.Error!ConstTypeId {
-        const id: ConstTypeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.types.items.len))));
-        try self.types.append(self.allocator, .zst);
+        const id: ConstTypeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.types.items().len))));
+        _ = try self.types.append(self.allocator, .zst);
         return id;
     }
 
     /// Install the content of a node `reserve` returned.
     pub fn fill(self: *ConstTypeStore, id: ConstTypeId, ty: ConstType) Allocator.Error!void {
-        self.types.items[@backingInt(id)] = switch (ty) {
+        self.types.items()[@backingInt(id)] = switch (ty) {
             .named => |named| blk: {
-                const index: u32 = @intCast(self.named_pool.items.len);
-                try self.named_pool.append(self.allocator, named);
+                const index: u32 = @intCast(self.named_pool.items().len);
+                _ = try self.named_pool.append(self.allocator, named);
                 break :blk .{ .named = index };
             },
             .erased => |digest| blk: {
-                const index: u32 = @intCast(self.erased_pool.items.len);
-                try self.erased_pool.append(self.allocator, digest);
+                const index: u32 = @intCast(self.erased_pool.items().len);
+                _ = try self.erased_pool.append(self.allocator, digest);
                 break :blk .{ .erased = index };
             },
             inline .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => |payload, tag| @unionInit(StoredConstType, @tagName(tag), payload),
@@ -814,7 +847,7 @@ pub const ConstTypeStore = struct {
     }
 
     pub fn typeCount(self: *const ConstTypeStore) usize {
-        return self.types.items.len;
+        return self.types.items().len;
     }
 
     pub fn appendTypeSpan(self: *ConstTypeStore, ids: []const ConstTypeId) Allocator.Error!ConstRange {
@@ -834,27 +867,27 @@ pub const ConstTypeStore = struct {
     }
 
     pub fn get(self: *const ConstTypeStore, id: ConstTypeId) ConstType {
-        return switch (self.types.items[@backingInt(id)]) {
-            .named => |index| .{ .named = self.named_pool.items[index] },
-            .erased => |index| .{ .erased = self.erased_pool.items[index] },
+        return switch (self.types.items()[@backingInt(id)]) {
+            .named => |index| .{ .named = self.named_pool.items()[index] },
+            .erased => |index| .{ .erased = self.erased_pool.items()[index] },
             inline .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => |payload, tag| @unionInit(ConstType, @tagName(tag), payload),
         };
     }
 
     pub fn typeSpan(self: *const ConstTypeStore, range: ConstRange) []const ConstTypeId {
-        return self.type_pool.items[range.start .. range.start + range.len];
+        return self.type_pool.items()[range.start .. range.start + range.len];
     }
 
     pub fn fieldSpan(self: *const ConstTypeStore, range: ConstRange) []const TypeField {
-        return self.field_pool.items[range.start .. range.start + range.len];
+        return self.field_pool.items()[range.start .. range.start + range.len];
     }
 
     pub fn tagSpan(self: *const ConstTypeStore, range: ConstRange) []const TypeTag {
-        return self.tag_pool.items[range.start .. range.start + range.len];
+        return self.tag_pool.items()[range.start .. range.start + range.len];
     }
 
     pub fn declaredFieldSpan(self: *const ConstTypeStore, range: ConstRange) []const TypeDeclaredField {
-        return self.declared_field_pool.items[range.start .. range.start + range.len];
+        return self.declared_field_pool.items()[range.start .. range.start + range.len];
     }
 
     pub fn cloneTypeFromTranslated(
@@ -1167,16 +1200,16 @@ pub const ConstTypeStore = struct {
         pub const deserialize = Serde.deserializeWithAllocator;
     };
 
+    /// Free the pools this store owns. A loaded store's pools borrow the
+    /// relocated buffer, and a borrowed list frees nothing.
     pub fn deinit(self: *ConstTypeStore) void {
-        if (!self.serialized) {
-            self.types.deinit(self.allocator);
-            self.named_pool.deinit(self.allocator);
-            self.erased_pool.deinit(self.allocator);
-            self.type_pool.deinit(self.allocator);
-            self.field_pool.deinit(self.allocator);
-            self.tag_pool.deinit(self.allocator);
-            self.declared_field_pool.deinit(self.allocator);
-        }
+        self.types.deinit(self.allocator);
+        self.named_pool.deinit(self.allocator);
+        self.erased_pool.deinit(self.allocator);
+        self.type_pool.deinit(self.allocator);
+        self.field_pool.deinit(self.allocator);
+        self.tag_pool.deinit(self.allocator);
+        self.declared_field_pool.deinit(self.allocator);
         self.* = ConstTypeStore.init(self.allocator);
     }
 };
@@ -1186,31 +1219,31 @@ pub const ConstStore = struct {
     const VisitState = enum { unseen, active, done };
 
     allocator: Allocator,
-    values: std.ArrayList(StoredValue),
-    fns: std.ArrayList(StoredFn),
+    values: collections.SafeList(StoredValue),
+    fns: collections.SafeList(StoredFn),
     /// Flat pool of `ConstNodeId`s for list/tuple/record/tag-payload ranges.
-    node_pool: std.ArrayList(ConstNodeId),
+    node_pool: collections.SafeList(ConstNodeId),
     /// Flat pool of tag-name bytes.
-    tag_name_pool: std.ArrayList(u8),
+    tag_name_pool: collections.SafeList(u8),
     /// Monomorphic type evidence for roots and function captures.
     type_store: ConstTypeStore,
     /// Flat pool of function captures.
-    capture_pool: std.ArrayList(ConstCapture),
+    capture_pool: collections.SafeList(ConstCapture),
     /// Flat evidence vectors referenced by stored functions.
-    evidence_pool: std.ArrayList(ConstFnEvidence),
-    evidence_target_pool: std.ArrayList(ConstFnTargetEvidence),
-    evidence_structural_pool: std.ArrayList(ConstFnStructuralEvidence),
-    evidence_frame_pool: std.ArrayList(ConstFnEvidenceFrame),
+    evidence_pool: collections.SafeList(ConstFnEvidence),
+    evidence_target_pool: collections.SafeList(ConstFnTargetEvidence),
+    evidence_structural_pool: collections.SafeList(ConstFnStructuralEvidence),
+    evidence_frame_pool: collections.SafeList(ConstFnEvidenceFrame),
     /// Flat pool of immutable backing bytes shared by strings and packed lists.
-    blob_backing: std.ArrayList(u8),
+    blob_backing: collections.SafeList(u8),
     /// `ConstBlobDataId` -> range into `blob_backing`.
-    blob_views: std.ArrayList(ConstRange),
+    blob_views: collections.SafeList(ConstRange),
     /// Build-only content index over the blobs' backing int ids. Entries hash
     /// and compare by their bytes in `blob_backing`, read afresh on every
     /// lookup, so the backing may move while the store is being built.
     blob_index: std.HashMapUnmanaged(u32, void, BlobIndexContext, std.hash_map.default_max_load_percentage) = .empty,
-    /// True for a store reconstructed from a serialized buffer (pools point into
-    /// buffer-owned memory and must not be freed).
+    /// True for a store reconstructed from a serialized buffer. Its
+    /// `blob_index` is not stored, so such a store takes no new blob data.
     serialized: bool = false,
 
     pub const serde_transient_fields = .{"blob_index"};
@@ -1251,18 +1284,18 @@ pub const ConstStore = struct {
     pub fn init(allocator: Allocator) ConstStore {
         return .{
             .allocator = allocator,
-            .values = .empty,
-            .fns = .empty,
-            .node_pool = .empty,
-            .tag_name_pool = .empty,
+            .values = .{},
+            .fns = .{},
+            .node_pool = .{},
+            .tag_name_pool = .{},
             .type_store = ConstTypeStore.init(allocator),
-            .capture_pool = .empty,
-            .evidence_pool = .empty,
-            .evidence_target_pool = .empty,
-            .evidence_structural_pool = .empty,
-            .evidence_frame_pool = .empty,
-            .blob_backing = .empty,
-            .blob_views = .empty,
+            .capture_pool = .{},
+            .evidence_pool = .{},
+            .evidence_target_pool = .{},
+            .evidence_structural_pool = .{},
+            .evidence_frame_pool = .{},
+            .blob_backing = .{},
+            .blob_views = .{},
         };
     }
 
@@ -1271,15 +1304,15 @@ pub const ConstStore = struct {
     }
 
     pub fn reserve(self: *ConstStore) Allocator.Error!ConstNodeId {
-        const id: ConstNodeId = @fromBackingInt(std.math.cast(u32, self.values.items.len) orelse return error.OutOfMemory);
-        try self.values.append(self.allocator, .pending);
+        const id: ConstNodeId = @fromBackingInt(std.math.cast(u32, self.values.items().len) orelse return error.OutOfMemory);
+        _ = try self.values.append(self.allocator, .pending);
         return id;
     }
 
     /// Store `value` at `id`. Any slices in `value` are copied into the store's
     /// pools; the caller retains ownership of the input slices and frees them.
     pub fn fill(self: *ConstStore, id: ConstNodeId, value: ConstValue) void {
-        const slot = &self.values.items[@backingInt(id)];
+        const slot = &self.values.items()[@backingInt(id)];
         if (slot.* != .pending) constStoreInvariant("const node filled more than once");
         slot.* = self.storeValue(value) catch constStoreInvariant("out of memory storing const value");
     }
@@ -1291,18 +1324,27 @@ pub const ConstStore = struct {
             .pending => constStoreInvariant("cannot fill a const node with a pending value"),
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
-            .str => |s| .{ .str = s },
+            .str => |s| blk: {
+                if (s.capacity < self.blobData(s.bytes).len) constStoreInvariant("string capacity is below its length");
+                break :blk .{ .str = s };
+            },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
             .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = try self.appendNodes(function.captures) } },
-            .list => |list| .{ .list = switch (list) {
-                .nodes => |items| .{ .nodes = try self.appendNodes(items) },
-                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
-                .empty => |capacity| .{ .empty = capacity },
-            } },
+            .list => |list| blk: {
+                if (list.capacity < list.items.len()) constStoreInvariant("list capacity is below its length");
+                break :blk .{ .list = .{
+                    .items = switch (list.items) {
+                        .nodes => |items| .{ .nodes = try self.appendNodes(items) },
+                        .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                        .empty => .empty,
+                    },
+                    .capacity = list.capacity,
+                } };
+            },
             .tuple => |items| .{ .tuple = try self.appendNodes(items) },
             .record => |items| .{ .record = try self.appendNodes(items) },
             .tag => |tag| blk: {
@@ -1323,7 +1365,7 @@ pub const ConstStore = struct {
     /// retains ownership of the input `captures` slice and frees it.
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
         try validateEvidenceFrames(self.allocator, fn_value);
-        const id: ConstFnId = @fromBackingInt(std.math.cast(u32, self.fns.items.len) orelse return error.OutOfMemory);
+        const id: ConstFnId = @fromBackingInt(std.math.cast(u32, self.fns.items().len) orelse return error.OutOfMemory);
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
         const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
         const evidence_targets = try artifact_serialize.appendSpan(ConstRange, ConstFnTargetEvidence, &self.evidence_target_pool, self.allocator, fn_value.evidence.targets);
@@ -1332,7 +1374,7 @@ pub const ConstStore = struct {
         for (stored_structurals, fn_value.evidence.structurals) |*stored, structural| stored.* = structural.storedForm();
         const evidence_structurals = try artifact_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, stored_structurals);
         const evidence_frames = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
-        try self.fns.append(self.allocator, .{
+        _ = try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
@@ -1470,15 +1512,17 @@ pub const ConstStore = struct {
     /// table in between.
     pub fn reserveBlobData(self: *ConstStore, len: usize) Allocator.Error![]u8 {
         if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
-        return self.blob_backing.addManyAsSlice(self.allocator, len);
+        const start: usize = self.blob_backing.length;
+        try self.blob_backing.resize(self.allocator, start + len);
+        return self.blob_backing.items()[start..];
     }
 
     /// Intern the `len` bytes written into the space `reserveBlobData`
     /// returned, releasing that space when equal bytes are already interned.
     pub fn commitBlobData(self: *ConstStore, len: usize) Allocator.Error!ConstBlobDataId {
-        const start = self.blob_backing.items.len - len;
+        const start = self.blob_backing.items().len - len;
         errdefer self.blob_backing.shrinkRetainingCapacity(start);
-        const bytes = self.blob_backing.items[start..];
+        const bytes = self.blob_backing.items()[start..];
         const entry = try self.blob_index.getOrPutContextAdapted(
             self.allocator,
             bytes,
@@ -1491,14 +1535,14 @@ pub const ConstStore = struct {
         }
         errdefer self.blob_index.removeByPtr(entry.key_ptr);
 
-        const raw_id = std.math.cast(u32, self.blob_views.items.len) orelse return error.OutOfMemory;
+        const raw_id = std.math.cast(u32, self.blob_views.items().len) orelse return error.OutOfMemory;
         // An empty blob owns no backing, as `artifact_serialize.appendSpan`
         // records it.
         const view: ConstRange = if (len == 0) .{ .start = 0, .len = 0 } else .{
             .start = std.math.cast(u32, start) orelse return error.OutOfMemory,
             .len = std.math.cast(u32, len) orelse return error.OutOfMemory,
         };
-        try self.blob_views.append(self.allocator, view);
+        _ = try self.blob_views.append(self.allocator, view);
         entry.key_ptr.* = raw_id;
         return @fromBackingInt(raw_id);
     }
@@ -1514,21 +1558,21 @@ pub const ConstStore = struct {
         if (entry.found_existing) return @fromBackingInt(entry.key_ptr.*);
         errdefer self.blob_index.removeByPtr(entry.key_ptr);
 
-        const raw_id = std.math.cast(u32, self.blob_views.items.len) orelse return error.OutOfMemory;
-        const backing_len = self.blob_backing.items.len;
+        const raw_id = std.math.cast(u32, self.blob_views.items().len) orelse return error.OutOfMemory;
+        const backing_len = self.blob_backing.items().len;
         const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
         errdefer self.blob_backing.shrinkRetainingCapacity(backing_len);
-        try self.blob_views.append(self.allocator, view);
+        _ = try self.blob_views.append(self.allocator, view);
         entry.key_ptr.* = raw_id;
         return @fromBackingInt(raw_id);
     }
 
     fn nodeSlice(self: *const ConstStore, range: ConstRange) []const ConstNodeId {
-        return self.node_pool.items[range.start .. range.start + range.len];
+        return self.node_pool.items()[range.start .. range.start + range.len];
     }
 
     pub fn get(self: *const ConstStore, id: ConstNodeId) ConstValue {
-        return switch (self.values.items[@backingInt(id)]) {
+        return switch (self.values.items()[@backingInt(id)]) {
             .pending => .pending,
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
@@ -1539,45 +1583,48 @@ pub const ConstStore = struct {
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
             .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = self.nodeSlice(function.captures) } },
-            .list => |list| .{ .list = switch (list) {
-                .nodes => |r| .{ .nodes = self.nodeSlice(r) },
-                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
-                .empty => |capacity| .{ .empty = capacity },
+            .list => |list| .{ .list = .{
+                .items = switch (list.items) {
+                    .nodes => |r| .{ .nodes = self.nodeSlice(r) },
+                    .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                    .empty => .empty,
+                },
+                .capacity = list.capacity,
             } },
             .tuple => |r| .{ .tuple = self.nodeSlice(r) },
             .record => |r| .{ .record = self.nodeSlice(r) },
             .tag => |tag| .{ .tag = .{
-                .tag_name = self.tag_name_pool.items[tag.tag_name.start .. tag.tag_name.start + tag.tag_name.len],
+                .tag_name = self.tag_name_pool.items()[tag.tag_name.start .. tag.tag_name.start + tag.tag_name.len],
                 .payloads = self.nodeSlice(tag.payloads),
             } },
         };
     }
 
     pub fn getFn(self: *const ConstStore, id: ConstFnId) ConstFn {
-        const stored = self.fns.items[@backingInt(id)];
+        const stored = self.fns.items()[@backingInt(id)];
         return .{
             .fn_def = stored.fn_def,
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
             .owner_fn_ty = stored.owner_fn_ty.get(),
-            .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
+            .captures = self.capture_pool.items()[stored.captures.start .. stored.captures.start + stored.captures.len],
             .evidence = .{
-                .nodes = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
-                .targets = self.evidence_target_pool.items[stored.evidence_targets.start .. stored.evidence_targets.start + stored.evidence_targets.len],
-                .structurals = self.evidence_structural_pool.items[stored.evidence_structurals.start .. stored.evidence_structurals.start + stored.evidence_structurals.len],
+                .nodes = self.evidence_pool.items()[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
+                .targets = self.evidence_target_pool.items()[stored.evidence_targets.start .. stored.evidence_targets.start + stored.evidence_targets.len],
+                .structurals = self.evidence_structural_pool.items()[stored.evidence_structurals.start .. stored.evidence_structurals.start + stored.evidence_structurals.len],
             },
-            .evidence_frames = self.evidence_frame_pool.items[stored.evidence_frames.start .. stored.evidence_frames.start + stored.evidence_frames.len],
+            .evidence_frames = self.evidence_frame_pool.items()[stored.evidence_frames.start .. stored.evidence_frames.start + stored.evidence_frames.len],
             .evidence_frame_head = stored.evidence_frame_head.get(),
         };
     }
 
     pub fn blobData(self: *const ConstStore, id: ConstBlobDataId) []const u8 {
         const index = @backingInt(id);
-        if (@import("builtin").mode == .debug and index >= self.blob_views.items.len) {
+        if (@import("builtin").mode == .debug and index >= self.blob_views.items().len) {
             constStoreInvariant("blob backing id is out of range");
         }
-        const view = self.blob_views.items[index];
-        return self.blob_backing.items[view.start .. view.start + view.len];
+        const view = self.blob_views.items()[index];
+        return self.blob_backing.items()[view.start .. view.start + view.len];
     }
 
     /// Relocatable serialized form. Every field is a `SafeList`-equivalent POD
@@ -1640,7 +1687,7 @@ pub const ConstStore = struct {
                 },
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
-                .str => |str| if (!sameBytes(self.blobData(str), other.blobData(right.str))) return false,
+                .str => |str| if (str.capacity != right.str.capacity or !sameBytes(self.blobData(str.bytes), other.blobData(right.str.bytes))) return false,
                 .crash => |str| if (!sameBytes(self.blobData(str), other.blobData(right.crash))) return false,
                 .checked_error => |str| if (!sameBytes(self.blobData(str), other.blobData(right.checked_error))) return false,
                 .box => |payload| try pending.append(scratch, .{ .left = payload, .right = right.box }),
@@ -1650,18 +1697,19 @@ pub const ConstStore = struct {
                 },
                 .list => |list| {
                     const right_list = right.list;
-                    if (std.meta.activeTag(list) != std.meta.activeTag(right_list)) return false;
-                    switch (list) {
+                    if (list.capacity != right_list.capacity) return false;
+                    if (std.meta.activeTag(list.items) != std.meta.activeTag(right_list.items)) return false;
+                    switch (list.items) {
                         .nodes => |items| {
-                            if (items.len != right_list.nodes.len) return false;
-                            for (items, right_list.nodes) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
+                            if (items.len != right_list.items.nodes.len) return false;
+                            for (items, right_list.items.nodes) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
                         },
                         .packed_bytes => |packed_list| {
-                            const r = right_list.packed_bytes;
+                            const r = right_list.items.packed_bytes;
                             if (packed_list.len != r.len or packed_list.element != r.element or packed_list.product_width != r.product_width) return false;
                             if (!sameBytes(self.blobData(packed_list.bytes), other.blobData(r.bytes))) return false;
                         },
-                        .empty => |capacity| if (capacity != right_list.empty) return false,
+                        .empty => {},
                     }
                 },
                 inline .tuple, .record => |items, tag| {
@@ -1727,24 +1775,30 @@ pub const ConstStore = struct {
                 .pending, .zst => {},
                 .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
                 .scalar => |scalar| hashScalar(hasher, scalar),
-                inline .str, .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
+                .str => |str| {
+                    hasher.update(std.mem.asBytes(&str.capacity));
+                    hashBytes(hasher, self.blobData(str.bytes));
+                },
+                inline .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
                 .box => |payload| try pending.append(scratch, payload),
                 .nominal => |nominal| {
                     hasher.update(&context.moduleDigest(nominal.named_type.module));
                     try pending.append(scratch, nominal.backing);
                 },
-                .list => |list| switch (list) {
+                .list => |list| switch (list.items) {
                     .nodes => |items| {
+                        hasher.update(std.mem.asBytes(&list.capacity));
                         hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
                         try pending.appendSlice(scratch, items);
                     },
                     .packed_bytes => |packed_list| {
+                        hasher.update(std.mem.asBytes(&list.capacity));
                         hasher.update(std.mem.asBytes(&packed_list.len));
                         hasher.update(std.mem.asBytes(&packed_list.product_width));
                         hasher.update(if (packed_list.element) |element| @tagName(element) else "product");
                         hashBytes(hasher, self.blobData(packed_list.bytes));
                     },
-                    .empty => |capacity| hasher.update(std.mem.asBytes(&capacity)),
+                    .empty => hasher.update(std.mem.asBytes(&list.capacity)),
                 },
                 inline .tuple, .record => |items| {
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
@@ -1772,22 +1826,22 @@ pub const ConstStore = struct {
 
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
         if (@import("builtin").mode != .debug) return;
-        for (self.values.items) |value| {
+        for (self.values.items()) |value| {
             if (value == .pending) base.invariant("const store invariant violated: completed store contains a pending node", .{});
         }
-        const value_state = try self.allocator.alloc(VisitState, self.values.items.len);
+        const value_state = try self.allocator.alloc(VisitState, self.values.items().len);
         defer self.allocator.free(value_state);
         @memset(value_state, .unseen);
 
-        const fn_state = try self.allocator.alloc(VisitState, self.fns.items.len);
+        const fn_state = try self.allocator.alloc(VisitState, self.fns.items().len);
         defer self.allocator.free(fn_state);
         @memset(fn_state, .unseen);
 
-        const value_delayed_depth = try self.allocator.alloc(usize, self.values.items.len);
+        const value_delayed_depth = try self.allocator.alloc(usize, self.values.items().len);
         defer self.allocator.free(value_delayed_depth);
         @memset(value_delayed_depth, 0);
 
-        const fn_delayed_depth = try self.allocator.alloc(usize, self.fns.items.len);
+        const fn_delayed_depth = try self.allocator.alloc(usize, self.fns.items().len);
         defer self.allocator.free(fn_delayed_depth);
         @memset(fn_delayed_depth, 0);
 
@@ -1799,10 +1853,10 @@ pub const ConstStore = struct {
             .value_delayed_depth = value_delayed_depth,
             .fn_delayed_depth = fn_delayed_depth,
         };
-        for (self.values.items, 0..) |_, index| {
+        for (self.values.items(), 0..) |_, index| {
             try self.verifyGraph(&pending, states, .{ .value = .{ .id = @fromBackingInt(@intCast(@as(u32, @intCast(index)))), .delayed_depth = 0 } });
         }
-        for (self.fns.items, 0..) |_, index| {
+        for (self.fns.items(), 0..) |_, index| {
             try validateEvidenceFrames(self.allocator, self.getFn(@fromBackingInt(@intCast(@as(u32, @intCast(index))))));
             try self.verifyGraph(&pending, states, .{ .fn_value = .{ .id = @fromBackingInt(@intCast(@as(u32, @intCast(index)))), .delayed_depth = 0 } });
         }
@@ -1811,19 +1865,19 @@ pub const ConstStore = struct {
     pub fn deinit(self: *ConstStore) void {
         self.type_store.deinit();
         self.blob_index.deinit(self.allocator);
-        if (!self.serialized) {
-            self.values.deinit(self.allocator);
-            self.fns.deinit(self.allocator);
-            self.node_pool.deinit(self.allocator);
-            self.tag_name_pool.deinit(self.allocator);
-            self.capture_pool.deinit(self.allocator);
-            self.evidence_pool.deinit(self.allocator);
-            self.evidence_target_pool.deinit(self.allocator);
-            self.evidence_structural_pool.deinit(self.allocator);
-            self.evidence_frame_pool.deinit(self.allocator);
-            self.blob_backing.deinit(self.allocator);
-            self.blob_views.deinit(self.allocator);
-        }
+        // A loaded store's pools borrow the relocated buffer, and a borrowed
+        // list frees nothing.
+        self.values.deinit(self.allocator);
+        self.fns.deinit(self.allocator);
+        self.node_pool.deinit(self.allocator);
+        self.tag_name_pool.deinit(self.allocator);
+        self.capture_pool.deinit(self.allocator);
+        self.evidence_pool.deinit(self.allocator);
+        self.evidence_target_pool.deinit(self.allocator);
+        self.evidence_structural_pool.deinit(self.allocator);
+        self.evidence_frame_pool.deinit(self.allocator);
+        self.blob_backing.deinit(self.allocator);
+        self.blob_views.deinit(self.allocator);
         self.* = ConstStore.init(self.allocator);
     }
 
@@ -1859,7 +1913,7 @@ pub const ConstStore = struct {
             .exit_fn => |index| states.fn_state[index] = .done,
             .value => |node| {
                 const index = @backingInt(node.id);
-                if (index >= self.values.items.len) constStoreInvariant("completed store contains an out-of-range value id");
+                if (index >= self.values.items().len) constStoreInvariant("completed store contains an out-of-range value id");
                 switch (states.value_state[index]) {
                     .done => continue,
                     .active => {
@@ -1876,13 +1930,16 @@ pub const ConstStore = struct {
                 switch (self.get(node.id)) {
                     .pending => constStoreInvariant("completed store contains a pending node"),
                     .zst, .scalar => {},
-                    .str, .crash, .checked_error => |str| {
+                    .str => |str| {
+                        _ = self.strBytes(str.bytes);
+                    },
+                    .crash, .checked_error => |str| {
                         _ = self.strBytes(str);
                     },
                     .fn_value => |fn_id| try pending.append(self.allocator, .{ .fn_value = .{ .id = fn_id, .delayed_depth = node.delayed_depth } }),
                     .box => |child| try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } }),
                     .nominal => |nominal| try pending.append(self.allocator, .{ .value = .{ .id = nominal.backing, .delayed_depth = node.delayed_depth } }),
-                    .list => |list| switch (list) {
+                    .list => |list| switch (list.items) {
                         .nodes => |children| for (children) |child| {
                             try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
                         },
@@ -1912,7 +1969,7 @@ pub const ConstStore = struct {
             },
             .fn_value => |node| {
                 const index = @backingInt(node.id);
-                if (index >= self.fns.items.len) constStoreInvariant("completed store contains an out-of-range function id");
+                if (index >= self.fns.items().len) constStoreInvariant("completed store contains an out-of-range function id");
                 switch (states.fn_state[index]) {
                     .done => continue,
                     .active => {
@@ -1960,7 +2017,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // owns and frees the slices it hands to `append`/`appendFn`.
     const list_items = try gpa.dupe(ConstNodeId, &.{ a, b });
     defer gpa.free(list_items);
-    const list = try store.append(.{ .list = .{ .nodes = list_items } });
+    const list = try store.append(.{ .list = .{ .items = .{ .nodes = list_items }, .capacity = 8 } });
     const tag_payloads = try gpa.dupe(ConstNodeId, &.{a});
     defer gpa.free(tag_payloads);
     const tag_name = try gpa.dupe(u8, "Ok");
@@ -1970,19 +2027,19 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const sd = try store.addBlobData("hello world");
     try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
     const hello = try store.addBlobData("hello");
-    const str = try store.append(.{ .str = hello });
-    const packed_list = try store.append(.{ .list = .{ .packed_bytes = .{
+    const str = try store.append(.{ .str = .{ .bytes = hello, .capacity = 40 } });
+    const packed_list = try store.append(.{ .list = .{ .items = .{ .packed_bytes = .{
         .bytes = sd,
         .len = 11,
         .element = .u8,
-    } } });
-    const product_list = try store.append(.{ .list = .{ .packed_bytes = .{
+    } }, .capacity = 64 } });
+    const product_list = try store.append(.{ .list = .exact(.{ .packed_bytes = .{
         .bytes = try store.addBlobData("ello world"),
         .len = 2,
         .element = null,
         .product_width = 5,
-    } } });
-    const empty_list = try store.append(.{ .list = .{ .empty = 4096 } });
+    } }) });
+    const empty_list = try store.append(.{ .list = .{ .items = .empty, .capacity = 4096 } });
     // A function value with a capture (exercises capture_pool).
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const private_backing_ty = try store.type_store.append(.{ .record = .{} });
@@ -2079,20 +2136,25 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(@as(u64, 7), loaded.get(a).scalar.u64);
     try std.testing.expectEqual(@as(i32, -3), loaded.get(b).scalar.i32);
     // List range resolves to the same node ids
-    try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list.nodes);
+    try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list.items.nodes);
+    try std.testing.expectEqual(@as(u64, 8), loaded.get(list).list.capacity);
     // Tag name + payloads
     const loaded_tag = loaded.get(tag).tag;
     try std.testing.expectEqualStrings("Ok", loaded_tag.tag_name);
     try std.testing.expectEqualSlices(ConstNodeId, &.{a}, loaded_tag.payloads);
     // String backing
-    try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
-    const loaded_packed = loaded.get(packed_list).list.packed_bytes;
+    try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str.bytes));
+    try std.testing.expectEqual(@as(u64, 40), loaded.get(str).str.capacity);
+    const loaded_packed = loaded.get(packed_list).list.items.packed_bytes;
+    try std.testing.expectEqual(@as(u64, 64), loaded.get(packed_list).list.capacity);
     try std.testing.expectEqual(sd, loaded_packed.bytes);
     try std.testing.expectEqualStrings("hello world", loaded.blobData(loaded_packed.bytes));
-    const loaded_product = loaded.get(product_list).list.packed_bytes;
+    const loaded_product = loaded.get(product_list).list.items.packed_bytes;
+    try std.testing.expectEqual(@as(u64, 2), loaded.get(product_list).list.capacity);
     try std.testing.expectEqual(@as(?ConstPackedScalar, null), loaded_product.element);
     try std.testing.expectEqual(@as(u32, 5), loaded_product.byteWidth());
-    try std.testing.expectEqual(@as(u64, 4096), loaded.get(empty_list).list.empty);
+    try std.testing.expect(loaded.get(empty_list).list.items == .empty);
+    try std.testing.expectEqual(@as(u64, 4096), loaded.get(empty_list).list.capacity);
     try std.testing.expectEqual(@as(u32, 2), loaded_product.len);
     try std.testing.expectEqualStrings("ello world", loaded.blobData(loaded_product.bytes));
     // Function captures

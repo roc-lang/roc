@@ -646,6 +646,24 @@ type. You can also give reserved fields names that start with `_`, like `_reserv
 
 Only nominal records can have `_` fields.
 
+A nominal record with a `_` field can also take more fields from a type parameter:
+
+```roc
+Pad(rest) := {
+    z : U64,
+    _ : U8,
+    ..rest
+}
+```
+
+The fields you wrote come first, in the order you wrote them. The fields that `rest`
+adds come after them, sorted by name. So `Pad({ b : U64, a : U64 })` has `z` at
+offset 0, the reserved byte at offset 8, `a` at offset 16, and `b` at offset 24.
+
+The declaration can't say where fields go when it doesn't know their names. Sorting
+them by name means every use of `Pad({ b : U64, a : U64 })` agrees on one layout,
+no matter where the extra fields came from.
+
 > Note that platform authors shouldn't compute these offsets by hand. `roc glue`
 > generates host code using the exact layout the compiler chose for each target, on
 > both 32-bit and 64-bit targets.

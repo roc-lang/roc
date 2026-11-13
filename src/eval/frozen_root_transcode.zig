@@ -265,7 +265,11 @@ const Builder = struct {
         const count = if (small) raw[raw.len - 1] & ~builtins.str.RocStr.small_str_flag else self.readWord(source.offsetBy(2 * self.sourceWord()));
         const src = if (small) source else try self.pointer(source);
         const text = self.sourceBytes(src, count);
-        if (count < 3 * self.graph.word()) {
+        // The capacity the string was evaluated with travels with it. A
+        // string held inline has none of its own beyond its bytes, so it is
+        // inline on the target whenever its bytes fit there.
+        const capacity: u64 = if (small) count else builtins.str.RocStr.decodeCapacityForWidth(self.readWord(source.offsetBy(self.sourceWord())));
+        if (capacity < 3 * self.graph.word()) {
             @memcpy(self.graph.bytes(dest, count), text);
             self.graph.bytes(dest, 3 * self.graph.word())[3 * self.graph.word() - 1] = @as(u8, @intCast(count)) | builtins.str.RocStr.small_str_flag;
             return;
@@ -273,16 +277,24 @@ const Builder = struct {
         const result = try self.graph.reserveAllocation(.{ .source = src, .plan = null, .layout_idx = .str, .count = count, .kind = .string }, count, 1, false, null);
         if (result.fresh) @memcpy(self.graph.bytes(result.dest, count), text);
         try self.graph.relocate(dest, result.dest);
-        try self.graph.writeWord(dest.offsetBy(self.graph.word()), builtins.str.RocStr.encodeCapacityForWidth(count));
+        try self.graph.writeWord(dest.offsetBy(self.graph.word()), builtins.str.RocStr.encodeCapacityForWidth(capacity));
         try self.graph.writeWord(dest.offsetBy(2 * self.graph.word()), count);
     }
     fn list(self: *Builder, job: Job, sp: Program.ConstPlanId, tp: Program.ConstPlanId) Allocator.Error!void {
         const count = self.readWord(job.source.offsetBy(self.sourceWord()));
         try self.graph.writeWord(job.dest.offsetBy(self.graph.word()), count);
-        try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(count));
         const physical = self.graph.program.layouts.getLayout(job.layout_idx);
-        if (count == 0 or physical.tag == .list_of_zst) return;
         const source_physical = self.source_program.layouts.getLayout(job.source_layout);
+        // The capacity the list was evaluated with travels with it. A list
+        // of zero-sized items holds no allocation, so its capacity is a count
+        // alone, bounded by what the destination's word encodes.
+        const source_capacity = builtins.list.RocList.decodeCapacityForWidth(self.readWord(job.source.offsetBy(2 * self.sourceWord())));
+        const capacity = if (physical.tag == .list_of_zst)
+            @max(count, @min(source_capacity, (@as(u64, 1) << @intCast(8 * self.graph.word() - builtins.list.RocList.capacity_shift)) - 1))
+        else
+            source_capacity;
+        try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(capacity));
+        if (capacity == 0 or physical.tag == .list_of_zst) return;
         const sl: layout.Idx = if (source_physical.tag == .list_of_zst) .zst else source_physical.getIdx();
         const tl = physical.getIdx();
         // Zero-sized source elements have no allocation. Their destination

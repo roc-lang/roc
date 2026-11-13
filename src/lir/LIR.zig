@@ -1856,7 +1856,8 @@ pub const ProcShapes = packed struct(u16) {
     /// A checked integer division or remainder, whose divisor a value-range
     /// proof can show nonzero.
     checked_division: bool = false,
-    _padding: u1 = 0,
+    /// A local assigned a string literal.
+    str_literal: bool = false,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));

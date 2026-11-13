@@ -219,8 +219,8 @@ const MonoTestEnv = struct {
         var imported_envs_list = std.ArrayList(*const ModuleEnv).empty;
         try imported_envs_list.append(gpa, other_env.builtin_module.env);
 
-        const import_count = module_env.imports.imports.items.items.len;
-        for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
+        const import_count = module_env.imports.imports.items().len;
+        for (module_env.imports.imports.items()[0..import_count]) |str_idx| {
             const import_name = module_env.getString(str_idx);
             if (std.mem.eql(u8, import_name, other_module_name)) {
                 try imported_envs_list.append(gpa, other_env.module_env);
@@ -338,8 +338,8 @@ const MonoTestEnv = struct {
         var imported_envs_list = std.ArrayList(*const ModuleEnv).empty;
         try imported_envs_list.append(gpa, builtin_env);
 
-        const import_count = module_env.imports.imports.items.items.len;
-        for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
+        const import_count = module_env.imports.imports.items().len;
+        for (module_env.imports.imports.items()[0..import_count]) |str_idx| {
             const import_name = module_env.getString(str_idx);
             for (imports) |imp| {
                 if (std.mem.eql(u8, import_name, imp.name)) {
