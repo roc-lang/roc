@@ -40,7 +40,7 @@ const expected_node_payload_align = 4;
 const expected_node_size = 20;
 // Independent descriptor (word and payload), record-field and tag columns add
 // three 24-byte headers.
-const expected_moduleenv_size = 3232; // Includes the serialized source-digest, invoking-definitions, callable-checking-fact, checking-dependency, hosted-error origin, slot-kind, numeral-fact, interpolation-metadata, derived-map-plan, type-store widening-name, generated-codec-renaming, generated-codec-recurrence, identifier end and fingerprint, erroneous-node, selected-hoisted-root, promoted-local-procedure, platform-requirement solution and identity-variable, and exhaustiveness columns.
+const expected_moduleenv_size = 3280; // Includes the serialized source-digest, invoking-definitions, callable-checking-fact, checking-dependency, hosted-error origin, slot-kind, numeral-fact, interpolation-metadata, derived-map-plan, type-store widening-name and nominal and alias identity, generated-codec-renaming, generated-codec-recurrence, identifier end and fingerprint, erroneous-node, selected-hoisted-root, promoted-local-procedure, platform-requirement solution and identity-variable, and exhaustiveness columns.
 const expected_nodestore_size = 600; // Platform-independent size
 
 // Compile-time assertions - build will fail if sizes don't match expected values

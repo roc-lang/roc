@@ -41,7 +41,7 @@ test {
     try std.testing.expectEqual(4, @sizeOf(Descriptor.Word));
     try std.testing.expectEqual(24, @sizeOf(Descriptor.Row));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(20, @sizeOf(Alias));
+    try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
@@ -223,8 +223,10 @@ pub const Descriptor = struct {
         std.debug.assert(@sizeOf(Row) == @sizeOf(Word) + @sizeOf(Payload));
     }
 
-    /// This descriptor as a stored row.
-    pub inline fn encode(self: Descriptor) Row {
+    /// This descriptor as a stored row. A nominal type or alias stores
+    /// `identity`, the index of its identity row in its type store
+    /// (`NominalIdentity`, `AliasIdentity`); other kinds ignore it.
+    pub inline fn encode(self: Descriptor, identity: u32) Row {
         var payload: Payload = @splat(0);
         const kind: ContentKind = switch (self.content) {
             .flex => |flex| kind: {
@@ -239,10 +241,8 @@ pub const Descriptor = struct {
                 break :kind .rigid;
             },
             .alias => |alias| kind: {
-                payload[0] = alias.ident.ident_idx.denseIndex();
+                payload[0] = identity;
                 putRange(&payload, 1, alias.vars.nonempty);
-                payload[3] = @backingInt(alias.origin_module);
-                payload[4] = @bitCast(alias.source_decl);
                 break :kind .alias;
             },
             .field_presence => |presence| kind: {
@@ -269,10 +269,8 @@ pub const Descriptor = struct {
                     break :kind .tuple;
                 },
                 .nominal_type => |nominal| kind: {
-                    payload[0] = nominal.ident.ident_idx.denseIndex();
+                    payload[0] = identity;
                     putRange(&payload, 1, nominal.args);
-                    payload[3] = @backingInt(nominal.origin_module);
-                    payload[4] = @bitCast(nominal.source);
                     break :kind .nominal_type;
                 },
                 inline .fn_pure, .fn_effectful, .fn_unbound => |func, tag| kind: {
@@ -293,8 +291,10 @@ pub const Descriptor = struct {
         return .{ .word = .{ .kind = kind, .flags = self.flags, .rank = self.rank }, .payload = payload };
     }
 
-    /// The descriptor a stored row holds.
-    pub inline fn decode(row: Row) Descriptor {
+    /// The descriptor a stored row holds. `identities` is the type store
+    /// that holds the row, which gives a nominal type's or alias's identity
+    /// row by index (`nominalIdentity`, `aliasIdentity`).
+    pub inline fn decode(row: Row, identities: anytype) Descriptor {
         const p = row.payload;
         const content: Content = switch (row.word.kind) {
             .flex => .{ .flex = .{
@@ -306,12 +306,16 @@ pub const Descriptor = struct {
                 .name = Ident.Idx.fromDenseIndex(p[0]),
                 .constraints = getRange(StaticDispatchConstraint.SafeList.Range, p, 1),
             } },
-            .alias => .{ .alias = .{
-                .ident = .{ .ident_idx = Ident.Idx.fromDenseIndex(p[0]) },
-                .vars = .{ .nonempty = getRange(Var.SafeList.Range, p, 1) },
-                .origin_module = @fromBackingInt(p[3]),
-                .source_decl = @bitCast(p[4]),
-            } },
+            .alias => alias: {
+                const identity = identities.aliasIdentity(p[0]);
+                break :alias .{ .alias = .{
+                    .ident = .{ .ident_idx = identity.ident },
+                    .vars = .{ .nonempty = getRange(Var.SafeList.Range, p, 1) },
+                    .source_arg_count = identity.source_arg_count,
+                    .origin_module = identity.origin_module,
+                    .source_decl = identity.source_decl,
+                } };
+            },
             .field_presence => .{
                 .field_presence = switch (p[0]) {
                     0 => .required,
@@ -326,12 +330,15 @@ pub const Descriptor = struct {
                 .ext = @fromBackingInt(p[2]),
             } } },
             .tuple => .{ .structure = .{ .tuple = .{ .elems = getRange(Var.SafeList.Range, p, 0) } } },
-            .nominal_type => .{ .structure = .{ .nominal_type = .{
-                .ident = .{ .ident_idx = Ident.Idx.fromDenseIndex(p[0]) },
-                .args = getRange(Var.SafeList.Range, p, 1),
-                .origin_module = @fromBackingInt(p[3]),
-                .source = @bitCast(p[4]),
-            } } },
+            .nominal_type => nominal: {
+                const identity = identities.nominalIdentity(p[0]);
+                break :nominal .{ .structure = .{ .nominal_type = .{
+                    .ident = .{ .ident_idx = identity.ident },
+                    .args = getRange(Var.SafeList.Range, p, 1),
+                    .origin_module = identity.origin_module,
+                    .source = identity.source,
+                } } };
+            },
             inline .fn_pure, .fn_effectful, .fn_unbound => |tag| .{ .structure = @unionInit(FlatType, @tagName(tag), .{
                 .args = getRange(Var.SafeList.Range, p, 0),
                 .ret = @fromBackingInt(p[2]),
@@ -371,6 +378,43 @@ pub const Descriptor = struct {
                 .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => false,
             },
             .flex, .rigid, .alias, .field_presence, .err => false,
+        };
+    }
+};
+
+/// The identity of a nominal type application apart from its arguments. A
+/// type store keeps one row per distinct identity its descriptors hold
+/// (`Store.nominal_identities`), and a stored nominal descriptor names its
+/// row. Every field is compared exactly, so a row stands for exactly one
+/// combination of name, declaring module and source bits.
+pub const NominalIdentity = extern struct {
+    ident: Ident.Idx,
+    origin_module: ModuleIdentity.Idx,
+    source: NominalType.Source,
+
+    pub const SafeList = MkSafeList(@This());
+
+    pub fn of(nominal: NominalType) NominalIdentity {
+        return .{ .ident = nominal.ident.ident_idx, .origin_module = nominal.origin_module, .source = nominal.source };
+    }
+};
+
+/// The identity of an alias apart from its vars, interned like
+/// `NominalIdentity` (`Store.alias_identities`).
+pub const AliasIdentity = extern struct {
+    ident: Ident.Idx,
+    origin_module: ModuleIdentity.Idx,
+    source_decl: SourceDecl,
+    source_arg_count: u32,
+
+    pub const SafeList = MkSafeList(@This());
+
+    pub fn of(alias: Alias) AliasIdentity {
+        return .{
+            .ident = alias.ident.ident_idx,
+            .origin_module = alias.origin_module,
+            .source_decl = alias.source_decl,
+            .source_arg_count = alias.source_arg_count,
         };
     }
 };
@@ -685,11 +729,10 @@ pub const Rigid = struct {
 pub const Alias = struct {
     ident: TypeIdent,
     /// The backing var followed by the args: source arguments first, then
-    /// hidden implicit-row parameters. How many are source arguments is held
-    /// in the vars-pool slot just before this range
-    /// (`Store.aliasSourceArgCount`), so every alias is made through
-    /// `Store.mkAliasWithPackedSourceDecl`.
+    /// hidden implicit-row parameters.
     vars: Var.SafeList.NonEmptyRange,
+    /// How many of the args are source arguments.
+    source_arg_count: u32,
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
     origin_module: ModuleIdentity.Idx,

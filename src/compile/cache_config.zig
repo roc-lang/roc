@@ -371,7 +371,9 @@ pub const Constants = struct {
     /// 184: a type descriptor's rank is 16 bits.
     /// 185: a type descriptor is stored as one word of kind, flags and rank
     ///      and a payload of five words.
-    pub const CACHE_VERSION = 185;
+    /// 186: a type store interns the identities of its nominal types and
+    ///      aliases, and their descriptors name an identity row.
+    pub const CACHE_VERSION = 186;
 };
 
 /// Configuration for the Roc cache system.

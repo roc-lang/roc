@@ -61,6 +61,8 @@ const InterpolationMetadata = StaticDispatchConstraint.InterpolationMetadata;
 const NumeralInfo = types.NumeralInfo;
 const SourceDecl = types.SourceDecl;
 const DerivedMapPlan = types.DerivedMapPlan;
+const NominalIdentity = types.NominalIdentity;
+const AliasIdentity = types.AliasIdentity;
 
 /// Metadata belonging to a live union-find storage root.
 ///
@@ -258,6 +260,22 @@ pub const Store = struct {
     /// "Anonymous Structure Is Copied Per Use").
     widening_names: collections.SafeList(u64) = .{},
 
+    /// The identity of every nominal type application and alias a descriptor
+    /// of this store holds, one row per distinct identity: a stored nominal or
+    /// alias descriptor names its row (`types.Descriptor.encode`). Append-only;
+    /// a probe's rollback keeps the rows it interned, which stay valid
+    /// identities whether or not a descriptor names them.
+    nominal_identities: NominalIdentity.SafeList = .{},
+    alias_identities: AliasIdentity.SafeList = .{},
+    /// Which row holds each identity, covering the first
+    /// `nominal_identities_indexed` rows (and likewise for aliases); the rest
+    /// are indexed before the next lookup. Runtime-only: never serialized,
+    /// cloned, or relocated.
+    nominal_identity_index: std.AutoHashMapUnmanaged(NominalIdentity, u32) = .empty,
+    nominal_identities_indexed: u32 = 0,
+    alias_identity_index: std.AutoHashMapUnmanaged(AliasIdentity, u32) = .empty,
+    alias_identities_indexed: u32 = 0,
+
     /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
     /// relocated; capacity persists across instantiations until sealing.
@@ -350,10 +368,21 @@ pub const Store = struct {
     /// Relocate the self-contained type store and its explicit nominal lookup index.
     pub fn rebindSourceReferences(store: *Store, mapper: anytype) @TypeOf(mapper.*).Error!void {
         store.debugAssertUnsealed();
+        // A nominal type's or alias's source statement lives in its identity
+        // row; a defaulted field presence's default lives in its descriptor.
+        for (store.nominal_identities.items.items) |*identity| {
+            if (identity.source.present) identity.source.statement = @intCast(try mapper.node(identity.origin_module, identity.source.statement));
+        }
+        for (store.alias_identities.items.items) |*identity| {
+            if (identity.source_decl.present) identity.source_decl.statement = @intCast(try mapper.node(identity.origin_module, identity.source_decl.statement));
+        }
+        store.forgetIdentityIndexes();
         for (0..store.descs.backing.len()) |i| {
-            var desc = store.descs.get(@fromBackingInt(@intCast(i)));
+            const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(i));
+            if (store.descs.getWord(desc_idx).kind != .field_presence) continue;
+            var desc = store.descAt(desc_idx);
             try rebindSourceReferenceValue(&desc.content, mapper);
-            store.descs.set(@fromBackingInt(@intCast(i)), desc);
+            store.descs.setRow(desc_idx, store.encodeDescWithoutIdentity(desc));
         }
         for (store.nominal_decls.items.items) |*decl| try rebindSourceReferenceValue(decl, mapper);
         for (store.nominal_decl_index.items.items) |*entry| entry.statement = try mapper.node(entry.origin_module, entry.statement);
@@ -512,10 +541,7 @@ pub const Store = struct {
             live_descs.set(@backingInt(storage.desc_idx));
         }
 
-        for (self.vars.items) |*var_| {
-            if (isAliasSourceArgCountSlot(var_.*)) continue;
-            var_.* = self.representativeVar(var_.*);
-        }
+        for (self.vars.items) |*var_| var_.* = self.representativeVar(var_.*);
         for (0..self.record_fields.len()) |index| {
             var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
             field.presence.var_ = self.representativeVar(field.presence.var_);
@@ -527,7 +553,7 @@ pub const Store = struct {
         var live = live_descs.iterator(.{});
         while (live.next()) |index| {
             const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
-            var desc = self.descs.get(desc_idx);
+            var desc = self.descAt(desc_idx);
             switch (desc.content) {
                 .flex, .rigid, .alias, .field_presence, .err => continue,
                 .structure => |*flat| switch (flat.*) {
@@ -537,7 +563,7 @@ pub const Store = struct {
                     .tag_union => |*tag_union| tag_union.ext = self.representativeVar(tag_union.ext),
                 },
             }
-            self.descs.set(desc_idx, desc);
+            self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
         }
 
         var row_fields: std.ArrayListUnmanaged(RecordField) = .empty;
@@ -547,7 +573,7 @@ pub const Store = struct {
         live = live_descs.iterator(.{});
         while (live.next()) |index| {
             const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
-            var desc = self.descs.get(desc_idx);
+            var desc = self.descAt(desc_idx);
             const flat = switch (desc.content) {
                 .structure => |*flat| flat,
                 .flex, .rigid, .alias, .field_presence, .err => continue,
@@ -583,7 +609,7 @@ pub const Store = struct {
                 },
                 .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound => continue,
             }
-            self.descs.set(desc_idx, desc);
+            self.descs.setRow(desc_idx, self.encodeDescWithoutIdentity(desc));
         }
     }
 
@@ -669,6 +695,12 @@ pub const Store = struct {
         self.static_dispatch_relation_merges = .empty;
         self.static_dispatch_constraint_room.deinit(self.gpa);
         self.static_dispatch_constraint_room = .empty;
+        self.nominal_identity_index.deinit(self.gpa);
+        self.nominal_identity_index = .empty;
+        self.nominal_identities_indexed = 0;
+        self.alias_identity_index.deinit(self.gpa);
+        self.alias_identity_index = .empty;
+        self.alias_identities_indexed = 0;
     }
 
     /// Deinit the unification table
@@ -694,6 +726,8 @@ pub const Store = struct {
         self.nominal_decl_index.deinit(self.gpa);
         self.derived_map_plans.deinit(self.gpa);
         self.widening_names.deinit(self.gpa);
+        self.nominal_identities.deinit(self.gpa);
+        self.alias_identities.deinit(self.gpa);
     }
 
     /// Clone this store into fresh owned memory.
@@ -717,6 +751,8 @@ pub const Store = struct {
             .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
             .derived_map_plans = try self.derived_map_plans.clone(gpa),
             .widening_names = try self.widening_names.clone(gpa),
+            .nominal_identities = try self.nominal_identities.clone(gpa),
+            .alias_identities = try self.alias_identities.clone(gpa),
         };
     }
 
@@ -1069,7 +1105,16 @@ pub const Store = struct {
 
     /// `setDesc` without the frozen-class guard, for freezing and thawing.
     fn setDescUnguarded(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
-        const row = val.encode();
+        try self.setDescRowUnguarded(idx, try self.encodeDesc(val));
+    }
+
+    /// `setDesc` for a descriptor already encoded.
+    fn setDescRow(self: *Self, idx: DescStore.Idx, row: Desc.Row) Allocator.Error!void {
+        self.debugAssertUnfrozenWrite(idx);
+        try self.setDescRowUnguarded(idx, row);
+    }
+
+    fn setDescRowUnguarded(self: *Self, idx: DescStore.Idx, row: Desc.Row) Allocator.Error!void {
         try self.journalDescWrite(idx);
         if (self.settled_descs.contains(idx) and !DescStore.sameContent(self.descs.getRow(idx), row)) {
             self.settled_descs.clear();
@@ -1152,11 +1197,12 @@ pub const Store = struct {
             try self.setRootMeta(desc_idx, .{ .checked_var = checked_var });
             return desc_idx;
         }
+        const row = try self.encodeDesc(desc);
         const next_len = @as(usize, self.descs.backing.len()) + 1;
         try self.descs.backing.ensureTotalCapacity(self.gpa, next_len);
         try self.root_metas.ensureTotalCapacity(self.gpa, next_len);
 
-        const desc_idx = self.descs.appendAssumeCapacity(desc);
+        const desc_idx = self.descs.appendRowAssumeCapacity(row);
         const meta_idx = self.root_metas.appendAssumeCapacity(.{
             .checked_var = checked_var,
         });
@@ -1301,6 +1347,86 @@ pub const Store = struct {
         return self.root_metas.get(rootMetaIdx(desc_idx));
     }
 
+    // stored descriptors //
+
+    /// The descriptor stored at `desc_idx`.
+    inline fn descAt(self: *const Self, desc_idx: DescStore.Idx) Desc {
+        return Desc.decode(self.descs.getRow(desc_idx), self);
+    }
+
+    /// `desc` as a stored row, interning the identity of a nominal type or
+    /// alias.
+    fn encodeDesc(self: *Self, desc: Desc) Allocator.Error!Desc.Row {
+        const identity: u32 = switch (desc.content) {
+            .alias => |alias| try self.internAliasIdentity(.of(alias)),
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| try self.internNominalIdentity(.of(nominal)),
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => 0,
+            },
+            .flex, .rigid, .field_presence, .err => 0,
+        };
+        return desc.encode(identity);
+    }
+
+    /// `desc` as a stored row, for content that is neither a nominal type nor
+    /// an alias and so names no identity.
+    fn encodeDescWithoutIdentity(_: *const Self, desc: Desc) Desc.Row {
+        const kind = types.ContentKind.of(desc.content);
+        std.debug.assert(kind != .alias and kind != .nominal_type);
+        return desc.encode(0);
+    }
+
+    /// The identity row a stored nominal descriptor names.
+    pub inline fn nominalIdentity(self: *const Self, index: u32) NominalIdentity {
+        return self.nominal_identities.items.items[index];
+    }
+
+    /// The identity row a stored alias descriptor names.
+    pub inline fn aliasIdentity(self: *const Self, index: u32) AliasIdentity {
+        return self.alias_identities.items.items[index];
+    }
+
+    fn internNominalIdentity(self: *Self, identity: NominalIdentity) Allocator.Error!u32 {
+        return internIdentity(NominalIdentity, self.gpa, &self.nominal_identities, &self.nominal_identity_index, &self.nominal_identities_indexed, identity);
+    }
+
+    fn internAliasIdentity(self: *Self, identity: AliasIdentity) Allocator.Error!u32 {
+        return internIdentity(AliasIdentity, self.gpa, &self.alias_identities, &self.alias_identity_index, &self.alias_identities_indexed, identity);
+    }
+
+    /// The row holding `identity`, appending one when no row does.
+    fn internIdentity(
+        comptime Identity: type,
+        gpa: Allocator,
+        rows: *Identity.SafeList,
+        index: *std.AutoHashMapUnmanaged(Identity, u32),
+        indexed: *u32,
+        identity: Identity,
+    ) Allocator.Error!u32 {
+        const all = rows.items.items;
+        while (indexed.* < all.len) : (indexed.* += 1) {
+            const entry = try index.getOrPut(gpa, all[indexed.*]);
+            if (!entry.found_existing) entry.value_ptr.* = indexed.*;
+        }
+        const entry = try index.getOrPut(gpa, identity);
+        if (entry.found_existing) return entry.value_ptr.*;
+        errdefer _ = index.remove(identity);
+        const row: u32 = @intCast(all.len);
+        _ = try rows.append(gpa, identity);
+        entry.value_ptr.* = row;
+        indexed.* = row + 1;
+        return row;
+    }
+
+    /// Forget which row holds each identity, after the rows changed in place;
+    /// the next lookup indexes them again.
+    fn forgetIdentityIndexes(self: *Self) void {
+        self.nominal_identity_index.clearRetainingCapacity();
+        self.nominal_identities_indexed = 0;
+        self.alias_identity_index.clearRetainingCapacity();
+        self.alias_identities_indexed = 0;
+    }
+
     // fresh variables //
 
     /// Create a new unbound, flexible type variable without a name
@@ -1369,11 +1495,11 @@ pub const Store = struct {
         const desc_idx = if (self.free_descs.pop()) |freed| reused: {
             // Nothing watches or settles a freed descriptor, and no probe is
             // open, so the raw writes need no notes and no journal.
-            self.descs.set(freed, desc);
+            self.descs.setRow(freed, self.encodeDescWithoutIdentity(desc));
             self.root_metas.set(rootMetaIdx(freed), .{ .checked_var = checked_var });
             break :reused freed;
         } else appended: {
-            const appended = self.descs.appendAssumeCapacity(desc);
+            const appended = self.descs.appendRowAssumeCapacity(self.encodeDescWithoutIdentity(desc));
             const meta_idx = self.root_metas.appendAssumeCapacity(.{ .checked_var = checked_var });
             std.debug.assert(@backingInt(meta_idx) == @backingInt(appended));
             break :appended appended;
@@ -1849,9 +1975,7 @@ pub const Store = struct {
 
     /// Make alias content whose first `source_arg_count` args are source
     /// arguments and the rest hidden implicit-row parameters. Appends
-    /// `[count, backing, args...]` to the vars pool: the alias's range covers
-    /// the backing and args, and the count sits in the slot just before it
-    /// (`aliasSourceArgCount`). Every alias content is made here.
+    /// `[backing, args...]` to the vars pool as the alias's vars.
     pub fn mkAliasWithPackedSourceDecl(
         self: *Self,
         ident: TypeIdent,
@@ -1866,8 +1990,7 @@ pub const Store = struct {
         if (builtin.mode == .debug and self.sliceAliasesVars(args)) {
             base.invariant("mkAlias: argument slice aliases the var list it is appended to", .{});
         }
-        try self.vars.ensureUnusedCapacity(self.gpa, args.len + 2);
-        _ = self.vars.appendAssumeCapacity(aliasSourceArgCountSlot(source_arg_count));
+        try self.vars.ensureUnusedCapacity(self.gpa, args.len + 1);
         const backing_idx = self.vars.appendAssumeCapacity(backing_var);
         for (args) |arg| _ = self.vars.appendAssumeCapacity(arg);
 
@@ -1875,35 +1998,17 @@ pub const Store = struct {
             .alias = Alias{
                 .ident = ident,
                 .vars = .{ .nonempty = .{ .start = backing_idx, .count = @intCast(args.len + 1) } },
+                .source_arg_count = source_arg_count,
                 .origin_module = origin_module,
                 .source_decl = source_decl,
             },
         };
     }
 
-    /// The bit marking a vars-pool slot that holds an alias's source-argument
-    /// count rather than a variable. Every variable is below it (the checked
-    /// synthesized-type bit, see `representativeVar`), so a pass over the
-    /// whole pool tells the two apart.
-    const alias_source_arg_count_bit: u32 = @as(u32, 1) << 31;
-
-    fn aliasSourceArgCountSlot(source_arg_count: u32) Var {
-        std.debug.assert(source_arg_count < alias_source_arg_count_bit);
-        return @fromBackingInt(source_arg_count | alias_source_arg_count_bit);
-    }
-
-    fn isAliasSourceArgCountSlot(slot: Var) bool {
-        return @backingInt(slot) & alias_source_arg_count_bit != 0;
-    }
-
     /// How many of `alias`'s args are source arguments; the rest are hidden
     /// implicit-row parameters.
-    pub fn aliasSourceArgCount(self: *const Self, alias: Alias) u32 {
-        const start: u32 = @backingInt(alias.vars.nonempty.start);
-        std.debug.assert(start > 0);
-        const slot = self.vars.items[start - 1];
-        std.debug.assert(isAliasSourceArgCountSlot(slot));
-        return @backingInt(slot) & ~alias_source_arg_count_bit;
+    pub fn aliasSourceArgCount(_: *const Self, alias: Alias) u32 {
+        return alias.source_arg_count;
     }
 
     /// Make a nominal type application: identity plus actual type args only.
@@ -2499,7 +2604,7 @@ pub const Store = struct {
                     return .{
                         .storage_var = Self.slotIdxToVar(redirected_slot_idx),
                         .desc_idx = desc_idx,
-                        .desc = self.descs.get(desc_idx),
+                        .desc = self.descAt(desc_idx),
                         .meta = self.getRootMeta(desc_idx),
                     };
                 },
@@ -2721,7 +2826,7 @@ pub const Store = struct {
         const settled_before = self.settled_descs.list.items.len;
         const a_settled = self.settled_descs.contains(a_data.desc_idx);
         const b_settled = self.settled_descs.contains(b_data.desc_idx);
-        const merged_row = merged_desc.encode();
+        const merged_row = try self.encodeDesc(merged_desc);
         const a_kept = DescStore.sameContent(self.descs.getRow(a_data.desc_idx), merged_row);
         const b_kept = DescStore.sameContent(self.descs.getRow(b_data.desc_idx), merged_row);
         if (a_settled and !a_kept) self.settled_descs.clear();
@@ -2899,7 +3004,7 @@ pub const Store = struct {
     /// Get the descriptor for the provided idx
     /// Used in tests
     pub fn getDesc(self: *Self, desc_idx: DescStore.Idx) Desc {
-        return self.descs.get(desc_idx);
+        return self.descAt(desc_idx);
     }
 
     const Error = error{VarNotRoot};
@@ -2911,7 +3016,7 @@ pub const Store = struct {
         const slot = self.slots.get(Self.varToSlotIdx(var_));
         switch (slot) {
             .root => |desc_idx| {
-                var desc = self.descs.get(desc_idx);
+                var desc = self.descAt(desc_idx);
                 self.noteContentRewrite(desc.content);
                 desc.content = content;
                 try self.setDesc(desc_idx, desc);
@@ -2961,6 +3066,8 @@ pub const Store = struct {
         nominal_decl_index: NominalDeclIndexEntry.SafeList.Serialized,
         derived_map_plans: DerivedMapPlanEntry.SafeList.Serialized,
         widening_names: collections.SafeList(u64).Serialized,
+        nominal_identities: NominalIdentity.SafeList.Serialized,
+        alias_identities: AliasIdentity.SafeList.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -2985,6 +3092,8 @@ pub const Store = struct {
             try self.nominal_decl_index.serialize(&store.nominal_decl_index, allocator, writer);
             try self.derived_map_plans.serialize(&store.derived_map_plans, allocator, writer);
             try self.widening_names.serialize(&store.widening_names, allocator, writer);
+            try self.nominal_identities.serialize(&store.nominal_identities, allocator, writer);
+            try self.alias_identities.serialize(&store.alias_identities, allocator, writer);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -3015,6 +3124,8 @@ pub const Store = struct {
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
                 .derived_map_plans = self.derived_map_plans.deserializeInto(base_addr),
                 .widening_names = self.widening_names.deserializeInto(base_addr),
+                .nominal_identities = self.nominal_identities.deserializeInto(base_addr),
+                .alias_identities = self.alias_identities.deserializeInto(base_addr),
             };
         }
 
@@ -3055,6 +3166,8 @@ pub const Store = struct {
             store.nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa);
             store.derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa);
             store.widening_names = try self.widening_names.deserializeWithCopy(base_addr, gpa);
+            store.nominal_identities = try self.nominal_identities.deserializeWithCopy(base_addr, gpa);
+            store.alias_identities = try self.alias_identities.deserializeWithCopy(base_addr, gpa);
             store.invalid_nominal_decl_written = false;
             for (store.nominal_decls.items.items) |decl| store.noteNominalDeclWrite(decl);
             return store;
@@ -3272,28 +3385,11 @@ const DescStore = struct {
         }
     };
 
-    /// Insert a value into the store
-    fn insert(self: *Self, gpa: Allocator, typ: Desc) std.mem.Allocator.Error!Idx {
-        try self.backing.ensureUnusedCapacity(gpa, 1);
-        return self.appendAssumeCapacity(typ);
-    }
-
-    /// Appends a value to the store assuming there is capacity
-    fn appendAssumeCapacity(self: *Self, typ: Desc) Idx {
-        const row = typ.encode();
+    /// Append a stored row, assuming there is capacity.
+    fn appendRowAssumeCapacity(self: *Self, row: Desc.Row) Idx {
         if (row.word.kind == .err) self.err_written = true;
         const safe_idx = self.backing.appendAssumeCapacity(row);
         return @fromBackingInt(@intCast(@backingInt(safe_idx)));
-    }
-
-    /// Set a value in the store
-    fn set(self: *Self, idx: Idx, val: Desc) void {
-        self.setRow(idx, val.encode());
-    }
-
-    /// Get a value from the store
-    inline fn get(self: *const Self, idx: Idx) Desc {
-        return Desc.decode(self.getRow(idx));
     }
 
     /// The stored row of descriptor `idx`.
@@ -4845,8 +4941,11 @@ test "DescStore.Serialized roundtrip" {
         .rank = Rank.outermost,
     };
 
-    const desc_idx_1 = try desc_store.insert(gpa, desc1);
-    const desc_idx_2 = try desc_store.insert(gpa, desc2);
+    const row1 = desc1.encode(0);
+    const row2 = desc2.encode(0);
+    try desc_store.backing.ensureUnusedCapacity(gpa, 2);
+    const desc_idx_1 = desc_store.appendRowAssumeCapacity(row1);
+    const desc_idx_2 = desc_store.appendRowAssumeCapacity(row2);
 
     // Create temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -4884,8 +4983,8 @@ test "DescStore.Serialized roundtrip" {
 
     // Verify using captured indices
     try std.testing.expectEqual(@as(usize, 2), deserialized.backing.len());
-    try std.testing.expectEqual(desc1, deserialized.get(desc_idx_1));
-    try std.testing.expectEqual(desc2, deserialized.get(desc_idx_2));
+    try std.testing.expectEqual(row1, deserialized.getRow(desc_idx_1));
+    try std.testing.expectEqual(row2, deserialized.getRow(desc_idx_2));
 }
 
 test "Store.Serialized roundtrip" {
