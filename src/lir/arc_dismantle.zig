@@ -363,6 +363,15 @@ pub const Dismantles = struct {
     /// `operand_takes` on containers solved borrowed, valid only in
     /// emissions whose demand vector overrides the root to owned.
     owned_only_operand_takes: std.AutoHashMapUnmanaged(CallArg, Take) = .empty,
+    /// Whole moves of a container that is read again afterwards: an owned
+    /// direct-call position, keyed by the call and the argument position, or
+    /// an owned same-value binding, keyed by the binding at position zero.
+    /// The mask names the container's fields nothing observes after the
+    /// statement on any path. When emission retains the container for such
+    /// a move, the container releases those fields of its own unit before
+    /// the receiver runs, so the receiver holds their only unit, and keeps
+    /// the rest as its residual.
+    whole_move_residuals: std.AutoHashMapUnmanaged(CallArg, Take) = .empty,
     /// Exact field-place destinations for outcome-conditioned argument
     /// restitution. Entries exist only when the projection binding has no
     /// operand use other than this call and the call result has the closed,
@@ -393,6 +402,7 @@ pub const Dismantles = struct {
         self.field_restitution_args.deinit(gpa);
         self.operand_takes.deinit(gpa);
         self.owned_only_operand_takes.deinit(gpa);
+        self.whole_move_residuals.deinit(gpa);
         self.projection_units.deinit();
         self.complete_takes.deinit();
         self.projection_aliases.deinit();
@@ -416,6 +426,11 @@ pub const Dismantles = struct {
     pub fn ownedOnlyOperandTake(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?Take {
         if (position > std.math.maxInt(u8)) return null;
         return self.owned_only_operand_takes.get(.{ .stmt = stmt, .position = @intCast(position) });
+    }
+
+    pub fn wholeMoveResidualAt(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?Take {
+        if (position > std.math.maxInt(u8)) return null;
+        return self.whole_move_residuals.get(.{ .stmt = stmt, .position = @intCast(position) });
     }
 
     pub fn containerOf(self: *const Dismantles, local: LIR.LocalId) ?Container {
@@ -569,6 +584,12 @@ const Candidate = struct {
     /// stay valid as long as no whole use can run after a take, which the
     /// dataflow checks exactly like a borrow of every field at once.
     whole_uses: std.ArrayList(LIR.CFStmtId) = .empty,
+    /// Call and low-level results solved borrowed from the container as one
+    /// value: a callee lending a parameter back, a borrowed low-level
+    /// result. Such a result may read any of the container's stored units,
+    /// so every mention of it, and of anything borrowed onward from it,
+    /// observes every field.
+    lent_results: std.ArrayList(LIR.LocalId) = .empty,
     /// Length of `reads` as classification left it. Solving appends the
     /// deferred reads whose representatives committed no plan, and truncates
     /// back first, so a recursive call-graph component can solve its
@@ -643,6 +664,7 @@ const Analysis = struct {
             candidate.equivalenced_reads.deinit(self.gpa);
             candidate.join_starts.deinit(self.gpa);
             candidate.whole_uses.deinit(self.gpa);
+            candidate.lent_results.deinit(self.gpa);
         }
         self.candidates.deinit(self.gpa);
         var view_it = self.view_candidates.valueIterator();
@@ -651,6 +673,7 @@ const Analysis = struct {
             candidate.equivalenced_reads.deinit(self.gpa);
             candidate.join_starts.deinit(self.gpa);
             candidate.whole_uses.deinit(self.gpa);
+            candidate.lent_results.deinit(self.gpa);
         }
         self.view_candidates.deinit(self.gpa);
         self.union_roots.deinit(self.gpa);
@@ -772,6 +795,17 @@ const Analysis = struct {
         const root = self.resolveRoot(local);
         const candidate = (try self.entryOf(root)) orelse return;
         try candidate.whole_uses.append(self.gpa, stmt);
+    }
+
+    /// Records a call or low-level result solved borrowed from a container
+    /// as one value. A result borrowed from a view or from a field read's
+    /// binding is a member of that read's borrow forest instead.
+    fn noteLentResult(self: *Analysis, target: LIR.LocalId) Error!void {
+        if (!self.rc_local[@backingInt(target)] or !self.solution.isBorrowed(target)) return;
+        const lender = self.solution.borrowSourceOf(target) orelse return;
+        const root = self.solution.unitLocalOf(lender);
+        const candidate = (try self.entryOf(root)) orelse return;
+        try candidate.lent_results.append(self.gpa, target);
     }
 
     /// The tag-union root a local's ownership unit belongs to, when that root
@@ -1617,6 +1651,66 @@ const ReadKind = struct {
     site: bool = false,
 };
 
+/// A statement that gives a receiver one unit of every field of the
+/// container being solved: an owned direct-call position, or an owned
+/// same-value binding (at position zero).
+const WholeMoveSite = struct {
+    stmt: LIR.CFStmtId,
+    /// The statement after it.
+    next: LIR.CFStmtId,
+    position: u8,
+    /// The container's fields nothing observes after the statement.
+    mask: u64 = 0,
+};
+
+/// Whether `operand` is the container `local` as one value: the container
+/// itself or a borrowed pure same-value alias of it. A view container is
+/// named by every local of its view.
+fn namesContainer(analysis: *const Analysis, local: LIR.LocalId, view: bool, operand: LIR.LocalId) bool {
+    if (operand == local) return true;
+    const index = @backingInt(operand);
+    return switch (analysis.state[index]) {
+        .transparent_alias => !view and analysis.alias_root[index] == @backingInt(local),
+        .view => view and analysis.view_head[index] == @backingInt(local),
+        .unknown, .ineligible, .candidate => false,
+    };
+}
+
+/// The whole move `stmt_id` makes of the container `local`, if any: a direct
+/// call that receives it under an owned parameter of the callee's solved
+/// signature, when exactly one argument names the container, or an owned
+/// same-value binding of it.
+fn wholeMoveSite(
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    analysis: *const Analysis,
+    local: LIR.LocalId,
+    view: bool,
+    stmt_id: LIR.CFStmtId,
+) ?WholeMoveSite {
+    const whole_use = store.getCFStmtImmediate(stmt_id);
+    if (whole_use.* == .assign_ref) {
+        const bind = whole_use.assign_ref;
+        if (bind.op.kind != .local or bind.target == local or solution.isBorrowed(bind.target)) return null;
+        if (!namesContainer(analysis, local, view, bind.op.source)) return null;
+        return .{ .stmt = stmt_id, .next = bind.next, .position = 0 };
+    }
+    if (whole_use.* != .assign_call) return null;
+    const stmt = whole_use.assign_call;
+    if (stmt.target == local) return null;
+    const args = store.getLocalSpan(stmt.args);
+    const sig = solution.sigOf(stmt.proc);
+    var found: ?WholeMoveSite = null;
+    for (0..GuardedList.borrowLen(args)) |position| {
+        const arg = GuardedList.at(args, position);
+        if (!namesContainer(analysis, local, view, arg)) continue;
+        if (found != null or position >= arc_sig.tracked_param_count) return null;
+        if (sig.paramMode(position) != .owned) return null;
+        found = .{ .stmt = stmt_id, .next = stmt.next, .position = @intCast(position) };
+    }
+    return found;
+}
+
 const OperandSite = struct {
     stmt: LIR.CFStmtId,
     /// The statement after the operand's.
@@ -2314,6 +2408,7 @@ fn classifyStatement(
                 }
                 try analysis.useWholeAt(arg, current);
             }
+            try analysis.noteLentResult(stmt.target);
             try analysis.noteDef(stmt.target, current);
         },
         .assign_call_erased => |inline_stmt| {
@@ -2336,6 +2431,7 @@ fn classifyStatement(
                 const arg = GuardedList.at(args, i);
                 try analysis.useWholeAt(arg, current);
             }
+            try analysis.noteLentResult(stmt.target);
             try analysis.noteDef(stmt.target, current);
         },
         .assign_list => |stmt| {
@@ -3635,6 +3731,8 @@ pub fn compute(
     defer forward_scratch.deinit(gpa);
     var operand_sites = std.ArrayList(OperandSite).empty;
     defer operand_sites.deinit(gpa);
+    var whole_move_sites = std.ArrayList(WholeMoveSite).empty;
+    defer whole_move_sites.deinit(gpa);
     // Per read of the container being solved: whether it defines a view whose
     // borrow forest has a consuming operand (see `operandSiteUse`).
     var view_demand = std.ArrayList(bool).empty;
@@ -3856,6 +3954,7 @@ pub fn compute(
         restitution: CallArg,
         operand_take: CallArg,
         owned_only_operand_take: CallArg,
+        whole_move_residual: CallArg,
         container: LIR.LocalId,
         owned_only_container: LIR.LocalId,
         path_take: LIR.LocalId,
@@ -3961,6 +4060,7 @@ pub fn compute(
                         .restitution => |call_arg| _ = result.field_restitution_args.remove(call_arg),
                         .operand_take => |call_arg| _ = result.operand_takes.remove(call_arg),
                         .owned_only_operand_take => |call_arg| _ = result.owned_only_operand_takes.remove(call_arg),
+                        .whole_move_residual => |call_arg| _ = result.whole_move_residuals.remove(call_arg),
                         .container => |local| _ = result.containers.remove(local),
                         .owned_only_container => |local| _ = result.owned_only_containers.remove(local),
                         .path_take => |local| path_takes.unmark(local),
@@ -4123,6 +4223,24 @@ pub fn compute(
                     try view_demand.append(gpa, demanded);
                 }
                 declined_takes.clearRetainingCapacity();
+                // An owned call position or owned same-value binding that
+                // receives the container whole while it is read again
+                // afterwards leaves the container holding a unit of every
+                // field. The fields nothing observes afterwards are dead in
+                // that unit there, so the container can release them at
+                // once and the receiver then holds their only unit. A
+                // payload view addresses its union's unit instead.
+                whole_move_sites.clearRetainingCapacity();
+                if (union_root == null) {
+                    for (candidate.whole_uses.items) |stmt| {
+                        if (wholeMoveSite(store, solution, &analysis, local, entry.view, stmt)) |site| try whole_move_sites.append(gpa, site);
+                    }
+                }
+                // A read of the container's scalar bytes observes no stored
+                // unit, but it keeps the container read after a whole move.
+                // With a mask bit to spare, such reads are observed under
+                // it; without one, every whole move counts as read again.
+                const shell_bit: u64 = if (whole_move_sites.items.len != 0 and pieces.items.len < 64) @as(u64, 1) << 63 else 0;
                 var ret_must: u64 = ~@as(u64, 0);
                 var saw_ret = false;
                 const taken_mask: u64 = attempt: while (true) {
@@ -4141,8 +4259,12 @@ pub fn compute(
                     deferred_takes.clearRetainingCapacity();
                     read_kinds.clearRetainingCapacity();
                     field_restitutions.clearRetainingCapacity();
+                    for (whole_move_sites.items) |*site| site.mask = 0;
                     for (candidate.reads.items, read_masks.items, 0..) |read, bit, read_index| {
-                        if (bit == 0) continue;
+                        if (bit == 0) {
+                            if (shell_bit != 0) try read_kinds.put(read.stmt, .{ .bit = shell_bit, .consuming = false });
+                            continue;
+                        }
                         if (readsThroughHeldView(&analysis, &held_views, read.through, reads_stop)) continue;
                         const target_index = @backingInt(read.target);
                         // A borrowed binding holds no unit of its own, so its read
@@ -4202,6 +4324,22 @@ pub fn compute(
                             slot.value_ptr.consuming = false;
                         } else {
                             slot.value_ptr.* = .{ .bit = ~@as(u64, 0), .consuming = false };
+                        }
+                    }
+                    // A result lent by the container as one value reads stored
+                    // units the lender does not name, so each mention of it, and
+                    // of every binding borrowed onward from it, is a borrow of
+                    // every field at once, exactly like a whole use.
+                    for (candidate.lent_results.items) |lent| {
+                        try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, @backingInt(lent));
+                        for (forest.items) |borrower| {
+                            forest_mark[borrower] = false;
+                            var mention = analysis.mention_heads[borrower];
+                            while (mention != no_index) {
+                                const edge = analysis.mention_edges.items[mention];
+                                mention = edge.next;
+                                try read_kinds.put(@fromBackingInt(@intCast(edge.stmt)), .{ .bit = ~@as(u64, 0), .consuming = false });
+                            }
                         }
                     }
                     // A borrowed field read binds a name that reads the field's stored
@@ -4273,7 +4411,7 @@ pub fn compute(
                     ret_must = ~@as(u64, 0);
                     saw_ret = false;
                     const solved_mask: u64 = solve: {
-                        if (candidate_mask == 0) break :solve 0;
+                        if (candidate_mask == 0 and whole_move_sites.items.len == 0) break :solve 0;
                         var poison: u64 = 0;
                         // A borrowed payload view supplies no unit of its own. Only producing
                         // its union root again restores fresh fields across a loop back edge;
@@ -4301,7 +4439,15 @@ pub fn compute(
                         while (demoted_it.next()) |kind| {
                             if (kind.consuming) candidate_mask |= kind.bit;
                         }
-                        if (candidate_mask == 0) break :solve 0;
+                        var whole_move_mask: u64 = 0;
+                        for (whole_move_sites.items) |*site| {
+                            // A container nothing reads after the move is
+                            // not retained for it: its whole unit moves.
+                            const observed = future_fields.observed(site.next);
+                            site.mask = if (observed == 0 and shell_bit != 0) 0 else rc_mask & ~observed;
+                            whole_move_mask |= site.mask;
+                        }
+                        if (candidate_mask == 0 and whole_move_mask == 0) break :solve 0;
                         body_states.clearRetainingCapacity();
                         flow_frames.clearRetainingCapacity();
                         try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0 } });
@@ -4433,6 +4579,13 @@ pub fn compute(
                         }
 
                         poison |= forced_poison;
+                        // A call the flow never reached sits outside the
+                        // verified region, and a poisoned field keeps its
+                        // ordinary retain and residual release.
+                        for (whole_move_sites.items) |*site| {
+                            const kind = read_kinds.get(site.stmt) orelse dismantleInvariant("ARC dismantle lost a whole use's observation");
+                            site.mask = if (kind.visited) site.mask & ~poison else 0;
+                        }
                         break :solve candidate_mask & ~poison;
                     };
                     // An owned-demanded read whose binding stays borrowed is no take,
@@ -4448,7 +4601,9 @@ pub fn compute(
                     }
                     if (!declined_any) break :attempt solved_mask;
                 };
-                if (taken_mask == 0) continue;
+                var whole_move_mask: u64 = 0;
+                for (whole_move_sites.items) |site| whole_move_mask |= site.mask;
+                if (taken_mask == 0 and whole_move_mask == 0) continue;
 
                 // Accepted. The committed field-place domain is the layout's
                 // refcounted slots. ARC owns the path-sensitive residual mask
@@ -4466,6 +4621,11 @@ pub fn compute(
                     !result.take_bindings[candidate_index]
                 else
                     solution.isBorrowed(activation_root) and union_root == null;
+                // A container nothing takes from dismantles for its whole
+                // moves alone only when it holds its unit in every emission:
+                // a borrowed parameter would otherwise gain an owned variant
+                // whose one difference is where a retained unit is released.
+                if (taken_mask == 0 and owned_only) continue;
                 // A parameter whose every stored unit is taken on every
                 // returning path: borrowing it saves no caller any work.
                 if (owned_only and !entry.view and !projected and is_param[candidate_index] and
@@ -4600,6 +4760,12 @@ pub fn compute(
                 } else {
                     try result.containers.put(local, .{ .layout_idx = local_layout_idx, .pieces = stored_pieces, .full_mask = rc_mask });
                     try undo.append(gpa, .{ .container = local });
+                }
+                for (whole_move_sites.items) |site| {
+                    if (site.mask == 0) continue;
+                    const key = CallArg{ .stmt = site.stmt, .position = site.position };
+                    try result.whole_move_residuals.put(gpa, key, .{ .root = local, .field_mask = site.mask });
+                    try undo.append(gpa, .{ .whole_move_residual = key });
                 }
             }
 

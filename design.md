@@ -23232,7 +23232,11 @@ lent from it). Every operand mention of any of those bindings other than a
 use-point take candidate is therefore a borrow observation of the field at
 that statement, so a take the mention could follow is rejected exactly like a
 borrowing read placed there. Binding an owned alias of one of them is such a
-mention, since the alias retains through it. An explicit outcome field
+mention, since the alias retains through it. A call or low-level result
+anchored as a borrow of the container itself, such as the list a callee lends
+back out of a record it was passed, reads stored units no field read names,
+so every operand mention of it, and of every binding borrowed onward from it,
+is a borrow observation of every field. An explicit outcome field
 receipt changes the matching edge state from taken back to available before
 that edge is walked. An explicit join-cell reinitialization starts a new
 definition after observing its value operand and clears that definition's
@@ -23243,12 +23247,55 @@ residual masks; the ARC join equations below normalize their exact
 differences. A read the flow never reaches keeps its field residual. A field that fails
 any rule simply stays residual—its reads keep their retains and its stored
 unit is released at the death point—and a container whose take set comes
-out empty keeps today's whole release exactly.
+out empty, and whose whole moves give nothing up, keeps today's whole release
+exactly.
 
-Emission changes in exactly two places. A take emits no retain at its read or
+A whole use can give fields up too. An owned direct-call position, or an owned
+same-value binding, that receives the container while the container is read
+again afterwards cannot move it: the receiver gets a retained unit of every
+field and the container keeps its own. A field of the container's unit that
+nothing observes after that statement is dead there, but left to the
+container's ordinary release it stays shared until the container's last read,
+and the receiver copies a list only it uses: `a2 = push_a(s, 3)` followed by a
+read of `s.b` appends to a copy of `s.a`. Each such statement is a whole-move
+site, and its mask is the container's fields with no later observation on any
+path: no field read, no mention of a borrowed read's forest or of a lent
+result, no other whole use. The mask comes from the same backward observation
+solution that demotes takes, so a site in a loop that does not re-run the
+container's definition observes itself and gives nothing up, and a field read
+again after the call stays shared, as it must. A container with no
+observation after the site is not retained for it and has no site. A read of
+the container's scalar bytes observes no stored unit, but it does keep the
+container read; such reads are observed under one spare mask bit, so a
+container read only for a number afterwards still gives up every stored
+field, and a container whose pieces fill the mask treats every site as read
+again. Sites are solved for struct containers, held views and projected
+containers alike. A tag union's payload view has none. A container nothing
+takes from commits a plan for its sites alone only when it holds its unit in
+every emission: a borrowed parameter would otherwise earn an owned variant
+whose one difference is where a retained unit is released. Aggregate and
+low-level operands reach this rule through the owned binding lowering gives
+them; a borrowed operand retained directly at such a position keeps its whole
+retain.
+
+Emission applies a site only where it actually retains: the container is in
+the path state with every field, the call does not replace the frame, no
+outcome receipt covers the position, and no other operand of the statement
+lends the same value, since the callee could release its unit of a field while
+that operand still reads it. Emission then pays the ordinary whole retain,
+releases the masked fields from the container's own unit before the receiver
+runs, and continues with the remaining fields as the container's residual.
+The RC statements are the ones the container's death would have emitted for
+those fields; only their position changes, from after the receiver to before
+it. The certifier needs no rule for it: a retained aggregate that dismantles
+one unit while an intact surplus unit is consumed whole is a form it already
+certifies.
+
+Emission changes in exactly three places. A take emits no retain at its read or
 operand: the value's unit is the container's stored unit for that field,
 moved rather than duplicated. A use-point operand whose path no longer holds
-the field retains instead. The container's release becomes its dismantling: at the
+the field retains instead. A whole-move site that retains releases its masked
+fields right after the retain. The container's release becomes its dismantling: at the
 point its whole-value `decref` would have been placed, emission instead reads
 each refcounted field that was not taken into a fresh temporary and releases
 that temporary, using the field layout's helper and the container's
@@ -23347,6 +23394,9 @@ or source names:
   unchanged
 - a whole move, whole release, call argument, aggregate insertion, or return
   requires `R(a) = F(a)`; it removes the aggregate resource exactly as before
+- a retained whole move at a committed whole-move site with mask `D` requires
+  `R(a) = F(a)`, gives the receiver a retained unit of every field, dismantles
+  `D` before the receiver runs, and leaves `R'(a) = F(a) - D`
 - dismantling a residual `S` emits one field read and release for every
   `f in S`, then leaves `R'(a) = empty`
 - rebinding a name first settles its exact residual state; it cannot silently

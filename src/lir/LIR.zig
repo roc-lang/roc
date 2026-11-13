@@ -370,6 +370,9 @@ pub const RcReason = enum(u8) {
     /// `ArcPlanStep.pre_release_extra` (`releaseTailCallerFrame`): owned state
     /// of a frame that a tail call replaces.
     tail_call_frame,
+    /// `ArcPlanStep.pre_release_extra` (`wholeMoveResidual`): the fields of a
+    /// retained aggregate that nothing reads after the call it is moved into.
+    moved_aggregate_dead_fields,
     /// Closure released after a call that did not reuse it (`reuse_closure`
     /// false).
     closure_after_call,

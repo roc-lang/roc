@@ -896,6 +896,7 @@ const ArcLaneScratch = struct {
     deaths: std.ArrayList(ReleaseDecision) = .empty,
     transfer_positions: std.ArrayList(u32) = .empty,
     retain_args: std.ArrayList(LIR.LocalId) = .empty,
+    moved_residuals: std.ArrayList(ReleaseDecision) = .empty,
     dismantle_temps: std.ArrayList(LIR.LocalId) = .empty,
     dyn_operands: std.ArrayList(LIR.LocalId) = .empty,
 
@@ -911,6 +912,7 @@ const ArcLaneScratch = struct {
         self.deaths.deinit(self.allocator);
         self.transfer_positions.deinit(self.allocator);
         self.retain_args.deinit(self.allocator);
+        self.moved_residuals.deinit(self.allocator);
         self.dismantle_temps.deinit(self.allocator);
         self.dyn_operands.deinit(self.allocator);
     }
@@ -920,6 +922,7 @@ const ArcLaneScratch = struct {
         self.deaths.clearRetainingCapacity();
         self.transfer_positions.clearRetainingCapacity();
         self.retain_args.clearRetainingCapacity();
+        self.moved_residuals.clearRetainingCapacity();
         self.dismantle_temps.clearRetainingCapacity();
         self.dyn_operands.clearRetainingCapacity();
     }
@@ -1892,6 +1895,7 @@ const Inserter = struct {
     death_scratch: *std.ArrayList(ReleaseDecision) = undefined,
     transfer_position_scratch: *std.ArrayList(u32) = undefined,
     retain_arg_scratch: *std.ArrayList(LIR.LocalId) = undefined,
+    moved_residual_scratch: *std.ArrayList(ReleaseDecision) = undefined,
     dyn_operand_scratch: *std.ArrayList(LIR.LocalId) = undefined,
     lane_allocator: Allocator = undefined,
     /// Storage that dies when the current ARC task callback returns.
@@ -1899,6 +1903,9 @@ const Inserter = struct {
 
     const CallArgOwnership = struct {
         retain_args: []const LIR.LocalId = &.{},
+        /// Fields of retained aggregate arguments that nothing reads after
+        /// the call, released from the caller's unit before it.
+        moved_residuals: []const ReleaseDecision = &.{},
         /// Ownership vector the call site demands; differs from the callee's
         /// solved signature only when borrowed positions upgrade to moves.
         demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
@@ -1940,6 +1947,7 @@ const Inserter = struct {
         self.death_scratch = &env.lane.deaths;
         self.transfer_position_scratch = &env.lane.transfer_positions;
         self.retain_arg_scratch = &env.lane.retain_args;
+        self.moved_residual_scratch = &env.lane.moved_residuals;
         self.dyn_operand_scratch = &env.lane.dyn_operands;
         self.dismantle_temps = &env.lane.dismantle_temps;
         self.lane_allocator = env.lane.allocator;
@@ -2720,6 +2728,7 @@ const Inserter = struct {
                     var transfer = AliasBindTransfer{ .retain_target = true, .release_old_target = false };
                     const complete_take_root = self.dismantles.completeTakeRoot(segment.cursor);
                     var complete_moved_root = false;
+                    var moved_residual: ?ReleaseDecision = null;
                     if (self.isBindingBorrowed(assign.target)) {
                         transfer.retain_target = false;
                     } else if (complete_take_root) |root| {
@@ -2737,6 +2746,12 @@ const Inserter = struct {
                             .local => {
                                 if (assign.target != assign.op.source) {
                                     transfer = try self.transferForAliasBind(&segment.owned, assign.target, assign.op.source, assign.next);
+                                    // An owned binding that retains its
+                                    // source holds a unit of every field,
+                                    // and so does the source.
+                                    if (transfer.retain_target) {
+                                        moved_residual = try self.wholeMoveResidual(&segment.owned, segment.cursor, 0, &[_]LIR.LocalId{assign.op.source}, assign.op.source);
+                                    }
                                 } else {
                                     transfer.retain_target = false;
                                 }
@@ -2776,7 +2791,10 @@ const Inserter = struct {
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.retain_assign_ref_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ body_clone.refOpSource(assign.op), assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
+                    self.death_scratch.clearRetainingCapacity();
+                    if (moved_residual) |release| try self.death_scratch.append(self.lane_allocator, release);
+                    try self.postStmtDeaths(&segment.owned, &singles, null, assign.next, self.death_scratch);
+                    try self.copyDeathScratchToStep(step);
                 },
                 .dyn => |dyn_stmt| try self.planDynStmt(segment, dyn_stmt),
                 .init_uninitialized => |uninit| {
@@ -2796,6 +2814,10 @@ const Inserter = struct {
                     const transfer = try self.transferForCall(&segment.owned, segment.cursor, tail_call, assign.proc, self.solution.sigOf(assign.proc), unique_demand, assign.args, assign.next, assign.target, null);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     for (transfer.args.retain_args) |arg| try self.appendStepRetain(step, .{ .local = arg, .reason = .owned_param_demand });
+                    if (transfer.args.moved_residuals.len != 0) {
+                        try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, transfer.args.moved_residuals);
+                        step.pre_release_extra_reason = .moved_aggregate_dead_fields;
+                    }
                     step.retain_call_result = transfer.retain_call_result;
                     step.call_callee = assign.proc;
                     step.call_demanded = transfer.args.demanded;
@@ -6302,6 +6324,7 @@ const Inserter = struct {
         target: LIR.LocalId,
     ) ResourceError!CallArgOwnership {
         self.retain_arg_scratch.clearRetainingCapacity();
+        self.moved_residual_scratch.clearRetainingCapacity();
         var demanded = callee_sig;
         const locals = self.store.getLocalSpan(span);
         // A call across emission units adapts to the callee's base signature
@@ -6551,6 +6574,13 @@ const Inserter = struct {
                 try owned.unset(owner);
             } else {
                 try self.retain_arg_scratch.append(self.lane_allocator, local);
+                if (call_stmt) |stmt_id| {
+                    if (tail_call == null and restitution == null and field_receipt == null and root_receipt == null) {
+                        if (try self.wholeMoveResidual(owned, stmt_id, position, locals, local)) |release| {
+                            try self.moved_residual_scratch.append(self.lane_allocator, release);
+                        }
+                    }
+                }
             }
         }
 
@@ -6560,6 +6590,7 @@ const Inserter = struct {
 
         return .{
             .retain_args = self.retain_arg_scratch.items,
+            .moved_residuals = self.moved_residual_scratch.items,
             .demanded = demanded,
         };
     }
@@ -7266,6 +7297,34 @@ const Inserter = struct {
             if (self.owned_binding_override.contains(take.root)) return take;
         }
         return null;
+    }
+
+    /// A retained aggregate argument of an owned call position gives the
+    /// callee one unit of every field and leaves the caller's unit intact.
+    /// The fields of that unit that nothing reads after the call are dead at
+    /// the call, so they are released before it rather than at the
+    /// aggregate's last read: the callee then holds their only unit. Returns
+    /// that release and removes the fields from the aggregate's residual mask,
+    /// or null when the operand keeps its ordinary whole retain.
+    fn wholeMoveResidual(
+        self: *Inserter,
+        owned: *OwnedSet,
+        stmt: LIR.CFStmtId,
+        position: usize,
+        locals: anytype,
+        local: LIR.LocalId,
+    ) ResourceError!?ReleaseDecision {
+        const plan = self.dismantles.wholeMoveResidualAt(stmt, position) orelse return null;
+        const root = self.unitOf(plan.root);
+        if (root != self.unitOf(local)) return null;
+        if (!owned.contains(root)) return null;
+        const container = self.dismantleFor(root) orelse return null;
+        // Another position lending the same value reads the callee's unit
+        // of these fields, which the callee may release first.
+        if (self.groupSharesOtherOperand(locals, position, local)) return null;
+        if (owned.residualMask(root) != container.full_mask) return null;
+        try owned.takeResidualField(root, plan.field_mask);
+        return .{ .residual = .{ .value = root, .field_mask = plan.field_mask } };
     }
 
     /// Moves the committed field unit out of the container's residual mask
@@ -14482,10 +14541,12 @@ test "RC borrow keeps the lender alive past a consuming use of the lender" {
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
     // The pair is consumed by the call while its borrow is still live, so the
-    // call argument pays a retain and the pair's own unit is released after
-    // the borrow's last use.
-    try f.expectRc(pair, 1, 1, 0);
+    // call argument pays a retain. Nothing reads the pair's second field
+    // after the call, so the pair's own unit gives it up before the call and
+    // keeps only the borrowed field, released after the borrow's last use.
+    try f.expectRc(pair, 1, 0, 0);
     try f.expectRc(field, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 3), f.countAllRc());
 }
 
 test "RC borrow: reassigned lender forces the read to stay owned" {
@@ -16873,6 +16934,320 @@ test "RC a closure taken from a dying record of closures through a borrowed wrap
     try testing.expect(released_before_call);
     try testing.expect(!retained_before_call);
     try testing.expectEqual(arc_sig.Mode.owned, arc_sig.RcSig.paramMode(.{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(variant_call.proc).rc_borrowed_params) }, 1));
+}
+
+/// The successor of a statement that binds a value or retains one, for tests
+/// that walk a straight line of them. Any other statement, a release
+/// included, fails the test.
+fn linearFixtureNext(stmt: LIR.CFStmt) error{TestUnexpectedResult}!LIR.CFStmtId {
+    if (stmt == .assign_ref) return stmt.assign_ref.next;
+    if (stmt == .assign_literal) return stmt.assign_literal.next;
+    if (stmt == .assign_list) return stmt.assign_list.next;
+    if (stmt == .assign_struct) return stmt.assign_struct.next;
+    if (stmt == .incref) return stmt.incref.next;
+    return error.TestUnexpectedResult;
+}
+
+/// The field index of the one take-and-release ARC emitted on the straight
+/// line from `start` to the first direct call, for tests of the release a
+/// retained aggregate pays before the call it moves into.
+fn takenFieldReleasedBeforeCall(f: *const ArcTest, start: LIR.CFStmtId) error{ TestUnexpectedResult, TestExpectedEqual }!u32 {
+    var cursor = start;
+    var taken: ?struct { temp: LIR.LocalId, field: u32 } = null;
+    var released: usize = 0;
+    var remaining: usize = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        const stmt = f.store.getCFStmt(cursor);
+        if (stmt == .assign_call) break;
+        if (stmt == .assign_ref) {
+            const assign = stmt.assign_ref;
+            if (f.store.stmtRowOrDefault(assign.extra).take_kind == .take) {
+                try testing.expect(taken == null);
+                try testing.expectEqual(LIR.RefOp.Kind.field, assign.op.kind);
+                taken = .{ .temp = assign.target, .field = assign.op.index };
+            }
+            cursor = assign.next;
+        } else if (stmt == .decref) {
+            try testing.expectEqual(taken.?.temp, stmt.decref.value);
+            released += 1;
+            cursor = stmt.decref.next;
+        } else {
+            cursor = try linearFixtureNext(stmt);
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), released);
+    return taken.?.field;
+}
+
+test "RC a record moved into a call releases the fields nothing reads afterwards before the call" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // `sink(pair)` owns its argument, and only the pair's second list is
+    // read afterwards. The pair is retained for the call, so both hold a
+    // unit of every field. Nothing reads the first list again, so the pair
+    // releases it before the call and the callee holds its only unit; the
+    // second list is then taken from the pair, which keeps nothing else.
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const sunk = try f.local(.i64);
+    const kept = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const ret = try f.ret(appended);
+    const append = try f.assignLowLevel(appended, &.{ kept, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const read_kept = try f.assignRefField(kept, pair, 1, elem_assign);
+    const sink = try f.assignCall(sunk, &.{pair}, read_kept);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, sink);
+    const b_assign = try f.assignList(b, &.{}, pair_assign);
+    const body = try f.assignList(a, &.{}, b_assign);
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+
+    try f.expectRc(pair, 1, 0, 0);
+    try f.expectRc(kept, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 2), f.countAllRc());
+    try testing.expectEqual(@as(u32, 0), try takenFieldReleasedBeforeCall(&f, f.procBody()));
+}
+
+test "RC a record moved into a call keeps the field read afterwards shared with the callee" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // The same shape, but the list read after the call is the pair's first:
+    // the callee and the pair both need it, so it stays retained across the
+    // call, and only the second list, which nothing reads again, is released
+    // before the call.
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const sunk = try f.local(.i64);
+    const kept = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const ret = try f.ret(appended);
+    const append = try f.assignLowLevel(appended, &.{ kept, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const read_kept = try f.assignRefField(kept, pair, 0, elem_assign);
+    const sink = try f.assignCall(sunk, &.{pair}, read_kept);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, sink);
+    const b_assign = try f.assignList(b, &.{}, pair_assign);
+    const body = try f.assignList(a, &.{}, b_assign);
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+
+    try f.expectRc(pair, 1, 0, 0);
+    try f.expectRc(kept, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 2), f.countAllRc());
+    try testing.expectEqual(@as(u32, 1), try takenFieldReleasedBeforeCall(&f, f.procBody()));
+}
+
+test "RC a record moved into a call on one branch gives up its unread field on every edge into the join" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Only one arm of the switch passes the pair to `sink`; the pair's second
+    // list is read after the arms rejoin. The calling arm retains the pair
+    // and releases its first list before the call. The other arm still holds
+    // that list when it reaches the join, so it releases it on its own edge
+    // and both arrive holding the second list alone.
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const cond = try f.local(.bool);
+    const sunk = try f.local(.i64);
+    const kept = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(appended);
+    const append = try f.assignLowLevel(appended, &.{ kept, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const join_body = try f.assignRefField(kept, pair, 1, elem_assign);
+    const call_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const sink = try f.assignCall(sunk, &.{pair}, call_jump);
+    const skip_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const skip = try f.assignI64(sunk, 0, skip_jump);
+    const choose = try f.switchStmt(cond, sink, skip, null);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{}),
+        .body = join_body,
+        .remainder = choose,
+    } }, .test_fixture);
+    const cond_assign = try f.assignTag(cond, 1, null, join);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, cond_assign);
+    const b_assign = try f.assignList(b, &.{}, pair_assign);
+    const body = try f.assignList(a, &.{}, b_assign);
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+
+    // One retain for the call, and one release of the first list per arm.
+    try f.expectRc(pair, 1, 0, 0);
+    try f.expectRc(kept, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 3), f.countAllRc());
+}
+
+/// A caller that lends a pair's first list through `peek`, uses the pair as
+/// `take_first` says, and reads the lent list afterwards. Returns the fixture
+/// with the pair and the local bound to the pair's field read after the
+/// lending call.
+const LentFieldFixture = struct {
+    fixture: ArcTest,
+    pair: LIR.LocalId,
+    read: LIR.LocalId,
+    caller: LIR.LirProcSpecId,
+};
+
+fn setupLentFieldRead(take_first: bool) Allocator.Error!LentFieldFixture {
+    var f = try ArcTest.init(testing.allocator);
+    errdefer f.deinit();
+
+    // `peek` lends its pair's first list back to its caller.
+    const peek_pair = try f.local(f.pair_list);
+    const peek_field = try f.local(f.list_i64);
+    const peek = try f.addProc(&.{peek_pair}, try f.assignRefField(peek_field, peek_pair, 0, try f.ret(peek_field)), f.list_i64);
+
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const lent = try f.local(f.list_i64);
+    const sunk = try f.local(.i64);
+    const read = try f.local(f.list_i64);
+    const index = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const ret = try f.ret(elem);
+    const read_lent = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = elem,
+        .op = .list_get_unsafe,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_get_unsafe.rcEffect()),
+        .args = try f.span(&.{ lent, index }),
+        .next = ret,
+    } }, .test_fixture);
+    const append = try f.assignLowLevel(appended, &.{ read, index }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_lent);
+    const index_assign = try f.assignI64(index, 0, append);
+    // Either the lent list itself is read out of the pair and appended to,
+    // or the pair is first passed whole to an owning callee and its other
+    // list is appended to.
+    const after_lend = if (take_first)
+        try f.assignRefField(read, pair, 0, index_assign)
+    else
+        try f.assignCall(sunk, &.{pair}, try f.assignRefField(read, pair, 1, index_assign));
+    const lend = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = lent,
+        .proc = peek,
+        .args = try f.span(&.{pair}),
+        .next = after_lend,
+    } }, .test_fixture);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, lend);
+    const b_assign = try f.assignList(b, &.{}, pair_assign);
+    const body = try f.assignList(a, &.{}, b_assign);
+    const caller = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    return .{ .fixture = f, .pair = pair, .read = read, .caller = caller };
+}
+
+test "RC a field read retains while a call result lent by its record is still read" {
+    var lent = try setupLentFieldRead(true);
+    defer lent.fixture.deinit();
+
+    // The lent result borrows the pair's first list without a field read of
+    // the caller's own. Appending to that list in place would change what
+    // the result reads afterwards, so the field read pays its retain instead
+    // of taking the pair's stored unit.
+    try testing.expectEqual(@as(usize, 1), lent.fixture.countRc(lent.read, .incref));
+}
+
+test "RC a record moved into a call keeps every field while a call result it lent is still read" {
+    var lent = try setupLentFieldRead(false);
+    defer lent.fixture.deinit();
+
+    // The pair's first list is never read through the pair after the call,
+    // but the lent result still reads it. The callee owns its unit of that
+    // list and may release it, so the pair keeps its own until the result's
+    // last read: nothing is released on the way to the call.
+    var cursor = lent.fixture.store.getProcSpecImmediate(lent.caller).body.?;
+    var calls: usize = 0;
+    while (calls < 2) {
+        const stmt = lent.fixture.store.getCFStmt(cursor);
+        if (stmt == .assign_call) {
+            calls += 1;
+            cursor = stmt.assign_call.next;
+        } else {
+            cursor = try linearFixtureNext(stmt);
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), lent.fixture.countRc(lent.pair, .incref));
+}
+
+test "RC a field passed out of a record nested in a dying record is taken once, by the nested record" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // `update` borrows a wrapped pair of lists and hands the pair to an
+    // owning callee, so its owned variant moves the pair where its base
+    // retains it: a wrapper reaching `update` is a consuming operand.
+    const wrapper_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{f.pair_list});
+    const wrapper_param = try f.local(wrapper_layout);
+    const payload = try f.local(f.pair_list);
+    const updated = try f.local(.i64);
+    const update_ret = try f.ret(updated);
+    const consume_payload = try f.assignCall(updated, &.{payload}, update_ret);
+    const read_payload = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = payload,
+        .op = .tagPayloadStruct(wrapper_param, 0, 0),
+        .next = consume_payload,
+    } }, .test_fixture);
+    const update = try f.addProc(&.{wrapper_param}, read_payload, .i64);
+
+    // The caller reads the wrapper through a record nested in a dying
+    // record, as a closure body reads a capture, and passes it to `update`.
+    // The nested record receives the outer record's unit and gives the
+    // wrapper up at the call. The outer record holds nothing by then, so it
+    // claims no take of its own there: the call selects `update`'s owned
+    // variant and nothing is released afterwards.
+    const held_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = wrapper_layout },
+    });
+    const captures_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = held_layout },
+    });
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const wrapper = try f.local(wrapper_layout);
+    const held = try f.local(held_layout);
+    const captures = try f.local(captures_layout);
+    const held_read = try f.local(held_layout);
+    const wrapper_read = try f.local(wrapper_layout);
+    const result = try f.local(.i64);
+    const caller_ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = update,
+        .args = try f.span(&.{wrapper_read}),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const read_wrapper = try f.assignRefField(wrapper_read, held_read, 0, call);
+    const read_held = try f.assignRefField(held_read, captures, 0, read_wrapper);
+    const captures_assign = try f.assignStruct(captures, &.{held}, read_held);
+    const held_assign = try f.assignStruct(held, &.{wrapper}, captures_assign);
+    const wrapper_assign = try f.assignTag(wrapper, 0, pair, held_assign);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, wrapper_assign);
+    const b_assign = try f.assignList(b, &.{}, pair_assign);
+    const caller_body = try f.assignList(a, &.{}, b_assign);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expect((try f.directCallTo(caller, result)).proc != update);
+    try testing.expectEqual(@as(usize, 0), f.countRc(wrapper_read, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(wrapper_read, .decref));
 }
 
 test "RC field takes through a complete projection repeated in a join body" {
