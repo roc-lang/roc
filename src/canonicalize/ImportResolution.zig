@@ -738,7 +738,7 @@ const Resolver = struct {
                     } }, self.env.store.getExprRegion(expr_idx));
                     try self.env.store.resolveDeferredExprToNominalExternal(
                         expr_idx,
-                        import_idx,
+                        .{ .import = import_idx },
                         node_idx,
                         tag_expr,
                         .tag,
@@ -771,15 +771,39 @@ const Resolver = struct {
         if ((try self.resolveTypePath(available.module_env, prefix, tag_path, max_alias_depth)) != null) return false;
 
         const tag_dot = lastDot(tag_path);
-        const owner_node = if (tag_dot) |dot| owner: {
+        const owner_env: *const ModuleEnv, const owner_node = if (tag_dot) |dot| owner: {
             const decl = (try self.resolveTypePath(available.module_env, prefix, tag_path[0..dot], max_alias_depth)) orelse
                 return false;
-            // A nominal construction names its type through the import it
-            // was written with.
-            if (decl.env != available.module_env) return false;
-            break :owner decl.node_idx;
-        } else (try self.importMainTypeNode(available)) orelse return false;
-        if (available.module_env.store.getStatement(@fromBackingInt(@intCast(owner_node))) != .s_nominal_decl) return false;
+            break :owner .{ decl.env, decl.node_idx };
+        } else .{ available.module_env, (try self.importMainTypeNode(available)) orelse return false };
+        switch (owner_env.store.getStatement(@fromBackingInt(@intCast(owner_node)))) {
+            // An alias names the nominal type checking resolves it to.
+            .s_nominal_decl, .s_alias_decl => {},
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => return false,
+        }
+        const owner_module: CIR.Expr.NominalExternalModule = if (owner_env == available.module_env)
+            .{ .import = entryImport(entry) }
+        else
+            .{ .identity = (try self.identityFor(owner_env)) orelse return false };
 
         const tag_text = if (tag_dot) |dot| tag_path[dot + 1 ..] else tag_path;
         const tag_name = try self.env.insertIdent(Ident.for_text(tag_text));
@@ -795,12 +819,10 @@ const Resolver = struct {
             .name = tag_name,
             .args = .{ .span = base.DataSpan.empty() },
         } }, receiver_region);
-        const import_idx = entryImport(entry);
-
         if (access_expr == node_expr) {
             // `Alias.Path.U.v` is not called, so it reads the field `v`.
             const receiver = try self.env.addExpr(CIR.Expr{ .e_nominal_external = .{
-                .module_idx = import_idx,
+                .module = owner_module,
                 .target_node_idx = owner_node,
                 .backing_expr = tag_expr,
                 .backing_type = .tag,
@@ -817,7 +839,7 @@ const Resolver = struct {
             self.env.store.resolveDeferredExprToFieldAccess(node_expr, receiver, segments);
         } else {
             // The callee becomes the receiver of a method call.
-            try self.env.store.resolveDeferredExprToNominalExternal(node_expr, import_idx, owner_node, tag_expr, .tag);
+            try self.env.store.resolveDeferredExprToNominalExternal(node_expr, owner_module, owner_node, tag_expr, .tag);
             self.env.store.setRegionAt(@fromBackingInt(@intCast(@backingInt(node_expr))), receiver_region);
             try self.env.store.replaceCallWithMethodCall(access_expr, node_expr, member, member_region);
         }
@@ -879,16 +901,22 @@ const Resolver = struct {
                 }
             },
             .expr_nominal, .pattern_nominal => {
-                // A nominal construction names the declaration through the
-                // import it was written with, so a declaration reached only by
-                // following an alias out of that module is not one this
-                // position can name.
-                if (!in_import) return self.failEntry(entry, entry.not_found_failure);
                 switch (decl_env.store.getStatement(@fromBackingInt(@intCast(decl_node_idx)))) {
-                    .s_nominal_decl => try self.rewriteNominal(entry, import_idx, decl_node_idx),
-                    // A construction names a nominal type; an alias is a
-                    // different kind of declaration, not a missing one.
-                    .s_alias_decl, .s_where_alias_decl => try self.failEntry(entry, .type_alias_but_needed_nominal),
+                    // A construction through an alias names the nominal type
+                    // checking resolves the alias to (design.md "Nominal
+                    // Construction Through Aliases"). A declaration reached by
+                    // following an alias out of the import is named by its
+                    // module's content identity.
+                    .s_nominal_decl, .s_alias_decl => {
+                        const module: CIR.Expr.NominalExternalModule = if (in_import)
+                            .{ .import = import_idx }
+                        else
+                            .{ .identity = (try self.identityFor(decl_env)) orelse
+                                return self.failEntry(entry, entry.not_found_failure) };
+                        try self.rewriteNominal(entry, module, decl_node_idx);
+                    },
+                    // A where alias names no type a construction can build.
+                    .s_where_alias_decl => try self.failEntry(entry, .type_alias_but_needed_nominal),
                     .s_decl,
                     .s_var,
                     .s_var_uninitialized,
@@ -923,7 +951,7 @@ const Resolver = struct {
     fn rewriteNominal(
         self: *Resolver,
         entry: DeferredImportRef,
-        import_idx: CIR.Import.Idx,
+        module: CIR.Expr.NominalExternalModule,
         node_idx: u32,
     ) std.mem.Allocator.Error!void {
         switch (entry.kind) {
@@ -934,7 +962,7 @@ const Resolver = struct {
                     return self.failEntry(entry, entry.not_found_failure);
                 try self.env.store.resolveDeferredExprToNominalExternal(
                     expr_idx,
-                    import_idx,
+                    module,
                     node_idx,
                     backing.expr,
                     backing.ty,
@@ -945,7 +973,7 @@ const Resolver = struct {
                 const deferred = self.env.store.getPattern(pattern_idx).deferred_import_ref;
                 try self.env.store.resolveDeferredPatternToNominalExternal(
                     pattern_idx,
-                    import_idx,
+                    module,
                     node_idx,
                     deferred.backing_pattern,
                     deferred.backing_type,

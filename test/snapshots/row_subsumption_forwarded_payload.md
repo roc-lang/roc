@@ -73,7 +73,19 @@ TYPE MISMATCH - row_subsumption_forwarded_payload.md:24:12:24:12
 			(annotation-start code-block)
 			(indent 1)
 			(text "Try(Str, [B])")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Maybe")
+			(reflow " ")
+			(annotated code "A")
+			(reflow " ")
+			(reflow "should be")
+			(reflow " ")
+			(annotated code "B")
+			(reflow "?"))))
 ~~~
 # TOKENS
 ~~~zig
@@ -385,28 +397,28 @@ rejected = take_other(fwd_err(A))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "forwarded"))
-		(e-call (constraint-fn-var 519)
+		(e-call (constraint-fn-var 513)
 			(e-lookup-local
 				(p-assign (ident "take_err")))
-			(e-call (constraint-fn-var 517)
+			(e-call (constraint-fn-var 511)
 				(e-lookup-local
 					(p-assign (ident "fwd_err")))
 				(e-tag (name "A")))))
 	(d-let
 		(p-assign (ident "constructed"))
-		(e-call (constraint-fn-var 533)
+		(e-call (constraint-fn-var 527)
 			(e-lookup-local
 				(p-assign (ident "take_err")))
-			(e-call (constraint-fn-var 531)
+			(e-call (constraint-fn-var 525)
 				(e-lookup-local
 					(p-assign (ident "con_err")))
 				(e-tag (name "A")))))
 	(d-let
 		(p-assign (ident "wrapped"))
-		(e-call (constraint-fn-var 548)
+		(e-call (constraint-fn-var 543)
 			(e-lookup-local
 				(p-assign (ident "take_wrap")))
-			(e-call (constraint-fn-var 546)
+			(e-call (constraint-fn-var 541)
 				(e-lookup-local
 					(p-assign (ident "fwd_wrap")))
 				(e-tag (name "A")))))

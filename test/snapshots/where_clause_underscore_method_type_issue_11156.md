@@ -92,9 +92,9 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "str")))
-			(e-dispatch-call (method "map_err") (constraint-fn-var 312)
+			(e-dispatch-call (method "map_err") (constraint-fn-var 306)
 				(receiver
-					(e-call (constraint-fn-var 309)
+					(e-call (constraint-fn-var 303)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -116,7 +116,7 @@ NO CHANGE
 					(ty-underscore)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 358)
+		(e-call (constraint-fn-var 355)
 			(e-lookup-local
 				(p-assign (ident "where_clause_underscore_method_type_issue_11156.Blub.parse")))
 			(e-string

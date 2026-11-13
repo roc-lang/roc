@@ -367,14 +367,19 @@ pub const Constants = struct {
     /// 184: combines the independent 179 and 183 entry changes.
     /// 185: combines the independent 181 and 184 entry changes.
     /// 186: combines the independently merged 183 and 185 entry layouts.
-    /// 187: uncommitted record and tag tails replace per-use structure,
-    ///      checked variables record uncommitted record tails, type stores
-    ///      list no widening field names, quantified record tails are
-    ///      restricted at every use, record pattern tails are marked,
-    ///      nominal declarations record padding, method requirements on open
-    ///      rows are held on the row variable for the whole record or tag
+    /// 187: CIR external nominal construction and pattern nodes record which
+    ///      index space their module refers to, and a reserved-module-name
+    ///      diagnostic node is added.
+    /// 190: type tags record whether they are in their row only because `match`
+    ///      branch patterns asked for them.
+    /// 191: on top of the 190 entry layout, uncommitted record and tag tails
+    ///      replace per-use structure, checked variables record uncommitted
+    ///      record tails, type stores list no widening field names, quantified
+    ///      record tails are restricted at every use, record pattern tails are
+    ///      marked, nominal declarations record padding, method requirements on
+    ///      open rows are held on the row variable for the whole record or tag
     ///      union, and snapshots record which value a requirement is about.
-    pub const CACHE_VERSION = 187;
+    pub const CACHE_VERSION = 191;
 };
 
 /// Configuration for the Roc cache system.

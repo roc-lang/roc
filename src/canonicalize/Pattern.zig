@@ -85,7 +85,7 @@ pub const Pattern = union(enum) {
     /// MyModule.Point.(1.0)                # Values
     /// ```
     nominal_external: struct {
-        module_idx: CIR.Import.Idx,
+        module: CIR.Expr.NominalExternalModule,
         target_node_idx: u32,
         backing_pattern: Pattern.Idx,
         backing_type: CIR.Expr.NominalBackingType,
@@ -399,17 +399,7 @@ pub const Pattern = union(enum) {
             .nominal_external => |n| {
                 const begin = try ir.beginSExprNodeAt(tree, "p-nominal-external", pattern_idx);
 
-                const module_idx_int = @backingInt(n.module_idx);
-                std.debug.assert(module_idx_int < ir.imports.imports.items().len);
-                const string_lit_idx = ir.imports.imports.items()[module_idx_int];
-                const module_name = ir.common.strings.get(string_lit_idx);
-                // Special case: Builtin module is an implementation detail, print as (builtin)
-                if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                    const field_begin = try tree.beginNamedNode("builtin");
-                    try tree.endNodeWithoutChildren(field_begin);
-                } else {
-                    try tree.pushStringPair("external-module", module_name);
-                }
+                try ir.pushNominalExternalModuleToSExprTree(tree, n.module);
 
                 const attrs = tree.beginNode();
                 try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);

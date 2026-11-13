@@ -97,6 +97,10 @@ not_polymorphic = |x| {
 # EXPECTED
 TYPE MISMATCH - deferred_result_relation.md:76:14:76:15
 TYPE MISMATCH - deferred_result_relation.md:86:14:86:18
+UNMATCHABLE PATTERN - deferred_result_relation.md:13:4:13:5
+UNMATCHABLE PATTERN - deferred_result_relation.md:25:4:25:5
+UNMATCHABLE PATTERN - deferred_result_relation.md:36:3:36:4
+UNMATCHABLE PATTERN - deferred_result_relation.md:55:3:55:4
 # PROBLEMS
 ~~~clojure
 (reports
@@ -161,7 +165,147 @@ TYPE MISMATCH - deferred_result_relation.md:86:14:86:18
 			(annotation-start code-block)
 			(indent 1)
 			(text "[A(a)]")
-			(annotation-end))))
+			(annotation-end)))
+	(report
+		(severity warning)
+		(title "Unmatchable Pattern")
+		(region (start 13 4) (end 13 5))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "third")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated keyword "match")
+			(reflow " ")
+			(reflow "can never match."))
+		(document
+			(source-region (file "deferred_result_relation.md") (start 13 4) (end 13 5) (annotation warning) (line-text "\t\t\tC => \"c\""))
+			(line-break)
+			(reflow "The value this pattern matches never has the")
+			(reflow " ")
+			(annotated code "C")
+			(reflow " ")
+			(reflow "tag. Only")
+			(reflow " ")
+			(annotated keyword "match")
+			(reflow " ")
+			(reflow "patterns mention it; nothing ever produces it.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "If")
+			(reflow " ")
+			(annotated code "C")
+			(reflow " ")
+			(reflow "should be possible here, add a type annotation to the value that lists it.")))
+	(report
+		(severity warning)
+		(title "Unmatchable Pattern")
+		(region (start 25 4) (end 25 5))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "third")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated keyword "match")
+			(reflow " ")
+			(reflow "can never match."))
+		(document
+			(source-region (file "deferred_result_relation.md") (start 25 4) (end 25 5) (annotation warning) (line-text "\t\t\tC => \"c\""))
+			(line-break)
+			(reflow "The value this pattern matches never has the")
+			(reflow " ")
+			(annotated code "C")
+			(reflow " ")
+			(reflow "tag. Only")
+			(reflow " ")
+			(annotated keyword "match")
+			(reflow " ")
+			(reflow "patterns mention it; nothing ever produces it.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "If")
+			(reflow " ")
+			(annotated code "C")
+			(reflow " ")
+			(reflow "should be possible here, add a type annotation to the value that lists it.")))
+	(report
+		(severity warning)
+		(title "Unmatchable Pattern")
+		(region (start 36 3) (end 36 4))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "third")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated keyword "match")
+			(reflow " ")
+			(reflow "can never match."))
+		(document
+			(source-region (file "deferred_result_relation.md") (start 36 3) (end 36 4) (annotation warning) (line-text "\t\tC => \"c\""))
+			(line-break)
+			(reflow "The value this pattern matches never has the")
+			(reflow " ")
+			(annotated code "C")
+			(reflow " ")
+			(reflow "tag. Only")
+			(reflow " ")
+			(annotated keyword "match")
+			(reflow " ")
+			(reflow "patterns mention it; nothing ever produces it.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "If")
+			(reflow " ")
+			(annotated code "C")
+			(reflow " ")
+			(reflow "should be possible here, add a type annotation to the value that lists it.")))
+	(report
+		(severity warning)
+		(title "Unmatchable Pattern")
+		(region (start 55 3) (end 55 4))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "third")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated keyword "match")
+			(reflow " ")
+			(reflow "can never match."))
+		(document
+			(source-region (file "deferred_result_relation.md") (start 55 3) (end 55 4) (annotation warning) (line-text "\t\tC => \"c\""))
+			(line-break)
+			(reflow "The value this pattern matches never has the")
+			(reflow " ")
+			(annotated code "C")
+			(reflow " ")
+			(reflow "tag. Only")
+			(reflow " ")
+			(annotated keyword "match")
+			(reflow " ")
+			(reflow "patterns mention it; nothing ever produces it.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "If")
+			(reflow " ")
+			(annotated code "C")
+			(reflow " ")
+			(reflow "should be possible here, add a type annotation to the value that lists it."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -754,13 +898,13 @@ not_polymorphic = |x| {
 													(p-assign (ident "step"))))))
 									(e-lookup-local
 										(p-assign (ident "r"))))
-								(e-call (constraint-fn-var 642)
+								(e-call (constraint-fn-var 636)
 									(e-lookup-local
 										(p-assign (ident "step"))))))))
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 649)
+							(e-call (constraint-fn-var 644)
 								(e-lookup-local
 									(p-assign (ident "inner")))
 								(e-empty_record)))
@@ -815,7 +959,7 @@ not_polymorphic = |x| {
 						(e-lambda
 							(args
 								(p-underscore))
-							(e-call (constraint-fn-var 713)
+							(e-call (constraint-fn-var 707)
 								(e-field-access
 									(receiver
 										(e-lookup-local
@@ -825,7 +969,7 @@ not_polymorphic = |x| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 721)
+							(e-call (constraint-fn-var 716)
 								(e-lookup-local
 									(p-assign (ident "inner")))
 								(e-empty_record)))
@@ -874,7 +1018,7 @@ not_polymorphic = |x| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 776)
+							(e-call (constraint-fn-var 771)
 								(e-lookup-local
 									(p-assign (ident "inner")))
 								(e-empty_record)))
@@ -927,7 +1071,7 @@ not_polymorphic = |x| {
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-call (constraint-fn-var 833)
+									(e-call (constraint-fn-var 829)
 										(e-lookup-local
 											(p-assign (ident "inner")))
 										(e-empty_record))))
@@ -965,7 +1109,7 @@ not_polymorphic = |x| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 872)
+							(e-call (constraint-fn-var 869)
 								(e-lookup-local
 									(p-assign (ident "inner")))
 								(e-empty_record)))
@@ -1029,12 +1173,12 @@ not_polymorphic = |x| {
 									(p-assign (ident "step")))))))
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 980)
+					(e-call (constraint-fn-var 983)
 						(e-lookup-local
 							(p-assign (ident "optional")))
 						(e-lookup-local
 							(p-assign (ident "r")))))
-				(e-call (constraint-fn-var 989)
+				(e-call (constraint-fn-var 993)
 					(e-lookup-local
 						(p-assign (ident "inner")))
 					(e-empty_record))))
@@ -1093,7 +1237,7 @@ not_polymorphic = |x| {
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-call (constraint-fn-var 1023)
+									(e-call (constraint-fn-var 1028)
 										(e-lookup-local
 											(p-assign (ident "inner")))
 										(e-empty_record))))
@@ -1124,7 +1268,7 @@ not_polymorphic = |x| {
 							(args
 								(p-underscore))
 							(e-runtime-error (tag "erroneous_value_expr")))))
-				(e-call (constraint-fn-var 1066)
+				(e-call (constraint-fn-var 1072)
 					(e-lookup-local
 						(p-assign (ident "inner")))
 					(e-empty_record)))))

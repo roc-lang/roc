@@ -17,7 +17,7 @@ from_row = |z, a| { z, a }
 read_a = |row| row.a
 
 stored : Padded
-stored = Padded.new(88, 99)
+stored = Padded.make(88, 99)
 
 main! = || {
     slot = Padded.Slot.new(11, 22)

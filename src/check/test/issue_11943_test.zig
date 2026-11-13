@@ -100,11 +100,10 @@ test "issue 11943: a nested builtin type takes precedence over a tag of the same
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertOneCanErrorMsg(
-        \\**Does Not Exist**
-        \\`Str.Utf8Problem.missing` does not exist.
-        \\`Str.Utf8Problem` is in scope, but it has no associated `missing`.
-        \\
+    // `Str.Utf8Problem` is an alias, so its members are resolved by checking.
+    try test_env.assertOneTypeErrorMsg(
+        \\**Associated Function Not Found**
+        \\The type `Str.Utf8Problem` does not have an associated function named `missing`.
         \\```roc
         \\missing = Str.Utf8Problem.missing()
         \\```

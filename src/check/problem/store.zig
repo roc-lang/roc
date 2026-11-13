@@ -201,6 +201,7 @@ pub const Store = struct {
                     .static_dispatch,
                     .cannot_access_opaque_nominal,
                     .nominal_type_resolution_failed,
+                    .alias_names_no_nominal_type,
                     .recursive_alias,
                     .not_a_where_alias,
                     .where_alias_in_type_position,
