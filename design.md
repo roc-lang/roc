@@ -10716,7 +10716,10 @@ interpolation's plan, so the `from_interpolation` plan and iterator plan
 ordinary solving outputs for a `Str` interpolation are read by nothing. An
 interpolation with absent dispatch variables gets neither plan and
 contributes no dispatch type roots, and the program lowered from the checked
-module is the same.
+module is the same. Hoisted-root selection keeps such an interpolation as a
+compile-time root exactly as it keeps one whose `Str` conversion it reads
+(`hoistedRootExprStep`): the builtin conversion is pure and no local
+procedure declares it.
 
 Only the builtin `Str` declaration qualifies, for the target and for every
 part. A part whose type is still undetermined, a number or string literal
