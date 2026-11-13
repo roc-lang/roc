@@ -367,11 +367,11 @@ pub const Constants = struct {
     /// 184: combines the independent 179 and 183 entry changes.
     /// 185: combines the independent 181 and 184 entry changes.
     /// 186: combines the independently merged 183 and 185 entry layouts.
-    /// 187: a serialized module env records the BLAKE3 digest of its source,
+    /// 188: a serialized module env records the BLAKE3 digest of its source,
     ///      and module identities, cache keys and file-dependency content
     ///      hashes are computed from source digests; a flex variable records
     ///      whether it is a deferred literal's type.
-    pub const CACHE_VERSION = 187;
+    pub const CACHE_VERSION = 188;
 };
 
 /// Configuration for the Roc cache system.
