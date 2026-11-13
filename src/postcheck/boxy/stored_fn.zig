@@ -616,8 +616,64 @@ const MetadataReader = struct {
         return error.InvalidMetadata;
     }
     fn name(self: *MetadataReader) error{InvalidMetadata}!void {
+        _ = try self.nameBytes();
+    }
+    fn nameBytes(self: *MetadataReader) error{InvalidMetadata}![]const u8 {
         const len = try self.word();
-        _ = try self.take(len);
+        return try self.take(len);
+    }
+    /// One field of a record's table entry, returning its label.
+    fn recordField(self: *MetadataReader) error{InvalidMetadata}![]const u8 {
+        const label = try self.nameBytes();
+        try self.typeRef();
+        _ = try self.tag(types.FieldKind);
+        _ = try self.word();
+        const has_default = try self.byte();
+        if (has_default > 1) return error.InvalidMetadata;
+        if (has_default == 1) {
+            try self.module();
+            _ = try self.word();
+        }
+        return label;
+    }
+    /// A padded record's declaration entries, which the type store derives
+    /// the record's slots from: every named entry is one of the record's
+    /// `field_count` fields, read from `fields_at`, every padding position
+    /// below `padding` appears, and no entry appears twice.
+    fn declaredEntries(self: *MetadataReader, fields_at: usize, field_count: u32, padding: u32) error{InvalidMetadata}!void {
+        const count = try self.word();
+        if (count > self.remaining() / 5) return error.InvalidMetadata;
+        const entries_at = self.at;
+        var paddings: u32 = 0;
+        for (0..count) |_| {
+            const entry_at = self.at;
+            switch (try self.tag(std.meta.Tag(types.DeclaredEntry))) {
+                .named => {
+                    const label = try self.nameBytes();
+                    var record_fields = self.*;
+                    record_fields.at = fields_at;
+                    const found = for (0..field_count) |_| {
+                        if (std.mem.eql(u8, try record_fields.recordField(), label)) break true;
+                    } else false;
+                    if (!found) return error.InvalidMetadata;
+                },
+                .padding => {
+                    if (try self.word() >= padding) return error.InvalidMetadata;
+                    paddings += 1;
+                },
+            }
+            const entry = self.bytes[entry_at..self.at];
+            var earlier = MetadataReader{ .bytes = self.bytes, .at = entries_at };
+            while (earlier.at < entry_at) {
+                const earlier_at = earlier.at;
+                switch (try earlier.tag(std.meta.Tag(types.DeclaredEntry))) {
+                    .named => _ = try earlier.nameBytes(),
+                    .padding => _ = try earlier.word(),
+                }
+                if (std.mem.eql(u8, self.bytes[earlier_at..earlier.at], entry)) return error.InvalidMetadata;
+            }
+        }
+        if (paddings != padding) return error.InvalidMetadata;
     }
     fn module(self: *MetadataReader) error{InvalidMetadata}!void {
         if (try self.word() >= self.modules) return error.InvalidMetadata;
@@ -679,25 +735,16 @@ const MetadataReader = struct {
             .record => {
                 const fields = try self.word();
                 if (fields > self.remaining() / 14) return error.InvalidMetadata;
-                for (0..fields) |_| {
-                    try self.name();
-                    try self.typeRef();
-                    _ = try self.tag(types.FieldKind);
-                    _ = try self.word();
-                    const has_default = try self.byte();
-                    if (has_default > 1) return error.InvalidMetadata;
-                    if (has_default == 1) {
-                        try self.module();
-                        _ = try self.word();
-                    }
-                }
+                const fields_at = self.at;
+                for (0..fields) |_| _ = try self.recordField();
                 try self.ext();
                 const declared = try self.byte();
                 if (declared > 1) return error.InvalidMetadata;
                 if (declared == 1) {
-                    try self.typeSpan();
-                    const slots = try self.word();
-                    _ = try self.takeProduct(slots, 4);
+                    const padding = try self.word();
+                    if (padding > self.remaining() / 4) return error.InvalidMetadata;
+                    for (0..padding) |_| try self.typeRef();
+                    try self.declaredEntries(fields_at, fields, padding);
                 }
             },
             .tuple => try self.typeSpan(),
@@ -1155,9 +1202,15 @@ const Encoder = struct {
                 try self.table.append(self.allocator, @intFromBool(record.declared.get() != null));
                 if (record.declared.get()) |declared| {
                     try self.tableTypes(store.span(declared.padding));
-                    const slots = store.declaredSlots(declared);
-                    try self.tableWord(@intCast(slots.len));
-                    for (slots) |slot| try self.tableWord(slot);
+                    const entries = store.declaredEntries(declared);
+                    try self.tableWord(@intCast(entries.len));
+                    for (entries) |entry| {
+                        try self.table.append(self.allocator, @backingInt(std.meta.activeTag(entry)));
+                        switch (entry) {
+                            .named => |label| try self.tableName(label),
+                            .padding => |ordinal| try self.tableWord(ordinal),
+                        }
+                    }
                 }
             },
             .tuple => |items| try self.tableTypes(store.span(items)),
@@ -1480,9 +1533,15 @@ const Decoder = struct {
                 var declared: ?types.DeclaredOrderInput = null;
                 if (self.byte() != 0) {
                     const padding = try self.typeSpan();
-                    const slots = try program.arena.allocator().alloc(u32, self.word());
-                    for (slots) |*slot| slot.* = self.word();
-                    declared = .{ .padding = padding, .slots = slots };
+                    const entries = try program.arena.allocator().alloc(types.DeclaredEntry, self.word());
+                    for (entries) |*entry| {
+                        const kind: std.meta.Tag(types.DeclaredEntry) = @fromBackingInt(@intCast(self.byte()));
+                        entry.* = switch (kind) {
+                            .named => .{ .named = try self.name() },
+                            .padding => .{ .padding = self.word() },
+                        };
+                    }
+                    declared = .{ .padding = padding, .entries = entries };
                 }
                 break :blk try store.intern(.{ .record = .{ .fields = fields, .ext = remainder, .declared = declared } });
             },
@@ -1779,6 +1838,84 @@ test "function unit metadata validates the integer list template tag, its single
     bytes[1] = 1;
     var invalid = MetadataReader{ .bytes = &bytes, .modules = 1 };
     try std.testing.expectError(error.InvalidMetadata, invalid.worker());
+}
+
+/// One declaration entry as `paddedRecordEntry` writes it: a named field by
+/// its label text, or an unnamed field by its position in the padding.
+const EncodedDeclaredEntry = union(enum) {
+    named: []const u8,
+    padding: u32,
+};
+
+/// The table entry of `Pad({ a : U64 })` for `Pad(r) := { z : U64, _ : U8, ..r }`,
+/// with its declaration entries written by `entries`.
+fn paddedRecordEntry(out: *std.ArrayList(u8), entries: []const EncodedDeclaredEntry) Allocator.Error!void {
+    const allocator = std.testing.allocator;
+    const Write = struct {
+        fn word(bytes: *std.ArrayList(u8), value: u32) Allocator.Error!void {
+            var encoded: [4]u8 = undefined;
+            std.mem.writeInt(u32, &encoded, value, .little);
+            try bytes.appendSlice(std.testing.allocator, &encoded);
+        }
+        fn name(bytes: *std.ArrayList(u8), text: []const u8) Allocator.Error!void {
+            try word(bytes, @intCast(text.len));
+            try bytes.appendSlice(std.testing.allocator, text);
+        }
+    };
+    try out.append(allocator, @backingInt(std.meta.Tag(types.Node).record));
+    try Write.word(out, 2);
+    for ([_][]const u8{ "a", "z" }) |field| {
+        try Write.name(out, field);
+        try Write.word(out, 0);
+        try out.append(allocator, @backingInt(types.FieldKind.inline_slot));
+        try Write.word(out, 0);
+        try out.append(allocator, 0); // no default
+    }
+    try Write.word(out, no_type);
+    try out.append(allocator, 1);
+    try Write.word(out, 1); // one unnamed field
+    try Write.word(out, 0);
+    try Write.word(out, @intCast(entries.len));
+    const EntryTag = std.meta.Tag(types.DeclaredEntry);
+    for (entries) |entry| switch (entry) {
+        .named => |label| {
+            try out.append(allocator, @backingInt(EntryTag.named));
+            try Write.name(out, label);
+        },
+        .padding => |ordinal| {
+            try out.append(allocator, @backingInt(EntryTag.padding));
+            try Write.word(out, ordinal);
+        },
+    };
+}
+
+test "function unit metadata validates a padded record's declaration entries" {
+    const allocator = std.testing.allocator;
+    const Case = struct { entries: []const EncodedDeclaredEntry, valid: bool };
+    const cases = [_]Case{
+        .{ .entries = &.{ .{ .named = "z" }, .{ .padding = 0 } }, .valid = true },
+        .{ .entries = &.{ .{ .named = "z" }, .{ .padding = 0 }, .{ .named = "a" } }, .valid = true },
+        // A label the record does not have.
+        .{ .entries = &.{ .{ .named = "y" }, .{ .padding = 0 } }, .valid = false },
+        // A padding position past the unnamed fields.
+        .{ .entries = &.{ .{ .named = "z" }, .{ .padding = 1 } }, .valid = false },
+        // A field named twice.
+        .{ .entries = &.{ .{ .named = "z" }, .{ .padding = 0 }, .{ .named = "z" } }, .valid = false },
+        // An unnamed field with no entry.
+        .{ .entries = &.{.{ .named = "z" }}, .valid = false },
+    };
+    for (cases) |case| {
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(allocator);
+        try paddedRecordEntry(&bytes, case.entries);
+        var reader = MetadataReader{ .bytes = bytes.items, .types = 1 };
+        if (case.valid) {
+            try reader.typeEntry();
+            try std.testing.expectEqual(@as(usize, 0), reader.remaining());
+        } else {
+            try std.testing.expectError(error.InvalidMetadata, reader.typeEntry());
+        }
+    }
 }
 
 test "function unit metadata validates both callable eval entry module references" {
