@@ -5886,13 +5886,18 @@ pub const ReportBuilder = struct {
     }
 
     fn buildAssociatedItemNotFoundReport(self: *Self, data: AssociatedItemNotFound) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Associated Item Not Found", "", .runtime_error);
+        var report = try Report.init(
+            self.gpa,
+            if (data.called) "Associated Function Not Found" else "Associated Constant Not Found",
+            "",
+            .runtime_error,
+        );
         errdefer report.deinit();
 
         try D.renderSliceInto(&.{
             D.bytes("The type"),
             D.ident(data.type_name).withAnnotation(.inline_code),
-            D.bytes("does not have an associated item named"),
+            D.bytes(if (data.called) "does not have an associated function named" else "does not have an associated constant named"),
             D.ident(data.item_name).withAnnotation(.inline_code),
             D.bytes(".").withNoPrecedingSpace(),
         }, self, &report, &report.headline);
