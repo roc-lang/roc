@@ -1914,70 +1914,42 @@ declaration names that declaration, so a construction through it contributes
 the same omission edges as one written through the nominal type's own name
 (Defaulted Fields).
 
-### Builtin Declarations Published Through Aliases
+### Builtin Types Named Through Aliases
 
-A builtin type's public name can be an alias of a nominal type declared
-elsewhere in the Builtin module: `Str.Utf8Problem`, `Str.Utf16Problem` and
-`Str.Utf32Problem` are aliases of `StrUtf8Problem`, `StrUtf16Problem` and
-`StrUtf32Problem`, which are declared below the `Builtin` type's block, so
-their members do not shadow `Str`'s and they are private to the module the
-way any type declared beside a type module's main type is.
-The alias is the only name Roc code has for such a type. Everything
-user-visible presents the declaration under the alias's name, and everything
-internal (method dispatch, intrinsic identity, layouts) uses the nominal
-declaration.
+`Str.Utf8Problem`, `Str.Utf16Problem` and `Str.Utf32Problem` are aliases of
+`StrUtf8Problem`, `StrUtf16Problem` and `StrUtf32Problem`, nominal types
+declared below the `Builtin` type's block. A type declared there is private
+to the Builtin module, as a type declared beside any type module's main type
+is, and its members do not shadow `Str`'s. The compiler has no rule specific
+to these types: they behave as a private nominal type behind a public alias
+behaves in any module.
 
-The builtin type registry (`CIR.builtin_type_specs`) states the relation: the
-nominal declaration's entry is not auto-imported, names its alias in
-`published_as`, and has the alias's name as its `display_name`. Registry
-compilation rejects an entry whose `display_name` is neither its declared name
-nor its publishing alias's, and one whose name carries the `Builtin.`
-qualification although an alias publishes it, or lacks it although none does. The builtin compiler reads each alias entry's
-solved type from the checked Builtin module and records the nominal
-declaration it resolves to in `BuiltinIndices.alias_targets`; it fails the
-build when a `published_as` entry is not the solved target of the alias it
-names.
-
-- Printed types. A published declaration's name (`StrUtf8Problem`) is an
-  ordinary one that a user type can share, so nothing recognizes it by name
-  alone: every renaming first establishes that the Builtin module declares
-  the type. A nominal type records that in its source bits
-  (`NominalType.originIsBuiltin`), error snapshots keep it
-  (`SnapshotNominalType.builtin_origin`), and the type writer consults its
-  display-name resolver only for such a type, after the import mapping
-  misses. The import mapping has no entry for a published declaration. The
-  checker's writer shows the registry `display_name` (`Utf8Problem`), as it
-  shows every builtin type; a type writer made without an import mapping
-  (LSP hover, the REPL, snapshot type listings) shows the alias as it shows
-  any builtin type (`Str.Utf8Problem`). Glue compares a nominal type's origin
-  with the Builtin module's identity before renaming it. A user type named
-  `StrUtf8Problem` keeps its name everywhere.
-- Member lookup. Canonicalization finds a builtin member by looking its
-  qualified name up in the Builtin module. A path through a publishing alias
-  (`Utf8Problem.is_eq`, `Str.Utf8Problem.is_eq`) misses that lookup, and only
-  then does canonicalization consult `alias_targets` for the declaration that
-  owns the member and look the member up under the owner's name. A lookup
-  that hits never consults the table. This is specific to the baked Builtin
-  module, which is checked before any module is canonicalized; aliases in
-  other modules use Associated Item Lookup Through Aliases.
+- The builtin type registry (`CIR.builtin_type_specs`) lists the aliases,
+  like every other type the `Builtin` block declares, which puts the bare
+  names (`Utf8Problem`) in scope and gives them their display names. It does
+  not list the private nominal types.
+- Printed types. A type reached through the alias is the alias, so it prints
+  under the alias's name. Builtin.roc's own annotations name these types
+  through the aliases, including inside the nominal types' blocks, so
+  inferred types carry the alias. A type that has lost its alias prints
+  under the nominal type's own name, as it does for any module.
+- Member lookup. `Utf8Problem.is_eq` and `Str.Utf8Problem.is_eq` are
+  Associated Item Lookup Through Aliases: canonicalization sees that the
+  path's type segments name an alias declaration and emits
+  `e_lookup_associated`, and checking resolves the alias to the nominal type
+  that owns the member.
 - Construction and patterns through the alias are ordinary Nominal
   Construction Through Aliases.
-- Documentation. The docs generator has one rule for a nominal type that
-  only an alias names, and the Builtin module follows it like any package
-  (`adoptRenamedNominals` in src/docs/extract.zig): a public alias that
-  applies a nominal type with no public name of its own to exactly the
-  alias's parameters is that type's public name. The alias's entry is the
-  nominal type's (its kind, parameters, backing type and members, under
-  the alias's name), the nominal type has no entry of its own, and every
-  reference to it renders as a reference to the alias. The nominal type
-  may be declared in the alias's module or in a module the package does
-  not expose, and a renamed type can rename further types through aliases
-  nested in it. `roc bump` applies the same rule to a package's public API
-  (`adoptRenamedNominals` in src/bump/extract.zig). The Builtin docs need
-  no registry lookup for this: a published declaration is private by its
-  position, below the `Builtin` block. Another package's docs show a
-  published builtin declaration under the alias's name, read from the
-  registry for a type whose origin is the Builtin module.
+- Documentation and `roc bump` apply their one rule for a nominal type that
+  only an alias names (`adoptRenamedNominals` in src/docs/extract.zig and
+  src/bump/extract.zig): a public alias that applies a nominal type with no
+  public name of its own to exactly the alias's parameters is that type's
+  public name. The alias's entry is the nominal type's (its kind, parameters,
+  backing type and members, under the alias's name), the nominal type has no
+  entry of its own, and every reference to it renders as a reference to the
+  alias. The nominal type may be declared in the alias's module or in a
+  module the package does not expose, and a renamed type can rename further
+  types through aliases nested in it.
 
 ### Compile-Time Evaluation And Static Storage
 

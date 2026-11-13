@@ -83,13 +83,6 @@ pub fn validateBuiltinIndices(env: *const ModuleEnv, indices: CIR.BuiltinIndices
         if (!std.mem.eql(u8, env.getIdentText(ident), spec.qualified_name)) return error.CorruptEmbeddedBuiltins;
     }
 
-    for (indices.alias_targets) |target| {
-        if (!indicesContainStatement(indices, target.alias)) return error.CorruptEmbeddedBuiltins;
-        if (!indicesContainStatement(indices, target.nominal)) return error.CorruptEmbeddedBuiltins;
-        if (env.store.getStatement(target.alias) != .s_alias_decl) return error.CorruptEmbeddedBuiltins;
-        if (env.store.getStatement(target.nominal) != .s_nominal_decl) return error.CorruptEmbeddedBuiltins;
-    }
-
     if (!std.mem.eql(u8, env.getIdentText(indices.ok_ident), "Ok")) return error.CorruptEmbeddedBuiltins;
     if (!std.mem.eql(u8, env.getIdentText(indices.err_ident), "Err")) return error.CorruptEmbeddedBuiltins;
 
@@ -101,6 +94,9 @@ pub fn validateBuiltinIndices(env: *const ModuleEnv, indices: CIR.BuiltinIndices
         const header = env.store.getTypeHeader(header_idx);
         const name = env.getIdentText(header.name);
         if (isBuiltinContainerName(name)) continue;
+        // The registry lists the types the Builtin type's block declares.
+        // A type declared beside it is private to the module.
+        if (!std.mem.startsWith(u8, name, "Builtin.")) continue;
         if (!indicesContainStatement(indices, stmt_idx)) return error.CorruptEmbeddedBuiltins;
     }
 }

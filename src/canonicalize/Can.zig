@@ -331,9 +331,6 @@ used_patterns: collections.DenseMap(Pattern.Idx, void),
 globally_resolvable_patterns: collections.DenseMap(Pattern.Idx, void),
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: collections.DenseMap(Ident.Idx, AutoImportedType),
-/// The builtin alias declarations that name a nominal type, each with the
-/// nominal declaration that owns its members.
-builtin_alias_targets: []const CIR.BuiltinAliasTarget = &.{},
 /// Auto-imported builtin type names that some type declaration in this
 /// source also declares. Only these can yield to a source declaration.
 builtin_type_names_declared_in_source: collections.DenseMap(Ident.Idx, void),
@@ -535,7 +532,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .used_patterns = .keyed,
     .globally_resolvable_patterns = .keyed,
     .builtin_auto_imported_types = .input,
-    .builtin_alias_targets = .input,
     .builtin_type_names_declared_in_source = .input,
     .import_indices = .keyed,
     .parser_type_decl_states = .keyed,
@@ -1119,7 +1115,6 @@ fn initInternal(
                 context.builtin_types.builtin_module_env,
                 context.builtin_types.builtin_indices,
             );
-            result.builtin_alias_targets = context.builtin_types.builtin_indices.alias_targets;
             try result.setupAutoImportedBuiltinTypes(env, gpa);
             try result.recordBuiltinTypeNamesDeclaredInSource();
         }
@@ -8731,12 +8726,16 @@ fn canonicalizeModuleQualifiedIdent(
             return .{ .expr = CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty(), .diverges = false } };
         }
 
-        // The path names no member directly. When it names a member through
-        // a builtin alias, the member belongs to the nominal declaration the
-        // builtin compiler recorded for that alias.
+        // The path names no member directly. When its type segments name a
+        // builtin alias, the member belongs to whatever type checking
+        // resolves the alias to, as for an imported module's alias.
         if (!self.isSourceTagIdent(ident)) {
-            if (try self.builtinAliasMemberNode(info, qualifier_tokens[1..], field_text)) |target_node_idx| {
-                return .{ .expr = try self.canonicalizedExternalLookup(import_idx, target_node_idx, ident, region) };
+            if (try self.builtinAliasStatement(info, qualifier_tokens[1..])) |alias_node_idx| {
+                const type_ident = if (qualifier_tokens.len > 1)
+                    try self.joinedQualifierIdent(qualifier_tokens)
+                else
+                    module_name;
+                return .{ .expr = try self.canonicalizedExternalAssociatedLookup(import_idx, alias_node_idx, type_ident, ident, region) };
             }
         }
 
@@ -8797,43 +8796,29 @@ fn canonicalizeModuleQualifiedIdent(
     return .{ .expr = expr };
 }
 
-/// The exposed value `member` of the nominal declaration a builtin alias
-/// names, when the auto-imported builtin type `info` followed by the nested
-/// type segments is such an alias.
-fn builtinAliasMemberNode(
+/// The alias declaration the auto-imported builtin type `info` followed by
+/// the nested type segments names, when it names one.
+fn builtinAliasStatement(
     self: *Self,
     info: AutoImportedType,
     segment_tokens: []const u32,
-    member: []const u8,
 ) std.mem.Allocator.Error!?u32 {
-    if (!autoImportedTypeUsesCompilerBuiltinImport(info)) return null;
-
     const top = self.qualified_ident_bytes.top();
     defer self.qualified_ident_bytes.clearFrom(top);
 
-    const type_stmt: CIR.Statement.Idx = if (segment_tokens.len == 0)
-        info.statement_idx orelse return null
-    else stmt: {
+    const type_node: u32 = if (segment_tokens.len == 0)
+        @backingInt(info.statement_idx orelse return null)
+    else node: {
         var qualified: []const u8 = self.env.getIdent(info.qualified_type_ident);
         for (segment_tokens) |raw_tok| {
             const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse return null;
             qualified = try appendQualifiedText(&self.qualified_ident_bytes, qualified, self.env.getIdent(segment));
         }
         const type_ident = info.env.common.findIdent(qualified) orelse return null;
-        const type_node = info.env.getExposedTypeNodeIndexById(type_ident) orelse return null;
-        break :stmt @fromBackingInt(@intCast(type_node));
+        break :node info.env.getExposedTypeNodeIndexById(type_ident) orelse return null;
     };
-
-    const owner_stmt = for (self.builtin_alias_targets) |target| {
-        if (target.alias == type_stmt) break target.nominal;
-    } else return null;
-    const owner_header = info.env.store.getTypeHeader(info.env.store.getStatement(owner_stmt).s_nominal_decl.header);
-    // The owner is declared beside the Builtin type, so its own name is bare
-    // while its members are named under the module's name.
-    const owner_name = try appendQualifiedText(&self.qualified_ident_bytes, info.env.module_name, info.env.getIdentText(owner_header.name));
-    const member_name = try appendQualifiedText(&self.qualified_ident_bytes, owner_name, member);
-    const member_ident = info.env.common.findIdent(member_name) orelse return null;
-    return info.env.getExposedValueNodeIndexById(member_ident);
+    if (info.env.store.getStatement(@fromBackingInt(@intCast(type_node))) != .s_alias_decl) return null;
+    return type_node;
 }
 
 /// Whether the qualifier tokens name a type nested inside the auto-imported

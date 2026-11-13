@@ -79,9 +79,6 @@ pub const SnapshotNominalType = struct {
     ident: types.TypeIdent,
     vars: SnapshotContentIdxSafeList.Range,
     origin_module: base.ModuleIdentity.Idx,
-    /// Whether the Builtin module declares the type, which decides the name
-    /// a builtin declaration published through an alias is shown under.
-    builtin_origin: bool,
 };
 
 /// A snapshotted function type with argument types and return type.
@@ -190,7 +187,6 @@ pub const FormatContext = struct {
     import_mapping: ?types.import_mapping.ImportMapping,
     default_source: @FieldType(TypeWriter, "mb_default_source"),
     default_source_ctx: *const anyopaque,
-    display_name: @FieldType(TypeWriter, "mb_display_name"),
 
     /// The context `writer` renders with.
     pub fn of(writer: *const TypeWriter) FormatContext {
@@ -199,7 +195,6 @@ pub const FormatContext = struct {
             .import_mapping = if (writer.import_mapping) |mapping| mapping.* else null,
             .default_source = writer.mb_default_source,
             .default_source_ctx = writer.default_source_ctx,
-            .display_name = writer.mb_display_name,
         };
     }
 };
@@ -275,7 +270,6 @@ const NominalFrame = struct {
     fill: SnapshotFill,
     ident: types.TypeIdent,
     origin_module: base.ModuleIdentity.Idx,
-    builtin_origin: bool,
     args: []const types.Var,
     idx: u32 = 0,
     backing: types.Var = undefined,
@@ -727,7 +721,6 @@ pub const Store = struct {
                         .fill = fill,
                         .ident = nominal_type.ident,
                         .origin_module = nominal_type.origin_module,
-                        .builtin_origin = nominal_type.originIsBuiltin(),
                         // A declaration in a function body's trailing
                         // context arguments are never shown.
                         .args = store.nominalDeclaredArgs(nominal_type),
@@ -957,7 +950,6 @@ pub const Store = struct {
                             .ident = frame.ident,
                             .vars = args_range,
                             .origin_module = frame.origin_module,
-                            .builtin_origin = frame.builtin_origin,
                         },
                     } });
                     return true;

@@ -128,7 +128,6 @@ pub fn appendStored(
             .import_mapping = import_mapping,
             .default_source = ModuleEnv.typeWriterDefaultSource,
             .default_source_ctx = env,
-            .display_name = ModuleEnv.typeWriterPublishedBuiltinDisplayName,
         });
         var builder = try report.ReportBuilder.init(
             gpa,

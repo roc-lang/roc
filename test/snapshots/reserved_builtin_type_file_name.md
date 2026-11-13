@@ -80,7 +80,7 @@ Bool :: [].{
 					(p-assign (ident "#interp_0"))
 					(e-lookup-local
 						(p-assign (ident "s"))))
-				(e-interpolation (constraint-fn-var 245) (dispatcher-var 13)
+				(e-interpolation (constraint-fn-var 239) (dispatcher-var 13)
 					(first
 						(e-literal (string "user level ")))
 					(parts

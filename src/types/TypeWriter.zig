@@ -99,8 +99,6 @@ import_mapping: ?*const import_mapping_mod.ImportMapping,
 /// Optional resolver for rendering a defaulted field's source expression.
 mb_default_source: ?DefaultSourceFn = null,
 default_source_ctx: *const anyopaque = undefined,
-/// Optional resolver for types shown under a name other than their own.
-mb_display_name: ?DisplayNameFn = null,
 /// The polarity of the position currently being written: `.pos` at the root,
 /// flipped through function argument positions and kept through returns.
 /// Tag unions in output positions are implicitly open, so an anonymous
@@ -131,17 +129,6 @@ gpa: std.mem.Allocator,
 
 /// Resolves a defaulted field identity to source text for display.
 pub const DefaultSourceFn = *const fn (ctx: *const anyopaque, id: types_mod.DefaultId) ?[]const u8;
-
-/// Returns the name a type the Builtin module declares, whose identifier text
-/// is `name`, is shown under, or null when it is shown under a name derived
-/// from its own.
-pub const DisplayNameFn = *const fn (name: []const u8) ?[]const u8;
-
-/// Install the resolver consulted for the name of a type the Builtin module
-/// declares, when the import mapping does not cover it.
-pub fn setDisplayNameResolver(self: *TypeWriter, resolver: DisplayNameFn) void {
-    self.mb_display_name = resolver;
-}
 
 /// Install the source resolver used when rendering defaulted record fields.
 pub fn setDefaultSourceResolver(self: *TypeWriter, ctx: *const anyopaque, resolver: DefaultSourceFn) void {
@@ -345,7 +332,6 @@ pub fn initFromParts(
         .import_mapping = import_mapping,
         .mb_default_source = null,
         .default_source_ctx = undefined,
-        .mb_display_name = null,
         .polarity = .pos,
         .gpa = gpa,
     };
@@ -803,7 +789,7 @@ fn writeVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, root_var: Var) err
 /// Write an alias type's name, and push the frame for its arguments when it
 /// has any.
 fn startAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias) error{ OutOfMemory, WriteFailed }!bool {
-    try writer.writeAll(self.getDisplayName(alias.ident.ident_idx, alias.source_decl.originIsBuiltin()));
+    try writer.writeAll(self.getDisplayName(alias.ident.ident_idx));
     // An alias stores its backing var as the first element of its span, so
     // its arguments are the span with that element dropped.
     var args = alias.vars.nonempty;
@@ -853,7 +839,7 @@ fn startTuple(self: *TypeWriter, writer: *ByteWrite, tuple: Tuple) error{ OutOfM
 /// Write a nominal type's name, and push the frame for its arguments when it
 /// has any.
 fn startNominalType(self: *TypeWriter, writer: *ByteWrite, nominal_type: NominalType) error{ OutOfMemory, WriteFailed }!bool {
-    try writer.writeAll(self.getDisplayName(nominal_type.ident.ident_idx, nominal_type.originIsBuiltin()));
+    try writer.writeAll(self.getDisplayName(nominal_type.ident.ident_idx));
     const args = self.displayedNominalArgs(nominal_type);
     if (args.len() == 0) return false;
     try writer.writeAll("(");
@@ -1665,23 +1651,15 @@ pub fn getIdent(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
 
 /// Gets the display name for a type identifier, accounting for import mappings.
 /// If the identifier is in the import_mapping, returns the mapped name.
-/// Otherwise, returns the original identifier text. `origin_is_builtin` says
-/// whether the Builtin module declares the type: the resolver renames only
-/// that module's declarations, whose names another module's type can share.
-fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx, origin_is_builtin: bool) []const u8 {
+/// Otherwise, returns the original identifier text.
+fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
     if (self.import_mapping) |mapping| {
         if (mapping.get(idx)) |display_idx| {
             return self.idents.getText(display_idx);
         }
     }
 
-    const name = self.idents.getText(idx);
-    if (origin_is_builtin) {
-        if (self.mb_display_name) |resolve| {
-            if (resolve(name)) |shown| return shown;
-        }
-    }
-    return stripBuiltinQualification(name);
+    return stripBuiltinQualification(self.idents.getText(idx));
 }
 
 /// Strip the implementation-detail `Builtin.` / `Num.` qualification from a

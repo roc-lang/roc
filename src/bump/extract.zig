@@ -1014,14 +1014,6 @@ fn qualifiedPath(
         // Builtin type names may arrive pre-qualified ("Builtin.Str"); users
         // never write that namespace, so drop it (same policy as docs).
         const builtin_prefix = "Builtin.";
-        // A builtin declaration published through an alias has only the
-        // alias's name in a public API.
-        if (can.CIR.builtinTypePublishedName(type_name)) |published| {
-            return try std.fmt.allocPrint(alloc, "{s}{s}", .{
-                published.alias_qualified_name[builtin_prefix.len..],
-                published.member_path,
-            });
-        }
         const bare = if (std.mem.startsWith(u8, type_name, builtin_prefix))
             type_name[builtin_prefix.len..]
         else
@@ -1040,20 +1032,6 @@ test "nameIsPublic follows the type module visibility rule" {
     try std.testing.expect(!nameIsPublic("helper", "Color"));
     try std.testing.expect(!nameIsPublic("Colors", "Color"));
     try std.testing.expect(!nameIsPublic("Color2.hex", "Color"));
-}
-
-test "a builtin type published through an alias takes the alias's path" {
-    const alias_path = try qualifiedPath(std.testing.allocator, .builtin, "Builtin", "Builtin.Str.Utf8Problem");
-    defer std.testing.allocator.free(alias_path);
-    try std.testing.expectEqualStrings("Str.Utf8Problem", alias_path);
-
-    const qualified_path = try qualifiedPath(std.testing.allocator, .builtin, "Builtin", "Builtin.StrUtf8Problem");
-    defer std.testing.allocator.free(qualified_path);
-    try std.testing.expectEqualStrings("Str.Utf8Problem", qualified_path);
-
-    const relative_path = try qualifiedPath(std.testing.allocator, .builtin, "Builtin", "StrUtf8Problem");
-    defer std.testing.allocator.free(relative_path);
-    try std.testing.expectEqualStrings("Str.Utf8Problem", relative_path);
 }
 
 test "a root namespace leaves self type paths unqualified" {

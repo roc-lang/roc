@@ -41,7 +41,6 @@ pub fn init(snapshots: *const snapshot.Store, capture_idx: u32, context: snapsho
     errdefer self.writer.deinit();
     self.writer.mb_default_source = context.default_source;
     self.writer.default_source_ctx = context.default_source_ctx;
-    self.writer.mb_display_name = context.display_name;
 
     // Allocate identities before their contents, preserving shared variables
     // and recursive edges without recursing on the native stack.
@@ -131,7 +130,7 @@ fn content(self: *Self, snapshots: *const snapshot.Store, captured: snapshot.Sna
                 defer self.gpa.free(args);
                 // Snapshot nominal spans start with diagnostic backing data.
                 // TypeWriter only displays the nominal's name and arguments.
-                break :blk try self.store.mkNominalWithSourceDeclAndBuiltinOrigin(nominal.ident, args[1..], nominal.origin_module, null, false, nominal.builtin_origin);
+                break :blk try self.store.mkNominal(nominal.ident, args[1..], nominal.origin_module, false);
             },
             inline .fn_pure, .fn_effectful, .fn_unbound => |func, kind| blk: {
                 const args = try self.vars(snapshots, func.args);

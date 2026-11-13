@@ -23775,15 +23775,15 @@ StrUtf8Problem := [
 	CodepointTooLarge,
 	EncodesSurrogateHalf,
 ].{
-	is_eq : StrUtf8Problem, StrUtf8Problem -> Bool
+	is_eq : Str.Utf8Problem, Str.Utf8Problem -> Bool
 }
 
 StrUtf16Problem := [UnpairedHighSurrogate, UnpairedLowSurrogate, UnexpectedEndOfSequence].{
-	is_eq : StrUtf16Problem, StrUtf16Problem -> Bool
+	is_eq : Str.Utf16Problem, Str.Utf16Problem -> Bool
 }
 
 StrUtf32Problem := [CodePointTooLarge, SurrogateCodePoint, UnexpectedEndOfSequence].{
-	is_eq : StrUtf32Problem, StrUtf32Problem -> Bool
+	is_eq : Str.Utf32Problem, Str.Utf32Problem -> Bool
 }
 
 hasher_start : U64 -> Hasher

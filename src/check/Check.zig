@@ -4819,7 +4819,6 @@ pub fn fixupTypeWriter(self: *Self) void {
     // Defaulted fields render their default's source snippet when it was
     // declared in this module (design.md "Defaulted Fields").
     self.type_writer.setDefaultSourceResolver(self.cir, ModuleEnv.typeWriterDefaultSource);
-    self.type_writer.setDisplayNameResolver(ModuleEnv.typeWriterPublishedBuiltinDisplayName);
 }
 
 /// Struct-typed field types that own no memory, so `deinit` releases nothing.
@@ -62256,17 +62255,81 @@ pub fn createImportMapping(
     var mapping = types_mod.import_mapping.ImportMapping.init(gpa);
     errdefer mapping.deinit();
 
-    // Step 1: Map each builtin type's qualified name to its registry display
-    // name. A qualified name carries the `Builtin.` module qualification,
-    // which no user type can have. A declaration published through an alias
-    // has a bare name a user type can share, so it has no entry here: the
-    // type writer renames it by its origin instead.
-    if (builtin_module != null and builtin_indices != null) {
-        inline for (CIR.builtin_type_specs) |spec| {
-            if (spec.published_as != null) continue;
-            const display_ident = try idents.insert(gpa, Ident.for_text(spec.display_name));
-            const qualified_ident = try idents.insert(gpa, Ident.for_text(spec.qualified_name));
-            try putBetterDisplayName(&mapping, idents, qualified_ident, display_ident);
+    // Step 1: Add auto-imported builtin types
+    if (builtin_module) |builtin_env| {
+        if (builtin_indices) |indices| {
+            inline for (CIR.builtin_type_specs) |spec| {
+                const stmt_idx: CIR.Statement.Idx = @field(indices, spec.type_field);
+
+                // Skip invalid statement indices (index 0 is typically invalid/sentinel)
+                if (@backingInt(stmt_idx) != 0) {
+                    const stmt = builtin_env.store.getStatement(stmt_idx);
+                    const header_idx = switch (stmt) {
+                        .s_nominal_decl => |decl| decl.header,
+                        .s_alias_decl => |alias| alias.header,
+                        .s_decl,
+                        .s_var,
+                        .s_var_uninitialized,
+                        .s_reassign,
+                        .s_crash,
+                        .s_dbg,
+                        .s_expr,
+                        .s_expect,
+                        .s_for,
+                        .s_while,
+                        .s_infinite_loop,
+                        .s_breakable_loop,
+                        .s_break,
+                        .s_return,
+                        .s_import,
+                        .s_where_alias_decl,
+                        .s_type_anno,
+                        .s_type_var_alias,
+                        .s_runtime_error,
+                        => null,
+                    };
+                    if (header_idx) |hdr_idx| {
+                        const header = builtin_env.store.getTypeHeader(hdr_idx);
+                        const qualified_name = builtin_env.getIdentText(header.name);
+                        const relative_name = builtin_env.getIdentText(header.relative_name);
+
+                        // Extract display name (last component after dots)
+                        const display_name = blk: {
+                            var last_dot: usize = 0;
+                            for (qualified_name, 0..) |c, i| {
+                                if (c == '.') last_dot = i + 1;
+                            }
+                            break :blk qualified_name[last_dot..];
+                        };
+
+                        const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                        const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
+                        const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
+
+                        // Add mapping for qualified_name -> display_name
+                        if (mapping.get(qualified_ident)) |existing_ident| {
+                            const existing_name = idents.getText(existing_ident);
+                            if (displayNameIsBetter(display_name, existing_name)) {
+                                try mapping.put(qualified_ident, display_ident);
+                            }
+                        } else {
+                            try mapping.put(qualified_ident, display_ident);
+                        }
+
+                        // Also add mapping for relative_name -> display_name
+                        // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
+                        if (mapping.get(relative_ident)) |existing_ident| {
+                            const existing_name = idents.getText(existing_ident);
+                            if (displayNameIsBetter(display_name, existing_name)) {
+                                try mapping.put(relative_ident, display_ident);
+                            }
+                        } else {
+                            try mapping.put(relative_ident, display_ident);
+                        }
+                    }
+                    // else: Skip non-nominal/alias statements (e.g., nested types that aren't directly importable)
+                }
+            }
         }
     }
 
@@ -62295,18 +62358,6 @@ pub fn createImportMapping(
 }
 
 const displayNameIsBetter = can.Can.displayNameIsBetter;
-
-fn putBetterDisplayName(
-    mapping: *types_mod.import_mapping.ImportMapping,
-    idents: *const Ident.Store,
-    key: Ident.Idx,
-    display_ident: Ident.Idx,
-) std.mem.Allocator.Error!void {
-    if (mapping.get(key)) |existing_ident| {
-        if (!displayNameIsBetter(idents.getText(display_ident), idents.getText(existing_ident))) return;
-    }
-    try mapping.put(key, display_ident);
-}
 
 test "issue 11393: imported codec methods instantiate independently and reject unsupported arguments" {
     const TestEnv = @import("test/TestEnv.zig");

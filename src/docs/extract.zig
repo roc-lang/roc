@@ -3361,14 +3361,6 @@ fn allocDocType(gpa: Allocator, value: DocType) ExtractError!*const DocType {
 /// Parse a full type name (like "Builtin.Str", "Num.U64") into module_path and type_name.
 /// For the structured output, we want to preserve the full module path as-is from the compiler.
 fn getDisplayName(origin_text: []const u8, ident_text: []const u8) []const u8 {
-    // A builtin declaration published through an alias is shown as the alias.
-    if (getModulePath(origin_text).len == 0) {
-        if (CIR.builtinTypePublishedName(ident_text)) |published| {
-            if (published.member_path.len == 0) {
-                return published.alias_qualified_name[CIR.builtin_module_prefix.len..];
-            }
-        }
-    }
     // Strip module prefix from the ident text if it matches the origin
     // e.g., origin="Builtin", ident="Builtin.Str" -> display="Str"
     // e.g., origin="Num", ident="Num.U64" -> display="U64"

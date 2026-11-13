@@ -111,10 +111,7 @@ pub fn main(process_init: std.process.Init) !void {
         gpa.free(builtin_roc_source);
     }
 
-    var builtin_indices = try buildBuiltinIndices(gpa, builtin_env);
-    const alias_targets = try buildBuiltinAliasTargets(gpa, builtin_env, builtin_indices);
-    defer gpa.free(alias_targets);
-    builtin_indices.alias_targets = alias_targets;
+    const builtin_indices = try buildBuiltinIndices(gpa, builtin_env);
     try installBuiltinNodeIndices(gpa, builtin_env, builtin_indices);
 
     // Create output directories when needed.
@@ -206,45 +203,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     }
     result.ok_ident = expectBuiltinIdent(env, "Ok");
     result.err_ident = expectBuiltinIdent(env, "Err");
-    result.alias_targets = &.{};
     return result;
-}
-
-/// The nominal declaration each alias entry of the registry names, read from
-/// the checked Builtin module's solved alias types.
-fn buildBuiltinAliasTargets(
-    gpa: Allocator,
-    env: *const ModuleEnv,
-    indices: BuiltinIndices,
-) Allocator.Error![]const CIR.BuiltinAliasTarget {
-    var targets = std.ArrayList(CIR.BuiltinAliasTarget).empty;
-    errdefer targets.deinit(gpa);
-    inline for (CIR.builtin_type_specs) |spec| {
-        const stmt_idx: CIR.Statement.Idx = @field(indices, spec.type_field);
-        if (env.store.getStatement(stmt_idx) == .s_alias_decl) {
-            const content = env.types.resolveThroughAliases(ModuleEnv.varFrom(stmt_idx)).desc.content;
-            if (content == .structure and content.structure == .nominal_type) {
-                const nominal = content.structure.nominal_type;
-                if (!nominal.originIsBuiltin()) base.invariant("builtin compiler invariant violated: the alias \"{s}\" names a nominal type the Builtin module does not declare", .{spec.qualified_name});
-                try targets.append(gpa, .{
-                    .alias = stmt_idx,
-                    .nominal = @fromBackingInt(@intCast(nominal.statement())),
-                });
-            }
-        }
-    }
-    inline for (CIR.builtin_type_specs) |spec| {
-        if (spec.published_as) |alias_name| {
-            const nominal_stmt: CIR.Statement.Idx = @field(indices, spec.type_field);
-            const published = for (targets.items) |target| {
-                if (target.nominal != nominal_stmt) continue;
-                const header = env.store.getTypeHeader(env.store.getStatement(target.alias).s_alias_decl.header);
-                if (std.mem.eql(u8, env.getIdentText(header.name), alias_name)) break true;
-            } else false;
-            if (!published) base.invariant("builtin compiler invariant violated: \"{s}\" is registered as published by the alias \"{s}\", whose solved type is not that declaration", .{ spec.qualified_name, alias_name });
-        }
-    }
-    return try targets.toOwnedSlice(gpa);
 }
 
 fn findBuiltinTypeDeclaration(gpa: Allocator, env: *const ModuleEnv, spec: CIR.BuiltinTypeSpec) !CIR.Statement.Idx {
@@ -587,12 +546,6 @@ fn writeBuiltinIndicesZig(
             try out.print("    .{s} = {d},\n", .{ field_name, @backingInt(value) });
         } else if (FieldType == base.Ident.Idx) {
             try out.print("    .{s} = {d},\n", .{ field_name, @as(u32, @bitCast(value)) });
-        } else if (FieldType == []const CIR.BuiltinAliasTarget) {
-            try out.print("    .{s} = [_][2]u32{{", .{field_name});
-            for (value) |target| {
-                try out.print(" .{{ {d}, {d} }},", .{ @backingInt(target.alias), @backingInt(target.nominal) });
-            }
-            try out.writeAll(" },\n");
         } else {
             @compileError("unsupported BuiltinIndices field type: " ++ @typeName(FieldType));
         }
@@ -600,18 +553,6 @@ fn writeBuiltinIndicesZig(
 
     try out.writeAll(
         \\};
-        \\
-        \\fn AliasTargets(comptime CIR: type) type {
-        \\    return struct {
-        \\        const values: [builtin_indices_raw.alias_targets.len]CIR.BuiltinAliasTarget = blk: {
-        \\            var targets: [builtin_indices_raw.alias_targets.len]CIR.BuiltinAliasTarget = undefined;
-        \\            for (&targets, builtin_indices_raw.alias_targets) |*target, raw| {
-        \\                target.* = .{ .alias = @fromBackingInt(raw[0]), .nominal = @fromBackingInt(raw[1]) };
-        \\            }
-        \\            break :blk targets;
-        \\        };
-        \\    };
-        \\}
         \\
         \\pub fn builtinIndices(comptime CIR: type) CIR.BuiltinIndices {
         \\    return .{
@@ -623,8 +564,6 @@ fn writeBuiltinIndicesZig(
             try out.print("        .{s} = @fromBackingInt(builtin_indices_raw.{s}),\n", .{ field_name, field_name });
         } else if (FieldType == base.Ident.Idx) {
             try out.print("        .{s} = @bitCast(@as(u32, builtin_indices_raw.{s})),\n", .{ field_name, field_name });
-        } else if (FieldType == []const CIR.BuiltinAliasTarget) {
-            try out.print("        .{s} = &AliasTargets(CIR).values,\n", .{field_name});
         } else {
             @compileError("unsupported BuiltinIndices field type: " ++ @typeName(FieldType));
         }
