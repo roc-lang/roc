@@ -124,7 +124,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 			(e-if
 				(if-branches
 					(if-branch
-						(e-structural-eq (negated "false")
+						(e-method-eq (negated "false")
 							(lhs
 								(e-lookup-local
 									(p-assign (ident "a"))))
@@ -134,7 +134,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 							(e-tag (name "False")))))
 				(if-else
 					(e-block
-						(e-structural-eq (negated "false")
+						(e-method-eq (negated "false")
 							(lhs
 								(e-lookup-local
 									(p-assign (ident "a"))))
@@ -146,7 +146,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-structural-eq (negated "false")
+			(e-method-eq (negated "false")
 				(lhs
 					(e-lookup-local
 						(p-assign (ident "v"))))
@@ -174,7 +174,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 		(p-assign (ident "checks"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 350)
+				(e-call (constraint-fn-var 339)
 					(e-lookup-local
 						(p-assign (ident "same")))
 					(e-tag (name "Yes")
@@ -183,7 +183,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 					(e-tag (name "Yes")
 						(args
 							(e-num (value "1")))))
-				(e-call (constraint-fn-var 366)
+				(e-call (constraint-fn-var 355)
 					(e-lookup-local
 						(p-assign (ident "is_nope")))
 					(e-tag (name "Yes")

@@ -2143,7 +2143,7 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red]")
+			(text "[Blue, Red, ..d] where [d.is_eq : d, d -> Bool]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -2194,7 +2194,7 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red]")
+			(text "[Blue, Red, ..d] where [d.is_eq : d, d -> Bool]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -3198,7 +3198,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1369) (dispatcher-var 281)
+						(e-interpolation (constraint-fn-var 1372) (dispatcher-var 281)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3255,11 +3255,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1578)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1580)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1575)
+										(e-dispatch-call (method "times") (constraint-fn-var 1577)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3274,18 +3274,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1611)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1613)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1601)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1603)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1638)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1640)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1628)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1630)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3300,11 +3300,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1677)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1679)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1674)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1676)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3319,12 +3319,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1743)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1745)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1713)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1715)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))

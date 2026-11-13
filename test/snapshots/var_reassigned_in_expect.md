@@ -338,7 +338,7 @@ NO CHANGE
 											(e-lookup-local
 												(p-assign (ident "x"))))))
 								(e-empty_record)))
-						(e-dispatch-call (method "is_gte") (constraint-fn-var 428)
+						(e-dispatch-call (method "is_gte") (constraint-fn-var 429)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$left"))))
@@ -361,15 +361,15 @@ NO CHANGE
 						(e-tag (name "True"))))
 				(s-reassign
 					(p-var-assign (ident "$count"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 473)
+					(e-dispatch-call (method "plus") (constraint-fn-var 475)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "$count"))))
 						(args
 							(e-num (value "1")))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 479)
+				(e-dispatch-call (method "plus") (constraint-fn-var 481)
 					(receiver
-						(e-dispatch-call (method "minus") (constraint-fn-var 475)
+						(e-dispatch-call (method "minus") (constraint-fn-var 477)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$remaining"))))

@@ -450,7 +450,7 @@ main! = |_args| {
 			(e-match
 				(match
 					(cond
-						(e-call (constraint-fn-var 428)
+						(e-call (constraint-fn-var 429)
 							(e-lookup-local
 								(p-assign (ident "f")))
 							(e-empty_record)))
@@ -488,10 +488,10 @@ main! = |_args| {
 						(e-match
 							(match
 								(cond
-									(e-call (constraint-fn-var 468)
+									(e-call (constraint-fn-var 469)
 										(e-lookup-local
 											(p-assign (ident "countdown")))
-										(e-dispatch-call (method "minus") (constraint-fn-var 466)
+										(e-dispatch-call (method "minus") (constraint-fn-var 467)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "n"))))
@@ -518,7 +518,7 @@ main! = |_args| {
 			(e-match
 				(match
 					(cond
-						(e-dispatch-call (method "kind") (constraint-fn-var 480)
+						(e-dispatch-call (method "kind") (constraint-fn-var 481)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "x"))))
@@ -580,7 +580,7 @@ main! = |_args| {
 						(elems
 							(e-tag (name "A"))
 							(e-tag (name "B")))))
-				(e-dispatch-call (method "map") (constraint-fn-var 531)
+				(e-dispatch-call (method "map") (constraint-fn-var 532)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "xs"))))
