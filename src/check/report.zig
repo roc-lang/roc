@@ -79,6 +79,7 @@ const InvalidNominalDeclRecursion = problem_mod.InvalidNominalDeclRecursion;
 // Nominal type errors
 const CannotAccessOpaqueNominal = problem_mod.CannotAccessOpaqueNominal;
 const NominalTypeResolutionFailed = problem_mod.NominalTypeResolutionFailed;
+const AliasNamesNoNominalType = problem_mod.AliasNamesNoNominalType;
 
 // Platform errors
 const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
@@ -1062,6 +1063,9 @@ pub const ReportBuilder = struct {
             },
             .nominal_type_resolution_failed => |data| {
                 return self.buildNominalTypeResolutionFailed(data);
+            },
+            .alias_names_no_nominal_type => |data| {
+                return self.buildAliasNamesNoNominalType(data);
             },
             .static_dispatch => |detail| {
                 switch (detail) {
@@ -4786,6 +4790,33 @@ pub const ReportBuilder = struct {
             D.bytes("instead of"),
             D.bytes("::").withAnnotation(.binary_operator),
             D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildAliasNamesNoNominalType(
+        self: *Self,
+        data: AliasNamesNoNominalType,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Expected Nominal Type", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("You are using the type"),
+            D.ident(data.alias_name).withAnnotation(.inline_code),
+            D.bytes("like a nominal type, but it is an alias of a type that is not nominal."),
+        }, self, &report, &report.headline);
+
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
+        }
+
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("You can declare the type it aliases with"),
+            D.bytes(":=").withAnnotation(.binary_operator),
+            D.bytes("to make it nominal."),
         }, self, &report);
 
         return report;

@@ -21758,6 +21758,7 @@ fn generateDocs(
             const source_decl = module_info.public_type_decl orelse continue;
             try public_type_projections.append(ctx.gpa, .{
                 .public_name = module_info.name,
+                .page_name = module_info.name,
                 .package_name = build_env.displayNameForPackage(module_info.package_name),
                 .source_env = module_info.checked.env,
                 .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
@@ -21765,6 +21766,25 @@ fn generateDocs(
                 .public_order = module_info.public_order,
             });
         }
+    }
+    // A public alias that renames a nominal type documents that type, so
+    // every such type joins the projections.
+    {
+        var documented = std.ArrayList(extract.DocumentedModule).empty;
+        defer documented.deinit(ctx.gpa);
+        for (modules) |documented_module| {
+            try documented.append(ctx.gpa, .{
+                .name = documented_module.name,
+                .package_name = build_env.displayNameForPackage(documented_module.package_name),
+                .env = documented_module.checked.env,
+                .public_type_decl = documented_module.public_type_decl,
+                .exposed_names = documented_module.docs_exposed_names,
+                .public_order = documented_module.public_order,
+            });
+        }
+        const package_envs = try build_env.getRootPackageModuleEnvs(ctx.gpa);
+        defer ctx.gpa.free(package_envs);
+        try extract.adoptRenamedNominals(ctx.gpa, ctx.arena, documented.items, package_envs, &public_type_projections);
     }
     extract.sortPublicTypeProjections(public_type_projections.items);
 
@@ -21778,6 +21798,7 @@ fn generateDocs(
             .exposed_names = module_info.docs_exposed_names,
             .public_type = if (module_info.public_type_decl) |source_decl| .{
                 .public_name = module_info.name,
+                .page_name = module_info.name,
                 .package_name = sched_pkg_name,
                 .source_env = module_info.checked.env,
                 .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
@@ -21859,7 +21880,7 @@ fn generateBuiltinDocs(ctx: *CliCtx, base_output_dir: []const u8, with_lang_ref:
         errdefer ctx.gpa.free(modules);
         // The builtin is documented as a standalone root type module, whose
         // display package name is `module` (see `BuildEnv.displayNameForPackage`).
-        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{});
+        modules[0] = try docs.extract.extractBuiltinDocs(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc");
         errdefer modules[0].deinit(ctx.gpa);
         break :package_docs docs.DocModel.PackageDocs{ .name = try ctx.gpa.dupe(u8, "Builtin"), .modules = modules };
     };

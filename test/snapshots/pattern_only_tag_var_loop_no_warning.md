@@ -158,7 +158,7 @@ NO CHANGE
 												(e-block
 													(s-reassign
 														(p-var-assign (ident "$busy_count"))
-														(e-dispatch-call (method "plus") (constraint-fn-var 347)
+														(e-dispatch-call (method "plus") (constraint-fn-var 341)
 															(receiver
 																(e-lookup-local
 																	(p-var-assign (ident "$busy_count"))))
@@ -191,18 +191,18 @@ NO CHANGE
 									(e-empty_record))))
 						(e-empty_record)))
 				(s-expr
-					(e-call (constraint-fn-var 413)
+					(e-call (constraint-fn-var 407)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
 						(e-block
 							(s-let
 								(p-assign (ident "#interp_0"))
-								(e-dispatch-call (method "to_str") (constraint-fn-var 373)
+								(e-dispatch-call (method "to_str") (constraint-fn-var 367)
 									(receiver
 										(e-lookup-local
 											(p-var-assign (ident "$busy_count"))))
 									(args)))
-							(e-interpolation (constraint-fn-var 390) (dispatcher-var 58)
+							(e-interpolation (constraint-fn-var 384) (dispatcher-var 58)
 								(first
 									(e-literal (string "busy for ")))
 								(parts

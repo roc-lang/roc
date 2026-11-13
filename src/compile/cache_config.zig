@@ -367,7 +367,12 @@ pub const Constants = struct {
     /// 184: combines the independent 179 and 183 entry changes.
     /// 185: combines the independent 181 and 184 entry changes.
     /// 186: combines the independently merged 183 and 185 entry layouts.
-    pub const CACHE_VERSION = 187;
+    /// 187: CIR external nominal construction and pattern nodes record which
+    ///      index space their module refers to, and a reserved-module-name
+    ///      diagnostic node is added.
+    /// 190: type tags record whether they are in their row only because `match`
+    ///      branch patterns asked for them.
+    pub const CACHE_VERSION = 190;
 };
 
 /// Configuration for the Roc cache system.

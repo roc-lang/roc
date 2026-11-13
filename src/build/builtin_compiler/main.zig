@@ -507,13 +507,15 @@ fn findTypeDeclarationByQualifiedName(env: *const ModuleEnv, qualified_name: []c
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
-        if (stmt == .s_nominal_decl) {
-            const header = env.store.getTypeHeader(stmt.s_nominal_decl.header);
-            const ident_idx = header.name;
-            const ident_text = env.getIdentText(ident_idx);
-            if (std.mem.eql(u8, ident_text, qualified_name)) {
-                return stmt_idx;
-            }
+        const header_idx = if (stmt == .s_nominal_decl)
+            stmt.s_nominal_decl.header
+        else if (stmt == .s_alias_decl)
+            stmt.s_alias_decl.header
+        else
+            continue;
+        const header = env.store.getTypeHeader(header_idx);
+        if (std.mem.eql(u8, env.getIdentText(header.name), qualified_name)) {
+            return stmt_idx;
         }
     }
 

@@ -94,6 +94,9 @@ pub fn validateBuiltinIndices(env: *const ModuleEnv, indices: CIR.BuiltinIndices
         const header = env.store.getTypeHeader(header_idx);
         const name = env.getIdentText(header.name);
         if (isBuiltinContainerName(name)) continue;
+        // The registry lists the types the Builtin type's block declares.
+        // A type declared beside it is private to the module.
+        if (!std.mem.startsWith(u8, name, "Builtin.")) continue;
         if (!indicesContainStatement(indices, stmt_idx)) return error.CorruptEmbeddedBuiltins;
     }
 }

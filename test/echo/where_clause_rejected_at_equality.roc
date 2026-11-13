@@ -11,8 +11,8 @@ Blub :: {}.{
 		]
 	parse = |str| {
 		T : a
-		parse = T.parser_for({})
-		{ value, .. } = parse(str)?
+		parser = T.parser_for({})
+		{ value, .. } = parser(str)?
 		Ok(value)
 	}
 }

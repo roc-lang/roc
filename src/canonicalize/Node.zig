@@ -233,6 +233,7 @@ pub const Tag = enum {
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
+    diag_module_name_reserved,
     diag_default_app_wrong_arity,
     diag_cannot_import_default_app,
     diag_type_name_case_mismatch,
@@ -899,10 +900,11 @@ pub const Payload = extern union {
 
     /// expr_nominal_external: external nominal type
     pub const ExprNominalExternal = extern struct {
+        /// An `Import.Idx` or a `ModuleIdentity.Idx`, as `module_kind` says.
         module_idx: u32,
         target_node_idx: u32,
         backing_span2_idx: u32, // Index into span2_data: (backing_expr, backing_type)
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        module_kind: NominalExternalModuleKind,
     };
 
     /// expr_crash: crash expression with message
@@ -1000,11 +1002,15 @@ pub const Payload = extern union {
     };
 
     pub const PatternNominalExternal = extern struct {
+        /// An `Import.Idx` or a `ModuleIdentity.Idx`, as `module_kind` says.
         module_idx: u32,
         target_node_idx: u32,
         backing_span2_idx: u32, // Index into span2_data: (backing_pattern, backing_type)
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        module_kind: NominalExternalModuleKind,
     };
+
+    /// Which index space an external nominal node's `module_idx` is in.
+    pub const NominalExternalModuleKind = enum(u32) { import, identity };
     /// pattern_deferred_import_ref: the deferred worklist entry that resolves
     /// this node, and the backing pattern the imported nominal type is
     /// matched against.
