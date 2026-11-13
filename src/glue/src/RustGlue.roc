@@ -126,11 +126,22 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 		RocF64 => "f64"
 		RocDec => "RocDec"
 		RocList(elem_id) =>
-			if is_type_refcounted(type_table, elem_id) {
-				"RocList<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}>"
-			} else {
-				"RocListWith<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}, false>"
-			}
+			match type_table.get(elem_id) {
+				# The item has no layout the host can know, so the list has no
+				# item type.
+				RocUnknown(_) => "RocOpaqueList"
+				_ =>
+					if is_roc_released(type_table, elem_id) {
+						# The items are readable, but the allocation header
+						# depends on whether the opaque values they hold are
+						# refcounted, which only Roc knows.
+						"RocHeldList<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}>"
+					} else if is_type_refcounted(type_table, elem_id) {
+						"RocList<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}>"
+					} else {
+						"RocListWith<${type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)}, false>"
+					}
+				}
 		RocRecord(rec) =>
 			if rec.name == "" {
 				"*mut c_void"
@@ -164,6 +175,17 @@ resolve_tag_union_type_rust = |type_table, duplicate_names, preferred_names, typ
 ## Refcounted types need 2*ptr_width header space in list allocations.
 is_type_refcounted : TypeTable, U64 -> Bool
 is_type_refcounted = |type_table, type_id| type_table.is_refcounted(type_id)
+
+## True when a host that owns a value of this type cannot release it, because
+## the value holds an opaque Roc value. See `HostRcPlan`.
+is_roc_released : TypeTable, U64 -> Bool
+is_roc_released = |type_table, type_id| type_table.is_roc_released(type_id)
+
+## Comment emitted where a type's `decref` would be, when the type holds an
+## opaque Roc value.
+roc_released_note : Str -> Str
+roc_released_note = |indent|
+	"${indent}// No `decref`: this value holds an opaque Roc value, which only Roc can\n${indent}// release. Release its other parts one at a time and pass the opaque value\n${indent}// to a Roc function that takes ownership of it.\n"
 
 is_repr_refcounted : TypeTable, TypeRepr -> Bool
 is_repr_refcounted = |type_table, type_repr| type_table.repr_is_refcounted(type_repr)
@@ -872,6 +894,8 @@ generate_rust_file = |hosted_functions, type_table, provides_list| {
 		.concat(generate_rust_roc_str)
 		.concat("\n")
 		.concat(generate_rust_roc_list)
+		.concat("\n")
+		.concat(generate_rust_roc_held_lists)
 		.concat("\n")
 		.concat(generate_rust_release_support)
 		.concat("\n")
@@ -1739,6 +1763,123 @@ generate_rust_release_support =
 	\\}
 	\\
 
+## Generate the list types for lists a host cannot release (static Rust code)
+generate_rust_roc_held_lists : Str
+generate_rust_roc_held_lists =
+	\\/// A Roc list whose items have a type only the application knows.
+	\\///
+	\\/// This host knows neither the size of an item nor whether items are
+	\\/// refcounted, so it cannot read an item, allocate such a list, or release
+	\\/// one. It can move the list, retain it, and pass it back to Roc. To release
+	\\/// it, pass it to a Roc function that takes ownership of it.
+	\\#[repr(C)]
+	\\#[derive(Clone, Copy)]
+	\\pub struct RocOpaqueList {
+	\\    pub elements: *mut c_void,
+	\\    pub length: usize,
+	\\    pub capacity_or_alloc_ptr: usize,
+	\\}
+	\\
+	\\impl RocOpaqueList {
+	\\    /// Return the number of items in the list.
+	\\    #[inline]
+	\\    pub fn len(&self) -> usize {
+	\\        self.length
+	\\    }
+	\\
+	\\    /// Return true if the list has zero items.
+	\\    #[inline]
+	\\    pub fn is_empty(&self) -> bool {
+	\\        self.length == 0
+	\\    }
+	\\
+	\\    /// Increment the reference count by `amount`.
+	\\    ///
+	\\    /// # Safety
+	\\    /// `self` must point at a live Roc list allocation. The retained references
+	\\    /// must be handed back to Roc.
+	\\    pub unsafe fn incref(self, amount: isize) {
+	\\        unsafe { retain_list_allocation(self.elements as *mut u8, self.capacity_or_alloc_ptr, amount); }
+	\\    }
+	\\}
+	\\
+	\\/// A Roc list whose items hold opaque Roc values.
+	\\///
+	\\/// The items have a known layout, so the host can read them. Whether the
+	\\/// opaque values inside them are refcounted is known only to Roc, and the
+	\\/// list's allocation header depends on it, so the host cannot allocate such
+	\\/// a list or release one. It can move the list, retain it, and pass it back
+	\\/// to Roc. To release it, pass it to a Roc function that takes ownership of
+	\\/// it.
+	\\#[repr(C)]
+	\\pub struct RocHeldList<T> {
+	\\    pub elements: *mut T,
+	\\    pub length: usize,
+	\\    pub capacity_or_alloc_ptr: usize,
+	\\}
+	\\
+	\\impl<T> Clone for RocHeldList<T> {
+	\\    fn clone(&self) -> Self {
+	\\        *self
+	\\    }
+	\\}
+	\\
+	\\impl<T> Copy for RocHeldList<T> {}
+	\\
+	\\impl<T> RocHeldList<T> {
+	\\    /// Return the number of items in the list.
+	\\    #[inline]
+	\\    pub fn len(&self) -> usize {
+	\\        self.length
+	\\    }
+	\\
+	\\    /// Return true if the list has zero items.
+	\\    #[inline]
+	\\    pub fn is_empty(&self) -> bool {
+	\\        self.length == 0
+	\\    }
+	\\
+	\\    /// Return the list items as a slice.
+	\\    pub fn as_slice(&self) -> &[T] {
+	\\        if self.elements.is_null() {
+	\\            &[]
+	\\        } else {
+	\\            unsafe { core::slice::from_raw_parts(self.elements, self.length) }
+	\\        }
+	\\    }
+	\\
+	\\    /// Increment the reference count by `amount`.
+	\\    ///
+	\\    /// # Safety
+	\\    /// `self` must point at a live Roc list allocation. The retained references
+	\\    /// must be handed back to Roc.
+	\\    pub unsafe fn incref(self, amount: isize) {
+	\\        unsafe { retain_list_allocation(self.elements as *mut u8, self.capacity_or_alloc_ptr, amount); }
+	\\    }
+	\\}
+	\\
+	\\/// Add `amount` references to a list's allocation. The refcount slot sits
+	\\/// directly before the allocation's first item whatever the item type is,
+	\\/// and a seamless slice names its allocation in `capacity_or_alloc_ptr`.
+	\\unsafe fn retain_list_allocation(elements: *mut u8, capacity_or_alloc_ptr: usize, amount: isize) {
+	\\    let alloc_ptr = if (capacity_or_alloc_ptr & 1) != 0 {
+	\\        (capacity_or_alloc_ptr & !1) as *mut u8
+	\\    } else {
+	\\        elements
+	\\    };
+	\\    if alloc_ptr.is_null() {
+	\\        return;
+	\\    }
+	\\    let rc = unsafe { (alloc_ptr as *mut AtomicIsize).sub(1) };
+	\\    if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
+	\\        return; // REFCOUNT_STATIC_DATA
+	\\    }
+	\\    unsafe {
+	\\        (*rc).fetch_add(amount, Ordering::Relaxed);
+	\\    }
+	\\}
+	\\
+
 ## Generate self-contained RocList<T> type (simplified, raw pointer approach)
 generate_rust_roc_list : Str
 generate_rust_roc_list =
@@ -2313,6 +2454,10 @@ box_payload_decref_name_rust = |inner_id| "decref_box_payload_type${U64.to_str(i
 
 release_policy_for_type_id_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
 release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id| {
+	if is_roc_released(type_table, type_id) {
+		return ""
+	}
+
 	if !is_type_refcounted(type_table, type_id) {
 		return "RocNoopRelease"
 	}
@@ -2416,6 +2561,12 @@ list_decref_helper_name_rust = |type_table, duplicate_names, preferred_names, el
 
 decref_stmt_for_type_id_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 decref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id, expr| {
+	if is_roc_released(type_table, type_id) {
+		# Every emitter leaves out the release of a value that holds an opaque
+		# Roc value, so reaching this is a generator bug. It must not compile.
+		return "    compile_error!(\"generated glue released type id ${U64.to_str(type_id)}, which only Roc can release\");\n"
+	}
+
 	type_repr = type_table.get(type_id)
 	decref_stmt_for_repr_rust(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
@@ -2540,10 +2691,13 @@ generate_refcount_impl_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames,
 generate_refcount_impl_rust = |type_table, duplicate_names, preferred_names, struct_name, fields| {
 	var $decref_body = ""
 	var $incref_body = ""
+	roc_released = List.any(fields, |field| is_roc_released(type_table, field.type_id))
 
 	for field in fields {
 		field_expr = "value.${field.ident}"
-		$decref_body = Str.concat($decref_body, decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
+		if !roc_released {
+			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
+		}
 		$incref_body = Str.concat($incref_body, incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
 	}
 
@@ -2558,7 +2712,13 @@ generate_refcount_impl_rust = |type_table, duplicate_names, preferred_names, str
 		$incref_body = indent_lines($incref_body, "    ")
 	}
 
-	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted field.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
+	incref_method = "    /// Increment Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n"
+
+	if roc_released {
+		"impl ${struct_name} {\n${roc_released_note("    ")}\n${incref_method}}\n\n"
+	} else {
+		"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted field.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n${incref_method}}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
+	}
 }
 
 generate_tag_payload_refcount_branch_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, TagVariant, AbiTagLayout, Str -> Str
@@ -2629,6 +2789,7 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
 	}
 
+	roc_released = is_roc_released(type_table, type_id)
 	var $decref_branches = ""
 	var $incref_branches = ""
 	var $decref_moves_payload = Bool.False
@@ -2636,9 +2797,11 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 	var $tag_index = 0
 	for tag in tu.tags {
 		abi_tag = abi_tag_at(abi_tags, $tag_index)
-		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "decref"))
 		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "incref"))
-		if abi_tag_has_payload(abi_tag) {
+		if !roc_released {
+			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, abi_tag, "decref"))
+		}
+		if !roc_released and abi_tag_has_payload(abi_tag) {
 			$decref_moves_payload = $decref_moves_payload or List.any(
 				tag.payload,
 				|payload_id|
@@ -2654,7 +2817,13 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 		"        let value = self;\n"
 	}
 
-	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n${decref_value_binding}        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
+	incref_method = "    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n"
+
+	if roc_released {
+		return "impl ${struct_name} {\n${roc_released_note("    ")}\n${incref_method}}\n\n"
+	}
+
+	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n${decref_value_binding}        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n${incref_method}}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
 }
 
 ## Generate one release helper per list type whose elements are refcounted.
@@ -2708,7 +2877,7 @@ generate_box_payload_decref_helpers_rust = |type_table, duplicate_names, preferr
 					match type_table.get(inner_id) {
 						_ => {
 							inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
-							if inner_rust != "RocBox" and inner_rust != "*mut c_void" and is_type_refcounted(type_table, inner_id) {
+							if inner_rust != "RocBox" and inner_rust != "*mut c_void" and is_type_refcounted(type_table, inner_id) and !is_roc_released(type_table, inner_id) {
 								stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, inner_id, "payload")
 								$helpers = Str.concat(
 									$helpers,
@@ -2938,7 +3107,9 @@ hosted_ownership_doc_rust = |type_table, duplicate_names, preferred_names, func|
 
 	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
 		arg_name = "arg${U64.to_str($idx)}"
-		stmt = if use_args_wrapper {
+		stmt = if is_roc_released(type_table, arg_type_id) {
+			"${arg_name} holds an opaque Roc value, which only Roc can release: pass it back to Roc."
+		} else if use_args_wrapper {
 			if is_type_refcounted(type_table, arg_type_id) {
 				"unsafe { ${arg_name}.decref(roc_host); }"
 			} else {

@@ -77,7 +77,16 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, prefe
 		RocF32 => "float"
 		RocF64 => "double"
 		RocDec => "RocDec"
-		RocList(_) => "RocList"
+		RocList(elem_id) =>
+			match type_table.get(elem_id) {
+				RocUnknown(_) => "RocOpaqueList"
+				_ =>
+					if type_table.is_roc_released(elem_id) {
+						"RocOpaqueList"
+					} else {
+						"RocList"
+					}
+				}
 		RocRecord(rec) =>
 			if rec.name == "" {
 				"void*"
@@ -1230,6 +1239,15 @@ header_guard_top = {
 		"count reaches zero, which is what compiled Roc code does when it drops one",
 		"it owns. Releasing the elements unconditionally double-frees them whenever",
 		"the Roc caller still holds the container.",
+		"",
+		"Opaque values:",
+		"A RocBox whose payload type the application chooses, and a RocOpaqueList,",
+		"refer to values whose layout this header cannot describe. The host may",
+		"store them, retain them, and pass them back to Roc. It cannot release",
+		"them, and neither can it release a record, tag union, box, or list that",
+		"holds one: the allocation header and the payload teardown both depend on",
+		"the missing layout. Pass the value to a Roc function that takes ownership",
+		"of it instead.",
 	])
 
 	"${header_doc}\n#ifndef ROC_PLATFORM_ABI_H\n#define ROC_PLATFORM_ABI_H\n\n"
@@ -1260,7 +1278,7 @@ core_types_section = {
 
 	roc_str_def = "typedef struct {\n    uint8_t* bytes;\n    size_t capacity_or_alloc_ptr;\n    size_t length;\n} RocStr;\n\nROC_STATIC_ASSERT(sizeof(RocStr) == 3 * sizeof(size_t), \"RocStr must be three pointer-sized words\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocStr) == ROC_ALIGNOF(size_t), \"RocStr must be pointer-word aligned\");\nROC_STATIC_ASSERT(offsetof(RocStr, bytes) == 0, \"RocStr.bytes offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocStr, capacity_or_alloc_ptr) == sizeof(size_t), \"RocStr.capacity_or_alloc_ptr offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocStr, length) == 2 * sizeof(size_t), \"RocStr.length offset mismatch\");\n\n"
 
-	roc_list_def = "typedef struct {\n    void* elements;\n    size_t length;\n    size_t capacity_or_alloc_ptr;\n} RocList;\n\nROC_STATIC_ASSERT(sizeof(RocList) == 3 * sizeof(size_t), \"RocList must be three pointer-sized words\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocList) == ROC_ALIGNOF(size_t), \"RocList must be pointer-word aligned\");\nROC_STATIC_ASSERT(offsetof(RocList, elements) == 0, \"RocList.elements offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocList, length) == sizeof(size_t), \"RocList.length offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocList, capacity_or_alloc_ptr) == 2 * sizeof(size_t), \"RocList.capacity_or_alloc_ptr offset mismatch\");\n\n"
+	roc_list_def = "typedef struct {\n    void* elements;\n    size_t length;\n    size_t capacity_or_alloc_ptr;\n} RocList;\n\nROC_STATIC_ASSERT(sizeof(RocList) == 3 * sizeof(size_t), \"RocList must be three pointer-sized words\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocList) == ROC_ALIGNOF(size_t), \"RocList must be pointer-word aligned\");\nROC_STATIC_ASSERT(offsetof(RocList, elements) == 0, \"RocList.elements offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocList, length) == sizeof(size_t), \"RocList.length offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocList, capacity_or_alloc_ptr) == 2 * sizeof(size_t), \"RocList.capacity_or_alloc_ptr offset mismatch\");\n\n/* A list whose items are, or hold, values of a type the application chooses.\n * The host cannot allocate or release one; see \"Opaque values\" above. */\ntypedef RocList RocOpaqueList;\n\n"
 
 	roc_box_def = "typedef void* RocBox;\n\n"
 

@@ -77,6 +77,48 @@ element range and finally frees the spine. Opaque payloads are not assigned a
 structural policy: recursive teardown across that boundary requires an explicit
 compiler-owned release root or descriptor rather than host-side guessing.
 
+### Values Only Roc Can Release
+
+A `Box` or `List` over a `RocUnknown` entry is a Roc reference the host owns
+and cannot release. Dropping the last reference means tearing the payload down
+and freeing an allocation whose header size depends on the payload's alignment
+and on whether the payload is refcounted. For an opaque target only compiled
+Roc code knows any of that, so a host-side release either leaks the payload's
+own references or hands `roc_dealloc` the wrong base pointer.
+
+The compiler reports this as `HostRcPlan.RcRocReleased`. A type has that plan
+when it is a box or list over an opaque target, or when a box payload, list
+item, record field, or tag payload it owns has it. The plan comes from the type
+table, never from the committed layout: the layout was selected with the
+application's variables sealed, so it calls `Box(model)` a box over nothing and
+`Box({ model : model, n : U64 })` a box over a struct, and the two are the same
+thing to a host.
+
+For an `RcRocReleased` type, generators emit:
+
+- a retain (`incref`), which is sound because the refcount slot sits directly
+  before the payload whatever the payload is
+- no `decref`, no release policy, no `decrefListOf...` or box payload helper,
+  and no owning wrapper (`_owned` in Rust)
+- for a list whose items are opaque, `RocOpaqueList`: no item type, no item
+  access, no allocation
+- for a list whose items have a known layout and hold an opaque value,
+  `RocHeldList(T)` in Zig and Rust: readable items, no allocation, because the
+  allocation header depends on whether those opaque values are refcounted. C
+  lists carry no item type, so C uses `RocOpaqueList` for both.
+
+The host retains such a value, reads the parts that have a known layout,
+releases those parts one at a time, and passes the opaque value back to Roc. A
+platform that wants its host to drop one provides a Roc function that takes
+ownership of it:
+
+```roc
+release_model_for_host : Box(Model) -> {}
+release_model_for_host = |_| {}
+```
+
+Compiled Roc then performs the release with the layout it knows.
+
 ## Pointer-Width Contract
 
 Crossing the host boundary does not make a value indirect. Arguments, results,
@@ -278,7 +320,7 @@ language-specific.
 
 | Risk | Required generated support | Runtime control |
 | --- | --- | --- |
-| Owned-vs-borrowed boundary confusion for hosted args, provided returns, and stored values | Explicit retain/release/move helpers and generated hosted-function comments/signatures that make ownership transfer visible | `glue runtime: cli-main` owns/decrefs `RocStr` hosted args and `roc_main` results; `glue runtime: app-model` owns/decrefs boxed models and rendered `View`; all CGlue/ZigGlue/RustGlue native+wasm32 cells. |
+| Owned-vs-borrowed boundary confusion for hosted args, provided returns, and stored values | Explicit retain/release/move helpers and generated hosted-function comments/signatures that make ownership transfer visible | `glue runtime: cli-main` owns/decrefs `RocStr` hosted args and `roc_main` results; `glue runtime: app-model` hands boxed models back to Roc through `roc_release_model` and releases the rest of the rendered `View` field by field; all CGlue/ZigGlue/RustGlue native+wasm32 cells. |
 | Recursive refcounting for nested records, tag payloads, lists, boxes, closures, and recursive types through `Box` | Data-driven recursive retain/release helpers emitted from compiler RC plans, not from type names | `glue runtime: type-catalog` exercises `Tree`, boxed payloads, recursive tags, and catalog unions; `glue runtime: layout-probe` exercises many boxed fields; `glue command generated Zig compiles with zig build-obj` checks emitted retain/release helpers. |
 | Lists with refcounted elements, including backing element-count headers | List helpers that know element width, alignment, and whether element teardown is required | `glue runtime: cli-main` constructs `List(Str)` args and validates the refcounted element-count header; `glue runtime: app-model` renders and decrefs `View.messages : List(Msg)`; issue 10451's Zig/Rust glue cases compile recursive release for a directly returned `List(Str)`. |
 | Seamless slices for `Str` and `List` | Allocation-base recovery helpers that never free the visible slice pointer directly | `glue runtime: cli-main` uses generated Zig/Rust `RocStr.fromSlice` and `RocList.fromSlice` helpers and decrefs through allocation-base recovery; CGlue helper source is covered by `glue command generated C header compiles with zig cc` and `CGlue.roc expect tests pass`. |
@@ -292,7 +334,7 @@ language-specific.
 | Compiler-emitted layout facts: field order, offsets, discriminants, size, alignment, zero-sized values, and Bool representation | Glue consumers must use emitted `AbiLayout` metadata and generated assertions rather than reconstructing layout | `glue runtime: layout-probe`, `glue runtime: duplicate-tags`, and `glue runtime: type-catalog` cover emitted layout facts across all languages/targets; `glue command generated Zig compiles with zig build-obj` checks field offsets and compile-time layout assertions. |
 | Nominal vs structural records and explicit padding fields | Generated records with concrete committed fields plus explicit padding and per-target size, alignment, field-offset, and padding assertions | `glue runtime: type-catalog` covers nominal and structural records; `glue runtime: layout-probe` covers padded/boxed/vector layouts; `glue regression: ZigGlue quotes bang record fields` covers field names that require escaping. |
 | Tag union active-payload handling, discriminant layout, single-variant unwrapping, duplicate names, recursive tags, and payload ownership transfer | Generated tag constructors/destructors, unsafe borrowed references, and unsafe consuming payload projections that only touch the validated active payload | `glue runtime: duplicate-tags` covers duplicate module-local tag/result names; `glue runtime: type-catalog` covers single-payload, no-payload, recursive, boxed, and result tag unions and consumes Rust owning payloads through `take_payload_*_unchecked`. |
-| Opaque or library containers such as `Dict` whose internals are not platform ABI | Opaque-safe helpers only; no generator or host code may infer container internals from semantic names | `glue regression: ZigGlue uses RocBox for opaque boxed app types` enforces `RocBox` for opaque boxed app values; C/Rust source-shape and compile controls cover opaque helper signatures without exposing container internals. |
+| Opaque or library containers such as `Dict` whose internals are not platform ABI | Opaque-safe helpers only; no generator or host code may infer container internals from semantic names | `glue regression: ZigGlue uses RocBox for opaque boxed app types` enforces `RocBox` for opaque boxed app values; `glue regression: a value holding an opaque Roc value has no host release in any generator` enforces that nothing holding one can be released or allocated by the host; C/Rust source-shape and compile controls cover opaque helper signatures without exposing container internals. |
 | Accidental shallow copies of ownership-bearing values | Rust non-`Copy` or unsafe ownership APIs; Zig/C retain/release naming and runtime double-free/leak checks | `glue runtime: cli-main`, `app-model`, and `type-catalog` all check balanced live allocations after owned values cross the boundary; `glue regression: RustGlue succeeds on fx platform` covers Rust ownership-shaped generated APIs. |
 | Error paths after ownership transfer into hosted functions | Scenario helpers that deliberately fail after receiving owned values and verify cleanup policy | `glue runtime: duplicate-tags` exercises `Try`-returning hosted functions with owned payloads; `glue runtime: cli-main` checks failure reporting paths and requires owned hosted args to be decrefed before a host-side failure is recorded. |
 | Thread sharing and atomic vs thread-confined refcounting | Thread-aware contracts where supported, plus explicit documentation of host-visible value sharing requirements | Generated Zig/Rust helper compile controls cover atomic refcount operations; `glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment` and the Rust equivalent check final decrement behavior; runtime matrix documents that current glue hosts are single-threaded. |

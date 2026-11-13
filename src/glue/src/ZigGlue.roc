@@ -426,11 +426,22 @@ type_repr_to_zig = |type_table, duplicate_names, preferred_names, type_id, type_
 		RocF64 => "f64"
 		RocDec => "RocDec"
 		RocList(elem_id) =>
-			if is_type_refcounted(type_table, elem_id) {
-				"RocList(${type_id_to_zig(type_table, duplicate_names, preferred_names, elem_id)})"
-			} else {
-				"RocListWith(${type_id_to_zig(type_table, duplicate_names, preferred_names, elem_id)}, false)"
-			}
+			match type_table.get(elem_id) {
+				# The item has no layout the host can know, so the list has no
+				# item type.
+				RocUnknown(_) => "RocOpaqueList"
+				_ =>
+					if is_roc_released(type_table, elem_id) {
+						# The items are readable, but the allocation header
+						# depends on whether the opaque values they hold are
+						# refcounted, which only Roc knows.
+						"RocHeldList(${type_id_to_zig(type_table, duplicate_names, preferred_names, elem_id)})"
+					} else if is_type_refcounted(type_table, elem_id) {
+						"RocList(${type_id_to_zig(type_table, duplicate_names, preferred_names, elem_id)})"
+					} else {
+						"RocListWith(${type_id_to_zig(type_table, duplicate_names, preferred_names, elem_id)}, false)"
+					}
+				}
 		RocRecord(rec) =>
 			if rec.name == "" {
 				"*anyopaque"
@@ -449,6 +460,17 @@ type_repr_to_zig = |type_table, duplicate_names, preferred_names, type_id, type_
 ## Refcounted types need 2*ptr_width header space in list allocations.
 is_type_refcounted : TypeTable, U64 -> Bool
 is_type_refcounted = |type_table, type_id| type_table.is_refcounted(type_id)
+
+## True when a host that owns a value of this type cannot release it, because
+## the value holds an opaque Roc value. See `HostRcPlan`.
+is_roc_released : TypeTable, U64 -> Bool
+is_roc_released = |type_table, type_id| type_table.is_roc_released(type_id)
+
+## Comment emitted where a type's `decref` would be, when the type holds an
+## opaque Roc value.
+roc_released_note : Str -> Str
+roc_released_note = |indent|
+	"${indent}// No `decref`: this value holds an opaque Roc value, which only Roc can\n${indent}// release. Release its other parts one at a time and pass the opaque value\n${indent}// to a Roc function that takes ownership of it.\n"
 
 is_repr_refcounted : TypeTable, TypeRepr -> Bool
 is_repr_refcounted = |type_table, type_repr| type_table.repr_is_refcounted(type_repr)
@@ -665,6 +687,90 @@ generate_roc_list_generic =
 	\\            return rc.* == 1;
 	\\        }
 	\\    };
+	\\}
+	\\
+
+## Generate the list types for lists a host cannot release (static Zig code)
+generate_roc_held_lists : Str
+generate_roc_held_lists =
+	\\/// A Roc list whose items have a type only the application knows.
+	\\///
+	\\/// This host knows neither the size of an item nor whether items are
+	\\/// refcounted, so it cannot read an item, allocate such a list, or release
+	\\/// one. It can move the list, retain it, and pass it back to Roc. To release
+	\\/// it, pass it to a Roc function that takes ownership of it.
+	\\pub const RocOpaqueList = extern struct {
+	\\    elements_ptr: ?*anyopaque,
+	\\    length: usize,
+	\\    capacity_or_alloc_ptr: usize,
+	\\
+	\\    /// Return the number of items in the list.
+	\\    pub fn len(self: RocOpaqueList) usize {
+	\\        return self.length;
+	\\    }
+	\\
+	\\    /// Return true if the list has zero items.
+	\\    pub fn isEmpty(self: RocOpaqueList) bool {
+	\\        return self.length == 0;
+	\\    }
+	\\
+	\\    /// Increment the reference count by `amount`.
+	\\    pub fn incref(self: RocOpaqueList, amount: isize) void {
+	\\        retainListAllocation(self.elements_ptr, self.capacity_or_alloc_ptr, amount);
+	\\    }
+	\\};
+	\\
+	\\/// A Roc list whose items hold opaque Roc values.
+	\\///
+	\\/// The items have a known layout, so the host can read them. Whether the
+	\\/// opaque values inside them are refcounted is known only to Roc, and the
+	\\/// list's allocation header depends on it, so the host cannot allocate such
+	\\/// a list or release one. It can move the list, retain it, and pass it back
+	\\/// to Roc. To release it, pass it to a Roc function that takes ownership of
+	\\/// it.
+	\\pub fn RocHeldList(comptime T: type) type {
+	\\    return extern struct {
+	\\        elements_ptr: ?[*]T,
+	\\        length: usize,
+	\\        capacity_or_alloc_ptr: usize,
+	\\
+	\\        const Self = @This();
+	\\
+	\\        /// Return the list items as a `[]const T` slice.
+	\\        pub fn items(self: Self) []const T {
+	\\            if (self.elements_ptr) |ptr| return ptr[0..self.length];
+	\\            return &[_]T{};
+	\\        }
+	\\
+	\\        /// Return the number of items in the list.
+	\\        pub fn len(self: Self) usize {
+	\\            return self.length;
+	\\        }
+	\\
+	\\        /// Return true if the list has zero items.
+	\\        pub fn isEmpty(self: Self) bool {
+	\\            return self.length == 0;
+	\\        }
+	\\
+	\\        /// Increment the reference count by `amount`.
+	\\        pub fn incref(self: Self, amount: isize) void {
+	\\            retainListAllocation(@ptrCast(self.elements_ptr), self.capacity_or_alloc_ptr, amount);
+	\\        }
+	\\    };
+	\\}
+	\\
+	\\/// Add `amount` references to a list's allocation. The refcount slot sits
+	\\/// directly before the allocation's first item whatever the item type is,
+	\\/// and a seamless slice names its allocation in `capacity_or_alloc_ptr`.
+	\\fn retainListAllocation(elements_ptr: ?*anyopaque, capacity_or_alloc_ptr: usize, amount: isize) void {
+	\\    const alloc_addr = if ((capacity_or_alloc_ptr & 1) != 0)
+	\\        capacity_or_alloc_ptr & ~@as(usize, 1)
+	\\    else
+	\\        @intFromPtr(elements_ptr);
+	\\    if (alloc_addr == 0) return;
+	\\    const rc: *isize = @ptrFromInt(alloc_addr - @sizeOf(isize));
+	\\    if (rc.* == 0) return; // REFCOUNT_STATIC_DATA
+	\\    _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
 	\\}
 	\\
 
@@ -1034,7 +1140,7 @@ generate_single_tag_union = |type_table, duplicate_names, preferred_names, type_
 		}
 
 		# Comptime assertions
-		method_decls = generate_tag_union_refcount_method_delegates(struct_name)
+		method_decls = generate_tag_union_refcount_method_delegates(struct_name, is_roc_released(type_table, type_id))
 		assertions = if abi_layout.size64 > 0 or abi_layout.size32 > 0 {
 			block =
 				\\comptime {
@@ -1113,7 +1219,7 @@ box_payload_decref_name = |inner_id| "decrefBoxPayloadType${U64.to_str(inner_id)
 
 release_policy_for_type_id : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
 release_policy_for_type_id = |type_table, duplicate_names, preferred_names, type_id| {
-	if !is_type_refcounted(type_table, type_id) {
+	if !is_type_refcounted(type_table, type_id) or is_roc_released(type_table, type_id) {
 		return ""
 	}
 
@@ -1217,6 +1323,12 @@ list_decref_helper_name = |type_table, duplicate_names, preferred_names, elem_id
 
 decref_stmt_for_type_id : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 decref_stmt_for_type_id = |type_table, duplicate_names, preferred_names, type_id, expr| {
+	if is_roc_released(type_table, type_id) {
+		# Every emitter leaves out the release of a value that holds an opaque
+		# Roc value, so reaching this is a generator bug. It must not compile.
+		return "    comptime { @compileError(\"generated glue released type id ${U64.to_str(type_id)}, which only Roc can release\"); }\n"
+	}
+
 	type_repr = type_table.get(type_id)
 	decref_stmt_for_repr(type_table, duplicate_names, preferred_names, type_id, type_repr, expr)
 }
@@ -1316,13 +1428,16 @@ generate_record_refcount_methods : TypeTable, List(Str), TypeNamePlan.PreferredN
 generate_record_refcount_methods = |type_table, duplicate_names, preferred_names, fields| {
 	var $decref_body = ""
 	var $incref_body = ""
+	roc_released = List.any(fields, |field| !field.is_padding and is_roc_released(type_table, field.type_id))
 
 	for field in fields {
 		# Padding fields are raw bytes with no Roc type, so they are never
 		# refcounted and contribute no incref/decref statements.
 		if !field.is_padding {
 			field_expr = "value.${name_to_zig_quoted_ident(field.name)}"
-			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
+			if !roc_released {
+				$decref_body = Str.concat($decref_body, decref_stmt_for_type_id(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
+			}
 			$incref_body = Str.concat($incref_body, incref_stmt_for_type_id(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
 		}
 	}
@@ -1338,7 +1453,13 @@ generate_record_refcount_methods = |type_table, duplicate_names, preferred_names
 		$incref_body = indent_lines($incref_body, "    ")
 	}
 
-	"    /// Recursively decrement Roc-owned fields.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        const value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    pub fn incref(self: @This(), amount: isize) void {\n        const value = self;\n${$incref_body}    }\n"
+	decref_method = if roc_released {
+		roc_released_note("    ")
+	} else {
+		"    /// Recursively decrement Roc-owned fields.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        const value = self;\n${$decref_body}    }\n"
+	}
+
+	"${decref_method}\n    /// Increment Roc-owned fields.\n    pub fn incref(self: @This(), amount: isize) void {\n        const value = self;\n${$incref_body}    }\n"
 }
 
 generate_tag_payload_refcount_branch : TypeTable, List(Str), TypeNamePlan.PreferredNames, TagVariant, AbiTagLayout, Str -> Str
@@ -1447,14 +1568,21 @@ tag_payload_refcount_uses_param = |type_table, tag, mode| {
 	)
 }
 
-generate_tag_union_refcount_method_delegates : Str -> Str
-generate_tag_union_refcount_method_delegates = |struct_name| {
-	"    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        decref${struct_name}(self, roc_host);\n    }\n\n    /// Increment Roc-owned payloads.\n    pub fn incref(self: @This(), amount: isize) void {\n        incref${struct_name}(self, amount);\n    }\n"
+generate_tag_union_refcount_method_delegates : Str, Bool -> Str
+generate_tag_union_refcount_method_delegates = |struct_name, roc_released| {
+	decref_method = if roc_released {
+		roc_released_note("    ")
+	} else {
+		"    /// Recursively decrement Roc-owned payloads.\n    pub fn decref(self: @This(), roc_host: *RocHost) void {\n        decref${struct_name}(self, roc_host);\n    }\n"
+	}
+
+	"${decref_method}\n    /// Increment Roc-owned payloads.\n    pub fn incref(self: @This(), amount: isize) void {\n        incref${struct_name}(self, amount);\n    }\n"
 }
 
 generate_tag_union_refcount_helpers : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr -> Str
 generate_tag_union_refcount_helpers = |type_table, duplicate_names, preferred_names, type_id, tu| {
 	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_names, type_id, tu)
+	roc_released = is_roc_released(type_table, type_id)
 	var $decref_branches = ""
 	var $incref_branches = ""
 	var $decref_uses_param = Bool.False
@@ -1463,7 +1591,9 @@ generate_tag_union_refcount_helpers = |type_table, duplicate_names, preferred_na
 	var $tag_index = 0
 	for tag in tu.tags {
 		abi_tag = abi_tag_at(abi_tags, $tag_index)
-		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag, abi_tag, "decref"))
+		if !roc_released {
+			$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag, abi_tag, "decref"))
+		}
 		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, duplicate_names, preferred_names, tag, abi_tag, "incref"))
 		if abi_tag_has_payload(abi_tag) {
 			$decref_uses_param = $decref_uses_param or tag_payload_refcount_uses_param(type_table, tag, "decref")
@@ -1483,7 +1613,13 @@ generate_tag_union_refcount_helpers = |type_table, duplicate_names, preferred_na
 		"    _ = amount;\n"
 	}
 
-	"fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${decref_unused}    switch (value.tag) {\n${$decref_branches}    }\n}\n\nfn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${incref_unused}    switch (value.tag) {\n${$incref_branches}    }\n}\n\npub const ${struct_name}Release = struct {\n    pub fn release(value: ${struct_name}, roc_host: *RocHost) void {\n        value.decref(roc_host);\n    }\n};\n\n"
+	incref_helper = "fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${incref_unused}    switch (value.tag) {\n${$incref_branches}    }\n}\n\n"
+
+	if roc_released {
+		incref_helper
+	} else {
+		"fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${decref_unused}    switch (value.tag) {\n${$decref_branches}    }\n}\n\n${incref_helper}pub const ${struct_name}Release = struct {\n    pub fn release(value: ${struct_name}, roc_host: *RocHost) void {\n        value.decref(roc_host);\n    }\n};\n\n"
+	}
 }
 
 generate_record_release_policy : Str -> Str
@@ -1542,7 +1678,7 @@ generate_box_payload_decref_helpers = |type_table, duplicate_names, preferred_na
 					match type_table.get(inner_id) {
 						_ => {
 							inner_zig = type_id_to_zig(type_table, duplicate_names, preferred_names, inner_id)
-							if inner_zig != "*anyopaque" and is_type_refcounted(type_table, inner_id) {
+							if inner_zig != "*anyopaque" and is_type_refcounted(type_table, inner_id) and !is_roc_released(type_table, inner_id) {
 								stmt = decref_stmt_for_type_id(type_table, duplicate_names, preferred_names, inner_id, "payload.*")
 								$helpers = Str.concat(
 									$helpers,
@@ -1569,7 +1705,7 @@ generate_refcount_helpers = |type_table, duplicate_names, preferred_names| {
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
 			RocRecord(rec) =>
-				if rec.name != "" {
+				if rec.name != "" and !is_roc_released(type_table, $type_id) {
 					struct_name = record_struct_name(type_table, duplicate_names, $type_id, rec)
 					if !(List.contains($seen_names, struct_name)) {
 						$seen_names = $seen_names.append(struct_name)
@@ -1820,6 +1956,8 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat(generate_roc_str)
 		.concat("\n")
 		.concat(generate_roc_list_generic)
+		.concat("\n")
+		.concat(generate_roc_held_lists)
 		.concat("\n")
 		.concat(generate_zig_release_support)
 		.concat("\n")
@@ -2413,7 +2551,9 @@ hosted_ownership_doc_zig = |type_table, duplicate_names, preferred_names, func| 
 
 	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
 		arg_name = "arg${U64.to_str($idx)}"
-		stmt = if use_args_wrapper {
+		stmt = if is_roc_released(type_table, arg_type_id) {
+			"${arg_name} holds an opaque Roc value, which only Roc can release: pass it back to Roc."
+		} else if use_args_wrapper {
 			if is_type_refcounted(type_table, arg_type_id) {
 				"${arg_name}.decref(roc_host);"
 			} else {

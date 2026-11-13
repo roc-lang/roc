@@ -3,7 +3,10 @@ app [program] { pf: platform "./main.roc" }
 import pf.Msg
 import pf.View
 
-Model := { count : I32 }
+## The label is a heap string, so the model's box has refcounted contents:
+## releasing it frees two allocations, which only code that knows this layout
+## can do.
+Model := { count : I32, label : Str }
 
 program = {
     init,
@@ -12,12 +15,12 @@ program = {
 }
 
 init : {} -> Model
-init = |_| { count: 1 }
+init = |_| { count: 1, label: "a label long enough to be stored on the heap" }
 
 update! : Model, Msg => Model
 update! = |model, msg| {
     match msg {
-        Reset => { count: model.count + 1 },
+        Reset => { count: model.count + 1, label: model.label },
         _ => model,
     }
 }

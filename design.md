@@ -25901,7 +25901,9 @@ container, and a release that never drops them leaks every item.
 Generated glue must therefore give the host a named release for every type
 reachable from a hosted or provided signature whose release is more than a
 single count decrement, and must name that release at the hosted signature: the
-container's own `decref` is a primitive, not a release, and must say so.
+container's own `decref` is a primitive, not a release, and must say so. A
+type that holds an opaque heap target is the exception: the host cannot release
+it at all, so glue emits no release for it (see Host Symbol ABI).
 
 The compiler must not infer different ownership behavior from hosted function
 names, return types, or body absence. Hosted-argument ownership is an ABI rule,
@@ -26627,6 +26629,24 @@ explicit Roc-side checked data; otherwise the wrapper may only treat the box as
 opaque. Shallow retain/move/return/drop of an opaque box follows the existing
 host ABI contract. Recursive payload teardown or structural inspection requires
 an explicit `TypeDesc`.
+
+The host owns each opaque box and list it holds and cannot release it. Dropping
+the last reference to a Roc allocation tears its payload down and frees an
+allocation whose header size depends on the payload's alignment and on whether
+the payload is refcounted, and for an opaque target only compiled Roc code
+knows those. Glue's type table therefore gives every type a host release plan
+with three states: it holds no Roc reference, it holds references the host can
+release, or it holds a reference only Roc can release. A type is in the third
+state when it is a box or list over an opaque target, or when a box payload,
+list item, record field, or tag payload it owns is. The plan is computed over
+the type table and never read from the committed layout, which was selected
+with the application's variables sealed and so reports `Box(model)` as a box
+over nothing. Generated bindings give a type in the third state a retain and
+nothing else: no release, no release policy, no owning wrapper, and for a list
+no allocation, since a list's allocation header depends on whether its items
+are refcounted. The host hands such a value back to Roc; a platform whose host
+must drop one provides a Roc function that takes ownership of it, and compiled
+Roc performs the release.
 
 The declared type is part of that contract, not just the symbol string. A
 hosted function's extern boundary is emitted at the hosted declaration's own

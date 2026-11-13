@@ -818,6 +818,7 @@ const CustomCase = enum {
     glue_boxed_sequences,
     glue_boxed_app_type,
     glue_generic_nominal_shapes,
+    glue_opaque_ownership,
     glue_application_only_requires,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
@@ -2712,6 +2713,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 12887: boxed sequences are opaque owning handles in every generator", .body = .{ .custom = .glue_boxed_sequences } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: a value holding an opaque Roc value has no host release in any generator", .body = .{ .custom = .glue_opaque_ownership } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
@@ -6624,6 +6626,7 @@ fn runCustomCase(
         .glue_boxed_sequences => customGlueBoxedSequences(io, allocator, &env, &timer, timeout_ms),
         .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_nominal_shapes => customGlueGenericNominalShapes(io, allocator, &env, &timer, timeout_ms),
+        .glue_opaque_ownership => customGlueOpaqueOwnership(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -19269,7 +19272,8 @@ fn customGlueBoxedAppType(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     // holds the application's type by value at any depth (nominal, record,
     // tuple, tag union, nested, recursive) has no layout the host can know,
     // so its box is the same opaque `RocBox` as `Box(Model)` and no payload
-    // type is emitted for it; a list of such elements matches `List(Model)`.
+    // type is emitted for it; a list of such items is the same opaque list as
+    // `List(Model)`.
     // A payload that reaches the application's type only through a further
     // box or list, or not at all, keeps its typed payload, and a by-value
     // record holding an opaque box is an ordinary struct with a pointer field.
@@ -19282,13 +19286,13 @@ fn customGlueBoxedAppType(io: std.Io, allocator: Allocator, env: *const CaseEnv,
             "pub extern fn take_nested(arg0: RocBox) callconv(.c) u64;",
             "pub extern fn take_recursive(arg0: RocBox) callconv(.c) u64;",
             "pub extern fn take_bare(arg0: RocBox) callconv(.c) u64;",
-            "pub extern fn take_list(arg0: RocListWith(*anyopaque, false)) callconv(.c) u64;",
-            "pub extern fn take_bare_list(arg0: RocListWith(*anyopaque, false)) callconv(.c) u64;",
+            "pub extern fn take_list(arg0: RocOpaqueList) callconv(.c) u64;",
+            "pub extern fn take_bare_list(arg0: RocOpaqueList) callconv(.c) u64;",
             "pub extern fn take_indirect(arg0: *TypesIndirect) callconv(.c) u64;",
             "pub extern fn take_known(arg0: *TypesKnown) callconv(.c) u64;",
             "    @\"state\": RocBox,",
             "    @\"boxed\": RocBox,",
-            "    @\"items\": RocListWith(*anyopaque, false),",
+            "    @\"items\": RocOpaqueList,",
         },
         .c = &.{
             "extern uint64_t take_nominal(RocBox arg0);",
@@ -19298,8 +19302,8 @@ fn customGlueBoxedAppType(io: std.Io, allocator: Allocator, env: *const CaseEnv,
             "extern uint64_t take_nested(RocBox arg0);",
             "extern uint64_t take_recursive(RocBox arg0);",
             "extern uint64_t take_bare(RocBox arg0);",
-            "extern uint64_t take_list(RocList arg0);",
-            "extern uint64_t take_bare_list(RocList arg0);",
+            "extern uint64_t take_list(RocOpaqueList arg0);",
+            "extern uint64_t take_bare_list(RocOpaqueList arg0);",
             "extern uint64_t take_indirect(TypesIndirect* arg0);",
             "extern uint64_t take_known(TypesKnown* arg0);",
             "    RocBox state;",
@@ -19315,14 +19319,168 @@ fn customGlueBoxedAppType(io: std.Io, allocator: Allocator, env: *const CaseEnv,
             "pub fn take_nested(arg0: RocBox) -> u64;",
             "pub fn take_recursive(arg0: RocBox) -> u64;",
             "pub fn take_bare(arg0: RocBox) -> u64;",
-            "pub fn take_list(arg0: RocListWith<*mut c_void, false>) -> u64;",
-            "pub fn take_bare_list(arg0: RocListWith<*mut c_void, false>) -> u64;",
+            "pub fn take_list(arg0: RocOpaqueList) -> u64;",
+            "pub fn take_bare_list(arg0: RocOpaqueList) -> u64;",
             "pub fn take_indirect(arg0: *mut TypesIndirect) -> u64;",
             "pub fn take_known(arg0: *mut TypesKnown) -> u64;",
             "    pub state: RocBox,",
             "    pub boxed: RocBox,",
         },
         .absent = &.{ "TypesWrap", "TypesSlot", "TypesDeep", "TypesTree", "Types.Wrap", "Types.Slot", "Types.Deep", "Types.Tree", "Loaded" },
+    });
+}
+
+fn customGlueOpaqueOwnership(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A box or list over a value of the application's type is a Roc reference
+    // the host owns and cannot release: the allocation header and the payload
+    // teardown both depend on a layout only Roc knows. The same holds for
+    // every record, tag union, box and list that holds one. Generated glue
+    // therefore gives such a type no `decref` and no release policy, whether
+    // the compiler sealed the application's type to nothing (`Box(Model)`) or
+    // to a struct (`Box(Wrap(Model))`), and a list of such items has no
+    // allocation or release either. The host retains them, reads what has a
+    // known layout, and hands them back to Roc. A type that never reaches the
+    // application's type keeps its full release.
+    //
+    // Every box in this platform is over an opaque target or over a record
+    // that holds one, so the compiler reports the same plan for all of them.
+    const debug_output_dir = createWorkSubdir(io, allocator, env, "debug-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/DebugGlue.roc", debug_output_dir, "test/glue/opaque-ownership/main.roc" },
+        .contains = &.{
+            .{ .stream = .stderr, .text = "contains_refcounted: True, details: AbiBuiltin, size32: 4, size64: 8 }, rc: RcRocReleased, repr: RocBox(" },
+            .{ .stream = .stderr, .text = "rc: RcRocReleased, repr: RocList(" },
+            .{ .stream = .stderr, .text = "rc: RcRocReleased, repr: RocTagUnion({ name: \"Types.Slot\"" },
+            .{ .stream = .stderr, .text = "rc: RcRefcounted, repr: RocList(" },
+        },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "rc: RcNoop, repr: RocBox(" },
+            .{ .stream = .stderr, .text = "rc: RcRefcounted, repr: RocBox(" },
+            .{ .stream = .stderr, .text = "contains_refcounted: False, details: AbiBuiltin, size32: 4, size64: 8 }, rc: RcRocReleased" },
+            .{ .stream = .stderr, .text = "panic" },
+            .{ .stream = .stderr, .text = "unreachable" },
+        },
+    })) |failure| return failure;
+
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/opaque-ownership/main.roc", .{
+        .zig = &.{
+            "pub extern fn give_boxes(arg0: RocHeldList(RocBox)) callconv(.c) RocHeldList(TypesHandle);",
+            "pub extern fn give_items(arg0: RocOpaqueList) callconv(.c) RocOpaqueList;",
+            "pub extern fn host_keep(arg0: RocHeldList(RocBox), arg1: RocStr) callconv(.c) void;",
+            "///     arg0 holds an opaque Roc value, which only Roc can release: pass it back to Roc.",
+            "pub fn decrefListOfTypesLabeled(value: RocList(TypesLabeled), roc_host: *RocHost) void {",
+        },
+        .c = &.{
+            "typedef RocList RocOpaqueList;",
+            "extern RocOpaqueList give_boxes(RocOpaqueList arg0);",
+            "extern RocOpaqueList give_items(RocOpaqueList arg0);",
+            "extern void host_keep(RocOpaqueList arg0, RocStr arg1);",
+            "extern TypesLabeled give_labeled(RocList arg0);",
+        },
+        .rust = &.{
+            "pub fn give_boxes(arg0: RocHeldList<RocBox>) -> RocHeldList<TypesHandle>;",
+            "pub fn give_items(arg0: RocOpaqueList) -> RocOpaqueList;",
+            "pub fn host_keep(arg0: RocHeldList<RocBox>, arg1: RocStr);",
+            "    ///     arg0 holds an opaque Roc value, which only Roc can release: pass it back to Roc.",
+            "pub struct TypesLabeledRelease;",
+            "pub unsafe fn give_labeled_owned(",
+            "pub unsafe fn decref_list_of_types_labeled(value: RocList<TypesLabeled>, roc_host: &RocHost) {",
+        },
+        .absent = &.{
+            // Zig and Rust releases of an opaque box held in a field or payload.
+            "decrefBox(@ptrCast(value.",
+            "decrefBox(@ptrCast(payload",
+            "decref_box(value.",
+            "decref_box(payload",
+            // Release policies and owning wrappers for types that hold one.
+            "TypesViewRelease",
+            "TypesHandleRelease",
+            "TypesSlotRelease",
+            "give_view_owned",
+            "give_handle_owned",
+            "give_wrapped_handle_owned",
+            "give_slot_owned",
+            "give_boxes_owned",
+            "give_items_owned",
+            "give_boxed_view_owned",
+            // A list type that claims an item size or a refcount policy.
+            "RocListWith(*anyopaque",
+            "RocListWith<*mut c_void",
+            "RocList(RocBox)",
+            "RocList<RocBox>",
+            "RocList(TypesHandle)",
+            "RocList<TypesHandle>",
+        },
+        .zig_checks =
+        \\fn Param(comptime function: anytype, comptime index: usize) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".param_types[index].?;
+        \\}
+        \\fn Result(comptime function: anytype) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
+        \\}
+        \\fn expectRetainOnly(comptime T: type) void {
+        \\    if (!@hasDecl(T, "incref")) @compileError(@typeName(T) ++ " cannot be retained");
+        \\    for ([_][]const u8{ "decref", "deinit", "deinitWith", "allocate", "fromSlice" }) |name| {
+        \\        if (@hasDecl(T, name)) @compileError(@typeName(T) ++ " has `" ++ name ++ "`, which needs a layout only Roc knows");
+        \\    }
+        \\}
+        \\fn expectReleasable(comptime T: type) void {
+        \\    if (!@hasDecl(T, "incref") or !@hasDecl(T, "decref")) @compileError(@typeName(T) ++ " lost its release");
+        \\}
+        \\comptime {
+        \\    // The two shapes of an opaque box are the same type and the same
+        \\    // ownership: the record that holds either has no release.
+        \\    const WrappedHandle = Result(abi.give_wrapped_handle);
+        \\    if (@FieldType(abi.TypesHandle, "state") != abi.RocBox) @compileError("Box(Model) is not an opaque box");
+        \\    if (@FieldType(WrappedHandle, "state") != abi.RocBox) @compileError("Box(Wrap(Model)) is not an opaque box");
+        \\    expectRetainOnly(abi.TypesHandle);
+        \\    expectRetainOnly(WrappedHandle);
+        \\
+        \\    expectRetainOnly(abi.TypesView);
+        \\    expectRetainOnly(abi.TypesSlot);
+        \\    expectRetainOnly(abi.RocOpaqueList);
+        \\    expectRetainOnly(abi.RocHeldList(abi.RocBox));
+        \\    expectRetainOnly(abi.RocHeldList(abi.TypesHandle));
+        \\    if (@hasDecl(abi.RocOpaqueList, "items")) @compileError("an opaque list exposes items of unknown size");
+        \\    if (@FieldType(abi.RocOpaqueList, "elements_ptr") != ?*anyopaque) @compileError("an opaque list claims an item type");
+        \\
+        \\    // A typed payload that holds an opaque box is still described, and
+        \\    // still not releasable.
+        \\    if (Result(abi.give_boxed_view) != *abi.TypesView) @compileError("Box(View(Model)) lost its typed payload");
+        \\
+        \\    expectReleasable(abi.TypesLabeled);
+        \\    if (!@hasDecl(abi, "TypesLabeledRelease")) @compileError("TypesLabeled lost its release policy");
+        \\    if (Param(abi.give_labeled, 0) != abi.RocList(abi.TypesLabeled)) @compileError("List(Labeled) is not a host-managed list");
+        \\}
+        \\
+        \\// The parts of a value that holds an opaque box stay usable: the host
+        \\// retains it whole, reads and releases what has a known layout, and
+        \\// hands the opaque box back to Roc.
+        \\fn settleView(view: abi.TypesView, roc_host: *abi.RocHost) void {
+        \\    view.incref(1);
+        \\    view.title.decref(roc_host);
+        \\    abi.decrefListOfStr(view.tags, roc_host);
+        \\    abi.release_model(view.model);
+        \\}
+        \\fn readHandles(handles: abi.RocHeldList(abi.TypesHandle)) u64 {
+        \\    handles.incref(1);
+        \\    var total: u64 = 0;
+        \\    for (handles.items()) |handle| total += handle.count;
+        \\    return total + handles.len();
+        \\}
+        \\fn retainSlot(slot: abi.TypesSlot, boxes: abi.RocHeldList(abi.RocBox), items: abi.RocOpaqueList) usize {
+        \\    slot.incref(1);
+        \\    boxes.incref(1);
+        \\    items.incref(1);
+        \\    return boxes.len() + items.len();
+        \\}
+        \\comptime {
+        \\    _ = &settleView;
+        \\    _ = &readHandles;
+        \\    _ = &retainSlot;
+        \\}
+        ,
     });
 }
 
@@ -19466,8 +19624,9 @@ const GlueOutputExpectations = struct {
 };
 
 /// Run every shipped generator over `platform_path`, require each output to
-/// contain its expected declarations, and semantically analyze every
-/// declaration of the generated Zig by compiling it as a test.
+/// contain its expected declarations, compile the generated C and Rust, and
+/// semantically analyze every declaration of the generated Zig by compiling it
+/// as a test.
 fn checkGlueOutput(
     io: std.Io,
     allocator: Allocator,
@@ -19506,7 +19665,31 @@ fn checkGlueOutput(
             }
         }
 
-        if (language != .zig) continue;
+        switch (language) {
+            .zig => {},
+            .c => {
+                const test_c_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.c" }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate test C path: {}", .{err});
+                std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_c_path, .data = "#include \"roc_platform_abi.h\"\n" }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to write test C file: {}", .{err});
+                const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_header.o" }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
+                const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{output_dir}) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate include flag: {}", .{err});
+                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+                    "zig", "cc", "-c", "-std=c11", "-Wall", "-Werror", include_flag, test_c_path, "-o", test_o_path,
+                }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+                continue;
+            },
+            .rust => {
+                const test_rlib_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rlib" }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate Rust rlib path: {}", .{err});
+                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+                    "rustc", "--edition=2021", "-D", "warnings", "--crate-type", "lib", generated_path, "-o", test_rlib_path,
+                }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+                continue;
+            },
+        }
         // `refAllDecls` only references declarations inside a test build, so
         // the generated file is compiled as a test to analyze every
         // declaration and helper body.

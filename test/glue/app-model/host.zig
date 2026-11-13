@@ -294,6 +294,15 @@ fn rocStrSlice(str: *const abi.RocStr) ?[]const u8 {
     return bytes[0..str.len()];
 }
 
+/// A `View` holds the application's model, which only Roc can release, so the
+/// view is released part by part and the model is handed back to Roc.
+fn releaseView(view: abi.View) void {
+    view.title.decref(&roc_host);
+    abi.decrefListOfMsg(view.messages, &roc_host);
+    view.lifecycle.decref(&roc_host);
+    abi.roc_release_model(view.model);
+}
+
 fn runAppModelContract() void {
     const initial = abi.roc_init();
     const updated = abi.roc_update(initial, resetMsg());
@@ -302,7 +311,7 @@ fn runAppModelContract() void {
     const title = view.title;
     const title_slice = rocStrSlice(&title) orelse {
         contract_env.fail("render title has null bytes len={}", .{title.len()});
-        view.decref(&roc_host);
+        releaseView(view);
         return;
     };
     if (!std.mem.eql(u8, title_slice, "ready")) {
@@ -314,7 +323,7 @@ fn runAppModelContract() void {
     if (view.messages.length != 0) {
         contract_env.fail("render messages expected empty got {}", .{view.messages.length});
     }
-    view.decref(&roc_host);
+    releaseView(view);
 }
 
 export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
