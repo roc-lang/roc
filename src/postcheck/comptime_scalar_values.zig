@@ -164,6 +164,11 @@ const Decoder = struct {
             return bytes[0..len];
         }
         if (length_word == 0 or length_word >= 3 * size) return null;
+        // An allocated string this short is either a view into a longer
+        // allocation, whose capacity word is a relocation naming it, or a
+        // string that records more capacity than it could hold inline. The
+        // second needs target storage: its literal would drop the capacity.
+        if (relocationAt(data_export, offset + size) == null) return null;
         const len: usize = @intCast(length_word);
         const frozen = self.frozen orelse return null;
         const relocation = relocationAt(data_export, offset) orelse return null;
@@ -290,7 +295,7 @@ test "completed successful scalar roots decode to literals; failed and aggregate
     const roles = [_]enum { failure, value, string }{ .failure, .value, .failure, .value, .failure, .value, .string };
     for (roles, 0..) |role, index| {
         try program.static_data_values.append(allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = switch (role) {
                 .failure => record_layout,
                 .value => if (index == 5) .i16 else .u32,

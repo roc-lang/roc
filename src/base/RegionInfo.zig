@@ -76,7 +76,7 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) Allocator.Error!collec
 
     // the first line starts at offset 0
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 0);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
@@ -86,7 +86,7 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) Allocator.Error!collec
     for (source) |c| {
         if (c == '\n') {
             // next line starts after the newline in the current position
-            const expected_idx = line_starts.items.items.len;
+            const expected_idx = line_starts.items().len;
             const idx = try line_starts.append(gpa, pos + 1);
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
@@ -136,37 +136,37 @@ test "lineIdx" {
 
     // Simple test case with lines at positions 0, 10, 20
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 0);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 10);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 20);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 30);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
-    try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 0));
-    try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 5));
-    try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 9));
-    try std.testing.expectEqual(1, RegionInfo.lineIdx(line_starts.items.items, 10));
-    try std.testing.expectEqual(1, RegionInfo.lineIdx(line_starts.items.items, 15));
-    try std.testing.expectEqual(1, RegionInfo.lineIdx(line_starts.items.items, 19));
-    try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items.items, 20));
-    try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items.items, 25));
-    try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items.items, 29));
-    try std.testing.expectEqual(3, RegionInfo.lineIdx(line_starts.items.items, 30));
-    try std.testing.expectEqual(3, RegionInfo.lineIdx(line_starts.items.items, 35));
+    try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items(), 0));
+    try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items(), 5));
+    try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items(), 9));
+    try std.testing.expectEqual(1, RegionInfo.lineIdx(line_starts.items(), 10));
+    try std.testing.expectEqual(1, RegionInfo.lineIdx(line_starts.items(), 15));
+    try std.testing.expectEqual(1, RegionInfo.lineIdx(line_starts.items(), 19));
+    try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items(), 20));
+    try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items(), 25));
+    try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items(), 29));
+    try std.testing.expectEqual(3, RegionInfo.lineIdx(line_starts.items(), 30));
+    try std.testing.expectEqual(3, RegionInfo.lineIdx(line_starts.items(), 35));
 }
 
 test "lineIdx finds exact boundaries in a large source" {
@@ -188,27 +188,27 @@ test "columnIdx" {
     defer line_starts.deinit(gpa);
 
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 0);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 10);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 20);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
-    try std.testing.expectEqual(0, RegionInfo.columnIdx(line_starts.items.items, 0, 0));
-    try std.testing.expectEqual(5, RegionInfo.columnIdx(line_starts.items.items, 0, 5));
-    try std.testing.expectEqual(9, RegionInfo.columnIdx(line_starts.items.items, 0, 9));
+    try std.testing.expectEqual(0, RegionInfo.columnIdx(line_starts.items(), 0, 0));
+    try std.testing.expectEqual(5, RegionInfo.columnIdx(line_starts.items(), 0, 5));
+    try std.testing.expectEqual(9, RegionInfo.columnIdx(line_starts.items(), 0, 9));
 
-    try std.testing.expectEqual(0, RegionInfo.columnIdx(line_starts.items.items, 1, 10));
-    try std.testing.expectEqual(5, RegionInfo.columnIdx(line_starts.items.items, 1, 15));
+    try std.testing.expectEqual(0, RegionInfo.columnIdx(line_starts.items(), 1, 10));
+    try std.testing.expectEqual(5, RegionInfo.columnIdx(line_starts.items(), 1, 15));
 }
 
 test "getLineText" {
@@ -219,25 +219,25 @@ test "getLineText" {
     const source = "line0\nline1\nline2";
 
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 0);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 6);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 12);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
-    try std.testing.expectEqualStrings("line0", RegionInfo.getLineText(source, line_starts.items.items, 0, 0));
-    try std.testing.expectEqualStrings("line1", RegionInfo.getLineText(source, line_starts.items.items, 1, 1));
-    try std.testing.expectEqualStrings("line0\nline1", RegionInfo.getLineText(source, line_starts.items.items, 0, 1));
-    try std.testing.expectEqualStrings("line2", RegionInfo.getLineText(source, line_starts.items.items, 2, 2));
+    try std.testing.expectEqualStrings("line0", RegionInfo.getLineText(source, line_starts.items(), 0, 0));
+    try std.testing.expectEqualStrings("line1", RegionInfo.getLineText(source, line_starts.items(), 1, 1));
+    try std.testing.expectEqualStrings("line0\nline1", RegionInfo.getLineText(source, line_starts.items(), 0, 1));
+    try std.testing.expectEqualStrings("line2", RegionInfo.getLineText(source, line_starts.items(), 2, 2));
 }
 
 test "get" {
@@ -248,32 +248,32 @@ test "get" {
     const source = "line0\nline1\nline2";
 
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 0);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 6);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
-        const expected_idx = line_starts.items.items.len;
+        const expected_idx = line_starts.items().len;
         const idx = try line_starts.append(gpa, 12);
         std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
-    const info1 = try RegionInfo.position(source, line_starts.items.items, 2, 4);
+    const info1 = try RegionInfo.position(source, line_starts.items(), 2, 4);
     try std.testing.expectEqual(0, info1.start_line_idx);
     try std.testing.expectEqual(2, info1.start_col_idx);
     try std.testing.expectEqual(0, info1.end_line_idx);
     try std.testing.expectEqual(4, info1.end_col_idx);
-    try std.testing.expectEqualStrings("line0", info1.calculateLineText(source, line_starts.items.items));
+    try std.testing.expectEqualStrings("line0", info1.calculateLineText(source, line_starts.items()));
 
-    const info2 = try RegionInfo.position(source, line_starts.items.items, 8, 10);
+    const info2 = try RegionInfo.position(source, line_starts.items(), 8, 10);
     try std.testing.expectEqual(1, info2.start_line_idx);
     try std.testing.expectEqual(2, info2.start_col_idx);
     try std.testing.expectEqual(1, info2.end_line_idx);
     try std.testing.expectEqual(4, info2.end_col_idx);
-    try std.testing.expectEqualStrings("line1", info2.calculateLineText(source, line_starts.items.items));
+    try std.testing.expectEqualStrings("line1", info2.calculateLineText(source, line_starts.items()));
 }

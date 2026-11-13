@@ -138,11 +138,11 @@ pub const ResolvedDispatchTarget = struct {
     fn_var: Var,
     /// The dispatch this one was derived for (a component of a derived
     /// method, comparison, or hash), whose demand includes this one's.
-    parent_fn_var: ?Var,
+    parent_fn_var: collections.OptionalId(Var),
     /// The expression that introduced the dispatch. A structural comparison
     /// or hash carries no callable variable of its own, so its component
     /// dispatches are found through the expression they serve.
-    intro_expr: ?CIR.Expr.Idx,
+    intro_expr: collections.OptionalId(CIR.Expr.Idx),
     target: Target,
 
     pub const Target = union(enum) {
@@ -155,6 +155,10 @@ pub const ResolvedDispatchTarget = struct {
         foreign: struct { invokes: bool },
     };
 };
+
+comptime {
+    std.debug.assert(@sizeOf(ResolvedDispatchTarget) == 20);
+}
 
 /// A lookup naming a definition of another module.
 pub const ForeignCallee = union(enum) {
@@ -261,18 +265,18 @@ pub fn collectDependencies(
             return @backingInt(a.dependency) < @backingInt(b.dependency);
         }
     };
-    std.mem.sort(Dependency, dependencies.items.items, {}, DependencySort.lessThan);
+    std.mem.sort(Dependency, dependencies.items(), {}, DependencySort.lessThan);
 
     var unique_len: usize = 0;
-    for (dependencies.items.items) |dependency| {
+    for (dependencies.items()) |dependency| {
         if (unique_len != 0) {
-            const previous = dependencies.items.items[unique_len - 1];
+            const previous = dependencies.items()[unique_len - 1];
             if (previous.dependent == dependency.dependent and previous.dependency == dependency.dependency) continue;
         }
-        dependencies.items.items[unique_len] = dependency;
+        dependencies.items()[unique_len] = dependency;
         unique_len += 1;
     }
-    dependencies.items.items.len = unique_len;
+    dependencies.shrinkRetainingCapacity(unique_len);
 
     return dependencies;
 }
@@ -525,7 +529,7 @@ const DemandAnalyzer = struct {
                 },
                 .foreign => |foreign_target| resolution.foreign_invokes = resolution.foreign_invokes or foreign_target.invokes,
             }
-            if (target.parent_fn_var) |parent| {
+            if (target.parent_fn_var.get()) |parent| {
                 const parent_root = cir.types.resolveVar(parent).var_;
                 if (parent_root != fn_root) {
                     const parent_entry = try analyzer.resolved_dispatch.getOrPut(allocator, parent_root);
@@ -537,7 +541,7 @@ const DemandAnalyzer = struct {
                     }
                 }
             }
-            if (target.intro_expr) |intro| {
+            if (target.intro_expr.get()) |intro| {
                 const intro_entry = try analyzer.dispatch_by_intro.getOrPut(allocator, intro);
                 if (!intro_entry.found_existing) intro_entry.value_ptr.* = .empty;
                 for (intro_entry.value_ptr.items) |existing| {
@@ -548,17 +552,17 @@ const DemandAnalyzer = struct {
             }
         }
 
-        for (cir.scheme_uses.items.items, 0..) |record, record_index| {
+        for (cir.scheme_uses.items(), 0..) |record, record_index| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))) {
                 .value_use, .shared_value_use => {
                     const entry = try analyzer.scheme_use_by_node.getOrPut(@fromBackingInt(@intCast(record.node_idx)));
                     if (!entry.found_existing) entry.value_ptr.* = @intCast(record_index);
                 },
-                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use => {},
+                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use, .platform_requirement => {},
             }
         }
 
-        for (cir.for_loop_dispatch_plans.items.items) |plan| {
+        for (cir.for_loop_dispatch_plans.items()) |plan| {
             try analyzer.for_loop_dispatch.put(allocator, plan.node_idx, .{
                 @fromBackingInt(@intCast(plan.iter_fn_var)),
                 @fromBackingInt(@intCast(plan.next_fn_var)),
@@ -1792,8 +1796,8 @@ const DemandAnalyzer = struct {
         demand_node: CIR.Node.Idx,
     ) Var {
         const record_index = self.scheme_use_by_node.get(demand_node) orelse return fn_var;
-        const record = self.cir.scheme_uses.items.items[record_index];
-        const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        const record = self.cir.scheme_uses.items()[record_index];
+        const pairs = self.cir.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
         const old_root = self.cir.types.resolveVar(fn_var).var_;
         for (pairs) |pair| {
             if (self.cir.types.resolveVar(@fromBackingInt(@intCast(pair.old_var))).var_ == old_root) {

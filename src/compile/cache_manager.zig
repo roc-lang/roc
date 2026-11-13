@@ -184,6 +184,24 @@ pub const CacheManager = struct {
 
     const EntrySource = union(enum) { bytes: []const u8, stream: CoreCtx.FileStream };
 
+    /// A framed file's contents: its length prefix, the entry, its length
+    /// trailer.
+    const FramedEntry = struct {
+        prefix: [artifacts.length_prefix_len]u8,
+        source: EntrySource,
+        trailer: [artifacts.length_trailer_len]u8,
+
+        fn write(context: *const anyopaque, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            const self: *const FramedEntry = @ptrCast(@alignCast(context));
+            try writer.writeAll(&self.prefix);
+            switch (self.source) {
+                .bytes => |bytes| try writer.writeAll(bytes),
+                .stream => |stream| try stream.write(stream.context, writer),
+            }
+            try writer.writeAll(&self.trailer);
+        }
+    };
+
     fn storeEntry(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, source: EntrySource, size: usize, scope: []const u8, name: []const u8) void {
         if (comptime threading.is_freestanding) return;
         if (!self.config.enabled) return;
@@ -197,7 +215,10 @@ pub const CacheManager = struct {
             return;
         };
         defer stage.deinit();
-        const result = switch (source) {
+        const framed: FramedEntry = .{ .prefix = artifacts.lengthPrefix(size), .source = source, .trailer = artifacts.lengthTrailer(size) };
+        const result = if (family.framed())
+            self.roc_ctx.writeFileStream(stage.path, .{ .context = &framed, .write = FramedEntry.write })
+        else switch (source) {
             .bytes => |bytes| self.roc_ctx.writeFile(stage.path, bytes),
             .stream => |stream| self.roc_ctx.writeFileStream(stage.path, stream),
         };
@@ -206,6 +227,20 @@ pub const CacheManager = struct {
             self.recordStoreFailureFor(kind);
             return;
         };
+        if (family.framed()) {
+            // The framing records the length the producer declared, so a
+            // producer that wrote another length must not publish its file.
+            const written = self.roc_ctx.stat(stage.path) catch |err| {
+                self.verboseLog(allocator, "Failed to stat {s} cache entry for {s}: {}\n", .{ @tagName(kind), name, err });
+                self.recordStoreFailureFor(kind);
+                return;
+            };
+            if (written.size != size + artifacts.framing_len) {
+                self.verboseLog(allocator, "Wrote {d} bytes of {s} cache entry for {s}, expected {d}\n", .{ written.size, @tagName(kind), name, size + artifacts.framing_len });
+                self.recordStoreFailureFor(kind);
+                return;
+            }
+        }
         stage.publish() catch |err| {
             self.verboseLog(allocator, "Failed to publish {s} cache entry for {s}: {}\n", .{ @tagName(kind), name, err });
             self.recordStoreFailureFor(kind);
@@ -214,23 +249,85 @@ pub const CacheManager = struct {
         self.recordStoreFor(kind, size);
     }
 
-    pub fn loadRawBytes(self: *Self, key: [32]u8, scope: []const u8) ?[]const u8 {
+    /// An entry's payload read onto the heap, owned by the caller (free
+    /// `bytes` with the manager's allocator), and which file it came from.
+    pub const LoadedBytes = struct {
+        bytes: []const u8,
+        stamp: artifacts.Stamp,
+    };
+
+    pub fn loadRawBytes(self: *Self, key: [32]u8, scope: []const u8) ?LoadedBytes {
         return self.loadFamilyBytes(.checked, key, scope);
     }
 
-    pub fn loadFamilyBytes(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8) ?[]const u8 {
+    /// Read `family`'s entry for `key` after checking the length it records
+    /// at both ends. A file whose recorded lengths are not its length is
+    /// discarded and missed.
+    pub fn loadFamilyBytes(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8) ?LoadedBytes {
+        std.debug.assert(family.framed());
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
         const store = self.storeHandle() orelse {
             self.recordMissFor(.checked);
             return null;
         };
-        const bytes = (store.read(self.allocator, identity(family, key, scope)) catch null) orelse {
+        const id = identity(family, key, scope);
+        var artifact = (store.acquire(id) catch null) orelse {
             self.recordMissFor(.checked);
             return null;
         };
-        self.recordHitFor(.checked, bytes.len);
-        return bytes;
+        defer artifact.deinit();
+        var prefix: [artifacts.length_prefix_len]u8 = @splat(0);
+        var trailer: [artifacts.length_trailer_len]u8 = @splat(0);
+        if (artifact.size >= artifacts.framing_len) {
+            const prefix_read = artifact.file.readPositionalAll(store.io, &prefix, 0) catch 0;
+            const trailer_read = artifact.file.readPositionalAll(store.io, &trailer, artifact.size - trailer.len) catch 0;
+            if (prefix_read != prefix.len or trailer_read != trailer.len) {
+                self.recordMissFor(.checked);
+                return null;
+            }
+        }
+        if (!artifacts.lengthsMatch(artifact.size, &prefix, &trailer)) {
+            self.rejectEntry(.checked, family, key, scope, artifact.stamp(), "the lengths it records are not its length of {d} bytes", .{artifact.size});
+            return null;
+        }
+        const payload_len = std.math.cast(usize, artifact.size - artifacts.framing_len) orelse {
+            self.recordMissFor(.checked);
+            return null;
+        };
+        const bytes = self.allocator.alloc(u8, payload_len) catch {
+            self.recordMissFor(.checked);
+            return null;
+        };
+        const len = artifact.file.readPositionalAll(store.io, bytes, artifacts.length_prefix_len) catch 0;
+        if (len != payload_len) {
+            self.allocator.free(bytes);
+            self.recordMissFor(.checked);
+            return null;
+        }
+        self.recordHitFor(.checked, artifact.size);
+        return .{ .bytes = bytes, .stamp = artifact.stamp() };
+    }
+
+    /// Discard a loaded entry that is corrupt: count it as an invalidation of
+    /// `kind`, say why under `--verbose`, and delete its file unless another
+    /// writer has replaced it since it was loaded (`artifacts.Store.discard`),
+    /// so no later build reads it again.
+    pub fn rejectEntry(
+        self: *Self,
+        kind: Kind,
+        family: artifacts.Family,
+        key: [32]u8,
+        scope: []const u8,
+        stamp: artifacts.Stamp,
+        comptime reason: []const u8,
+        args: anytype,
+    ) void {
+        self.recordInvalidationFor(kind);
+        self.verboseLog(self.allocator, "Discarding corrupt {s} cache entry {s}: " ++ reason ++ "\n", .{ @tagName(family), std.fmt.bytesToHex(key, .lower) } ++ args);
+        if (comptime threading.is_freestanding) return;
+        const store = self.storeHandle() orelse return;
+        store.discard(identity(family, key, scope), stamp);
     }
 
     pub fn loadRawBytesMapped(self: *Self, key: [32]u8, scope: []const u8) ?CacheModule.CacheData {
@@ -244,6 +341,7 @@ pub const CacheManager = struct {
     /// File a copy of the file at `source_path` as `family`'s entry for
     /// `key`, staged beside the entry and renamed into place.
     pub fn storeFamilyFile(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8, source_path: []const u8, name: []const u8) void {
+        std.debug.assert(!family.framed());
         if (comptime threading.is_freestanding) return;
         if (!self.config.enabled) return;
         const store = self.storeHandle() orelse {
@@ -273,6 +371,7 @@ pub const CacheManager = struct {
     /// caller until its `deinit`, for a consumer that copies its bytes by
     /// file range. Null for a miss.
     pub fn acquireFamily(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8) ?artifacts.Artifact {
+        std.debug.assert(!family.framed());
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
         const store = self.storeHandle() orelse {
@@ -287,7 +386,22 @@ pub const CacheManager = struct {
         return artifact;
     }
 
+    /// Map (or read) `family`'s entry for `key` after checking the length it
+    /// records at both ends. A file whose recorded lengths are not its length
+    /// is discarded and missed.
     pub fn loadFamilyMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8) ?CacheModule.CacheData {
+        std.debug.assert(family.framed());
+        const data = self.mapFamily(allocator, kind, family, key, scope) orelse return null;
+        if (!artifacts.fileLengthsMatch(data.file())) {
+            self.rejectEntry(kind, family, key, scope, data.stamp, "the lengths it records are not its length of {d} bytes", .{data.file().len});
+            data.deinit(allocator);
+            return null;
+        }
+        self.recordHitFor(kind, data.file().len);
+        return data;
+    }
+
+    fn mapFamily(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8) ?CacheModule.CacheData {
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
         const store = self.storeHandle() orelse {
@@ -304,8 +418,7 @@ pub const CacheManager = struct {
             if (size != 0) {
                 const region = std.posix.mmap(null, size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE }, artifact.file.handle, 0) catch null;
                 if (region) |mapped| {
-                    self.recordHitFor(kind, size);
-                    return .{ .mapped = .{ .region = mapped, .file_len = size } };
+                    return .{ .storage = .{ .mapped = .{ .region = mapped, .file_len = size } }, .stamp = artifact.stamp() };
                 }
             }
         }
@@ -318,8 +431,7 @@ pub const CacheManager = struct {
             allocator.free(bytes);
             return null;
         }
-        self.recordHitFor(kind, size);
-        return .{ .allocated = bytes };
+        return .{ .storage = .{ .allocated = bytes }, .stamp = artifact.stamp() };
     }
 
     pub fn getStats(self: *const Self) CacheStats {

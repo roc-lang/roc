@@ -910,8 +910,8 @@ pub const RecordField = struct {
         }
     };
 
-    /// A safe multi list of record fields
-    pub const SafeMultiList = MkSafeMultiList(Self);
+    /// Independently growing columns of record fields.
+    pub const SafeMultiList = collections.ReservedColumns(Self, .dense);
 
     /// A safe list of record fields
     pub const SafeList = MkSafeList(Self);
@@ -975,8 +975,8 @@ pub const Tag = struct {
     /// A safe list of tags
     pub const SafeList = MkSafeList(@This());
 
-    /// A safe multi list of tags
-    pub const SafeMultiList = MkSafeMultiList(@This());
+    /// Independently growing columns of tag rows.
+    pub const SafeMultiList = collections.ReservedColumns(@This(), .dense);
 };
 
 /// Two tag union fields

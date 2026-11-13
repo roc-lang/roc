@@ -649,7 +649,7 @@ pub const ModuleIndex = struct {
         fn indexDeclarations(self: *Builder) Allocator.Error!void {
             const env = self.env;
             const store = &env.store;
-            for (env.method_defs.entries.items) |entry| {
+            for (env.method_defs.entries.items()) |entry| {
                 if (store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
                 const statement: StatementId = @fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)));
                 const decl = store.getStatement(statement).s_decl;
@@ -659,7 +659,7 @@ pub const ModuleIndex = struct {
 
             var recursively_referenced = collections.DenseMap(u32, void).init(self.allocator);
             defer recursively_referenced.deinit();
-            for (env.scheme_uses.items.items) |record| {
+            for (env.scheme_uses.items()) |record| {
                 if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_value_reference)) continue;
                 const node: CIR.Node.Idx = @fromBackingInt(@intCast(record.node_idx));
                 if (store.nodes.get(node).tag != .expr_var) continue;
@@ -720,6 +720,14 @@ fn dedupeSorted(list: *std.ArrayList(u32)) void {
 /// A range of a unit's binder pool.
 const BinderSpan = struct { start: u32 = 0, len: u32 = 0 };
 
+/// A binder range or its absence in eight bytes: the length is stored plus
+/// one, so all zeros means absent and an empty range stays present.
+const OptionalBinderSpan = collections.OptionalStruct(BinderSpan, "len");
+
+comptime {
+    std.debug.assert(@sizeOf(OptionalBinderSpan) == 8);
+}
+
 /// Whether inline expects run when lowering evaluates a body.
 pub const InlineExpectMode = enum { run, omit };
 
@@ -736,10 +744,10 @@ const UnitFacts = struct {
     flags: []u8,
     /// For an `if`, `match`, or `for` expression and for an expression
     /// statement: the binders it reassigns anywhere inside it.
-    state_merges: []?BinderSpan,
+    state_merges: []OptionalBinderSpan,
     /// For a `for` expression or a loop statement: the binders its condition
     /// and body reassign.
-    loop_mutations: []?BinderSpan,
+    loop_mutations: []OptionalBinderSpan,
     binders: []BinderId,
 
     fn destroy(self: *UnitFacts, allocator: Allocator) void {
@@ -950,13 +958,13 @@ pub const BodyAnalyses = struct {
 
     pub fn stateMergeBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
         const facts, const position = try self.unitFacts(bodies, raw_node);
-        const span = facts.state_merges[position] orelse invariant("a state merge was requested for a node that owns none");
+        const span = facts.state_merges[position].get() orelse invariant("a state merge was requested for a node that owns none");
         return facts.binders[span.start..][0..span.len];
     }
 
     pub fn loopMutationBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
         const facts, const position = try self.unitFacts(bodies, raw_node);
-        const span = facts.loop_mutations[position] orelse invariant("loop mutations were requested for a node that is not a loop");
+        const span = facts.loop_mutations[position].get() orelse invariant("loop mutations were requested for a node that is not a loop");
         return facts.binders[span.start..][0..span.len];
     }
 
@@ -1610,20 +1618,18 @@ const InspectElision = struct {
 /// reuses that construct's published range instead of revisiting its parts,
 /// so each node is walked only by its nearest enclosing plan owner.
 const ReassignmentPublisher = struct {
-    const no_position = std.math.maxInt(u32);
-
     allocator: Allocator,
     bodies: CheckedBodies,
     unit: UnitId,
     nodes: []const u32,
-    state_merges: []?BinderSpan = &.{},
-    loop_mutations: []?BinderSpan = &.{},
+    state_merges: []OptionalBinderSpan = &.{},
+    loop_mutations: []OptionalBinderSpan = &.{},
     binders: std.ArrayList(BinderId) = .empty,
     scratch: std.ArrayList(BinderId) = .empty,
     work: std.ArrayList(Work) = .empty,
-    /// Per node of the unit, by position: for a binder being deduplicated,
-    /// its position in `scratch`.
-    scratch_positions: []u32 = &.{},
+    /// Per node of the unit, by position: whether a binder being
+    /// deduplicated is already in `scratch`.
+    scratch_seen: std.DynamicBitSetUnmanaged = .{},
 
     const PlanRef = union(enum) {
         /// A loop's mutations: its condition and body. The node is a `for`
@@ -1673,7 +1679,7 @@ const ReassignmentPublisher = struct {
     fn deinitScratch(self: *ReassignmentPublisher) void {
         self.scratch.deinit(self.allocator);
         self.work.deinit(self.allocator);
-        self.allocator.free(self.scratch_positions);
+        self.scratch_seen.deinit(self.allocator);
     }
 
     fn deinitResults(self: *ReassignmentPublisher) void {
@@ -1683,12 +1689,11 @@ const ReassignmentPublisher = struct {
     }
 
     fn run(self: *ReassignmentPublisher) Allocator.Error!void {
-        self.state_merges = try self.allocator.alloc(?BinderSpan, self.nodes.len);
-        @memset(self.state_merges, null);
-        self.loop_mutations = try self.allocator.alloc(?BinderSpan, self.nodes.len);
-        @memset(self.loop_mutations, null);
-        self.scratch_positions = try self.allocator.alloc(u32, self.nodes.len);
-        @memset(self.scratch_positions, no_position);
+        self.state_merges = try self.allocator.alloc(OptionalBinderSpan, self.nodes.len);
+        @memset(self.state_merges, .none);
+        self.loop_mutations = try self.allocator.alloc(OptionalBinderSpan, self.nodes.len);
+        @memset(self.loop_mutations, .none);
+        self.scratch_seen = try .initEmpty(self.allocator, self.nodes.len);
         const index = self.bodies.index();
         for (self.nodes) |raw| switch (index.nodeKind(raw)) {
             .expr => {
@@ -1766,9 +1771,9 @@ const ReassignmentPublisher = struct {
     /// The published range of a plan owner, if it has one yet.
     fn publishedRange(self: *const ReassignmentPublisher, plan: PlanRef) ?BinderSpan {
         return switch (plan) {
-            .loop => |raw| self.loop_mutations[self.position(raw)],
-            .state => |expr| self.state_merges[self.position(@backingInt(expr))],
-            .expr_statement => |statement| self.state_merges[self.position(@backingInt(statement))],
+            .loop => |raw| self.loop_mutations[self.position(raw)].get(),
+            .state => |expr| self.state_merges[self.position(@backingInt(expr))].get(),
+            .expr_statement => |statement| self.state_merges[self.position(@backingInt(statement))].get(),
         };
     }
 
@@ -1800,7 +1805,9 @@ const ReassignmentPublisher = struct {
                 if (item.nested) try self.pushContribution(item.plan, range);
             },
             .share_state => |item| {
-                self.state_merges[self.position(@backingInt(item.statement))] = self.state_merges[self.position(@backingInt(item.expr))].?;
+                const shared = self.state_merges[self.position(@backingInt(item.expr))];
+                std.debug.assert(shared.get() != null);
+                self.state_merges[self.position(@backingInt(item.statement))] = shared;
             },
             .append_binders => |range| {
                 try self.scratch.appendSlice(self.allocator, self.binders.items[range.start..][0..range.len]);
@@ -1854,21 +1861,21 @@ const ReassignmentPublisher = struct {
         const count = self.scratch.items.len;
         for (start..count) |i| {
             const binder = self.scratch.items[i];
-            const slot = &self.scratch_positions[self.position(@backingInt(binder))];
-            if (slot.* == no_position) {
-                slot.* = @intCast(end);
+            const slot = self.position(@backingInt(binder));
+            if (!self.scratch_seen.isSet(slot)) {
+                self.scratch_seen.set(slot);
                 self.scratch.items[end] = binder;
                 end += 1;
             }
         }
-        for (self.scratch.items[start..end]) |binder| self.scratch_positions[self.position(@backingInt(binder))] = no_position;
+        for (self.scratch.items[start..end]) |binder| self.scratch_seen.unset(self.position(@backingInt(binder)));
         const binders_start: u32 = @intCast(self.binders.items.len);
         try self.binders.appendSlice(self.allocator, self.scratch.items[start..end]);
         const range: BinderSpan = .{ .start = binders_start, .len = @intCast(end - start) };
         switch (plan) {
-            .loop => |raw| self.loop_mutations[self.position(raw)] = range,
-            .state => |expr| self.state_merges[self.position(@backingInt(expr))] = range,
-            .expr_statement => |statement| self.state_merges[self.position(@backingInt(statement))] = range,
+            .loop => |raw| self.loop_mutations[self.position(raw)] = .some(range),
+            .state => |expr| self.state_merges[self.position(@backingInt(expr))] = .some(range),
+            .expr_statement => |statement| self.state_merges[self.position(@backingInt(statement))] = .some(range),
         }
         return range;
     }
@@ -2025,7 +2032,7 @@ pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: Diagn
     defer allocator.free(states);
     var erroneous = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     defer erroneous.deinit(allocator);
-    for (bodies.env.erroneous_nodes.items.items) |entry| erroneous.set(entry.node_idx);
+    for (bodies.env.erroneous_nodes.items()) |entry| erroneous.set(entry.node_idx);
     var scan = DiagnosticScan{
         .allocator = allocator,
         .bodies = bodies,
@@ -2095,7 +2102,7 @@ const ConstantGraph = struct {
         var by_pattern = collections.DenseMap(u32, ExprId).init(allocator);
         defer by_pattern.deinit();
         for (roots.roots) |root| {
-            if (root.pattern) |pattern| try by_pattern.put(@backingInt(pattern), root.rootExpr());
+            if (root.pattern.get()) |pattern| try by_pattern.put(@backingInt(pattern), root.rootExpr());
         }
         for (refs.records) |record| {
             const ref = switch (record.ref) {
@@ -2473,7 +2480,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     const module = tables.module orelse invariant("single-source calls were computed without the module's identity");
     const env = bodies.env;
 
-    const count = templates.templates.items.len;
+    const count = templates.templates.items().len;
     const eligible = try allocator.alloc(bool, count);
     defer allocator.free(eligible);
     @memset(eligible, false);
@@ -2499,7 +2506,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     var public_defs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
     defer public_defs.deinit();
     for (tables.exported_defs) |def| try public_defs.put(def, {});
-    for (env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
+    for (env.method_defs.entries.items()) |entry| try public_defs.put(entry.value.def_idx, {});
     for (templates.by_def) |entry| {
         const id = local.template(entry.template) orelse continue;
         if (!public_defs.contains(entry.def)) eligible[@backingInt(id)] = true;
@@ -2508,7 +2515,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
         const id = local.template(entry.template) orelse continue;
         eligible[@backingInt(id)] = true;
     }
-    for (templates.templates.items, eligible) |template, *is_eligible| {
+    for (templates.templates.items(), eligible) |template, *is_eligible| {
         if (template.target != .roc or template.body != .checked_body) is_eligible.* = false;
     }
 
@@ -2673,13 +2680,13 @@ fn singleSourceSites(
     var site_counts = collections.DenseMap(u32, u32).init(allocator);
     defer site_counts.deinit();
     for (sites) |site| {
-        const expr = site.checked_expr orelse continue;
+        const expr = site.checked_expr.get() orelse continue;
         (try site_counts.getOrPutValue(@backingInt(expr), 0)).value_ptr.* += 1;
     }
 
     for (sites, flags) |site, *flag| {
         if (site.owner != .template) continue;
-        const expr = site.checked_expr orelse continue;
+        const expr = site.checked_expr.get() orelse continue;
         const raw = @backingInt(expr);
         if (site_counts.get(raw).? != 1) continue;
         flag.* = shapes.callees.isSet(raw) or if (shapes.bound_by.get(raw)) |pattern|

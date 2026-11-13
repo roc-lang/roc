@@ -441,12 +441,12 @@ pub const Layouts = struct {
                 return .{ .struct_ = try graph.appendFields(self.allocator, fields) };
             },
             .record => |record| {
-                if (record.ext != null) types.invariant("an open record reached committed layout selection");
+                if (record.ext != .none) types.invariant("an open record reached committed layout selection");
                 const storage = try self.recordStorage(record);
                 defer self.allocator.free(storage);
                 const fields = try self.allocator.alloc(layout.GraphField, storage.len);
                 defer self.allocator.free(fields);
-                if (record.declared) |declared| {
+                if (record.declared.get()) |declared| {
                     for (self.store.declaredSlots(declared), fields) |slot, *field| {
                         field.* = .{ .index = slot, .child = try self.input(graph, nodes, order, storage[slot]), .is_padding = slot >= record.fields.len };
                     }

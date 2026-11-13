@@ -12,7 +12,7 @@ pub fn IndexedStack(comptime K: type) type {
         const page_shift = 8;
         const page_len = 1 << page_shift;
         const Page = [page_len]u32;
-        const absent = std.math.maxInt(u32);
+        const max_len = std.math.maxInt(u32);
 
         allocator: Allocator,
         entries: std.ArrayList(K) = .empty,
@@ -83,7 +83,7 @@ pub fn IndexedStack(comptime K: type) type {
                     const position = page[id & (page_len - 1)];
                     if (position < self.entries.items.len and self.entries.items[position] == key) return position;
                     try self.entries.ensureUnusedCapacity(self.allocator, 1);
-                    std.debug.assert(self.entries.items.len < absent);
+                    std.debug.assert(self.entries.items.len < max_len);
                     page[id & (page_len - 1)] = @intCast(self.entries.items.len);
                     self.entries.appendAssumeCapacity(key);
                     return null;
@@ -115,11 +115,14 @@ pub fn IndexedStack(comptime K: type) type {
             const page_slot = &self.pages.items[page_id - self.page_base];
             if (page_slot.* == null) {
                 const page = try self.allocator.create(Page);
-                @memset(page, absent);
+                // A slot is trusted only when the entry it names holds its
+                // ID, and an ID's slot is written whenever the ID is pushed,
+                // so an unwritten slot may name any position: zero serves.
+                @memset(page, 0);
                 page_slot.* = page;
             }
             try self.entries.ensureUnusedCapacity(self.allocator, 1);
-            std.debug.assert(self.entries.items.len < absent);
+            std.debug.assert(self.entries.items.len < max_len);
             page_slot.*.?[id & (page_len - 1)] = @intCast(self.entries.items.len);
             self.entries.appendAssumeCapacity(key);
         }

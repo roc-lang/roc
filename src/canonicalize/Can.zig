@@ -1262,11 +1262,11 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
 
 /// Name the node a worklist entry resolves.
 fn setDeferredRefNode(self: *Self, idx: ModuleEnv.DeferredImportRef.Idx, node_idx: u32) void {
-    self.env.deferred_import_refs.items.items[@backingInt(idx)].node_idx = node_idx;
+    self.env.deferred_import_refs.items()[@backingInt(idx)].node_idx = node_idx;
 }
 
 fn setDeferredTagMemberAccessNode(self: *Self, idx: ModuleEnv.DeferredImportRef.Idx, expr_idx: Expr.Idx) void {
-    self.env.deferred_import_refs.items.items[@backingInt(idx)].tag_member_access_node = @backingInt(expr_idx);
+    self.env.deferred_import_refs.items()[@backingInt(idx)].tag_member_access_node = @backingInt(expr_idx);
 }
 
 /// The deferred reference an external type binding names. Its path is the
@@ -1405,7 +1405,7 @@ fn retargetDeferredRefToApply(
     ref: ModuleEnv.DeferredImportRef.Idx,
     apply_anno_idx: TypeAnno.Idx,
 ) void {
-    const entry = &self.env.deferred_import_refs.items.items[@backingInt(ref)];
+    const entry = &self.env.deferred_import_refs.items()[@backingInt(ref)];
     entry.node_idx = @backingInt(apply_anno_idx);
     entry.kind = .type_anno_apply;
 }
@@ -1798,7 +1798,7 @@ fn activeDeclEntryIsDefiningItem(self: *Self, binding: ActiveDeclBinding, ident:
     if (self.defining_bound_vars == null) return false;
     const parser_decl_scope = self.parse_ir.decl_index.scopes.items[@backingInt(binding.parser_scope)];
     if (parser_decl_scope.kind != .associated) return false;
-    const owner_path = parser_decl_scope.owner_type_path orelse return false;
+    const owner_path = parser_decl_scope.owner_type_path.get() orelse return false;
     const pattern_idx = self.assoc_value_patterns.get(.{ .owner = owner_path, .item = ident }) orelse return false;
     return self.isDefiningBoundVar(pattern_idx);
 }
@@ -1837,7 +1837,7 @@ fn forwardVisibleValueDecl(
         switch (decl.kind) {
             .value, .var_decl => return decl_idx,
             .value_anno, .var_anno => {
-                if (self.annoOnlyDeclsResolveAsValues() and decl.paired_decl == null and annotation_only == null) {
+                if (self.annoOnlyDeclsResolveAsValues() and decl.paired_decl == .none and annotation_only == null) {
                     annotation_only = decl_idx;
                 }
             },
@@ -1905,7 +1905,7 @@ fn firstUsableParserTypeDecl(self: *const Self, bucket: AST.DeclIndex.NameBucket
 fn parserTypeDeclIsSelected(self: *const Self, decl_idx: AST.DeclIndex.DeclIdx) bool {
     const decl_index = &self.parse_ir.decl_index;
     const decl = decl_index.decls.items[@backingInt(decl_idx)];
-    const path = decl.type_path orelse return false;
+    const path = decl.type_path.get() orelse return false;
     const selected = self.firstUsableParserTypeDecl(decl_index.typeDeclsForPath(path)) orelse return false;
     return selected == decl_idx;
 }
@@ -1980,7 +1980,7 @@ fn activeWholeScopeBindingForDeclScope(
             return null;
         }
         if (parser_scope.forward_policy != .whole_scope) return null;
-        maybe_scope = parser_scope.parent;
+        maybe_scope = parser_scope.parent.get();
     }
     return null;
 }
@@ -2129,7 +2129,7 @@ fn visibleParserTypePathForSegments(
 
     if (self.activeDeclScopeDeclaresType(root_ident)) |active_type| {
         const decl = self.parse_ir.decl_index.decls.items[@backingInt(active_type.decl_idx)];
-        if (decl.type_path) |root_path| {
+        if (decl.type_path.get()) |root_path| {
             return self.parserTypePathFromRoot(root_path, segments[1..]);
         }
     }
@@ -2163,11 +2163,11 @@ fn parserTypePathForDependencySegments(
                 {
                     continue;
                 }
-                const root_path = candidate.type_path orelse continue;
+                const root_path = candidate.type_path.get() orelse continue;
                 return self.parserTypePathFromRoot(root_path, segments[1..]);
             }
         }
-        maybe_scope = scope.parent;
+        maybe_scope = scope.parent.get();
     }
 
     return self.moduleParserTypePathForSegments(segments);
@@ -2342,8 +2342,8 @@ fn mutuallyRecursiveAliasAnno(
     const referenced_stmt_idx = self.alias_cycle_references.get(ast_stmt_idx) orelse return null;
     const referenced_decl_idx = decl_index.declForStatement(@backingInt(referenced_stmt_idx)) orelse return null;
     const referenced_decl = decl_index.decls.items[@backingInt(referenced_decl_idx)];
-    const name = decl.name_ident orelse return null;
-    const referenced_name = referenced_decl.name_ident orelse return null;
+    const name = decl.nameIdent() orelse return null;
+    const referenced_name = referenced_decl.nameIdent() orelse return null;
     const region = self.parserDeclRegion(decl);
     const referenced_region = self.parserDeclRegion(referenced_decl);
 
@@ -2517,7 +2517,7 @@ const AliasCycleContext = struct {
                     return @fromBackingInt(@intCast(decl.statement));
                 }
             }
-            maybe_scope = scope.parent;
+            maybe_scope = scope.parent.get();
         }
 
         return null;
@@ -3103,7 +3103,7 @@ fn typePathRootName(self: *const Self, path_idx: AST.DeclIndex.TypePathIdx) Iden
     var current = path_idx;
     while (true) {
         const path = decl_index.type_paths.items[@backingInt(current)];
-        if (path.parent) |parent| {
+        if (path.parent.get()) |parent| {
             current = parent;
             continue;
         }
@@ -3116,7 +3116,7 @@ fn typePathRootScope(self: *const Self, path_idx: AST.DeclIndex.TypePathIdx) AST
     var current = path_idx;
     while (true) {
         const path = decl_index.type_paths.items[@backingInt(current)];
-        if (path.parent) |parent| {
+        if (path.parent.get()) |parent| {
             current = parent;
             continue;
         }
@@ -3154,7 +3154,7 @@ fn typePathIdent(
     var maybe_path: ?AST.DeclIndex.TypePathIdx = path_idx;
     while (maybe_path) |idx| {
         try self.scratch_type_paths.append(idx);
-        maybe_path = decl_index.type_paths.items[@backingInt(idx)].parent;
+        maybe_path = decl_index.type_paths.items[@backingInt(idx)].parent.get();
     }
 
     const bytes_top = self.scratchBytesTop();
@@ -3259,7 +3259,7 @@ fn ensureParserTypeDeclBinding(
         AST.TypeDeclKind.where_alias
     else
         return null;
-    const name_ident = decl.name_ident orelse return null;
+    const name_ident = decl.nameIdent() orelse return null;
     const ast_stmt_idx: AST.Statement.Idx = @fromBackingInt(@intCast(decl.statement));
     const region = self.parserDeclRegion(decl);
 
@@ -3267,7 +3267,7 @@ fn ensureParserTypeDeclBinding(
         inline .prepared, .registered, .redeclared => |stmt_idx| stmt_idx,
         .rejected => return null,
     } else blk: {
-        const type_path = decl.type_path;
+        const type_path = decl.type_path.get();
         const canonical_name = if (type_path) |path|
             try self.typePathIdent(path, self.typePathNeedsModulePrefix(path))
         else
@@ -3307,7 +3307,7 @@ fn ensureParserTypeDeclBinding(
     };
 
     const owner_scope_idx = binding.canonical_scope;
-    if (decl.type_path) |path| {
+    if (decl.type_path.get()) |path| {
         const canonical_name = try self.typePathIdent(path, self.typePathNeedsModulePrefix(path));
         const relative_name = try self.typePathIdent(path, false);
         try self.putTypeBindingInScope(owner_scope_idx, canonical_name, stmt_idx, kind, region);
@@ -3396,8 +3396,8 @@ fn enterAssociatedBlockState(
     state.* = .{
         .associated_value_regions = retained_value_regions,
         .work = work,
-        .owner_type_path = associated_scope.owner_type_path,
-        .owner_is_module_visible = self.associatedOwnerIsModuleVisible(associated_scope.owner_type_path),
+        .owner_type_path = associated_scope.owner_type_path.get(),
+        .owner_is_module_visible = self.associatedOwnerIsModuleVisible(associated_scope.owner_type_path.get()),
     };
 
     try self.scopeEnter(self.env.gpa, false);
@@ -6293,7 +6293,7 @@ fn resolvePlatformHosted(
 ) std.mem.Allocator.Error!void {
     if (self.env.module_kind != .platform) return;
 
-    for (self.env.hosted_entries.items.items, 0..) |*entry, entry_index| {
+    for (self.env.hosted_entries.items(), 0..) |*entry, entry_index| {
         const module_alias = entry.module_ident orelse {
             // An entry written without a module names a declaration in this
             // platform module. Such a target has no import, so a resolved entry
@@ -6442,7 +6442,7 @@ fn resolvePlatformProvides(
         });
         if (local_def != null) continue;
 
-        for (self.env.requires_types.items.items) |required| {
+        for (self.env.requires_types.items()) |required| {
             if (entry.ident.eql(required.ident)) {
                 _ = self.exposed_ident_texts.remove(self.env.getIdent(entry.ident));
                 try self.env.pushDiagnostic(.{ .provided_value_is_required = .{
@@ -6613,7 +6613,7 @@ fn builtinTypeAnnoForBinding(self: *const Self, external: Scope.ExternalTypeBind
 }
 
 fn importIsCompilerBuiltin(self: *const Self, import_idx: CIR.Import.Idx) bool {
-    const import_name_idx = self.env.imports.imports.items.items[@backingInt(import_idx)];
+    const import_name_idx = self.env.imports.imports.items()[@backingInt(import_idx)];
     return CIR.Import.isCompilerBuiltinImportName(self.env.common.getString(import_name_idx));
 }
 
@@ -8757,7 +8757,7 @@ fn canonicalizeUnqualifiedIdentExpr(
                 }
             }
 
-            const requires_items = self.env.requires_types.items.items;
+            const requires_items = self.env.requires_types.items();
             for (requires_items, 0..) |req, idx| {
                 if (req.ident.eql(ident)) {
                     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
@@ -8802,7 +8802,7 @@ fn canonicalizeUnqualifiedIdentExpr(
             const active_decl_scope = active_decl_entry.binding;
             const parser_decl_scope = self.parse_ir.decl_index.scopes.items[@backingInt(active_decl_scope.parser_scope)];
             if (parser_decl_scope.kind == .associated) {
-                if (parser_decl_scope.owner_type_path) |owner_path| {
+                if (parser_decl_scope.owner_type_path.get()) |owner_path| {
                     const key = AST.DeclIndex.AssocValue{
                         .owner = owner_path,
                         .item = ident,
@@ -10636,9 +10636,9 @@ fn isBuiltinBoolExternalNominal(self: *const Self, module_idx: Import.Idx, targe
     if (target_node_idx != bool_target_node_idx) return false;
 
     const module_idx_int = @backingInt(module_idx);
-    if (module_idx_int >= self.env.imports.imports.items.items.len) return false;
+    if (module_idx_int >= self.env.imports.imports.items().len) return false;
 
-    const string_lit_idx = self.env.imports.imports.items.items[module_idx_int];
+    const string_lit_idx = self.env.imports.imports.items()[module_idx_int];
     const module_name = self.env.common.strings.get(string_lit_idx);
     if (bool_info.env.module_role == .builtin) {
         return std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name);
@@ -15917,7 +15917,7 @@ fn adoptValueForwardReference(
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!?Pattern.Idx {
     const parser_decl = self.parse_ir.decl_index.decls.items[@backingInt(parser_decl_idx)];
-    std.debug.assert(parser_decl.pattern == @backingInt(ast_pattern_idx));
+    std.debug.assert(parser_decl.pattern.get() == @backingInt(ast_pattern_idx));
     const ast_pattern = self.parse_ir.store.getPattern(ast_pattern_idx);
     if (ast_pattern != .ident) return null;
     const ident = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse
@@ -15935,7 +15935,7 @@ fn takeValueForwardReference(
     const kv = self.value_forward_references.fetchRemove(.{ .decl_idx = parser_decl_idx, .ident = ident }) orelse return null;
 
     const parser_decl = self.parse_ir.decl_index.decls.items[@backingInt(parser_decl_idx)];
-    std.debug.assert(parser_decl.name_ident == null or parser_decl.name_ident.?.eql(ident));
+    std.debug.assert(parser_decl.name_ident.isNone() or parser_decl.name_ident.eql(ident));
 
     if (self.active_decl_scopes.get(parser_decl.scope)) |active_owner| {
         try self.putScopeIdent(active_owner.canonical_scope, ident, kv.value.pattern_idx);
@@ -19803,7 +19803,7 @@ fn recordParserBlockLocalDefs(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) st
             .var_anno,
             => continue,
         };
-        const ident = decl.name_ident orelse continue;
+        const ident = decl.nameIdent() orelse continue;
         try self.scratch_block_local_defs.append(.{
             .ident = ident,
             .region = self.parserDeclRegion(decl),
@@ -21401,7 +21401,7 @@ fn findMatchingTypeIdent(self: *Self) ?MatchingTypeResult {
     for (decl_index.scopeDecls(module_scope_idx)) |decl_idx| {
         const decl = decl_index.decls.items[@backingInt(decl_idx)];
         const kind = declIndexTypeKind(decl.kind) orelse continue;
-        const type_ident = decl.name_ident orelse continue;
+        const type_ident = decl.nameIdent() orelse continue;
         const type_name_text = self.env.getIdent(type_ident);
 
         if (std.mem.eql(u8, type_name_text, module_name_text)) {
@@ -21438,7 +21438,7 @@ fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void
     for (decl_index.scopeDecls(module_scope_idx)) |decl_idx| {
         const decl = decl_index.decls.items[@backingInt(decl_idx)];
         if (declIndexTypeKind(decl.kind) == null) continue;
-        const type_ident = decl.name_ident orelse continue;
+        const type_ident = decl.nameIdent() orelse continue;
         const stmt_id: AST.Statement.Idx = @fromBackingInt(@intCast(decl.statement));
         const stmt_idx = self.parserTypeDeclStatement(stmt_id) orelse
             base.invariant("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@backingInt(stmt_id)});

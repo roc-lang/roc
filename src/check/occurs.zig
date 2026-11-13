@@ -173,7 +173,7 @@ const CheckOccurs = struct {
         // Push the first frame
         // Since we know that Scratch.init initializes capacity, we can append
         // assuming capacity here
-        std.debug.assert(self.scratch.stack.items.capacity > 0);
+        std.debug.assert(self.scratch.stack.capacity > 0);
         _ = self.scratch.stack.appendAssumeCapacity(Frame{ .process_var = .{ .var_ = var_, .edge = edge } });
 
         // Process frames
@@ -194,7 +194,7 @@ const CheckOccurs = struct {
     /// Process frames until the work stack is empty or an invalid cycle is
     /// found.
     fn occursFrames(self: *Self) std.mem.Allocator.Error!?Result {
-        while (self.scratch.stack.items.pop()) |frame| {
+        while (self.scratch.stack.pop()) |frame| {
             switch (frame) {
                 .process_var => |start| {
                     const root = self.types_store.resolveVar(start.var_);
@@ -230,7 +230,7 @@ const CheckOccurs = struct {
                         // var.
                         const seen_len: usize = @intCast(self.scratch.seen.len());
                         std.debug.assert(seen_len > 0);
-                        self.scratch.err_var = self.scratch.seen.items.items[seen_len - 1].var_;
+                        self.scratch.err_var = self.scratch.seen.items()[seen_len - 1].var_;
 
                         return classified;
                     } else {
@@ -361,7 +361,7 @@ const CheckOccurs = struct {
         var recursion_allowed = closing.recursion_allowed;
         var nominal = closing.nominal_backing;
 
-        const entries = self.scratch.seen.items.items;
+        const entries = self.scratch.seen.items();
         var k = match_idx + 1;
         while (k < entries.len) : (k += 1) {
             recursion_allowed = recursion_allowed or entries[k].edge.recursion_allowed;
@@ -434,7 +434,7 @@ const CheckOccurs = struct {
     /// Push a slice of sub vars onto the work stack to be processed later.
     fn pushVarsToProcess(self: *Self, sub_vars: []Var, edge: Edge) std.mem.Allocator.Error!void {
         if (self.cutsEdge(edge)) return self.scratch.cut_roots.appendSlice(self.scratch.gpa, sub_vars);
-        try self.scratch.stack.items.ensureUnusedCapacity(self.scratch.gpa, sub_vars.len);
+        try self.scratch.stack.ensureUnusedCapacity(self.scratch.gpa, sub_vars.len);
         for (sub_vars) |sub_var| {
             _ = self.scratch.stack.appendAssumeCapacity(Frame{ .process_var = .{
                 .var_ = sub_var,
@@ -537,8 +537,8 @@ pub const Scratch = struct {
     }
 
     pub fn reset(self: *Self) void {
-        self.stack.items.clearRetainingCapacity();
-        self.seen.items.clearRetainingCapacity();
+        self.stack.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
         self.seen_positions.clearRetainingCapacity();
         self.visited.clearRetainingCapacity();
         self.cut_roots.clearRetainingCapacity();
@@ -564,7 +564,7 @@ pub const Scratch = struct {
     }
 
     fn popSeen(self: *Self) void {
-        const entry = self.seen.items.pop() orelse return;
+        const entry = self.seen.pop() orelse return;
         const removed = self.seen_positions.remove(entry.var_);
         std.debug.assert(removed);
     }

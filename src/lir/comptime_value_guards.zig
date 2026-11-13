@@ -1,5 +1,6 @@
 //! Final post-ARC guards borrow the immutable compile-time failure image.
 const std = @import("std");
+const collections = @import("collections");
 const invariant = @import("base").invariant;
 const core = @import("lir_core");
 const DenseMap = @import("collections").DenseMap;
@@ -25,8 +26,8 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         }
     } else false;
     if (!has_value_slots) return;
-    const completed_exports: []?u32 = if (completed) |frozen| try exportsBySlot(allocator, program, frozen) else &.{};
-    defer allocator.free(completed_exports);
+    var completed_exports: ExportBySlot = if (completed) |frozen| try exportsBySlot(allocator, program, frozen) else .{};
+    defer completed_exports.deinit(allocator);
     var uses: std.ArrayList(Use) = .empty;
     defer uses.deinit(allocator);
     var work: std.ArrayList(LIR.CFStmtId) = .empty;
@@ -46,7 +47,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         defer if (!admitted and uses.items.len != uses_before) invariant("{s}", .{"compile-time value guards found a use in a procedure whose shapes excluded it"});
         visited.clearRetainingCapacity();
         work.clearRetainingCapacity();
-        if (proc.body) |body| try work.append(allocator, body);
+        if (proc.body.get()) |body| try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
             if ((try visited.getOrPut(stmt_id)).found_existing) continue;
             try Body.appendSuccessors(store, &work, stmt_id, allocator);
@@ -61,7 +62,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             const root = program.static_data_values.items[@backingInt(slot)].compile_time_root orelse continue;
             if (root.role != .value) continue;
             if (completed) |frozen| {
-                if (!completedValueFailed(program, frozen, completed_exports, root.role.value.failure_slot)) continue;
+                if (!completedValueFailed(program, frozen, &completed_exports, root.role.value.failure_slot)) continue;
             }
             try uses.append(allocator, .{ .proc = proc_id, .stmt = stmt_id, .slot = slot });
         }
@@ -130,7 +131,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         const guard = guards.get(use.stmt).?;
         const slot = &program.static_data_values.items[@backingInt(use.slot)];
         const previous = slot.first_comptime_guard;
-        slot.first_comptime_guard = @intCast(program.comptime_value_guards.items.len);
+        slot.first_comptime_guard = .some(@intCast(program.comptime_value_guards.items.len));
         program.comptime_value_guards.appendAssumeCapacity(.{
             .next_for_slot = previous,
             .owner = use.proc,
@@ -167,13 +168,16 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
     }
 }
 
+/// A position in a frozen image's exports.
+const ExportPosition = enum(u32) { _ };
+const ExportBySlot = collections.OptionalIndexColumn(ExportPosition);
+
 /// The frozen export holding each static data slot's completed bytes.
-fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) std.mem.Allocator.Error![]?u32 {
-    const exports = try allocator.alloc(?u32, program.static_data_values.items.len);
-    @memset(exports, null);
+fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) std.mem.Allocator.Error!ExportBySlot {
+    var exports = try ExportBySlot.initFilled(allocator, program.static_data_values.items.len);
     for (frozen.exports, 0..) |item, index| {
         const slot = item.value_id orelse continue;
-        exports[@backingInt(slot)] = @intCast(index);
+        exports.set(@backingInt(slot), @fromBackingInt(@as(u32, @intCast(index))));
     }
     return exports;
 }
@@ -181,10 +185,10 @@ fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, f
 /// Whether the value owning `failure_slot` failed or is yet to be evaluated:
 /// the `failed` flag of its failure record in the frozen image, when the
 /// image has one.
-fn completedValueFailed(program: *const Program.Result, frozen: *const Program.FrozenStaticData, exports: []const ?u32, failure_slot: LIR.StaticDataId) bool {
+fn completedValueFailed(program: *const Program.Result, frozen: *const Program.FrozenStaticData, exports: *const ExportBySlot, failure_slot: LIR.StaticDataId) bool {
     const fields = program.static_data_values.items[@backingInt(failure_slot)].compile_time_root.?.role.failure_message;
-    const index = exports[@backingInt(failure_slot)] orelse return true;
-    const record = frozen.exports[index];
+    const index = exports.get(@backingInt(failure_slot)) orelse return true;
+    const record = frozen.exports[@backingInt(index)];
     return record.bytes[record.symbol_offset + fields.failed_offset] != 0;
 }
 
@@ -195,7 +199,7 @@ fn localLessThan(_: void, a: LIR.LocalId, b: LIR.LocalId) bool {
 /// Caller has explicit successful evaluation evidence for this root's slot.
 pub fn completeSuccessfulSlot(program: *Program.Result, slot: LIR.StaticDataId) std.mem.Allocator.Error!void {
     var next = program.static_data_values.items[@backingInt(slot)].first_comptime_guard;
-    while (next) |index| {
+    while (next.get()) |index| {
         const guard = &program.comptime_value_guards.items[index];
         next = guard.next_for_slot;
         std.debug.assert(guard.value_slot == slot);
@@ -222,7 +226,7 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{
-        .initializer = null,
+        .initializer = .none,
         .layout_idx = record_layout,
         .compile_time_root = .{
             .module = .{},
@@ -240,7 +244,7 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     const plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .scalar);
     try program.static_data_values.append(allocator, .{
-        .initializer = null,
+        .initializer = .none,
         .layout_idx = .u8,
         .compile_time_root = .{
             .module = .{},
@@ -255,9 +259,9 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     const frame = try program.store.addLocalSpan(&.{target});
     var owners: [2]LIR.LirProcSpecId = undefined; // Both entries are assigned by addProcSpec before use.
     for (&owners, 0..) |*owner, i| {
-        owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = frame, .body = load, .ret_layout = .u8 }, .none);
+        owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = frame, .body = .some(load), .ret_layout = .u8 }, .none);
     }
-    const unrelated = try program.store.addProcSpec(.{ .name = .fromRaw(2), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = frame, .body = ret, .ret_layout = .u8 }, .none);
+    const unrelated = try program.store.addProcSpec(.{ .name = .fromRaw(2), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = frame, .body = .some(ret), .ret_layout = .u8 }, .none);
     try insert(allocator, &program, null);
     try std.testing.expectEqual(@as(usize, 2), program.comptime_value_guards.items.len);
     const guard = program.comptime_value_guards.items[0];
@@ -313,7 +317,7 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
         const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
         failure_slot_out.* = failure_slot;
         try program.static_data_values.append(allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = record_layout,
             .compile_time_root = .{
                 .module = .{},
@@ -329,7 +333,7 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
         });
         value_slot.* = @fromBackingInt(@intCast(program.static_data_values.items.len));
         try program.static_data_values.append(allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = .u8,
             .compile_time_root = .{
                 .module = .{},
@@ -345,7 +349,7 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
         const target = try program.store.addLocal(.{ .layout_idx = .u8 });
         const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
         load.* = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = .{ .id = slot } }, .next = ret } }, .test_fixture);
-        owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(@intCast(i + 1)), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{target}), .body = load.*, .ret_layout = .u8 }, .none);
+        owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(@intCast(i + 1)), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{target}), .body = .some(load.*), .ret_layout = .u8 }, .none);
     }
     var succeeded_record = @as([32]u8, @splat(0));
     var failed_record = @as([32]u8, @splat(0));

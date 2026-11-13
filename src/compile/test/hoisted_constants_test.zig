@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
 const build_options = @import("build_options");
 const can = @import("can");
 const check = @import("check");
@@ -528,10 +529,10 @@ test "hoisted list constants lower to internal static data in request order" {
 
     if (lowered.lir_result.static_data_values.items.len != 2) return error.StaticDataInitializerCountMismatch;
     try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
-    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.?);
-    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
-    const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
-    const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
+    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.get().?);
+    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.get().?);
+    const first_body = first_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
+    const second_body = second_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
     // Queued initializers lower in request order. ARC leaves initializers as
     // lowered, so their bodies' statement ids still show that order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
@@ -923,7 +924,7 @@ test "a restored list of boxed capturing closures that read their own constant i
     , expectRestoredSelfReadingClosuresStatic);
 }
 
-test "an empty compile-time list reads immutable data without a capacity request" {
+test "an empty compile-time list with capacity reads immutable data without a capacity request" {
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -945,7 +946,7 @@ test "an empty compile-time list reads immutable data without a capacity request
 test "a compile-time record of an empty list and a scalar reads immutable data" {
     // The record is read whole: a field projection of a completed record
     // is its own compile-time root, evaluated from the frozen record,
-    // whose empty list carries no capacity.
+    // whose empty list's descriptor records its capacity.
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -966,9 +967,10 @@ test "a compile-time record of an empty list and a scalar reads immutable data" 
     }.inspect);
 }
 
-test "an empty list with capacity in a record frozen into static data is the empty list" {
-    // The completed empty list has no backing allocation or runtime capacity
-    // request, including when stored inside a record.
+test "an empty list with capacity in a record frozen into static data keeps its capacity" {
+    // The completed empty list's descriptor records the capacity it was
+    // evaluated with and points at an allocation holding no items, with no
+    // runtime capacity request, including when stored inside a record.
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1058,8 +1060,9 @@ test "an empty list with capacity in a record frozen into static data is the emp
     );
     defer static_data_exports.deinitStaticData(gpa, exports);
 
-    // Every list field of a frozen record: null pointer, zero length and
-    // capacity, and no relocation.
+    // Every list field of a frozen record: a relocated pointer just past the
+    // header of an allocation with no items, zero length, and a capacity of
+    // four.
     const layouts = &lowered.lir_result.layouts;
     var frozen_lists: usize = 0;
     for (lowered.lir_result.static_data_values.items, 0..) |value, index| {
@@ -1076,8 +1079,22 @@ test "an empty list with capacity in a record frozen into static data is the emp
             if (layouts.getLayout(layouts.getStructFieldLayout(struct_idx, field_index)).tag != .list) continue;
             const offset = static_export.symbol_offset + layouts.getStructFieldOffset(struct_idx, field_index);
             const size = layouts.getStructFieldSize(struct_idx, field_index);
-            try std.testing.expect(std.mem.allEqual(u8, static_export.bytes[offset..][0..size], 0));
-            for (static_export.relocations) |relocation| try std.testing.expect(relocation.offset != offset);
+            try std.testing.expectEqual(@as(u32, 24), size);
+            const words = static_export.bytes[offset..][0..size];
+            try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, words[8..16], .little));
+            try std.testing.expectEqual(builtins.list.RocList.encodeCapacityForWidth(4), std.mem.readInt(u64, words[16..24], .little));
+            var pointers: usize = 0;
+            for (static_export.relocations) |relocation| {
+                if (relocation.offset != offset) continue;
+                const target = for (exports) |candidate| {
+                    if (std.mem.eql(u8, candidate.symbol_name, relocation.target_symbol_name)) break candidate;
+                } else return error.StaticDataSymbolNotFound;
+                // The pointer sits just past a static refcount word.
+                const items: usize = @intCast(@as(i64, target.symbol_offset) + relocation.addend);
+                try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, target.bytes[items - 8 ..][0..8], .little));
+                pointers += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 1), pointers);
             frozen_lists += 1;
         }
     }
@@ -1156,7 +1173,7 @@ fn reachableStatementCount(result: *lir.Program.Result) HoistedConstantsTestErro
     // entrypoint still makes the compiler process it (the regression in #11376).
     var statement_count: usize = 0;
     for (result.store.getProcSpecs()) |proc| {
-        const body = proc.body orelse continue;
+        const body = proc.body.get() orelse continue;
         var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
         defer statements.deinit();
         while (try statements.next()) |_| statement_count += 1;
@@ -1212,11 +1229,11 @@ test "computed callable aliases retain evaluation requests while proven forwards
         const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
         var evaluated: usize = 0;
         var forwarded: usize = 0;
-        for (artifact.callable_eval_templates.templates.items) |template| {
+        for (artifact.callable_eval_templates.templates.items()) |template| {
             const requested = for (artifact.root_requests.compile_time_requests) |request| {
-                if (request.compile_time_root == template.root) break true;
+                if (request.compile_time_root.get() == template.root) break true;
             } else false;
-            if (template.forwarded_lookup != null) {
+            if (template.forwarded_lookup != .none) {
                 forwarded += 1;
                 try std.testing.expect(!requested);
             } else {
@@ -2707,8 +2724,8 @@ fn expectPatternExtractionRoots(
         };
         extraction_count += 1;
 
-        try std.testing.expectEqual(extraction.result_pattern, root.source_pattern orelse return error.PatternExtractionMissingSourcePattern);
-        const checked_result_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedRootPattern;
+        try std.testing.expectEqual(extraction.result_pattern, root.source_pattern.get() orelse return error.PatternExtractionMissingSourcePattern);
+        const checked_result_pattern = root.pattern.get() orelse return error.PatternExtractionMissingCheckedRootPattern;
         try std.testing.expectEqual(extraction.result_pattern, checked_result_pattern);
 
         // The root evaluates the match of its base expression against the
@@ -2913,7 +2930,7 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
 
 fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
     for (result.static_data_values.items) |value| {
-        try std.testing.expect(result.store.getProcSpecImmediate(value.initializer.?).is_static_initializer);
+        try std.testing.expect(result.store.getProcSpecImmediate(value.initializer.get().?).is_static_initializer);
     }
 }
 

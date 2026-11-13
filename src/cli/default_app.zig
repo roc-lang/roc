@@ -193,7 +193,7 @@ fn notAnAppReport(
 
     if (keyword) |kw| {
         const region = ast.tokenizedRegionToRegion(header.to_tokenized_region());
-        try report.document.addSourceRegion(env.calcRegionInfo(region), .error_highlight, source_path, env.source, env.line_starts.items.items);
+        try report.document.addSourceRegion(env.calcRegionInfo(region), .error_highlight, source_path, env.source, env.line_starts.items());
         try report.document.addLineBreak();
         try report.document.addReflowingText("It has a ");
         try report.document.addInlineCode(kw);

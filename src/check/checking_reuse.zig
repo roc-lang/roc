@@ -38,7 +38,7 @@ pub fn fromChecker(allocator: Allocator, checker: anytype, scope: *const depende
         if (owner == 0 or scope.ordinal(hash) != owner) continue;
         const env = scope.environments.get(hash) orelse
             base.invariant("foreign reference tables belong to explicit dependency environments", .{});
-        for (env.checking_dependency.references.items.items, 0..) |node, slot| {
+        for (env.checking_dependency.references.items(), 0..) |node, slot| {
             try references.append(allocator, .{ .owner = @intCast(owner), .node = node, .slot = @intCast(slot) });
         }
     }
@@ -89,7 +89,7 @@ fn makeBinding(self: Self, env: *can.ModuleEnv, scope: *const dependencies.Scope
     // ordinals once, instead of scanning that domain for every foreign node.
     var ordinals = std.AutoHashMapUnmanaged(base.ModuleIdentity.Hash, u32).empty;
     defer ordinals.deinit(env.gpa);
-    for (env.checking_dependency.owners.items.items, 0..) |hash, ordinal| {
+    for (env.checking_dependency.owners.items(), 0..) |hash, ordinal| {
         const entry = try ordinals.getOrPut(env.gpa, hash);
         if (!entry.found_existing) entry.value_ptr.* = @intCast(ordinal);
     }
@@ -105,10 +105,10 @@ fn makeBinding(self: Self, env: *can.ModuleEnv, scope: *const dependencies.Scope
     for (self.foreign_references) |reference| {
         if (reference.owner >= scope.owners.items.len) return error.IncompatibleReferences;
         const current = scope.environments.get(scope.owners.items[reference.owner]) orelse return error.IncompatibleReferences;
-        if (reference.slot >= current.checking_dependency.references.items.items.len) return error.IncompatibleReferences;
+        if (reference.slot >= current.checking_dependency.references.items().len) return error.IncompatibleReferences;
         const entry = try binding.references.getOrPut(env.gpa, .{ .owner = reference.owner, .node = reference.node });
         if (entry.found_existing) return error.IncompatibleReferences;
-        entry.value_ptr.* = current.checking_dependency.references.items.items[reference.slot];
+        entry.value_ptr.* = current.checking_dependency.references.items()[reference.slot];
     }
     return binding;
 }

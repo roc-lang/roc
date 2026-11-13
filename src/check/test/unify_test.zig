@@ -1192,7 +1192,7 @@ test "unify - issue 11024 - empty nominal row absorption respects field kinds an
                     try std.testing.expect(store.resolveVar(empty).desc.content.structure == .nominal_type);
                     try std.testing.expect(store.resolveVar(backing).desc.content.structure == .record);
                 }
-                const omissions = env.scratch.absorbed_record_defaults.items.items;
+                const omissions = env.scratch.absorbed_record_defaults.items();
                 try std.testing.expectEqual(@as(usize, if (accepts and kind == .defaulted) 1 else 0), omissions.len);
                 if (omissions.len != 0) {
                     try std.testing.expectEqual(empty, omissions[0].record_var);
@@ -2282,7 +2282,7 @@ test "unify - closed tag union extends open" {
     // check that fresh vars are correct
 
     try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
-    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items.items[0]);
+    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items()[0]);
 }
 
 // unification - recursion //
@@ -2735,7 +2735,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.items.items[0];
+    const deferred = env.scratch.deferred_constraints.items()[0];
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(structure_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -2770,7 +2770,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
 
     // Check that constraint was captured (note: vars might be swapped due to merge order)
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.items.items[0];
+    const deferred = env.scratch.deferred_constraints.items()[0];
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(flex_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -2823,7 +2823,7 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
     const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items()[0].constraints);
 }
 
 test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
@@ -2854,7 +2854,7 @@ test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
     try std.testing.expect(resolved.desc.content == .rigid);
     try std.testing.expectEqual(types_mod.StaticDispatchConstraint.SafeList.Range.empty(), resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items()[0].constraints);
 }
 
 test "unify order - resulting type is order-independent for recursive types" {
@@ -2924,7 +2924,7 @@ test "unify order - deferred constraint origin var depends on operand order" {
             const result = if (flex_first) try env.unify(flex, rigid) else try env.unify(rigid, flex);
             try std.testing.expectEqual(.unified, result);
             try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
-            const origin = env.scratch.deferred_constraints.items.items[0].var_;
+            const origin = env.scratch.deferred_constraints.items()[0].var_;
             return @backingInt(ts.resolveVar(origin).var_);
         }
     };

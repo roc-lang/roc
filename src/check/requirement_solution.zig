@@ -23,9 +23,11 @@ pub const SolutionInput = struct {
     requires_idx: u32,
     /// The exported app def the requirement resolved to at check time.
     def: can.CIR.Def.Idx,
-    /// The requirement type instantiated into the app's store and unified
-    /// against the app def's expression; solved once checking completes.
+    /// The requirement type solved against the app binding. Once the binding's
+    /// scheme is complete, a function requirement names its invocation instance.
     solved_var: types_mod.Var,
+    /// The source-free scheme use checking records for a function requirement.
+    scheme_use: ?u32 = null,
     /// Whether the platform declares this requirement at a function type
     /// (procedure value) rather than a non-function type (const value).
     is_function: bool,
