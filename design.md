@@ -10591,6 +10591,29 @@ arithmetic remains polymorphic, including heterogeneous user arithmetic;
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
 
+### Call Arguments Relate In Order
+
+A call checks its arguments left to right, and relates each argument to its
+formal slot as soon as that argument has checked, before the next argument is
+checked. A later argument is therefore checked with every type its earlier
+siblings fixed: in `apply(ask, { plan: |a| ... })` with
+`apply : a, { plan : a -> b } -> b`, the record is checked knowing `a` is the
+type of `ask`, so a method call on the callback's parameter resolves while its
+arguments are checked and a record literal among them may omit defaulted
+fields. The flow is one-directional. An argument learns nothing from a sibling
+to its right until both relations have run, exactly as a deferred dispatch
+does.
+
+Each relation is owned by the call and leaves both operand graphs intact when
+it is rejected, so a rejected argument cannot poison the formal slots its
+siblings are checked against. The first rejected relation ends the fold, and
+an erroneous operand never relates; later arguments are still checked, and
+report their own errors. The fold runs exactly one relation per argument.
+`issue 12978: callback record accepts nominal method props with omitted
+defaults` in `type_checking_integration.zig` pins the accepted side, and
+`issue 10763 - a stored call result is monomorphic` pins that two wrong
+arguments of one call are each reported.
+
 ### Polarity: Output-Position Tag Unions Are Implicitly Open
 
 Every type annotation is walked with a POLARITY: the root is positive
@@ -12645,7 +12668,14 @@ including a generated codec call, waits and records when that generation
 happens, so checking order is unchanged. Each site keeps the record policy it
 applies to every other scheme: a value use or generated codec call with an
 empty substitution is recorded only when the scheme has evidence params, and
-a source dispatch edge to a same-module target is always recorded.
+a source dispatch edge to a same-module target is always recorded. A
+group-start predeclaration that shares hole variables adds one case: its use
+is recorded even with an empty substitution and no evidence params. The
+binding's own scheme can quantify a hole, which no slot enumerates, and the
+record's substitution maps every unpaired variable to itself, which states
+that the use shares the hole with the body. Post-check stages read that
+identity to forward what the body's instantiation supplies, such as a literal
+argument whose type a hole decides.
 A receiver already at `Rank.generalized` is never captured as an outer-rank
 pending requirement. Generalization boundaries cannot run inside a commit
 probe; probes may append candidates, but rollback rewinds those candidates and
@@ -14165,6 +14195,62 @@ and outside a loop; errors for a discarded value of another type on a `var`
 (`$items.len()`), the same call on an immutable binding, and an operator on a
 `var` (`$count + n`).
 
+### Frozen Scheme Relations Keep Enclosing Variables Monomorphic
+
+A local function that dispatches on a variable of an enclosing scope
+generalizes with that relation pending: in
+
+```roc
+labels = |prefix, keys| {
+    labelled = |suffix| keys.map(|k| "${prefix}${k.to_str()}${suffix}")
+    n = distinct(keys)
+    labelled("/${n.to_str()}")
+}
+```
+
+`labelled` generalizes while `keys` is still unknown, so its `map` relation
+holds `labelled`'s quantified item variable next to the enclosing `keys`.
+When `distinct(keys)` later gives `keys` the type `List(k)`, the relation
+resolves, and relating `List.map`'s signature to it unifies `labelled`'s
+quantified item variable with the enclosing `k`. Rank-minimum unification
+would leave that class generalized, and the next use of `labelled` would copy
+the enclosing function's own `k` as a fresh variable that nothing relates to
+`keys` again.
+
+A variable an enclosing scope owns is never quantified by a scheme nested in
+that scope. `restoreEnclosingVarRanks` enforces this where the two can meet:
+resolving a relation owned by a scheme whose boundary has already captured its
+requirements (`captured_scheme_owners`). Before such a relation resolves,
+`collectFrozenRelationEnclosingVars` records every non-generalized variable
+its callable and receiver reach, with its rank. Afterwards, each recorded
+variable that the resolution merged into a generalized class gets its rank
+back, and so does everything the class reaches. This is what
+checking the local function after the enclosing variable was known would have
+inferred: the variable is the enclosing scope's, shared by every use.
+
+A relation attached to a restored variable belongs to the enclosing scope
+along with its receiver, so its callable is restored too. A local function is
+therefore monomorphic in every variable such a relation relates: given
+`h = |d| keys.map(|k| k.combine(d))`, once `keys` is known to be a list of
+the enclosing scope's `k`, `d` is fixed by `k`'s one `combine` relation and
+two uses of `h` share it.
+
+This is a policy rewrite: it accepts programs that rank-minimum unification
+alone rejects with an unresolved requirement at the local function's use. The
+cost is confined to deferred relations whose owning scheme has already
+generalized: one walk of the relation's callable and receiver before it
+resolves, and one walk from each merged variable after. Every other deferred
+relation pays one owner lookup per constraint, and none when no scheme
+boundary has captured.
+
+The accepted side is pinned by `issue 12970: returned callback preserves
+captured method requirements across a where use` and `issue 12970: an
+unannotated enclosing function stays generic in its receiver's item` in
+`type_checking_integration.zig`. The rejected side is pinned by `issue 12970:
+a local function's variable fixed by its enclosing receiver is monomorphic`
+and `issue 12970: a relation on an enclosing item fixes the local
+function's other variables`.
+
 ### Rewrite Inventory
 
 - `finishAliasDeclarationParameters`—mechanism: completes an in-progress
@@ -14424,6 +14510,11 @@ Other solved-graph mutations:
   deferred static-dispatch worklist. Retirement reads the explicit structural
   origin and checked scheme-use substitution produced by those operations;
   there is no rank rewrite, structural ownership probe, or graph restamp.
+- `restoreEnclosingVarRanks` (`setDescRank`)—policy: Frozen Scheme Relations
+  Keep Enclosing Variables Monomorphic (above). After a relation owned by an
+  already-generalized scheme resolves, every enclosing-scope variable it
+  merged into a generalized class, and everything that class reaches,
+  returns to the enclosing variable's rank. No content is written.
 - `codecInputsAreBoundaryLocal` / `quiesceSchemeRequirementsAtBoundary`—policy:
   Derived Parser Tag-Row Closure (above). Exact owned codec relations with
   settled local inputs move to boundary validation before generalization;
@@ -20802,6 +20893,14 @@ alignment to the struct, so pure padding never inflates a struct's alignment.
 Using an unnamed field in a structural record type is rejected during
 canonicalization.
 
+A padded nominal's record can extend a row variable, as in
+`Pad(r) := { z : U64, _ : U8, ..r }`. Its memory order is the declaration's
+entries in declaration order, then every field the extension supplies, in
+label order. The declaration cannot name those fields, so they have no
+declared position. Label order depends only on the type, not on the target
+or on committed layouts, so every stage computes the same order from the
+type alone.
+
 Declared field order is explicit checked data. Record rows are sorted
 lexicographically by name at several stages (checking, Monotype row lowering,
 and Monotype instantiation) because field-name resolution and digests depend on
@@ -20822,7 +20921,12 @@ layout store, so all backends agree.
 Under `.boxy` the backing of a padded nominal is a record type of its own,
 distinct from the record of the same fields: `Converter.backing` reads the
 declaration's declared fields and padding types, at the nominal's arguments, and
-interns a record node that carries them. Its fields stay in lexicographic order,
+interns a record node that carries them. The node keeps the declaration's
+entries, and the type store derives its complete slot list from them when it
+interns the node, including slots for fields a row extension supplies. A
+substitution that resolves the extension re-interns the node with the same
+entries, so resolving the extension early or late gives one type and one
+layout, and no stage remaps a slot. Its fields stay in lexicographic order,
 so a literal, a field read, a pattern, or a codec treats it as it treats any
 record. A padding type may mention the declaration's type variables, so it is a
 component of the node like a field: it counts toward the type's closedness and
@@ -26333,7 +26437,12 @@ interning gives equal acyclic layouts one index, but a cyclic layout is
 built in raw slots of its own, so a commit that creates cyclic layouts looks
 each new layout's digest up among the layouts earlier such commits created
 and among its own, and commits again with every duplicate redirected to the
-existing layout. Each runtime representation therefore has one layout index,
+existing layout. The redirect sees graph nodes only, and the recursion boxes
+a commit inserts are not nodes. So a recursive slot edge whose target has an
+explicit `.box` node, seen through nominal wrappers, reads that node rather
+than inserting a box of the same content, and a debug build checks that the
+layouts a recursive commit reaches have distinct digests. Each runtime
+representation therefore has one layout index,
 which is what lets refcount helper names and layout-keyed procedure
 identities treat equal digests as equal layouts.
 

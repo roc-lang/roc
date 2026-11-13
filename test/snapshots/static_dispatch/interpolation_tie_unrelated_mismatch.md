@@ -171,12 +171,12 @@ NO CHANGE
 				(s-let
 					(p-assign (ident "x"))
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-call (constraint-fn-var 356)
+				(e-call (constraint-fn-var 357)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local
 						(p-assign (ident "s")))
-					(e-dispatch-call (method "to_str") (constraint-fn-var 348)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 349)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
