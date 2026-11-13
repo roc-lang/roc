@@ -14899,6 +14899,13 @@ const EvidencePass = struct {
             const k = candidate.param;
             const param = params[k];
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
+            // A row variable holds one requirement per record or tag union
+            // ending in it; the relation's own value names which.
+            if (param.constraint.receiver == .open_row_value) {
+                if (constraint_fn_var) |fn_var| {
+                    if (self.types.resolveVar(self.openRowValueOf(param.constraint)).var_ != self.types.resolveVar(self.openRowValueOfCallable(fn_var)).var_) continue;
+                }
+            }
             if (same_method_fallback == null) same_method_fallback = @intCast(k);
             if (constraint_fn_root) |fn_root| {
                 if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) {
@@ -16137,7 +16144,12 @@ const EvidencePass = struct {
     /// The record or tag union a requirement a row variable holds is about:
     /// its method's first argument.
     fn openRowValueOf(self: *EvidencePass, constraint: types.StaticDispatchConstraint) Var {
-        const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse unreachable;
+        return self.openRowValueOfCallable(constraint.fn_var);
+    }
+
+    /// The value a method callable is called on: its first argument.
+    fn openRowValueOfCallable(self: *EvidencePass, fn_var: Var) Var {
+        const func = self.types.resolveThroughAliases(fn_var).desc.content.unwrapFunc() orelse unreachable; // a requirement's callable is a function type
         return self.types.sliceVars(func.args)[0];
     }
 

@@ -12335,13 +12335,16 @@ mentions the whole value names it the same way (`r.bump : r -> r`,
 union only through its row variable: a record or tag union with no row
 variable has no way to carry one.
 
-One row variable can end two record types that differ in a field's type: a
-type-changing record update (`|r| { ..r, a: Str.inspect(r.a) }`) relates
-`{ a : x, ..ρ }` and `{ a : Str, ..ρ }`. A use can make each of them a
-different type (the argument a `Tagged`, the result an `Other`), so a
-requirement on `ρ` holds for every record type that ends in `ρ` in the
-binding's type: each is instantiated separately at a use and must have the
-method, with `r` in the method's signature standing for that record type.
+One row variable can end two record types that differ in a field's type:
+`both : { a : U64, ..r }, { a : Str, ..r } -> (Bool, Bool) where [r.is_eq :
+r, r -> Bool]`. A use can make each of them a different type (the first a
+`Num`, the second a `Text`), so a requirement on `r` holds for every record
+type that ends in `r` in the binding's type: each is instantiated separately
+at a use and must have the method, with `r` in the method's signature
+standing for that record type. The binding holds one requirement, and
+publishes one evidence parameter, per method and per record type ending in
+the variable, and a body's method call is related to the one stated on the
+value it is called on.
 A requirement on `ρ` therefore never depends on which of those records the
 body called the method on.
 
@@ -12382,6 +12385,13 @@ variable that later stages close as they close every unreached row, so its
 values' types are no more concrete to checking than an unconstrained row's. A
 requirement keeps the expression it was first held with as the place its
 failure is reported: for one a use copied from a scheme, that use.
+
+An operator and an explicit method call differ in one way that comes from
+the operator, not from the method: `==` relates both operands to one type, so
+in `Leaf("a") == e` the literal takes `e`'s named type, while
+`Leaf("a").is_eq(e)` and `Leaf("a").foo(e)` relate nothing to the receiver,
+whose literal row is then decided as the plain union and rejects the named
+argument (and likewise `{ id: 1 }.is_eq(one)`).
 
 A requirement a row variable holds is a method call on the value: its
 method takes the value as its first argument. A literal's conversion

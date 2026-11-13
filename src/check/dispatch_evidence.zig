@@ -702,6 +702,13 @@ fn pushTagChildren(
     try pushChildren(gpa, scratch, entry);
 }
 
+/// The record or tag union a row variable's requirement is about: its
+/// method's first argument.
+fn openRowValueRoot(store: *const types_mod.Store, constraint: StaticDispatchConstraint) Var {
+    const func = store.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse unreachable; // a requirement's callable is a function type
+    return store.resolveVar(store.sliceVars(func.args)[0]).var_;
+}
+
 fn emitConstraints(
     gpa: Allocator,
     store: *const types_mod.Store,
@@ -714,10 +721,25 @@ fn emitConstraints(
     out: *std.ArrayListUnmanaged(EvidenceParam),
 ) Allocator.Error!void {
     scratch.emitted_methods.clearRetainingCapacity();
+    const first_param = out.items.len;
     for (store.sliceStaticDispatchConstraints(constraints)) |constraint| {
-        const emitted = try scratch.emitted_methods.getOrPut(gpa, constraint.fn_name.idx);
-        if (!emitted.found_existing) {
+        // A row variable's requirements are one per method and per record or
+        // tag union ending in it (design.md "Methods On Open Rows"); any other
+        // variable's are one per method.
+        const existing: ?u32 = if (constraint.receiver == .open_row_value) blk: {
+            const value = openRowValueRoot(store, constraint);
+            for (out.items[first_param..], first_param..) |param, index| {
+                if (param.constraint.receiver != .open_row_value or !param.constraint.fn_name.eql(constraint.fn_name)) continue;
+                if (openRowValueRoot(store, param.constraint) == value) break :blk @intCast(index);
+            }
+            break :blk null;
+        } else blk: {
+            const emitted = try scratch.emitted_methods.getOrPut(gpa, constraint.fn_name.idx);
+            if (emitted.found_existing) break :blk emitted.value_ptr.*;
             emitted.value_ptr.* = @intCast(out.items.len);
+            break :blk null;
+        };
+        if (existing == null) {
             try out.append(gpa, .{
                 .dispatcher_var = dispatcher_root,
                 .constraint = constraint,
@@ -729,7 +751,7 @@ fn emitConstraints(
                 .path_len = entry.path_len,
             });
         } else {
-            const param_index = emitted.value_ptr.*;
+            const param_index = existing.?;
             const param = &out.items[param_index];
             const callable = store.resolveVar(constraint.fn_var).var_;
             if (callable != store.resolveVar(param.constraint.fn_var).var_) {

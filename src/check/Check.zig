@@ -52108,6 +52108,7 @@ inline fn processDeferredDispatchEntry(
         } else if (dispatcher_content == .rigid) {
             // Get the rigid variable and the constraints it has defined
             const rigid = dispatcher_content.rigid;
+            const rigid_constraints_range = rigid.constraints;
             const rigid_constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
 
             // Build a map of constraints the rigid has
@@ -52137,7 +52138,11 @@ inline fn processDeferredDispatchEntry(
                     }
                 }
                 // Then, lookup the inferred constraint in the actual list of rigid constraints
-                if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
+                const matched_rigid_var = if (annotated_row_value) |value|
+                    self.annotatedRowRequirementFor(rigid_constraints_range, constraint.fn_name, value)
+                else
+                    self.ident_to_var_map.get(constraint.fn_name);
+                if (matched_rigid_var) |rigid_var| {
                     // Each USE instantiates the where-method signature
                     // (design.md "Polarity"): its output rows are fresh
                     // for this use, everything else is shared. A scheme's
@@ -54748,6 +54753,19 @@ fn relationsCallMethodsOn(self: *Self, range: StaticDispatchConstraint.SafeList.
         if (args.len == 0 or self.types.resolveVar(args[0]).var_ != receiver_root) return false;
     }
     return true;
+}
+
+/// The callable of the requirement among an annotated row variable's
+/// constraints named `fn_name` that is stated on `value`: each record or tag
+/// union ending in the variable has its own (design.md "Methods On Open
+/// Rows").
+fn annotatedRowRequirementFor(self: *Self, range: StaticDispatchConstraint.SafeList.Range, fn_name: Ident.Idx, value: Var) ?Var {
+    const value_root = self.types.resolveVar(value).var_;
+    for (self.types.sliceStaticDispatchConstraints(range)) |stated| {
+        if (stated.receiver != .open_row_value or !stated.fn_name.eql(fn_name)) continue;
+        if (self.types.resolveVar(self.openRowValueReceiver(stated)).var_ == value_root) return stated.fn_var;
+    }
+    return null;
 }
 
 /// The name an annotation wrote for a row variable, or null for an
