@@ -1,11 +1,11 @@
 OpaqueTryFunction(a) :: { run : {} -> Try(a, [Bad]) }.{
     make : ({} -> Try(a, [Bad])) -> OpaqueTryFunction(a)
-    make = |run| {
-        { run }
+    make = |thunk| {
+        { run: thunk }
     }
 
     run : OpaqueTryFunction(a) -> Try(a, [Bad])
-    run = |{ run }| run({})
+    run = |{ run: thunk }| thunk({})
 }
 
 expect OpaqueTryFunction.run(OpaqueTryFunction.make(|_| Ok("hi"))) == Ok("hi")

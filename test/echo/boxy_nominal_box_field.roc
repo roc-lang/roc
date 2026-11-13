@@ -4,7 +4,7 @@
 # through their descriptor.
 Boxed :: Box({ prop : U64, other : U64 }).{
 	make : U64 -> Boxed
-	make = |prop| Boxed.(Box.box({ prop, other: 4096 }))
+	make = |value| Boxed.(Box.box({ prop: value, other: 4096 }))
 
 	prop : Boxed -> U64
 	prop = |Boxed.(boxed)| Box.unbox(boxed).prop

@@ -8,6 +8,6 @@ Public := [Doc(Public.Store)].{
 		count = |store| store.items.len()
 	}
 
-	empty : Store
-	empty = Store.empty
+	empty_store : Store
+	empty_store = Store.empty
 }

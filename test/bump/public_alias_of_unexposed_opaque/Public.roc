@@ -4,6 +4,6 @@ Public := [Doc(Public.Store)].{
 	## Opaque attribute store, re-exported under this module's name.
 	Store : Hidden.Store
 
-	empty : Store
-	empty = Hidden.Store.empty
+	empty_store : Store
+	empty_store = Hidden.Store.empty
 }
