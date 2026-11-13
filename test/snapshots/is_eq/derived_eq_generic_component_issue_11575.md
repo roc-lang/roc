@@ -131,7 +131,7 @@ NO CHANGE
 				(ty-lookup (name "Bool") (builtin)))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 262)
+		(e-call (constraint-fn-var 264)
 			(e-lookup-local
 				(p-assign (ident "eq")))
 			(e-lambda
