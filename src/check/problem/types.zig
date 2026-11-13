@@ -280,11 +280,14 @@ pub const UnsupportedGeneratedMethod = struct {
     region: base.Region,
 };
 
-/// A statically named associated item was absent after transparent aliases
-/// were resolved to their terminal type.
+/// A statically named associated constant or function was absent after
+/// transparent aliases were resolved to their terminal type.
 pub const AssociatedItemNotFound = struct {
     type_name: Ident.Idx,
     item_name: Ident.Idx,
+    /// Whether the name was called, which makes it a function rather than a
+    /// constant.
+    called: bool,
     region: base.Region,
 };
 

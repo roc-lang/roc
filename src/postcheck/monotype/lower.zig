@@ -28430,7 +28430,7 @@ const BodyContext = struct {
                 const wrapper = self.view.intrinsic_wrappers.get(wrapper_id);
                 return switch (wrapper.intrinsic) {
                     .str_inspect => try self.lowerStrInspectIntrinsicAtNode(fn_nodes, ret_cell),
-                    .structural_eq => Common.invariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
+                    .structural_eq => try self.lowerStructuralEqIntrinsicAtNode(fn_nodes, ret_cell),
                     .parse_tag_union,
                     .field_names_rename_fields,
                     .field_names_shortest_name,
@@ -29638,6 +29638,39 @@ const BodyContext = struct {
         };
         return .{
             .args = try self.draft.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = arg_cell }}),
+            .body = body,
+            .ret = ret_cell,
+        };
+    }
+
+    /// The body of a structural equality intrinsic used as a function value
+    /// (`Utf8Problem.is_eq`): it compares its two arguments structurally. A
+    /// method call or `==` on the type never calls this body; its dispatch
+    /// plan lowers the comparison in place.
+    fn lowerStructuralEqIntrinsicAtNode(
+        self: *BodyContext,
+        fn_nodes: FunctionNodes,
+        ret_cell: DraftTypeCell,
+    ) Allocator.Error!LoweredTemplateBody {
+        if (fn_nodes.args.len != 2) Common.invariant("structural equality intrinsic requires exactly two arguments");
+        try self.graph.unify(fn_nodes.args[0], fn_nodes.args[1]);
+
+        const lhs_cell = DraftTypeCell.fromGraphNode(fn_nodes.args[0]);
+        const rhs_cell = DraftTypeCell.fromGraphNode(fn_nodes.args[1]);
+        const lhs_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), lhs_cell, null);
+        const rhs_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), rhs_cell, null);
+        const lhs = try self.addExprWithTypeCell(lhs_cell, .{ .local = lhs_local });
+        const rhs = try self.addExprWithTypeCell(rhs_cell, .{ .local = rhs_local });
+        const ret_ty = try self.activeTypeFromCell(ret_cell);
+        const body = switch (try self.structuralDerivationOperandFromNode(fn_nodes.args[0])) {
+            .sealed => |operand_ty| try self.lowerStructuralEqFromOperands(operand_ty, lhs, rhs, false, ret_ty),
+            .deferred => |operand_node| try self.deferStructuralEqOperandsAtNode(ret_ty, operand_node, lhs, rhs, false),
+        };
+        return .{
+            .args = try self.draft.addTypedLocalSpan(&.{
+                .{ .local = lhs_local, .ty = lhs_cell },
+                .{ .local = rhs_local, .ty = rhs_cell },
+            }),
             .body = body,
             .ret = ret_cell,
         };

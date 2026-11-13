@@ -38432,6 +38432,7 @@ fn failAssociatedLookup(
     _ = try self.problems.appendProblem(.{ .associated_item_not_found = .{
         .type_name = type_ident,
         .item_name = item_ident,
+        .called = if (self.direct_callee_expr) |callee| callee == expr_idx else false,
         .region = region,
     } });
     const diagnostic_idx = try self.cir.store.addDiagnosticUnregistered(.{ .nested_value_not_found = .{
