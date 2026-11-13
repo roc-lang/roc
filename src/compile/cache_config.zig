@@ -358,6 +358,10 @@ pub const Constants = struct {
     ///      columns with body-local type context arguments, per-use anonymous
     ///      structure and generated-codec recurrences.
     /// 179: selected hoisted roots store their optional ids in four bytes.
+    /// 180: stored function recipes name modules the storing module imports.
+    /// 181: type stores list the names of their optional and defaulted fields
+    ///      once, and anonymous structure nothing visible can lift or widen is
+    ///      shared by every use instead of copied per use.
     /// 185: CIR external nominal construction and pattern nodes record which
     ///      index space their module refers to, and a reserved-module-name
     ///      diagnostic node is added.

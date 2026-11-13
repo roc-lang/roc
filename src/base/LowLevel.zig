@@ -113,9 +113,10 @@ pub const LowLevel = enum(u16) {
     list_reserve_for_append,
     list_release_excess_capacity,
     /// `List.clear`: the list with every item removed, keeping its
-    /// allocation and capacity when it is uniquely owned. Every backend
-    /// runs it as a zero-length sublist from index zero, whose result is
-    /// never a slice, so unlike `list_sublist` the result is born unique.
+    /// allocation and capacity when it is uniquely owned, and allocating the
+    /// capacity static data records when it is static data. Every backend
+    /// runs it as the `listClear` builtin, whose result is never a slice and
+    /// never shared, so unlike `list_sublist` the result is born unique.
     list_clear,
     list_map_prepare_reuse,
     list_map_can_reuse,

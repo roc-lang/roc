@@ -401,7 +401,10 @@ pub const StaticDataParts = struct {
     kind: union(enum) {
         word: u64,
         product,
-        list,
+        /// A list of the children, with room for this many items: the
+        /// capacity the list was evaluated with, never fewer than the
+        /// children.
+        list: u64,
         box,
         /// One sequence record child, with its committed step byte offset.
         boxed_sequence: u32,

@@ -1129,7 +1129,7 @@ test "an unsafe read of a zero-sized item or an empty list writes nothing" {
     defer env.deinit();
     const ops = env.ops();
     const empty = RocList.empty();
-    const zst_list: RocList = .{ .bytes = null, .length = 3, .capacity_or_alloc_ptr = 0 };
+    const zst_list = RocList.zeroSized(3, 3);
     for ([_]struct { elem: *const TypeDesc, list: *const RocList }{
         .{ .elem = desc_mod.zstDesc(), .list = &zst_list },
         .{ .elem = desc_mod.scalarDesc(.u64), .list = &empty },
