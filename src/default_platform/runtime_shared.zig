@@ -15,6 +15,9 @@ pub const SourceFrame = extern struct {
     column: u32,
 };
 
+/// What a runtime writes to stderr when the program overflows its stack.
+pub const stack_overflow_message = "Roc application overflowed its stack memory\n\n";
+
 /// The alignment an allocation is given: at least a word, so its header words
 /// are themselves aligned.
 pub fn normalizedAlignment(alignment: usize) usize {

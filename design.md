@@ -27128,19 +27128,35 @@ interpreter's `RocOps` as an explicit argument. An interpreter-mode executable b
 therefore runs every program the interpreter run path runs, including in a
 process that has no thread-local storage.
 
-The Linux default-platform runtime is the only default-platform runtime that
-installs fatal-signal handlers. It decides whether a `SIGSEGV` is a stack
-overflow with `classifyFault` in `src/base/memory_fault.zig`, the same
-dependency-free function the compiler's own crash handler calls, so the two
-never disagree about what a stack overflow is. The compiler's handler passes
-the faulting thread's stack bounds, which are the evaluation stack's while
-compiled code runs on it. The runtime passes the fault
-address and the interrupted stack pointer from the signal context and no stack
-bounds, because a process without libc has no exact stack range to report: a
-fault within `stack_overflow_proximity` of the stack pointer is reported as
-`Roc application overflowed its stack memory`, and every other `SIGSEGV` is
-reported as a segmentation fault together with its fault address. A fault that
-is not a stack overflow is never reported as one.
+The Linux, macOS and Windows default-platform runtimes report a stack
+overflow as `Roc application overflowed its stack memory` and exit with
+status 1; this is the only report a `.boxy` dev `roc run`, which runs the
+built binary, has. A fault that is not a stack overflow is never reported as
+one.
+
+The Linux runtime installs fatal-signal handlers. It decides whether a
+`SIGSEGV` is a stack overflow with `classifyFault` in
+`src/base/memory_fault.zig`, the same dependency-free function the compiler's
+own crash handler calls, so the two never disagree about what a stack
+overflow is. The compiler's handler passes the faulting thread's stack
+bounds, which are the evaluation stack's while compiled code runs on it. The
+runtime passes the fault address and the interrupted stack pointer from the
+signal context and no stack bounds, because a process without libc has no
+exact stack range to report: a fault within `stack_overflow_proximity` of the
+stack pointer is reported as a stack overflow, and every other `SIGSEGV` is
+reported as a segmentation fault together with its fault address.
+
+The macOS runtime (`c_runtime.zig`) handles `SIGSEGV` and `SIGBUS`, the
+signal Darwin raises for a fault in the guard region below a stack, on an
+alternate signal stack. It classifies both with `classifyFault` from the
+fault address, the interrupted stack pointer and the main thread's stack
+bounds, which libc reports exactly; any other fault is re-raised under the
+default action, so the process terminates by that signal as it would with no
+handler. The Windows runtime adds a vectored exception handler that reports
+`EXCEPTION_STACK_OVERFLOW`, an exception code that identifies the fault
+exactly, and reserves a thread stack guarantee for the handler to run in;
+every other exception continues to the next handler. The FreeBSD and NetBSD
+runtimes install no handlers.
 
 A native object the LLVM backend builds needs nothing from its platform but
 the `roc_*` symbols. LLVM's code generator lowers some operations to calls
