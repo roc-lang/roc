@@ -4382,8 +4382,11 @@ test "check type - match branch conflicting with rigid return type reports error
 
 test "check type - match" {
     const source =
+        \\flag : [True, False]
+        \\flag = True
+        \\
         \\x =
-        \\  match True {
+        \\  match flag {
         \\    True => "true"
         \\    False => "false"
         \\  }
@@ -4979,6 +4982,7 @@ test "check type - patterns - wrong type" {
 test "check type - patterns tag with payload" {
     const source =
         \\{
+        \\  x : [Ok(Str), Err(Str)]
         \\  x = Ok("ok")
         \\
         \\  match(x) {
@@ -5118,6 +5122,7 @@ test "check type - patterns list" {
 test "check type - patterns record" {
     const source =
         \\{
+        \\  val : { x : Str, y : [True, False] }
         \\  val = { x: "hello", y: True }
         \\
         \\  match(val) {
@@ -5132,6 +5137,7 @@ test "check type - patterns record" {
 test "check type - patterns record 2" {
     const source =
         \\{
+        \\  val : { x : Str, y : [True, False] }
         \\  val = { x: "hello", y: True }
         \\
         \\  match(val) {
@@ -5535,10 +5541,13 @@ test "check type - constant match scrutinee warns" {
         \\}
     ;
 
-    try checkTypesModule(source, .{ .pass_with_warnings = .{
-        .def = .last_def,
-        .warnings = &.{"Unconditional Condition"},
-    } }, "Str -> Str");
+    try checkTypesModule(source, .{
+        .pass_with_warnings = .{
+            .def = .last_def,
+            // Nothing produces `False`, so its branch is also unmatchable.
+            .warnings = &.{ "Unconditional Condition", "Unmatchable Pattern" },
+        },
+    }, "Str -> Str");
 }
 
 test "check type - constant match guard warns" {
@@ -10246,7 +10255,8 @@ test "check type - value rows - an unannotated top-level value's row is shared b
     // Every use of `e` in its module widens one row (design.md "Value Rows:
     // Uses Share One Row"): a `match` naming `Zed` and a call where
     // `[Aa, Boom, ..]` is accepted leave `e` at `[Aa, Boom, Zed]`, which the
-    // module closes when it finishes.
+    // module closes when it finishes. Nothing produces `Zed`, so its branch is
+    // reported as unmatchable (design.md "Pattern-Only Tags").
     const source =
         \\e = Boom
         \\
@@ -10267,8 +10277,8 @@ test "check type - value rows - an unannotated top-level value's row is shared b
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertNoErrors();
-    try test_env.assertDefType("e", "[Aa, Boom, Zed]");
+    try test_env.assertOneTypeWarning("Unmatchable Pattern");
+    try test_env.assertDefTypeOptions("e", "[Aa, Boom, Zed]", .{ .allow_type_errors = true });
 }
 
 test "check type - value rows - two uses at different closed unions are a mismatch" {
@@ -11531,7 +11541,8 @@ test "check type - exhaustive match does not over-close static dispatch return t
     // A static dispatch method returns a tag (inferred as open tag union).
     // The caller pattern matches it exhaustively without wildcards.
     // Each call site gets a fresh instantiation, so closing at one site
-    // should not affect the type at another.
+    // should not affect the type at another. `get` never produces `Blue`, so
+    // that branch is reported as unmatchable (design.md "Pattern-Only Tags").
     const source =
         \\Maker := {}.{
         \\  get = |_maker| Red
@@ -11552,14 +11563,12 @@ test "check type - exhaustive match does not over-close static dispatch return t
         \\  }
         \\}
     ;
-    try checkTypesModuleDefs(
-        source,
-        &.{
-            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red]" },
-            .{ .def = "narrow", .expected = "Str" },
-            .{ .def = "broad", .expected = "Str" },
-        },
-    );
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeWarning("Unmatchable Pattern");
+    try test_env.assertDefTypeOptions("Test.Maker.get", "_arg -> [Red]", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("narrow", "Str", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("broad", "Str", .{ .allow_type_errors = true });
 }
 
 test "check type - exhaustive match close does not leak through shared variable" {

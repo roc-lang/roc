@@ -102,8 +102,8 @@ test "issue 11943: a nested builtin type takes precedence over a tag of the same
     defer test_env.deinit();
     // `Str.Utf8Problem` is an alias, so its members are resolved by checking.
     try test_env.assertOneTypeErrorMsg(
-        \\**Associated Item Not Found**
-        \\The type `Str.Utf8Problem` does not have an associated item named `missing`.
+        \\**Associated Function Not Found**
+        \\The type `Str.Utf8Problem` does not have an associated function named `missing`.
         \\```roc
         \\missing = Str.Utf8Problem.missing()
         \\```
