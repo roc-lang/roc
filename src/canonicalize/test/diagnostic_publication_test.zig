@@ -54,7 +54,7 @@ test "diagnostic publication reserves before copying a non-tail span" {
 
     // Move the published span away from the tail, then fill index_data to
     // capacity so publishing another diagnostic must grow the allocation.
-    while (env.store.index_data.len() < env.store.index_data.items.capacity) {
+    while (env.store.index_data.len() < env.store.index_data.capacity) {
         _ = try env.store.index_data.append(allocator, 0);
     }
     try pushChainedRange(&env);
