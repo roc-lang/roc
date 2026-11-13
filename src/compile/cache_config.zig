@@ -374,7 +374,11 @@ pub const Constants = struct {
     ///      and module identities, cache keys and file-dependency content
     ///      hashes are computed from source digests; a flex variable records
     ///      whether it is a deferred literal's type. Includes the 187 changes.
-    pub const CACHE_VERSION = 188;
+    /// 190: type tags record whether they are in their row only because `match`
+    ///      branch patterns asked for them.
+    /// 191: includes both the 188 changes (source digests, deferred-literal
+    ///      flex variables) and the 190 changes (pattern-only type tags).
+    pub const CACHE_VERSION = 191;
 };
 
 /// Configuration for the Roc cache system.

@@ -1367,7 +1367,7 @@ const Unifier = struct {
                 // unify that against the rigid. This mirrors the `.rigid` branch
                 // of `unifyAlias`, keeping unification commutative.
                 const backing_var = self.types_store.getAliasBackingVar(b_alias);
-                try self.unifyGuarded(backing_var, vars.a.var_);
+                try self.unifyGuarded(vars.a.var_, backing_var);
             },
             .structure => return error.TypeMismatch,
             .field_presence => return error.TypeMismatch,
@@ -1408,7 +1408,7 @@ const Unifier = struct {
                 // Structural aliases are transparent. The concrete structure
                 // constrains the alias backing; alias spelling is checked
                 // presentation data, not union-find representative shape.
-                try self.unifyGuarded(vars.b.var_, backing_var);
+                try self.unifyGuarded(backing_var, vars.b.var_);
             },
             // A presence fact is not a type: it can never unify with an alias
             // (two-axes invariant). Reaching here is a structural mismatch.
@@ -2085,12 +2085,10 @@ const Unifier = struct {
     }
 
     fn mergeRowEntriesIntoScratch(self: *Self, comptime kind: RowKind, range: *kind.Entry().SafeList.Range, entries: kind.Entry().SafeMultiList.Range) std.mem.Allocator.Error!void {
-        const next = kind.storeEntries(self.types_store).sliceRange(entries);
         try self.scratch.mergeSortedExtension(
             kind,
             range,
-            next.items(.name),
-            next.items(kind.payloadField()),
+            kind.storeEntries(self.types_store).sliceRange(entries),
             self.ident_store,
         );
     }
@@ -2172,9 +2170,13 @@ const Unifier = struct {
         const range_start: u32 = @intCast(self.types_store.tags.len());
 
         for (self.scratch.in_both_tags.sliceRange(post.shared_tags_range)) |tags| {
+            // A tag both rows hold is pattern-only exactly when both rows
+            // hold it only because match patterns asked for it (design.md
+            // "Pattern-Only Tags").
             _ = try self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
+                .pattern_only = tags.a.pattern_only and tags.b.pattern_only,
             }});
         }
 
@@ -2255,7 +2257,10 @@ const Unifier = struct {
                     .vars = vars.*,
                     .direction = direction,
                 } });
-                try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var);
+                switch (direction) {
+                    .a_is_nominal => try self.unifyGuarded(nominal_backing_var, anon_tag_union.ext),
+                    .b_is_nominal => try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var),
+                }
                 return;
             } else {
                 // Anon has tags but nominal is empty
@@ -2306,8 +2311,12 @@ const Unifier = struct {
             .direction = direction,
         } });
 
-        // Now safe to proceed with full unification.
-        try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
+        // Now safe to proceed with full unification, each side keeping the
+        // role it has in `vars`.
+        switch (direction) {
+            .a_is_nominal => try self.unifyTwoTagUnions(vars, nominal_backing_tag_union, anon_tag_union),
+            .b_is_nominal => try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union),
+        }
     }
 
     fn unifyRecordWithNominal(
@@ -2380,13 +2389,23 @@ const Unifier = struct {
         // Unify the record fields
         try self.retainOuterRecordMismatch(vars, opened_backing, direction);
 
-        try self.unifyTwoRecords(
-            vars,
-            anon_record_fields,
-            anon_record_ext,
-            nominal_backing_record.fields,
-            nominal_backing_record.ext,
-        );
+        // Each side keeps the role it has in `vars`.
+        switch (direction) {
+            .a_is_nominal => try self.unifyTwoRecords(
+                vars,
+                nominal_backing_record.fields,
+                nominal_backing_record.ext,
+                anon_record_fields,
+                anon_record_ext,
+            ),
+            .b_is_nominal => try self.unifyTwoRecords(
+                vars,
+                anon_record_fields,
+                anon_record_ext,
+                nominal_backing_record.fields,
+                nominal_backing_record.ext,
+            ),
+        }
     }
 
     /// Retain only the outer record relation owned by the active diagnostic.
@@ -4272,13 +4291,6 @@ const RowKind = enum {
         };
     }
 
-    fn entry(comptime kind: RowKind, name: Ident.Idx, payload: kind.Payload()) kind.Entry() {
-        return switch (kind) {
-            .record => .{ .name = name, .presence = payload },
-            .tag_union => .{ .name = name, .args = payload },
-        };
-    }
-
     fn payloadOf(comptime kind: RowKind, e: kind.Entry()) kind.Payload() {
         return @field(e, @tagName(kind.payloadField()));
     }
@@ -4748,8 +4760,9 @@ pub const Scratch = struct {
         const gathered = self.rowList(kind, "gathered_");
         const start_int = gathered.len();
         const slice = multi_list.sliceRange(range);
-        for (slice.items(.name), slice.items(kind.payloadField())) |name, payload| {
-            _ = try gathered.append(self.gpa, kind.entry(name, payload));
+        // Whole entries are copied so a tag's pattern-only mark travels with it.
+        for (0..slice.len) |index| {
+            _ = try gathered.append(self.gpa, slice.get(index));
         }
         return gathered.rangeToEnd(@intCast(start_int));
     }
@@ -4757,17 +4770,18 @@ pub const Scratch = struct {
     /// Merge sorted extension entries into an already-sorted gathered range.
     /// Maintains sorted order; an entry already gathered keeps its first
     /// occurrence, and the repeat is recorded in the kind's chain-duplicate list.
+    /// A repeated tag names the same tag, so the kept occurrence is
+    /// pattern-only only when the repeat is too (design.md "Pattern-Only Tags").
     /// The range is updated in-place to reflect the new count.
     fn mergeSortedExtension(
         self: *Self,
         comptime kind: RowKind,
         range: *kind.Entry().SafeList.Range,
-        ext_names: []const Ident.Idx,
-        ext_payloads: []const kind.Payload(),
+        ext_entries: kind.Entry().SafeMultiList.Slice,
         ident_store: *const Ident.Store,
     ) std.mem.Allocator.Error!void {
-        std.debug.assert(ext_names.len == ext_payloads.len);
-        if (ext_names.len == 0) return;
+        if (ext_entries.len == 0) return;
+        const ext_names = ext_entries.items(.name);
 
         const gathered = self.rowList(kind, "gathered_");
         const chain_duplicates = self.rowList(kind, "chain_duplicate_");
@@ -4779,12 +4793,14 @@ pub const Scratch = struct {
         // Count the extension entries that are not already gathered, recording
         // each repeated one against its first occurrence.
         var new_count: usize = 0;
-        for (ext_names, ext_payloads) |ext_name, ext_payload| {
-            const first = for (current) |existing| {
-                if (existing.name.eql(ext_name)) break existing;
+        for (0..ext_entries.len) |ext_index| {
+            const ext_entry = ext_entries.get(ext_index);
+            const first = for (current) |*existing| {
+                if (existing.name.eql(ext_entry.name)) break existing;
             } else null;
             if (first) |existing| {
-                try chain_duplicates.append(self.gpa, .{ .first = kind.payloadOf(existing), .repeated = ext_payload });
+                if (comptime kind == .tag_union) existing.pattern_only = existing.pattern_only and ext_entry.pattern_only;
+                try chain_duplicates.append(self.gpa, .{ .first = kind.payloadOf(existing.*), .repeated = kind.payloadOf(ext_entry) });
             } else new_count += 1;
         }
 
@@ -4802,12 +4818,12 @@ pub const Scratch = struct {
         // 2. Then do an in-place merge of the two sorted regions
 
         // Append non-duplicate extension entries
-        for (ext_names, ext_payloads) |name, payload| {
+        for (ext_names, 0..) |name, ext_index| {
             const is_dup = for (current_after) |existing| {
                 if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
-                _ = gathered.appendAssumeCapacity(kind.entry(name, payload));
+                _ = gathered.appendAssumeCapacity(ext_entries.get(ext_index));
             }
         }
 

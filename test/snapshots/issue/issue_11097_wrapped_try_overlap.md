@@ -49,7 +49,7 @@ CONFLICTING TAG - issue_11097_wrapped_try_overlap.md:7:1:7:4
 			(line-break)
 			(reflow "It also comes from here:")
 			(line-break)
-			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 2 6) (end 2 15) (annotation error) (line-text "\t_ = save({})?"))
+			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 7 19) (end 7 37) (annotation error) (line-text "use = run(|_| Err(PersistFailed(Foo)))"))
 			(line-break)
 			(line-break)
 			(reflow "where it is:")
