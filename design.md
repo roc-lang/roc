@@ -5129,8 +5129,31 @@ checking argument expressions. A known function already supplies that arity
 shape; an unresolved callable is related once to a fresh arity-shaped function.
 Arguments are checked with those formal shapes, then the ordinary formal/actual
 relations are committed in one linear fold. Shared formal variables therefore
-flow through one graph relation; the checker never performs a pairwise
-argument scan.
+flow through one graph relation; checking never performs a pairwise argument
+scan.
+
+The fold relates arguments in order, so the parameter type a rejected argument
+met already carries what earlier operands gave the function's shared
+variables. Only once a relation has been rejected, and only when the callee's
+type is an instance of a scheme, the checker asks whether the argument is
+wrong by itself: in a commit-probe it relates the argument to its parameter in
+a fresh copy of that scheme, then relates one earlier operand (an earlier
+argument, or a method call's receiver) to the same copy. The first earlier
+operand whose relation fails there is reported with the argument as a
+conflict between the two, showing both types and the function's declared
+type (`refineCallArgsConflict`, `fn_call_args_conflict`). Every probe rolls
+back, so the solved graph and the call's recovery are those of any rejected
+argument. The trial sees the argument as the rejected relation left it, which
+keeps the child writes that completed before the rejection, exactly as the
+ordinary report's argument type does; when those writes alone stop the
+argument fitting the fresh copy, or no single earlier operand conflicts with
+it, the ordinary argument report stands. A direct call's scheme is the one its
+callee's value use instantiated (`direct_callee_scheme`), and a method call's
+is the one its dispatch target instantiated
+(`DispatchTargetInstantiation.scheme_var`); a callee with neither has no
+conflict report. Pinned by
+test/snapshots/call_args_conflict_shared_type_var.md and
+test/snapshots/call_args_conflict_method_receiver.md.
 
 Expected aggregate structure is recursive checking context, not a second owner
 of the expression's root relation. A record update passes a borrowed base-row
@@ -5152,6 +5175,18 @@ ordinary full-shape relation owns the diagnostic. This preserves the explicit
 stored-value scheme-use edge, gives nested constructions their declared field
 kinds before siblings meet, and keeps the shared expected graph pristine for
 the owning relation and its error report.
+
+The owning relation's root types often differ only somewhere inside, where a
+comparison of the roots' own shapes finds nothing to say. The unifier keeps
+the pair whose relation failed first in its operands' roles: every child
+relation, through aliases and opened nominal backings alike, relates the
+expected side's part first. A report that shows the roots in those roles
+compares that pair when the roots' own shapes agree
+(`ReportBuilder.mismatchLeafFor`), so a list of records missing a field names
+the field whether an annotation, a call, a record update, or an enclosing
+aggregate owns the relation. Pinned by
+test/snapshots/list_first_item_mismatch_owner_reports.md and
+test/snapshots/repro_issue_12968_record_update_list_field.md.
 
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
@@ -11556,7 +11591,9 @@ one rule whether the value is local or top-level:
 - An UNANNOTATED value's open row is one weak flex shared by every use in the
   enclosing scope. Uses that need wider unions widen the shared row, and the
   union that accumulates is the value's one type: `e = Boom` read where
-  `[Boom, Zed, ..]` is accepted and matched against `Aa` is `[Aa, Boom, Zed]`.
+  `[Boom, Zed, ..]` is accepted and matched against `Aa` is `[Aa, Boom, Zed]`
+  (and the `Aa` pattern is reported as unmatchable, since nothing produces
+  `Aa`; Pattern-Only Tags).
   Two uses that need different CLOSED unions (`pastel : [Purple, Mauve] -> Str`
   and `vibrant : [Purple, Orange] -> Str` both applied to `color = Purple`)
   are a type mismatch at the second use, exactly as Roc RFC 0010 specifies;
@@ -11624,6 +11661,108 @@ rebuilds the tag or asks for the annotation it needs.
 - Requiring an annotation on a value other modules can import. Roc never
   requires an annotation on any declaration other than a platform-host
   boundary.
+
+### Pattern-Only Tags
+
+A `match` branch's tag pattern is typed like any other use of the matched
+value: `C` is the open union `[C, ..]`, related to the scrutinee, so it adds
+`C` to the value's shared row (Value Rows: Uses Share One Row). That typing is
+unchanged by this section. What this section adds is a diagnostic: a pattern
+whose tag is in the value's type only because patterns asked for it can never
+match, and is reported with the Unmatchable Pattern warning.
+
+The rule is carried by one bit on each tag entry of a row,
+`types.Tag.pattern_only`:
+
+- A tag pattern of a user-written `match` branch, nested ones included, mints
+  its tag marked (`PatternCtx.match_alternative`). Every other producer mints
+  it unmarked: tag expressions, annotations, nominal backings, lambda
+  parameter and destructuring patterns, compiler-generated matches (`?` and
+  `??` desugarings), imports, and instantiation.
+- When unification relates two rows that both hold a tag, the merged tag is
+  marked only if both were (`processSharedTagsAfterChildren`); a tag only one
+  row holds keeps its own mark. A tag repeated along one row's chain names one
+  tag, so the occurrence that survives is marked only if every occurrence
+  was: the unifier's gather keeps the first occurrence (`mergeSortedExtension`),
+  and `normalizeRowUnion` keeps the innermost and rewrites its part to clear
+  the mark when an omitted occurrence was unmarked (`omitRowLabels`).
+- Every other copy of a tag may drop the mark. Dropping it can only lose a
+  warning, never add one, so copies that rebuild tags field by field
+  (instantiation, import, frozen replay copies) leave the copy unmarked.
+
+The mark is diagnostic metadata. Unification never reads it to decide a
+relation, and nothing that identifies a type reads it: canonical and sealed
+type keys, digests, snapshot comparison, exhaustiveness, Monotype, and layouts
+all read a tag's name and payloads only.
+
+Some values come from outside the module's own code, so a tag their row holds
+is produced even when only patterns name it here:
+
+- A lambda's parameters get their values from callers the module may not see.
+  A lambda whose body checked a recorded match tag pattern has its parameter
+  spans recorded (`Check.matching_lambda_params`), and everything reachable
+  from their types counts as produced: through aliases, records, tuples, tag
+  payloads, function arguments and results, nominal type arguments, and the
+  static-dispatch constraints of type variables, since a `where` method's
+  result is reachable only through its constraint's function type. The walk
+  runs at judgment time, not when the lambda finishes, because later relations
+  can split a parameter row's tags into new row parts.
+- A derived parser builds its shape's values from its input, so every type
+  reachable from a parser derivation's shape counts as produced.
+- A rejected expression (`Check.erroneous_value_exprs`) already owns an error
+  report about the value it was meant to produce, so every type reachable from
+  its type counts as produced; a literal whose deferred conversion to a
+  pattern-widened row fails is reported once, not again as an unmatchable
+  pattern.
+
+The judgment (`Check.reportPatternOnlyMatchTags`) runs once the module's types
+are settled: after deferred constraints, literal defaulting, and
+generated-codec finalization, and before any row is closed or any type is
+poisoned. It is deferred because a later relation can still produce a tag a
+pattern asked for. In
+
+```roc
+var $state = Idle
+for arg in args {
+	match $state {
+		Busy => ...
+		Idle => {}
+	}
+	if arg == "start" {
+		$state = Busy
+	}
+}
+```
+
+the `Busy` pattern is checked before `$state = Busy`, and only that later
+assignment clears the mark. Each recorded pattern is reported when its tag is
+still marked in the settled row of the value it matches and the row part that
+lists it is not produced. A match that had a type error is skipped: one
+that was retired, one whose scrutinee, branch guard, or branch value was
+rejected (including a branch value rejected against the match's expected
+result, which does not retire the match), and a branch part the
+exhaustiveness check already reported as redundant or unmatchable. A pattern
+whose whole row is pattern-only is skipped too: no producer gave that row any
+tag, so the module produces no value of that type at all (the result of a stub
+that only crashes, for instance), and no single pattern of the match is the
+mistaken one. A module with no recorded patterns does no work, and the walk
+runs only when some pattern's tag is still marked.
+
+The rule is intentionally conservative about parameters: a value mixed with a
+parameter, or an inline callback over a known list (`xs.map(|v| match v {
+C => .. })`), shares the parameter's row and is not reported. A top-level
+constant is judged like any other value: `mode = Debug` matched against
+`Release` is reported, and the annotation `mode : [Debug, Release]` (whose
+tags are unmarked) is how an author says `Release` is intended.
+
+The rejected side is pinned by
+`test/snapshots/repro_issue_12833_incompatible_match_pattern.md` and
+`test/snapshots/pattern_only_tag_warnings.md`; the accepted side by
+`test/snapshots/pattern_only_tag_var_loop_no_warning.md`,
+`test/snapshots/pattern_only_tag_parameter_no_warning.md`,
+`test/snapshots/pattern_only_tag_produced_no_warning.md`, and
+`test/snapshots/pattern_only_tag_derived_parser_no_warning.md`; the merge rule
+by the unifier tests in `src/check/test/unify_test.zig`.
 
 ### Hosted Try Question Widening Removed
 
@@ -12032,8 +12171,10 @@ Five consumers keep the rule exact:
 - `normalizeRowUnion` relates each repeated occurrence to the next one out,
   then rewrites the row part that holds the outer copy to omit it. Inner
   parts may be shared by other types (a callback's own error row) and keep
-  their labels; the outer part's meaning is unchanged by the omission. A part
-  left with no labels redirects to its extension
+  their labels; the outer part's meaning is unchanged by the omission. The
+  kept inner tag's part is also rewritten, with no label omitted, when it
+  must lose its pattern-only mark (Pattern-Only Tags); that changes no type.
+  A part left with no labels redirects to its extension
   (`RedirectRule.row_union_normalization`), taking the lower of the two ranks
   as unification would. A row's repeated pairs relate together or not at
   all: they are first probed as one set against throwaway problem stores,
@@ -12555,16 +12696,25 @@ target is known: `describe = |person| "${person.name} is ${person.age}"` is
 `age : U64` record fails to relate to it. The unifier keeps the pair whose
 relation failed first (a child mismatch a record or alias relation flags counts,
 an ignored one does not) and snapshots it before poisoning. When that pair
-reaches the item type of a copy the checker instantiated, the mismatch is
+reaches the item type of a copy the checker instantiated, and the rejected
+relation relates the value the instantiating use produced, the mismatch is
 reported as the use giving the interpolation's values different types: at the
 interpolation, with the use and both types, rather than as the call's or
 dispatch's own mismatch, whose types the failed relation has partly merged. The
-copy is then rejected, so discharging it reports nothing further. A mismatch
+copy is then rejected, so discharging it reports nothing further. A relation
+relates the use's value when it is the use's own relation, reads the use as an
+operand, or relates a call's arguments to the use as its callee
+(`currentRelationRelatesUse`). Reaching the item type is not enough by itself:
+unification gives every type it has related one variable, so an unrelated
+later mismatch involving, say, `Str` reaches the item type of every
+interpolation whose values became `Str`, and that mismatch is its own report. A mismatch
 found while relating a part to its item type is that part's own report. Pinned
 by test/snapshots/repro_issue_12213_method_interpolates_mixed_field_types.md
 (a method call) and
 test/snapshots/static_dispatch/interpolation_use_conflicting_values.md (a
-function call).
+function call), and by
+test/snapshots/static_dispatch/interpolation_tie_unrelated_mismatch.md (an
+unrelated mismatch after the use).
 
 Interpolation metadata records whether its regions are this module's source.
 Cross-module copying marks them imported, since a module renders only its own

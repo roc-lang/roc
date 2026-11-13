@@ -372,7 +372,10 @@ pub const Constants = struct {
     ///      diagnostic node is added.
     /// 189: checked artifacts store their type, scheme, blob and proc-base
     ///      interning tables; combines with the independent 187 entry change.
-    pub const CACHE_VERSION = 189;
+    /// 190: type tags record whether they are in their row only because `match`
+    ///      branch patterns asked for them.
+    /// 191: combines the independent 189 and 190 entry changes.
+    pub const CACHE_VERSION = 191;
 };
 
 /// Configuration for the Roc cache system.

@@ -44,7 +44,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 37 stores reproducible checking
+/// reflected in layout fingerprints. Version 38 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
 /// completion and cached literal argument roots for both strategies,
 /// body-local type context arguments, generated-codec recurrences,
@@ -54,9 +54,11 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// declaration backings whose formals bind by binder identity rather than by
 /// name, stored function recipes naming modules the storing module imports,
 /// type stores listing their widening field names once, and anonymous
-/// structure that every use shares when nothing visible can lift or widen it.
-/// It rejects every earlier format. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 37;
+/// structure that every use shares when nothing visible can lift or widen it,
+/// checked artifacts' type, scheme, blob and proc-base interning tables, and
+/// type tags that record whether only `match` branch patterns put them in
+/// their row. It rejects every earlier format. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 38;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
@@ -155,8 +157,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xDC, 0x50, 0xB5, 0x99, 0x90, 0xE7, 0xE0, 0xF7, 0xFD, 0x18, 0x31, 0xE9, 0xD2, 0x49, 0x8A, 0x27,
-        0x48, 0x9F, 0xEC, 0x75, 0x9C, 0x8B, 0x4C, 0xFF, 0x7E, 0xA7, 0xF0, 0xE3, 0xA7, 0x83, 0xE7, 0x10,
+        0x4C, 0x5F, 0xF3, 0x0B, 0xF7, 0x4B, 0x14, 0xCE, 0x92, 0x2B, 0xDA, 0x24, 0xC0, 0x7E, 0xB0, 0xCA,
+        0x15, 0xB9, 0xA5, 0x7D, 0x3A, 0x5A, 0xE7, 0x40, 0x74, 0x22, 0x5B, 0x4A, 0x1E, 0x19, 0x14, 0x35,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }
