@@ -15872,7 +15872,12 @@ strategy).
 Lowering gives every worker one hidden input per literal requirement of its own
 scheme, after its dictionaries (`Worker.literal_params`, in literal requirement
 order), a word of its type table: an immortal erased callable taking no
-arguments and producing the converted value. The callable is the root's entry wrapper composed as a
+arguments and producing the converted value. A body reads a literal argument
+from its type table where the literal is (`Body.literalThunkLocal`), not in
+its entry chain: only that literal reads the word, so a body holds each of
+its literal arguments only across the call that converts it, and the
+ownership facts of a body with many literals do not carry every one of them
+across every join. The callable is the root's entry wrapper composed as a
 dictionary entry (`Body.rootThunk`): its body restores the stored value
 (`CompileTimeRootPayload.const_node`), or, where none is stored (the root is
 being evaluated, or holds a function), converts the literal in the frames of
