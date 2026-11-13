@@ -2,7 +2,7 @@ Thing :: {
     name : Str,
 }.{
     new : Str -> Thing
-    new = |name| { name: name }
+    new = |text| { name: text }
 
     name : Thing -> Str
     name = |thing| thing.name

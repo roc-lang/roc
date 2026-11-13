@@ -357,6 +357,12 @@ pub const Diagnostic = union(enum) {
     default_app_missing_main: struct {
         module_name: Ident.Idx,
     },
+    /// An importable module is named after an auto-imported builtin type.
+    /// About the file as a whole: its name is the problem, so it has no
+    /// region.
+    module_name_reserved: struct {
+        module_name: Ident.Idx,
+    },
     default_app_wrong_arity: struct {
         arity: u32,
         region: Region,
@@ -619,7 +625,7 @@ pub const Diagnostic = union(enum) {
             .range_op_chained => |d| d.region,
             // A diagnostic about its file as a whole never stands in for a
             // malformed node, the only consumer of a diagnostic's region.
-            .type_module_missing_matching_type, .default_app_missing_main => base.invariant("file-level diagnostic {s} has no region", .{@tagName(self)}),
+            .type_module_missing_matching_type, .default_app_missing_main, .module_name_reserved => base.invariant("file-level diagnostic {s} has no region", .{@tagName(self)}),
         };
     }
 

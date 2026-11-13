@@ -4499,6 +4499,14 @@ pub const InstGraph = struct {
         return node;
     }
 
+    /// A leaf of closed type `ty` in `scope` that is not `scope`'s cell for
+    /// `ty`: an occurrence distinct from every equal closed type in the
+    /// scope, like the leaf a nominal owns as its backing (see
+    /// `ImportComponent`). Its components are still the scope's cells.
+    pub fn ownedCheckedLeaf(self: *InstGraph, scope: LeafScopeId, ty: Type.TypeId) Allocator.Error!NodeId {
+        return try self.newLeaf(.{ .ty = ty, .origin = .{ .checked = scope } });
+    }
+
     /// Make `node` the cell `scope` names for closed type `ty`, as binding a
     /// checked role to an explicit cell does in an eager instantiation.
     pub fn bindCheckedLeaf(self: *InstGraph, scope: LeafScopeId, ty: Type.TypeId, node: NodeId) Allocator.Error!void {

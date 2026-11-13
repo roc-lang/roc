@@ -82,6 +82,7 @@ pub const Problem = union(enum) {
     static_dispatch: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
+    alias_names_no_nominal_type: AliasNamesNoNominalType,
     recursive_alias: RecursiveAlias,
     not_a_where_alias: NotAWhereAlias,
     where_alias_in_type_position: WhereAliasInTypePosition,
@@ -1082,12 +1083,21 @@ pub const CannotAccessOpaqueNominal = struct {
 
 /// Compiler bug: a nominal type variable doesn't resolve to a nominal_type structure.
 /// This should never happen because:
-/// 1. The canonicalizer only creates nominal patterns/expressions for s_nominal_decl statements
+/// 1. The canonicalizer only creates nominal patterns/expressions for
+///    s_nominal_decl and s_alias_decl statements, and an alias that names no
+///    nominal type is reported as `alias_names_no_nominal_type`
 /// 2. generateNominalDecl always sets the decl_var to a nominal_type structure
 /// 3. instantiateVar and copyVar preserve the nominal_type structure
 pub const NominalTypeResolutionFailed = struct {
     var_: Var,
     nominal_type_decl_var: Var,
+};
+
+/// Error when a nominal construction or pattern names an alias whose type is
+/// not a nominal type, so there is no nominal type to construct or match.
+pub const AliasNamesNoNominalType = struct {
+    var_: Var,
+    alias_name: Ident.Idx,
 };
 
 // type declaration errors //

@@ -28,10 +28,10 @@ TypeTable := { entries : List(TypeInfo) }.{
 	]
 
 	from_list : List(TypeInfo) -> TypeTable
-	from_list = |entries| TypeTable.{ entries }
+	from_list = |infos| TypeTable.{ entries: infos }
 
 	entries : TypeTable -> List(TypeInfo)
-	entries = |{ entries }| entries
+	entries = |table| table.entries
 
 	type_info : TypeTable, U64 -> TypeInfo
 	type_info = |table, type_id|

@@ -27444,12 +27444,33 @@ const BodyContext = struct {
         return .{ .node = checked_ty };
     }
 
+    fn instOccurrenceStep(checked_ty: checked.CheckedTypeId, occurrence: InstOccurrence) InstStep {
+        return switch (occurrence) {
+            .shared => instNodeStep(checked_ty),
+            .owned => .{ .call = .{ .node = .{ .checked_ty = checked_ty, .occurrence = .owned } } },
+        };
+    }
+
     fn instSliceStep(checked_tys: []const checked.CheckedTypeId) InstStep {
         return .{ .call = .{ .slice = .{ .checked_tys = checked_tys } } };
     }
 
+    /// Whether a checked type occurrence is its scope's cell for the type.
+    /// A closed type is one type wherever it occurs, so an ordinary `shared`
+    /// occurrence of one is the scope's single cell for it. Two occurrence
+    /// roles are distinct cells instead, as they are in an imported Monotype:
+    /// a record or tag union's row tail and a nominal's backing. Relating an
+    /// anonymous structure to a nominal lifts the structure's class into the
+    /// nominal, so a row tail sharing that class would become a nominal, and
+    /// a backing sharing it would come to name the nominal it backs. An
+    /// `owned` closed occurrence is therefore a fresh cell whose components
+    /// are still the scope's cells. An occurrence that reaches an identity
+    /// variable is identified by its checked id either way.
+    const InstOccurrence = enum { shared, owned };
+
     const InstNodeTask = struct {
         checked_ty: checked.CheckedTypeId,
+        occurrence: InstOccurrence = .shared,
         scoped_ty: checked.CheckedTypeId = undefined,
         /// The node map `scoped_ty` is registered in while `reserved`.
         scoped_map: *InstantiatingNodeMap = undefined,
@@ -27485,15 +27506,16 @@ const BodyContext = struct {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
             return existing;
         }
-        if (try self.closedTypeLeaf(task.scoped_ty)) |leaf| return leaf;
+        if (try self.closedTypeLeaf(task.scoped_ty, .shared)) |leaf| return leaf;
         task.probed = true;
         return null;
     }
 
     /// The leaf a closed checked type instantiates to in a leaf-instantiating
-    /// context, recorded as its node there; null when the type builds its
-    /// structure instead.
-    fn closedTypeLeaf(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
+    /// context; null when the type builds its structure instead. A shared
+    /// occurrence is the leaf scope's cell, recorded as the type's node; an
+    /// owned one is a leaf of its own.
+    fn closedTypeLeaf(self: *BodyContext, checked_ty: checked.CheckedTypeId, occurrence: InstOccurrence) Allocator.Error!?NodeId {
         const scope, const mono = switch (self.instantiation.closed_types) {
             .structure => return null,
             .leaves => |scope| blk: {
@@ -27505,9 +27527,14 @@ const BodyContext = struct {
                 break :blk .{ scope, self.graph.closedCheckedMono(checkedTypeAddress(self.view, checked_ty)) orelse return null };
             },
         };
-        const node = try self.graph.checkedLeaf(scope, mono);
-        try self.instantiation.node_map.put(checked_ty, .{ .node = node });
-        return node;
+        switch (occurrence) {
+            .shared => {
+                const node = try self.graph.checkedLeaf(scope, mono);
+                try self.instantiation.node_map.put(checked_ty, .{ .node = node });
+                return node;
+            },
+            .owned => return try self.graph.ownedCheckedLeaf(scope, mono),
+        }
     }
 
     /// The Monotype a closed checked type of this context's module denotes.
@@ -27533,13 +27560,21 @@ const BodyContext = struct {
 
     fn stepInstNode(self: *BodyContext, frame: *InstFrame, task: *InstNodeTask, input: ?InstResult) Allocator.Error!InstStep {
         if (frame.cursor == 0) {
-            if (!task.probed) {
-                if (try self.probeInstNode(task)) |existing| return .{ .ret = .{ .node = existing } };
+            if (task.occurrence == .owned and try self.checkedTypeIsClosed(task.checked_ty)) {
+                // An owned closed occurrence neither reads nor registers
+                // the scope's cell for its type.
+                task.scoped_ty = try self.nodeMapType(self.scopedCheckedType(task.checked_ty));
+                if (try self.closedTypeLeaf(task.scoped_ty, .owned)) |leaf| return .{ .ret = .{ .node = leaf } };
+            } else {
+                task.occurrence = .shared;
+                if (!task.probed) {
+                    if (try self.probeInstNode(task)) |existing| return .{ .ret = .{ .node = existing } };
+                }
+                self.builder.countBodyDiagnostic("checked_node_cache_misses");
+                task.scoped_map = try self.scopedNodeMap(task.scoped_ty);
+                try task.scoped_map.put(task.scoped_ty, .{ .building = null });
+                task.reserved = true;
             }
-            self.builder.countBodyDiagnostic("checked_node_cache_misses");
-            task.scoped_map = try self.scopedNodeMap(task.scoped_ty);
-            try task.scoped_map.put(task.scoped_ty, .{ .building = null });
-            task.reserved = true;
             frame.cursor = 1;
         }
         const built: NodeId = built: {
@@ -27550,14 +27585,14 @@ const BodyContext = struct {
                 .alias => |alias| {
                     frame.index += 1;
                     if (frame.index < alias.args.len) return instNodeStep(alias.args[frame.index]);
-                    if (frame.index == alias.args.len) return instNodeStep(alias.backing);
+                    if (frame.index == alias.args.len) return instOccurrenceStep(alias.backing, task.occurrence);
                     break :built result.get(.node);
                 },
                 .record_ext => |ext| {
                     if (frame.cursor == 1) {
                         task.first = result;
                         frame.cursor = 2;
-                        return instNodeStep(ext);
+                        return instOccurrenceStep(ext, .owned);
                     }
                     break :built try self.graph.newNode(.{ .record = .{
                         .fields = task.first.get(.fields),
@@ -27580,7 +27615,7 @@ const BodyContext = struct {
                     if (frame.cursor == 1) {
                         task.first = result;
                         frame.cursor = 2;
-                        return instNodeStep(ext);
+                        return instOccurrenceStep(ext, .owned);
                     }
                     break :built try self.graph.newNode(.{ .tag_union = .{
                         .tags = task.first.get(.tags),
@@ -27617,7 +27652,7 @@ const BodyContext = struct {
                 .alias => |alias| {
                     task.next = .{ .alias = .{ .args = alias.args, .backing = alias.backing } };
                     if (alias.args.len != 0) return instNodeStep(alias.args[0]);
-                    return instNodeStep(alias.backing);
+                    return instOccurrenceStep(alias.backing, task.occurrence);
                 },
                 .record => |record| {
                     task.next = .{ .record_ext = record.ext };
@@ -27650,6 +27685,7 @@ const BodyContext = struct {
                 },
             }
         };
+        if (task.occurrence == .owned) return .{ .ret = .{ .node = built } };
         const map = try self.scopedNodeMap(task.scoped_ty);
         var entry = map.get(task.scoped_ty).?;
         const node = try entry.finish(self.graph, built);
@@ -28074,7 +28110,7 @@ const BodyContext = struct {
 
         frame.cursor = 1;
         try self.enterDeclScopes(task, source.view, source.declaration, task.args);
-        return instNodeStep(source.declaration.backing);
+        return instOccurrenceStep(source.declaration.backing, .owned);
     }
 
     /// Enter `view` (when it is not the current one) and push declaration
