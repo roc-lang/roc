@@ -1140,6 +1140,260 @@ pub const tests = [_]TestCase{
         .skip = .{ .wasm = true },
     },
     .{
+        .name = "copied method requirements (lss): helpers nested two deep sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.id(w)
+        \\        h2(v)
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "copied method requirements (boxy): helpers nested two deep sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.id(w)
+        \\        h2(v)
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): helpers nested three deep, each used twice, sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| {
+        \\            h3 = |z| outer.id(z)
+        \\            h3(h3(w))
+        \\        }
+        \\        h2(h2(v))
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "copied method requirements (boxy): helpers nested three deep, each used twice, sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| {
+        \\            h3 = |z| outer.id(z)
+        \\            h3(h3(w))
+        \\        }
+        \\        h2(h2(v))
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): helpers nested two deep with ? through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> Try(U64, [Other])
+        \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+        \\}
+        \\
+        \\a = |s, t| {
+        \\    h1 = |v| {
+        \\        h2 = |x| {
+        \\            m = s.read()?
+        \\            Ok(m + x)
+        \\        }
+        \\        first = h2(v)?
+        \\        h2(first)
+        \\    }
+        \\    (h1(t), h1(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = a(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(Ok(12), Ok(13))" },
+    },
+    .{
+        .name = "copied method requirements (boxy): helpers nested two deep with ? through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> Try(U64, [Other])
+        \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+        \\}
+        \\
+        \\a = |s, t| {
+        \\    h1 = |v| {
+        \\        h2 = |x| {
+        \\            m = s.read()?
+        \\            Ok(m + x)
+        \\        }
+        \\        first = h2(v)?
+        \\        h2(first)
+        \\    }
+        \\    (h1(t), h1(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = a(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(Ok(12), Ok(13))" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested helper with its own generic parameter beside the captured receiver",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\P := [P].{
+        \\    pick : P, x -> U64
+        \\    pick = |_, _| 1
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |p, v| {
+        \\        h2 = |q, w| outer.id(w) + q.pick(w)
+        \\        h2(P.P, h2(p, v))
+        \\    }
+        \\    h1(P.P, h1(P.P, x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "9" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested helper with its own generic parameter beside the captured receiver",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\P := [P].{
+        \\    pick : P, x -> U64
+        \\    pick = |_, _| 1
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |p, v| {
+        \\        h2 = |q, w| outer.id(w) + q.pick(w)
+        \\        h2(P.P, h2(p, v))
+        \\    }
+        \\    h1(P.P, h1(P.P, x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "9" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested helper adding to its captured receiver's method result, used twice",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\P := [P].{
+        \\    pick : P, x -> U64
+        \\    pick = |_, _| 1
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h2 = |q, w| outer.id(w) + q.pick(w)
+        \\    h2(P.P, h2(P.P, x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested helper adding to its captured receiver's method result, used twice",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\P := [P].{
+        \\    pick : P, x -> U64
+        \\    pick = |_, _| 1
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h2 = |q, w| outer.id(w) + q.pick(w)
+        \\    h2(P.P, h2(P.P, x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "7" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
         // Nothing pins the record's field kind: no annotation names the
         // record and no field is read. The field's value is a method call on
         // a list literal, whose generated iterator representation is selected

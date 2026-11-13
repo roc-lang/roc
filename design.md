@@ -14681,9 +14681,16 @@ Other solved-graph mutations:
   template whose uses' copies are among the live requirements with that live
   requirement, as declared in the same section; the template itself is not
   unified there. `identifyReplacedTemplates` (committed probe, after
-  `rejectPolymorphicRecursion`) identifies each replaced template with its
+  `rejectPolymorphicRecursion`) identifies each replaced template, and each
+  nested scheme's template between it and a live copy
+  (`appendTemplatesBetween`, from `nested_template_links`), with its
   live requirement once no use can instantiate it; the relation always
-  establishes, which Debug builds assert. A
+  establishes, which Debug builds assert. It then relates each requirement
+  an identified variable holds from the nested definition to the copy the
+  use's scheme-use record pairs it with
+  (`relateIdentifiedVariableRequirements`, committed probe, then
+  `setVarContent` of the variable's constraint list to hold the relation
+  once), repeating while a relation identifies further variables. A
   probe that cannot establish the pair, or that makes the related callable's
   type infinite, rolls back, reports the method conflict, poisons the
   receiver, and retires every definition the boundary generalizes. A relation
@@ -19473,8 +19480,30 @@ the live requirement that replaced it (`identifyReplacedTemplates`): the
 live requirement holds an instance of the template, so the identification
 always establishes, and every dispatch in the nested body then names the
 receiver's one published requirement, as evidence lookup by callable class
-requires. A nested definition whose type escapes through the boundary's
-interface is part of what the boundary publishes, so its template stays on
+requires. Nesting can be any depth. A definition between the receiver's
+boundary and the one that calls the method (`h1` around
+`h2 = |w| outer.id(w)`, inside `|outer| ...`) holds each of its uses' copies
+as a template of its own scheme, detached from the receiver, and its own
+uses copy that. The nested scheme is dropped when its definition leaves
+scope, so each use that copies such a requirement, leaving the receiver
+shared, records the requirement it copied with the creation template it
+descends from (`nested_template_links`). The boundary replaces a creation
+template when any live copy descends from it, and every template between the
+two (the one a live copy was copied from, the one that was copied from, and
+so on) is identified with the live requirement as well; one that only an
+unused definition copied is not among them. Identifying a template identifies
+the nested definition's variables its callable mentions with the ones a use
+gave them (the method's result, in `h2 = |q, w| outer.id(w) + q.pick(w)`).
+Such a variable then holds the nested definition's own requirements (`plus`)
+beside the use's copies of them, and it is one type variable with one method
+of each name: each is related to the copy the use's scheme-use record pairs
+it with and kept once, which can identify further variables, until none
+remain. A variable the nested definition quantified on its own (`q`) is
+identified with nothing and stays generic, and one a use gave a concrete type
+had each copy discharged against that type's method. A nested definition
+whose type escapes through the boundary's
+interface is part of what the boundary publishes, as is any definition
+between that holds a copy of its template, so the template stays on
 the receiver and its copies retire into it after generalization, as any
 published scheme's do. A template no use copied (a nested definition never
 used) stays too, as a requirement of its own beside the method's live one.

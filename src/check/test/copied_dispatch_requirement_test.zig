@@ -297,3 +297,208 @@ test "copied method requirements - a use violating a closure's requirement on a 
 
     try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "`take_first` method on `List` has an incompatible type");
 }
+
+const nested_prelude =
+    \\Repro := [].{}
+    \\
+    \\Id := [Id].{
+    \\    id : Id, x -> x
+    \\    id = |_, x| x
+    \\}
+    \\
+    \\W := [W].{
+    \\    wrap : W, x -> List(x)
+    \\    wrap = |_, x| [x]
+    \\}
+    \\
+    \\P := [P].{
+    \\    pick : P, x -> U64
+    \\    pick = |_, _| 1
+    \\}
+    \\
+    \\Source := { n : U64 }.{
+    \\    read : Source -> Try(U64, [Other])
+    \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+    \\}
+    \\
+;
+
+test "copied method requirements - a helper nested two deep and used twice is one requirement" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.id(w)
+        \\        h2(v)
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\used : U8
+        \\used = a(Id.Id, 1.U8)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "b, c -> c where [b.id : b, c -> c]");
+}
+
+test "copied method requirements - a helper used twice inside the helper that holds it is one requirement" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.id(w)
+        \\        h2(h2(v))
+        \\    }
+        \\    h1(x)
+        \\}
+        \\
+        \\used : U8
+        \\used = a(Id.Id, 1.U8)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "b, c -> c where [b.id : b, c -> c]");
+}
+
+test "copied method requirements - helpers nested three deep are one requirement" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| {
+        \\            h3 = |z| outer.id(z)
+        \\            h3(h3(w))
+        \\        }
+        \\        h2(h2(v))
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\used : U8
+        \\used = a(Id.Id, 1.U8)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "b, c -> c where [b.id : b, c -> c]");
+}
+
+test "copied method requirements - a helper a sibling helper uses, nested two deep, is one requirement" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.id(w)
+        \\        k = |z| h2(z)
+        \\        k(h2(v))
+        \\    }
+        \\    g = |y| h1(y)
+        \\    g(h1(x))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "b, c -> c where [b.id : b, c -> c]");
+}
+
+test "copied method requirements - a helper nested two deep with a ? is one requirement" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |s, t| {
+        \\    h1 = |v| {
+        \\        h2 = |x| {
+        \\            m = s.read()?
+        \\            Ok(m + x)
+        \\        }
+        \\        first = h2(v)?
+        \\        h2(first)
+        \\    }
+        \\    (h1(t), h1(t + 1))
+        \\}
+        \\
+        \\source : Source
+        \\source = { n: 5 }
+        \\
+        \\used : (Try(U64, [Other]), Try(U64, [Other]))
+        \\used = a(source, 2)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "copied method requirements - a nested helper's own parameter stays generic beside the captured receiver" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |outer, x| {
+        \\    h1 = |p, v| {
+        \\        h2 = |q, w| outer.id(w) + q.pick(w)
+        \\        h2(P.P, h2(p, v))
+        \\    }
+        \\    h1(P.P, h1(P.P, x))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "b, x -> x where [b.id : b, x -> x, x.plus : x, U64 -> x]");
+}
+
+test "copied method requirements - a nested helper's requirement on its method result is the enclosing definition's" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |outer, x| {
+        \\    h2 = |q, w| outer.id(w) + q.pick(w)
+        \\    h2(P.P, h2(P.P, x))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("a", "b, x -> x where [b.id : b, x -> x, x.plus : x, U64 -> x]");
+}
+
+test "copied method requirements - a method conflict through helpers nested two deep is rejected" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |outer| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.wrap(w)
+        \\        h2(v)
+        \\    }
+        \\    List.len(h1(h1(1.U8)))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "two different, incompatible `wrap` methods");
+}
+
+test "copied method requirements - a method conflict inside the helper that holds a helper is rejected" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |outer| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.wrap(w)
+        \\        h2(h2(v))
+        \\    }
+        \\    List.len(h1(1.U8))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Type Mismatch", "two different, incompatible `wrap` methods");
+}
+
+test "copied method requirements - polymorphic recursion beside helpers nested two deep is rejected" {
+    var test_env = try TestEnv.init("Repro", nested_prelude ++
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.id(w)
+        \\        go : p, q, U64 -> U64
+        \\        go = |m, n, k| if k == 0 { 0 } else { 1 + go(n, m, k - 1) }
+        \\        _count = go(h2(v), "s", 2)
+        \\        h2(v)
+        \\    }
+        \\    h1(h1(x))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeProblemMsgContains("Polymorphic Recursion", "recursion");
+}
