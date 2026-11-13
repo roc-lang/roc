@@ -445,7 +445,7 @@ test "a literal at a decided type is a conversion root checking evaluates" {
         stored += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), stored);
-    for (root.checked_procedure_templates.templates.items) |*template| {
+    for (root.checked_procedure_templates.templates.items()) |*template| {
         try std.testing.expectEqual(@as(usize, 0), root.checked_procedure_templates.templateLiteralRequirements(template).len);
     }
     const demand = checked.demand();

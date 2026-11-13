@@ -7310,6 +7310,13 @@ pub const Coordinator = struct {
             manager.rejectEntry(.canonicalized, .canonicalized, cache_key, entries_dir, cache_data.stamp, "its module environment fails validation", .{});
             return .{ .delivered_then_missed = delivered };
         };
+        // The entry records the digest of the source it was built from, and
+        // the key that named it hashes this read's digest. An entry whose
+        // record disagrees is corrupt.
+        if (!std.mem.eql(u8, &serialized.source_digest, &source_read.digest.bytes)) {
+            manager.rejectEntry(.canonicalized, .canonicalized, cache_key, entries_dir, cache_data.stamp, "its recorded source digest differs from the source's", .{});
+            return .{ .delivered_then_missed = delivered };
+        }
 
         const env = try module_alloc.create(ModuleEnv);
         env.* = serialized.deserializeInPlace(
@@ -7330,14 +7337,6 @@ pub const Coordinator = struct {
             module_alloc.destroy(env);
         };
         std.debug.assert(env.module_role == task.module_role);
-        // The entry records the digest of the source it was built from, and
-        // the key that named it hashes this read's digest. An entry whose
-        // record disagrees is corrupt.
-        if (!env.source_digest.eql(source_read.digest)) {
-            manager.recordInvalidationFor(.canonicalized);
-            return null;
-        }
-
         // Read this module's `import "path" as name` file imports, exactly as
         // the canonicalize task does on a miss, so the module's source-input
         // identity is complete before the checked-module cache is probed.
