@@ -13595,9 +13595,11 @@ deferred at lowering; the checked module and lowering are both complete):
   the two. Nothing reads a kind by matching types at the call. A scope that
   lowers a body at an instantiation binds the kind variable to the committed
   kind directly, and that body stores the field inline or in a presence slot.
-  A `field_kind` entry is a substitution entry, never part of a type; Monotype
-  skips it as it skips an erroneous entry, since it solves kinds from
-  its instantiation graph.
+  A `field_kind` entry is a substitution entry, never part of a type: a
+  substituting clone of a record whose kind variable the substitution commits
+  gives the cloned field the committed kind itself
+  (`cloneCheckedTypeBuildPayload`). Monotype skips the entry as it skips an
+  erroneous entry, since it solves kinds from its instantiation graph.
   Nominal declared-field tables use that same complete slot representation as
   the backing row. Their source type still identifies the payload, but their
   representation includes presence storage; descriptor construction must never
@@ -19901,14 +19903,26 @@ type and no other: Monotype's `lowerCheckedTypeVariable`, Boxy's
 `Converter.sealVariable`, and checked-module construction's
 `sealDecidedVariables`, which writes it into the types of the roots below.
 
+An undetermined field kind ("Field Kinds") is a kind variable, and the same
+four conditions decide it. A kind variable carries no numeric default and no
+constraint, so it is decided exactly when it is a flex variable that no
+scheme enclosing the site quantifies: no instantiation can then pin it to
+`optional` or to a default. Its one instantiation is `required`, the kind an
+unpinned kind commits to everywhere else. Every consumer gives it that kind
+and no other: Monotype's direct record-row lowering (`Builder.lowerType`),
+Boxy's `Converter.convertedField`, and `sealDecidedVariables`, which
+substitutes the committed kind so the sealed field is a `required` field. A
+kind variable an enclosing scheme quantifies is a specialization input like
+any quantified variable: `mk = |v| { a: v }` keeps its field's kind open, and
+a dispatch inside `mk` whose callable reaches that kind is
+`direct_parametric`.
+
 A variable that fails conditions 1 to 3 is not decided, whether or not a
 scheme quantifies it. A constrained variable is the dispatcher of the
 requirements it carries, which resolve by the default rule above
 (`evidence_dependent`, a default owner's method, a structural derivation, or
 `unreachable`), never by sealing. A numeric-default variable is constrained
-by its literal and takes the type its defaulting phase gives it. An
-undetermined field kind is a kind variable, not a type variable, and is
-never decided: a type that reaches one always depends on its instance.
+by its literal and takes the type its defaulting phase gives it.
 
 The rule is one rule for every value. It is applied where checked-module
 construction asks whether a type depends on an instance:
@@ -19917,8 +19931,9 @@ construction asks whether a type depends on an instance:
   (`callableIdentityIsSpecializationIndependent`): a resolved direct call is
   `direct_closed` when every variable its callable reaches is decided and
   its nested evidence is closed. The variables a callable reaches are those
-  of its structure; the signatures of the constraints a variable carries are
-  not structure. This holds for every plan: method calls, type dispatches,
+  of its structure, the kind variables of its record fields among them; the
+  signatures of the constraints a variable carries are not structure. This
+  holds for every plan: method calls, type dispatches,
   method equality, iterator `for` plans, and literal conversions alike.
 - Literal conversion roots: a literal whose conversion plan is
   `direct_closed` has a `numeral_conversion`/`quote_conversion` root,
@@ -19947,6 +19962,13 @@ whose body is the literal, the literal is a requirement of `make`'s scheme
 and the call's edge instantiates it at `Sql(v)`, which is closed: the edge's
 argument is a `literal_argument` root at `Sql([])`.
 
+In `run = |_| total(3, { id: 1.I32 })` with `run : {} -> I64` and
+`total : Tally(a), a -> I64`, the literal's type is `Tally({ id : I32 })`
+whose `id` field has an undetermined kind. `run`'s scheme does not reach
+that kind, so it is decided: the literal's `from_numeral` plan is
+`direct_closed` and its conversion root has the type `Tally({ id : I32 })`
+with `id` required.
+
 A literal whose own type is the unquantified variable (`_ = "x"`) is not
 this case. Its variable carries the conversion's constraint, so it is not
 decided; literal defaulting gives it `Str` (or `Dec`) under the default
@@ -19954,10 +19976,12 @@ rule, and where no default applies its dispatch is `unreachable`.
 
 The accepted and rejected sides are pinned by the checked-module
 construction tests "direct dispatch classification treats a decided variable
-as closed", "direct dispatch classification never decides an undetermined
-field kind", "sealing decided variables replaces each with its one
-instantiation", and "a literal requirement's instantiation is closed exactly
-when every variable is decided"; by the compile tests "a literal at a decided
+as closed", "direct dispatch classification decides an undetermined field
+kind no enclosing scheme quantifies", "sealing decided variables replaces
+each with its one instantiation", "a substituting clone gives a field the
+kind its kind variable was committed to", and "a literal requirement's
+instantiation is closed exactly when every variable is decided"; by the eval
+tests named "issue 11668"; by the compile tests "a literal at a decided
 type is a conversion root checking evaluates" and "a literal requirement
 instantiated at a decided type is a literal argument root checking
 evaluates", with their rejected counterparts; and by the CLI tests named
