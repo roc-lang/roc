@@ -275,6 +275,11 @@ pub const Store = struct {
     nominal_identities_indexed: u32 = 0,
     alias_identity_index: std.AutoHashMapUnmanaged(AliasIdentity, u32) = .empty,
     alias_identities_indexed: u32 = 0,
+    /// The rows most recently looked up, in front of the indexes above: a
+    /// store's descriptors name few distinct identities, written over and
+    /// over. Runtime-only, like the indexes.
+    nominal_identity_memo: IdentityMemo(NominalIdentity) = .{},
+    alias_identity_memo: IdentityMemo(AliasIdentity) = .{},
 
     /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
@@ -704,6 +709,8 @@ pub const Store = struct {
         self.alias_identity_index.deinit(self.gpa);
         self.alias_identity_index = .empty;
         self.alias_identities_indexed = 0;
+        self.nominal_identity_memo = .{};
+        self.alias_identity_memo = .{};
     }
 
     /// Deinit the unification table
@@ -1095,7 +1102,7 @@ pub const Store = struct {
     }
 
     /// In-place descriptor write. See setSlot.
-    fn setDesc(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
+    inline fn setDesc(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
         self.debugAssertUnfrozenWrite(idx);
         try self.setDescUnguarded(idx, val);
     }
@@ -1107,7 +1114,7 @@ pub const Store = struct {
     }
 
     /// `setDesc` without the frozen-class guard, for freezing and thawing.
-    fn setDescUnguarded(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
+    inline fn setDescUnguarded(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
         try self.setDescRowUnguarded(idx, try self.encodeDesc(val));
     }
 
@@ -1190,17 +1197,21 @@ pub const Store = struct {
     /// Create one descriptor and its structural root metadata atomically with
     /// respect to allocation failure. The two stores always use identical
     /// indices. A descriptor a merge freed is reused before the stores grow.
-    fn appendClass(self: *Self, desc: Desc, checked_var: Var) Allocator.Error!DescStore.Idx {
+    inline fn appendClass(self: *Self, desc: Desc, checked_var: Var) Allocator.Error!DescStore.Idx {
+        return self.appendClassRow(try self.encodeDesc(desc), checked_var);
+    }
+
+    /// `appendClass` for a descriptor already encoded.
+    fn appendClassRow(self: *Self, row: Desc.Row, checked_var: Var) Allocator.Error!DescStore.Idx {
         self.debugAssertUnsealed();
         if (self.takeFreeDesc()) |desc_idx| {
             // Inside a probe the freed descriptor predates it (frees made
             // during the probe are pending), so both writes journal and
             // rollback restores them.
-            try self.setDescUnguarded(desc_idx, desc);
+            try self.setDescRowUnguarded(desc_idx, row);
             try self.setRootMeta(desc_idx, .{ .checked_var = checked_var });
             return desc_idx;
         }
-        const row = try self.encodeDesc(desc);
         const next_len = @as(usize, self.descs.backing.len()) + 1;
         try self.descs.backing.ensureTotalCapacity(self.gpa, next_len);
         try self.root_metas.ensureTotalCapacity(self.gpa, next_len);
@@ -1357,9 +1368,59 @@ pub const Store = struct {
         return Desc.decode(self.descs.getRow(desc_idx), self);
     }
 
+    // per-kind readers //
+    //
+    // The content of descriptor `desc_idx` for a reader that already knows
+    // its kind (`resolveVarWord`, `kindAt`): each decodes that kind's payload
+    // alone and builds no `Content`.
+
+    pub inline fn flexAt(self: *const Self, desc_idx: DescStore.Idx) Flex {
+        return Desc.decodeFlex(self.descs.getRow(desc_idx));
+    }
+
+    pub inline fn rigidAt(self: *const Self, desc_idx: DescStore.Idx) Rigid {
+        return Desc.decodeRigid(self.descs.getRow(desc_idx));
+    }
+
+    pub inline fn aliasAt(self: *const Self, desc_idx: DescStore.Idx) Alias {
+        return Desc.decodeAlias(self.descs.getRow(desc_idx), self);
+    }
+
+    pub inline fn fieldPresenceAt(self: *const Self, desc_idx: DescStore.Idx) types.FieldPresence {
+        return Desc.decodeFieldPresence(self.descs.getRow(desc_idx));
+    }
+
+    pub inline fn recordAt(self: *const Self, desc_idx: DescStore.Idx) types.Record {
+        return Desc.decodeRecord(self.descs.getRow(desc_idx));
+    }
+
+    pub inline fn tupleAt(self: *const Self, desc_idx: DescStore.Idx) types.Tuple {
+        return Desc.decodeTuple(self.descs.getRow(desc_idx), self);
+    }
+
+    pub inline fn nominalAt(self: *const Self, desc_idx: DescStore.Idx) NominalType {
+        return Desc.decodeNominal(self.descs.getRow(desc_idx), self);
+    }
+
+    pub inline fn funcAt(self: *const Self, desc_idx: DescStore.Idx) types.Func {
+        return Desc.decodeFunc(self.descs.getRow(desc_idx), self);
+    }
+
+    pub inline fn tagUnionAt(self: *const Self, desc_idx: DescStore.Idx) TagUnion {
+        return Desc.decodeTagUnion(self.descs.getRow(desc_idx));
+    }
+
+    /// The identity row a nominal descriptor names: two descriptors naming
+    /// the same row have the same identity.
+    pub inline fn nominalIdentityRowAt(self: *const Self, desc_idx: DescStore.Idx) u32 {
+        const row = self.descs.getRow(desc_idx);
+        std.debug.assert(row.word.kind == .nominal_type);
+        return row.payload[0];
+    }
+
     /// `desc` as a stored row, interning the identity of a nominal type or
     /// alias.
-    fn encodeDesc(self: *Self, desc: Desc) Allocator.Error!Desc.Row {
+    inline fn encodeDesc(self: *Self, desc: Desc) Allocator.Error!Desc.Row {
         const identity: u32 = switch (desc.content) {
             .alias => |alias| try self.internAliasIdentity(.of(alias)),
             .structure => |flat| switch (flat) {
@@ -1373,7 +1434,7 @@ pub const Store = struct {
 
     /// `desc` as a stored row, for content that is neither a nominal type nor
     /// an alias and so names no identity.
-    fn encodeDescWithoutIdentity(self: *const Self, desc: Desc) Desc.Row {
+    inline fn encodeDescWithoutIdentity(self: *const Self, desc: Desc) Desc.Row {
         const kind = types.ContentKind.of(desc.content);
         std.debug.assert(kind != .alias and kind != .nominal_type);
         return desc.encode(0, self);
@@ -1389,12 +1450,48 @@ pub const Store = struct {
         return self.alias_identities.items.items[index];
     }
 
-    fn internNominalIdentity(self: *Self, identity: NominalIdentity) Allocator.Error!u32 {
-        return internIdentity(NominalIdentity, self.gpa, &self.nominal_identities, &self.nominal_identity_index, &self.nominal_identities_indexed, identity);
+    inline fn internNominalIdentity(self: *Self, identity: NominalIdentity) Allocator.Error!u32 {
+        if (self.nominal_identity_memo.get(identity)) |row| return row;
+        const row = try internIdentity(NominalIdentity, self.gpa, &self.nominal_identities, &self.nominal_identity_index, &self.nominal_identities_indexed, identity);
+        self.nominal_identity_memo.put(identity, row);
+        return row;
     }
 
-    fn internAliasIdentity(self: *Self, identity: AliasIdentity) Allocator.Error!u32 {
-        return internIdentity(AliasIdentity, self.gpa, &self.alias_identities, &self.alias_identity_index, &self.alias_identities_indexed, identity);
+    inline fn internAliasIdentity(self: *Self, identity: AliasIdentity) Allocator.Error!u32 {
+        if (self.alias_identity_memo.get(identity)) |row| return row;
+        const row = try internIdentity(AliasIdentity, self.gpa, &self.alias_identities, &self.alias_identity_index, &self.alias_identities_indexed, identity);
+        self.alias_identity_memo.put(identity, row);
+        return row;
+    }
+
+    /// A direct-mapped memo of identity rows, keyed by the identity's name.
+    /// Every hit compares the whole identity, so it returns exactly the row
+    /// the index would.
+    fn IdentityMemo(comptime Identity: type) type {
+        return struct {
+            entries: [entry_count]Entry = @splat(.{}),
+
+            const entry_count = 64;
+            const Entry = struct {
+                identity: Identity = undefined,
+                /// The row plus one; zero for an empty entry.
+                row_plus_one: u32 = 0,
+            };
+
+            inline fn slot(identity: Identity) usize {
+                return (@as(u32, @bitCast(identity.ident)) *% 0x9E3779B1) >> (32 - @ctz(@as(u32, entry_count)));
+            }
+
+            inline fn get(self: *const @This(), identity: Identity) ?u32 {
+                const entry = &self.entries[slot(identity)];
+                if (entry.row_plus_one == 0 or !std.mem.eql(u8, std.mem.asBytes(&entry.identity), std.mem.asBytes(&identity))) return null;
+                return entry.row_plus_one - 1;
+            }
+
+            fn put(self: *@This(), identity: Identity, row: u32) void {
+                self.entries[slot(identity)] = .{ .identity = identity, .row_plus_one = row + 1 };
+            }
+        };
     }
 
     /// The row holding `identity`, appending one when no row does.
@@ -1428,6 +1525,8 @@ pub const Store = struct {
         self.nominal_identities_indexed = 0;
         self.alias_identity_index.clearRetainingCapacity();
         self.alias_identities_indexed = 0;
+        self.nominal_identity_memo = .{};
+        self.alias_identity_memo = .{};
     }
 
     // fresh variables //
@@ -1437,7 +1536,10 @@ pub const Store = struct {
     pub fn fresh(self: *Self) std.mem.Allocator.Error!Var {
         const trace = tracy.traceNamed(@src(), "typesStore.fresh");
         defer trace.end();
-        return try self.freshFromContent(Content{ .flex = Flex.init() });
+        return try self.registerRow(self.encodeDescWithoutIdentity(.{
+            .content = .{ .flex = Flex.init() },
+            .rank = Rank.outermost,
+        }));
     }
 
     /// Create a new variable with the provided desc
@@ -1454,11 +1556,11 @@ pub const Store = struct {
     }
 
     /// Create a new variable with the given content and rank
-    pub fn freshFromContentWithRank(self: *Self, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
-        return try self.register(.{
+    pub inline fn freshFromContentWithRank(self: *Self, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
+        return try self.registerRow(try self.encodeDesc(.{
             .content = content,
             .rank = rank,
-        });
+        }));
     }
 
     /// Create a variable redirecting to the provided var
@@ -1475,12 +1577,17 @@ pub const Store = struct {
 
     /// Create a new variable with the given descriptor
     pub fn register(self: *Self, desc: Desc) std.mem.Allocator.Error!Var {
+        return self.registerRow(try self.encodeDesc(desc));
+    }
+
+    /// `register` for a descriptor already encoded.
+    fn registerRow(self: *Self, row: Desc.Row) std.mem.Allocator.Error!Var {
         self.debugAssertUnsealed();
         try self.slots.ensureUnusedCapacity(self.gpa, 1);
         try self.union_ranks.ensureUnusedCapacity(self.gpa, 1);
         const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
         const checked_var = Self.slotIdxToVar(slot_idx);
-        const desc_idx = try self.appendClass(desc, checked_var);
+        const desc_idx = try self.appendClassRow(row, checked_var);
         const inserted_slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
         const rank_idx = self.union_ranks.appendAssumeCapacity(0);
         std.debug.assert(inserted_slot_idx == slot_idx);
@@ -1629,7 +1736,7 @@ pub const Store = struct {
     /// to loose `rank` information! You should prefer to use regular `unify`
     /// over this function, which correctly propagates rank, unless you already
     /// know the two vars are of  the same rank.
-    pub fn dangerousSetVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
+    pub inline fn dangerousSetVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
         self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         const resolved = try self.resolveWriteTarget(target_var);
@@ -2747,14 +2854,30 @@ pub const Store = struct {
     }
 
     /// Resolve `var_` through any chain of aliases to the content they name.
-    pub fn resolveThroughAliases(self: *const Self, var_: Var) ResolvedVarDesc {
-        var resolved = self.resolveVar(var_);
+    pub inline fn resolveThroughAliases(self: *const Self, var_: Var) ResolvedVarDesc {
+        const found = self.findThroughAliases(var_);
+        return publicResolved(found.var_, self.withDesc(found.root));
+    }
+
+    /// The first variable on `var_`'s chain of alias backings whose class is
+    /// not an alias, with its storage root, reading only descriptor words.
+    fn findThroughAliases(self: *const Self, var_: Var) struct { var_: Var, root: StorageRoot } {
+        var current = var_;
         var guard = debug.IterationGuard.init("resolveThroughAliases");
-        while (resolved.desc.content == .alias) {
+        while (true) {
+            const root = self.findStorageRoot(current);
+            if (self.descs.getWord(root.desc_idx).kind != .alias) return .{ .var_ = current, .root = root };
             guard.tick();
-            resolved = self.resolveVar(self.getAliasBackingVar(resolved.desc.content.alias));
+            current = self.aliasBackingVarAt(root.desc_idx);
         }
-        return resolved;
+    }
+
+    /// The backing var of the alias stored at `desc_idx`: the first of its
+    /// vars (`getAliasBackingVar`).
+    inline fn aliasBackingVarAt(self: *const Self, desc_idx: DescStore.Idx) Var {
+        const row = self.descs.getRow(desc_idx);
+        std.debug.assert(row.word.kind == .alias);
+        return self.vars.items[row.payload[1]];
     }
 
     /// Whether `var_` resolves through aliases to a function structure.
@@ -2918,7 +3041,7 @@ pub const Store = struct {
 
         // The unifier computes merged content for b's descriptor destination.
         // Keep that destination even when balancing retains a's storage root.
-        try self.setDesc(b_data.desc_idx, merged_desc);
+        try self.setDescRow(b_data.desc_idx, merged_row);
         self.relinking_compared_classes = true;
         defer self.relinking_compared_classes = false;
         try self.linkStorageRoots(a_data, b_data, b_data.desc_idx, b_data.meta.checked_var);

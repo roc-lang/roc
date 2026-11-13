@@ -1464,7 +1464,7 @@ pub const Instantiator = struct {
     }
 
     /// Update the placeholder fresh var with its real content.
-    fn fillPlaceholder(
+    inline fn fillPlaceholder(
         self: *Self,
         fresh_var: Var,
         content: Content,
@@ -1481,7 +1481,7 @@ pub const Instantiator = struct {
     }
 
     /// Fill `common`'s placeholder and publish it as this frame's result.
-    fn finishFrame(
+    inline fn finishFrame(
         self: *Self,
         common: FillCommon,
         content: Content,

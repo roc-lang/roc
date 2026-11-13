@@ -300,63 +300,108 @@ pub const Descriptor = struct {
     /// index (`nominalIdentity`, `aliasIdentity`) and a vars range by its
     /// stored start (`varRange`).
     pub inline fn decode(row: Row, store: anytype) Descriptor {
-        const p = row.payload;
         const content: Content = switch (row.word.kind) {
-            .flex => .{ .flex = .{
-                .name = if (@as(collections.OptionalU32, @fromBackingInt(p[0])).get()) |dense| Ident.Idx.fromDenseIndex(dense) else null,
-                .constraints = getRange(StaticDispatchConstraint.SafeList.Range, p, 1),
-                .literal = row.word.literal,
-            } },
-            .rigid => .{ .rigid = .{
-                .name = Ident.Idx.fromDenseIndex(p[0]),
-                .constraints = getRange(StaticDispatchConstraint.SafeList.Range, p, 1),
-            } },
-            .alias => alias: {
-                const identity = store.aliasIdentity(p[0]);
-                break :alias .{ .alias = .{
-                    .ident = .{ .ident_idx = identity.ident },
-                    .vars = .{ .nonempty = store.varRange(p[1]) },
-                    .source_arg_count = identity.source_arg_count,
-                    .origin_module = identity.origin_module,
-                    .source_decl = identity.source_decl,
-                } };
-            },
-            .field_presence => .{
-                .field_presence = switch (p[0]) {
-                    0 => .required,
-                    1 => .optional,
-                    2 => .{ .defaulted = .{ .origin_module = @fromBackingInt(p[1]), .expr_node = p[2] } },
-                    else => unreachable, // `encode` writes only the three field-presence kinds
-                },
-            },
+            .flex => .{ .flex = decodeFlex(row) },
+            .rigid => .{ .rigid = decodeRigid(row) },
+            .alias => .{ .alias = decodeAlias(row, store) },
+            .field_presence => .{ .field_presence = decodeFieldPresence(row) },
             .err => .err,
-            .record => .{ .structure = .{ .record = .{
-                .fields = getRange(RecordField.SafeMultiList.Range, p, 0),
-                .ext = @fromBackingInt(p[2]),
-            } } },
-            .tuple => .{ .structure = .{ .tuple = .{ .elems = store.varRange(p[0]) } } },
-            .nominal_type => nominal: {
-                const identity = store.nominalIdentity(p[0]);
-                break :nominal .{ .structure = .{ .nominal_type = .{
-                    .ident = .{ .ident_idx = identity.ident },
-                    .args = store.varRange(p[1]),
-                    .origin_module = identity.origin_module,
-                    .source = identity.source,
-                } } };
-            },
-            inline .fn_pure, .fn_effectful, .fn_unbound => |tag| .{ .structure = @unionInit(FlatType, @tagName(tag), .{
-                .args = store.varRange(p[0]),
-                .ret = @fromBackingInt(p[1]),
-                .effect_deps = store.varRange(p[2]),
-            }) },
+            .record => .{ .structure = .{ .record = decodeRecord(row) } },
+            .tuple => .{ .structure = .{ .tuple = decodeTuple(row, store) } },
+            .nominal_type => .{ .structure = .{ .nominal_type = decodeNominal(row, store) } },
+            inline .fn_pure, .fn_effectful, .fn_unbound => |tag| .{ .structure = @unionInit(FlatType, @tagName(tag), decodeFunc(row, store)) },
             .empty_record => .{ .structure = .empty_record },
-            .tag_union => .{ .structure = .{ .tag_union = .{
-                .tags = getRange(Tag.SafeMultiList.Range, p, 0),
-                .ext = @fromBackingInt(p[2]),
-            } } },
+            .tag_union => .{ .structure = .{ .tag_union = decodeTagUnion(row) } },
             .empty_tag_union => .{ .structure = .empty_tag_union },
         };
         return .{ .content = content, .rank = row.word.rank, .flags = row.word.flags };
+    }
+
+    // Each kind's payload, for a reader that has already switched on the
+    // kind: `decode` for one kind, building nothing else.
+
+    /// The flex a `.flex` row holds.
+    pub inline fn decodeFlex(row: Row) Flex {
+        std.debug.assert(row.word.kind == .flex);
+        return .{
+            .name = if (@as(collections.OptionalU32, @fromBackingInt(row.payload[0])).get()) |dense| Ident.Idx.fromDenseIndex(dense) else null,
+            .constraints = getRange(StaticDispatchConstraint.SafeList.Range, row.payload, 1),
+            .literal = row.word.literal,
+        };
+    }
+
+    /// The rigid a `.rigid` row holds.
+    pub inline fn decodeRigid(row: Row) Rigid {
+        std.debug.assert(row.word.kind == .rigid);
+        return .{
+            .name = Ident.Idx.fromDenseIndex(row.payload[0]),
+            .constraints = getRange(StaticDispatchConstraint.SafeList.Range, row.payload, 1),
+        };
+    }
+
+    /// The alias an `.alias` row holds.
+    pub inline fn decodeAlias(row: Row, store: anytype) Alias {
+        std.debug.assert(row.word.kind == .alias);
+        const identity = store.aliasIdentity(row.payload[0]);
+        return .{
+            .ident = .{ .ident_idx = identity.ident },
+            .vars = .{ .nonempty = store.varRange(row.payload[1]) },
+            .source_arg_count = identity.source_arg_count,
+            .origin_module = identity.origin_module,
+            .source_decl = identity.source_decl,
+        };
+    }
+
+    /// The field presence a `.field_presence` row holds.
+    pub inline fn decodeFieldPresence(row: Row) FieldPresence {
+        std.debug.assert(row.word.kind == .field_presence);
+        const p = row.payload;
+        return switch (p[0]) {
+            0 => .required,
+            1 => .optional,
+            2 => .{ .defaulted = .{ .origin_module = @fromBackingInt(p[1]), .expr_node = p[2] } },
+            else => unreachable, // `encode` writes only the three field-presence kinds
+        };
+    }
+
+    /// The record a `.record` row holds.
+    pub inline fn decodeRecord(row: Row) Record {
+        std.debug.assert(row.word.kind == .record);
+        return .{ .fields = getRange(RecordField.SafeMultiList.Range, row.payload, 0), .ext = @fromBackingInt(row.payload[2]) };
+    }
+
+    /// The tuple a `.tuple` row holds.
+    pub inline fn decodeTuple(row: Row, store: anytype) Tuple {
+        std.debug.assert(row.word.kind == .tuple);
+        return .{ .elems = store.varRange(row.payload[0]) };
+    }
+
+    /// The nominal type a `.nominal_type` row holds.
+    pub inline fn decodeNominal(row: Row, store: anytype) NominalType {
+        std.debug.assert(row.word.kind == .nominal_type);
+        const identity = store.nominalIdentity(row.payload[0]);
+        return .{
+            .ident = .{ .ident_idx = identity.ident },
+            .args = store.varRange(row.payload[1]),
+            .origin_module = identity.origin_module,
+            .source = identity.source,
+        };
+    }
+
+    /// The function a `.fn_pure`, `.fn_effectful` or `.fn_unbound` row holds.
+    pub inline fn decodeFunc(row: Row, store: anytype) Func {
+        std.debug.assert(row.word.kind == .fn_pure or row.word.kind == .fn_effectful or row.word.kind == .fn_unbound);
+        return .{
+            .args = store.varRange(row.payload[0]),
+            .ret = @fromBackingInt(row.payload[1]),
+            .effect_deps = store.varRange(row.payload[2]),
+        };
+    }
+
+    /// The tag union a `.tag_union` row holds.
+    pub inline fn decodeTagUnion(row: Row) TagUnion {
+        std.debug.assert(row.word.kind == .tag_union);
+        return .{ .tags = getRange(Tag.SafeMultiList.Range, row.payload, 0), .ext = @fromBackingInt(row.payload[2]) };
     }
 
     inline fn putRange(payload: *Payload, at: usize, range: anytype) void {

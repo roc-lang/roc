@@ -945,7 +945,7 @@ const Unifier = struct {
         return switch (frame) {
             .root_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
             .guarded_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
-            .unify_vars => |vars| .{ .expected = vars.a.var_, .actual = vars.b.var_ },
+            .unify_vars => |pair| .{ .expected = pair.a, .actual = pair.b },
             .merge => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
             .merge_to_nominal => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
             .mismatch_handler,
@@ -969,7 +969,10 @@ const Unifier = struct {
                 self.unresolved_b = handler.saved_unresolved_b;
             },
             .restore_enclosing_records => |saved| self.enclosing_records = saved,
-            .unify_vars => |vars| try self.unifyVars(&vars),
+            .unify_vars => |pair| try self.unifyVars(&.{
+                .a = self.types_store.resolveVar(pair.a),
+                .b = self.types_store.resolveVar(pair.b),
+            }),
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
             .merge_to_nominal => |merge_frame| try self.mergeToNominal(&merge_frame.vars, merge_frame.direction),
             .same_alias_after_args => |post| try self.processSameAliasAfterArgs(post),
@@ -1026,7 +1029,7 @@ const Unifier = struct {
                     .saved_unresolved_a = saved_unresolved_a,
                     .saved_unresolved_b = saved_unresolved_b,
                 } });
-                try self.pushWorkFrame(.{ .unify_vars = vars });
+                try self.pushWorkFrame(.{ .unify_vars = .{ .a = vars.a.var_, .b = vars.b.var_ } });
             },
         }
     }
@@ -4176,7 +4179,13 @@ const WorkFrame = union(enum) {
     /// Restores the enclosing record pair once a record relation's scheduled
     /// children have drained. Pushed before those children so it pops after them.
     restore_enclosing_records: ?[2]Var,
-    unify_vars: ResolvedVarDescs,
+    /// The checked representatives of two classes to relate, resolved again
+    /// when the frame runs: it runs right after it is pushed, so nothing has
+    /// changed them, and the frame need not carry their descriptors.
+    unify_vars: struct {
+        a: Var,
+        b: Var,
+    },
     merge: struct {
         vars: ResolvedVarDescs,
         content: Content,
