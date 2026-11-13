@@ -330,6 +330,39 @@ test "a padded nominal is not passed to a function that takes its record apart" 
     , .padded_nominal, true);
 }
 
+/// Expect the one refusal of `source` to be a padded nominal's, taken apart,
+/// whose nominal has (`omits`) or lacks an optional or defaulted field the
+/// pattern leaves out.
+fn expectPaddedPatternRefusal(comptime source: []const u8, omits: bool) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+    const refusal = test_env.checker.problems.problems.items[0].type_mismatch.record_tail_refusal orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(Refusal.Kind.padded_nominal, refusal.kind);
+    try std.testing.expect(refusal.taken_apart);
+    try std.testing.expectEqual(omits, refusal.omits_omittable_field);
+}
+
+test "a padded nominal's refusal says when the pattern leaves out a defaulted field" {
+    try expectPaddedPatternRefusal(
+        \\Row := { columns : U64, _ : U32, label : Str ?? "none" }
+        \\width = |{ columns }| columns
+        \\row : Row
+        \\row = Row.{ columns: 3 }
+        \\n = width(row)
+    , true);
+}
+
+test "a padded nominal's refusal says nothing is left out when the pattern names every defaulted field" {
+    try expectPaddedPatternRefusal(
+        \\Row := { columns : U64, _ : U32, label : Str ?? "none" }
+        \\width = |{ columns, label }| Str.count_utf8_bytes(label) + columns
+        \\row : Row
+        \\row = Row.{ columns: 3 }
+        \\n = width(row)
+    , false);
+}
+
 test "a record literal checked at a padded nominal is built at it" {
     try expectOk(
         \\Row := { columns : U64, _ : U32, values : U64 }

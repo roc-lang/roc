@@ -5652,7 +5652,11 @@ pub const ReportBuilder = struct {
                         D.bytes("has more (anonymous) fields than the record this function takes apart, making it incompatible."),
                     }, self, report);
                     try report.document.addLineBreaks(2);
-                    try self.renderNominalPatternHint(report, nominal, "{s}.{{ ... }}", false);
+                    if (refusal.omits_omittable_field) {
+                        try self.renderNominalPatternHint(report, nominal, "{s}.{{ ..., .. }}", true);
+                    } else {
+                        try self.renderNominalPatternHint(report, nominal, "{s}.{{ ... }}", false);
+                    }
                 } else {
                     try D.renderSlice(&.{
                         D.typeIdent(nominal).withAnnotation(.inline_code),

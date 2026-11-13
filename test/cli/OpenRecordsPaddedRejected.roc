@@ -13,6 +13,8 @@ Row := { columns : U64, _ : U32, values : U64 }.{
 	total = |row| row.columns + row.values
 }
 
+Tagged := { columns : U64, _ : U32, label : Str ?? "none" }
+
 Holder := {}.{
 	take : Holder, Row -> U64
 	take = |_, row| row.total()
@@ -26,6 +28,8 @@ make = |c, v| { columns: c, values: v }
 apply = |f| f({ columns: 1, values: 2 })
 
 product = |{ columns, values }| columns * values
+
+columns_of = |{ columns }| columns
 
 give = |h, n| h.take({ columns: n, values: n })
 
@@ -42,6 +46,11 @@ as_callback = apply(Row.total)
 as_parameter = product(row)
 
 in_method = give(holder, 5)
+
+tagged : Tagged
+tagged = Tagged.{ columns: 8 }
+
+columns_without_label = columns_of(tagged)
 
 in_list : List(Row)
 in_list = build([1, 2])

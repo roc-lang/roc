@@ -2283,12 +2283,14 @@ const Unifier = struct {
         // Record Tails").
         if (self.rowCopyTail(anon_record_ext)) |copy_tail| {
             if (self.types_store.lookupNominalDecl(nominal_type)) |decl_idx| {
-                if (self.types_store.getNominalDecl(decl_idx).flags.padded) {
+                const decl = self.types_store.getNominalDecl(decl_idx);
+                if (decl.flags.padded) {
                     self.refuseRecordTail(.{
                         .kind = .padded_nominal,
                         .nominal = nominal_type.ident.ident_idx,
                         .field = null,
                         .taken_apart = copy_tail.flags.record_pattern_tail,
+                        .omits_omittable_field = self.backingOmittableFieldMissingFrom(decl.backing, anon_record_fields, anon_record_ext),
                     });
                     return error.TypeMismatch;
                 }
@@ -2699,6 +2701,36 @@ const Unifier = struct {
             if (found == null) found = field.name;
         }
         return found;
+    }
+
+    /// Whether the record backing of a nominal declaration, `backing`, has an
+    /// optional or defaulted field that the record row `row_fields` over
+    /// `row_ext` lacks.
+    fn backingOmittableFieldMissingFrom(
+        self: *Self,
+        backing: Var,
+        row_fields: RecordFieldSafeMultiList.Range,
+        row_ext: Var,
+    ) bool {
+        var current = backing;
+        var guard = types_mod.debug.IterationGuard.init("backingOmittableFieldMissingFrom");
+        while (true) {
+            guard.tick();
+            switch (self.types_store.resolveVar(current).desc.content) {
+                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .record => |record| {
+                        var iter = self.types_store.iterRecordFields(record.fields);
+                        while (iter.next()) |field| {
+                            if (self.fieldIsOmittable(field) and !self.rowHasField(row_fields, row_ext, field.name)) return true;
+                        }
+                        current = record.ext;
+                    },
+                    .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return false,
+                },
+                .flex, .rigid, .field_presence, .err => return false,
+            }
+        }
     }
 
     /// Whether the record row `fields` over `ext` holds a field named `name`.

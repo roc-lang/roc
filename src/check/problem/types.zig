@@ -663,6 +663,10 @@ pub const RecordTailRefusal = struct {
     /// The record is one the binding takes apart with a record pattern,
     /// rather than one it builds.
     taken_apart: bool,
+    /// The nominal type has an optional or defaulted field the record lacks,
+    /// so a nominal record pattern for it must end with `..`
+    /// (`padded_nominal`).
+    omits_omittable_field: bool = false,
 
     pub const Kind = enum {
         /// The nominal type declares unnamed fields, so its values are not
