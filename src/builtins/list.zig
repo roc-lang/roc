@@ -212,7 +212,9 @@ pub const RocList = extern struct {
     /// cannot disagree about which elements are visited. For seamless slices,
     /// `getAllocationElementCount` reads the heap-stored whole-allocation
     /// element count, so teardown visits elements outside the visible slice
-    /// window too. Callers own the uniqueness gate before invoking this.
+    /// window too. Callers invoke this only for an allocation they own
+    /// exclusively: one whose last reference `releaseAllocation` just
+    /// released, or one they hold the only reference to.
     pub fn decrefElements(
         self: RocList,
         element_width: usize,
@@ -231,6 +233,24 @@ pub const RocList = extern struct {
         }
     }
 
+    /// Releases one reference to the backing allocation, using the given
+    /// count-update atomicity, and reports whether it was the last one. When
+    /// it was, the caller releases the elements and then calls
+    /// `freeAllocation`. Uses the raw capacity, so a seamless slice releases
+    /// its reference to the allocation it points into.
+    pub fn releaseAllocation(self: RocList, atomicity: utils.RcAtomicity, roc_ops: *RocOps) bool {
+        if (self.capacity_or_alloc_ptr == 0) return false;
+        const data = self.getAllocationDataPtr(roc_ops) orelse return false;
+        const words: [*]isize = utils.alignedPtrCast([*]isize, data, @src());
+        return utils.releaseRcPtr(&(words - 1)[0], atomicity, roc_ops);
+    }
+
+    /// Frees the backing allocation after `releaseAllocation` reported that
+    /// its last reference was released.
+    pub fn freeAllocation(self: RocList, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) void {
+        utils.freeDataPtrC(self.getAllocationDataPtr(roc_ops), alignment, elements_refcounted, roc_ops);
+    }
+
     /// Always uses atomic count updates: this entry serves primitive-internal
     /// RC inside runtime-checked list ops, which serve both modes and make no
     /// thread-confinement claim. Single-thread statement teardown instead goes
@@ -246,20 +266,11 @@ pub const RocList = extern struct {
         dec: Dec,
         roc_ops: *RocOps,
     ) void {
-        // If unique, decref will free the list. Before that happens, all elements must be decremented.
-        if (elements_refcounted and self.isUnique(roc_ops)) {
+        if (!self.releaseAllocation(.atomic, roc_ops)) return;
+        if (elements_refcounted) {
             self.decrefElements(element_width, dec_context, dec, roc_ops);
         }
-
-        // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
-        utils.decref(
-            self.getAllocationDataPtr(roc_ops),
-            self.capacity_or_alloc_ptr,
-            alignment,
-            elements_refcounted,
-            .atomic,
-            roc_ops,
-        );
+        self.freeAllocation(alignment, elements_refcounted, roc_ops);
     }
 
     fn decrefAfterMovingSliceElements(
@@ -419,8 +430,8 @@ pub const RocList = extern struct {
         }
 
         if (self.getAllocationDataPtr(roc_ops)) |non_null_ptr| {
-            const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
-            return (ptr - 1)[0];
+            const ptr: [*]isize = utils.alignedPtrCast([*]isize, non_null_ptr, @src());
+            return @bitCast(utils.loadRefcountForUniqueness(&(ptr - 1)[0]));
         } else {
             unreachable; // a seamless slice or a list with nonzero capacity always points into an allocation
         }

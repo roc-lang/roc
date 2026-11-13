@@ -672,8 +672,8 @@ pub const RocStr = extern struct {
             self.bytes;
 
         if (data_ptr) |non_null_ptr| {
-            const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
-            return (ptr - 1)[0];
+            const ptr: [*]isize = utils.alignedPtrCast([*]isize, non_null_ptr, @src());
+            return @bitCast(utils.loadRefcountForUniqueness(&(ptr - 1)[0]));
         } else {
             unreachable; // a seamless slice or a non-small string with nonzero capacity always points into an allocation
         }
