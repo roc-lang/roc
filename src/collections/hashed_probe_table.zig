@@ -168,7 +168,7 @@ test "HashedProbeTable finds inserted entries and grows at half load" {
     var words: [40][]const u8 = undefined;
     var buffers: [40][8]u8 = undefined;
     for (&words, &buffers, 0..) |*word, *buffer, i| {
-        word.* = std.fmt.bufPrint(buffer, "w{d}", .{i}) catch unreachable;
+        word.* = try std.fmt.bufPrint(buffer, "w{d}", .{i});
         const context = WordsContext{ .words = words[0..i], .needle = word.* };
         try testing.expectEqual(@as(?u32, null), table.find(wordHash(word.*), context));
         try table.insertNew(gpa, wordHash(word.*), @intCast(i));
