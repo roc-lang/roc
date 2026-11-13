@@ -5043,6 +5043,49 @@ test "a capture slot of a lifted closure reads as a slot only of the closure's b
     }
 }
 
+test "issue 12976 a function returning a parameter its closure also captures lowers at every inline mode" {
+    // repro for https://github.com/roc-lang/roc/issues/12976
+    // `pass`'s parameter is also capture 0 of the closure it builds. Deciding
+    // whether inlining `pass(A)` is productive reads what `pass` builds at
+    // `.0`, which is `pass`'s own argument, not a capture `pass(A)` supplies.
+    const allocator = std.testing.allocator;
+    const source =
+        \\pass : [A, B] -> ([A, B], ({} -> [A, B]))
+        \\pass = |x| (x, |_| x)
+        \\pick : [A, B] -> U64
+        \\pick = |t| match t {
+        \\    A => 1
+        \\    B => 2
+        \\}
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    r = pass(A)
+        \\    pick(r.0) + n
+        \\}
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .procedures, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+            defer interpreter.deinit();
+            var n: u64 = 5;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&n),
+            });
+            try std.testing.expectEqual(@as(u64, 6), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
 test "issue 11317 or-pattern captures reuse one closure with and without specialization" {
     const allocator = std.testing.allocator;
     const source =
@@ -9929,19 +9972,19 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     try std.testing.expect(templates.specialization_interface_relations.len > 0);
 
     var template_index: ?usize = null;
-    for (templates.templates.items, 0..) |template, i| {
+    for (templates.templates.items(), 0..) |template, i| {
         if (template.specialization_interface_relations.len > 0) {
             template_index = i;
             break;
         }
     }
     const raw_template = template_index orelse return error.TestUnexpectedResult;
-    const saved_template_span = templates.templates.items[raw_template].specialization_interface_relations;
-    templates.templates.items[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
-    templates.templates.items[raw_template].specialization_interface_relations.len = 1;
+    const saved_template_span = templates.templates.items()[raw_template].specialization_interface_relations;
+    templates.templates.items()[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
+    templates.templates.items()[raw_template].specialization_interface_relations.len = 1;
     var failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.template_specialization_relations_out_of_bounds, failure.kind);
-    templates.templates.items[raw_template].specialization_interface_relations = saved_template_span;
+    templates.templates.items()[raw_template].specialization_interface_relations = saved_template_span;
 
     const saved_parent = templates.dispatch_scopes[0].parent;
     templates.dispatch_scopes[0].parent = .some(@fromBackingInt(@intCast(templates.dispatch_scopes.len)));
@@ -9950,7 +9993,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     templates.dispatch_scopes[0].parent = saved_parent;
 
     const saved_scheme_root = templates.dispatch_scopes[0].scheme_root;
-    templates.dispatch_scopes[0].scheme_root = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items.len);
+    templates.dispatch_scopes[0].scheme_root = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items().len);
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_scheme_root_out_of_bounds, failure.kind);
     templates.dispatch_scopes[0].scheme_root = saved_scheme_root;
@@ -9963,7 +10006,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
 
     const saved_relation_data = templates.specialization_interface_relations[0].data;
     templates.specialization_interface_relations[0].data = .{ .type_equality = .{
-        .left = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items.len),
+        .left = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items().len),
         .right = templates.dispatch_scopes[0].scheme_root,
     } };
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
@@ -10038,8 +10081,8 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
 
-    var path_param_span: ?@TypeOf(templates.templates.items[0].evidence_params) = null;
-    for (templates.templates.items) |template| {
+    var path_param_span: ?@TypeOf(templates.templates.items()[0].evidence_params) = null;
+    for (templates.templates.items()) |template| {
         const params = templates.evidenceParams(&template);
         for (params) |param| {
             if (param.path.len > 0) {
@@ -14059,7 +14102,7 @@ fn lowerRowCoercion(allocator: Allocator, source: []const u8, strategy: base.Spe
         .specialization_strategy = strategy,
     });
     errdefer lowered.deinit(allocator);
-    try std.testing.expect(lowered.resources.checked_artifact.moduleEnvConst().row_coerced_results.items.items.len != 0);
+    try std.testing.expect(lowered.resources.checked_artifact.moduleEnvConst().row_coerced_results.items().len != 0);
     return lowered;
 }
 
@@ -14613,7 +14656,7 @@ test "issue 12491 nested closure chain bound to a block local lowers under boxy"
 
 /// The procedure template of `artifact` exported as `name`.
 fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
-    for (artifact.checked_procedure_templates.templates.items) |template| {
+    for (artifact.checked_procedure_templates.templates.items()) |template| {
         const export_name = artifact.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
         if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) return template;
     }

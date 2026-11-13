@@ -40,7 +40,7 @@ fn expectDemands(source: []const u8, expected: []const struct { []const u8, []co
     const templates = &artifact.checked_procedure_templates;
     for (expected) |entry| {
         const name, const demands = entry;
-        const template = for (templates.templates.items) |*template| {
+        const template = for (templates.templates.items()) |*template| {
             const export_name = artifact.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
             if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) break template;
         } else {

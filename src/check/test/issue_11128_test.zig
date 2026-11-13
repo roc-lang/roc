@@ -20,7 +20,7 @@ fn schemeAllocationFailures(gpa: std.mem.Allocator) (std.mem.Allocator.Error || 
         // Asking for a root's scheme again names the scheme it already has.
         try std.testing.expectEqual(id, try store.internScheme(gpa, .source, root));
     }
-    try std.testing.expectEqual(inserted, store.schemes.items.len);
+    try std.testing.expectEqual(inserted, store.schemes.items().len);
 }
 
 test "issue 11128 scheme growth and allocation failure preserve existing schemes" {

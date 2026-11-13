@@ -20,8 +20,8 @@ test "no compiler-implemented builtin has a structural tag union in its type" {
     var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
     defer seen.deinit(gpa);
 
-    try std.testing.expect(env.provided_low_level_defs.items.items.len > 0);
-    for (env.provided_low_level_defs.items.items) |entry| {
+    try std.testing.expect(env.provided_low_level_defs.items().len > 0);
+    for (env.provided_low_level_defs.items()) |entry| {
         const def_idx: CIR.Def.Idx = @fromBackingInt(entry.def_idx);
         const def = env.store.getDef(def_idx);
         stack.clearRetainingCapacity();

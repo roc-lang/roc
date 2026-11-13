@@ -120,7 +120,7 @@ pub fn resolveDeferredFileImports(
 
     var index: u32 = 0;
     while (index < env.deferred_import_refs.len()) : (index += 1) {
-        const entry = env.deferred_import_refs.items.items[index];
+        const entry = env.deferred_import_refs.items()[index];
         if (entry.kind != .file_import) continue;
         try resolver.resolveFileImport(entry, file_imports);
     }
@@ -153,7 +153,7 @@ pub fn resolveDeferredImports(
 
     var index: u32 = 0;
     while (index < env.deferred_import_refs.len()) : (index += 1) {
-        const entry = env.deferred_import_refs.items.items[index];
+        const entry = env.deferred_import_refs.items()[index];
         if (entry.kind == .file_import) {
             std.debug.assert(env.fileDependencySettled(@fromBackingInt(@intCast(entry.file_dependency_idx))));
             continue;
@@ -254,7 +254,7 @@ const Resolver = struct {
                     }
                 }
                 for (self.outcomes, 0..) |*outcome, idx| {
-                    outcome.* = by_name.get(env.common.strings.get(env.imports.imports.items.items[idx]));
+                    outcome.* = by_name.get(env.common.strings.get(env.imports.imports.items()[idx]));
                 }
             },
             .resolved_store => |envs| {
@@ -312,7 +312,7 @@ const Resolver = struct {
             // The compiler's own baked `Builtin` module is part of the
             // compiler, not a module this one depends on, so it takes no
             // entry here.
-            const import_name = self.env.common.strings.get(self.env.imports.imports.items.items[idx]);
+            const import_name = self.env.common.strings.get(self.env.imports.imports.items()[idx]);
             if (CIR.Import.isCompilerBuiltinImportName(import_name)) continue;
             const outcome = self.outcomeFor(import_idx) orelse continue;
             const available = switch (outcome) {
@@ -1057,7 +1057,7 @@ const Resolver = struct {
         prefix: Prefix,
         path_text: []const u8,
     ) std.mem.Allocator.Error!void {
-        const hosted = &self.env.hosted_entries.items.items[entry.node_idx];
+        const hosted = &self.env.hosted_entries.items()[entry.node_idx];
         const target_node_idx = (try self.exposedValueNode(available.module_env, prefix, path_text)) orelse {
             hosted.target_status = .missing_value;
             return;
@@ -1152,7 +1152,7 @@ const Resolver = struct {
     fn failMissingModule(self: *Resolver, entry: DeferredImportRef) std.mem.Allocator.Error!void {
         switch (entry.kind) {
             .hosted_entry => {
-                self.env.hosted_entries.items.items[entry.node_idx].target_status = .missing_module;
+                self.env.hosted_entries.items()[entry.node_idx].target_status = .missing_module;
             },
             // The import statement owns the diagnostic for a name that denotes
             // no module, so its exposed items do not restate it.

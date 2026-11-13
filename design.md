@@ -279,7 +279,9 @@ avoids it so a small touched subset does not make large regions resident.
 Address stability below a reservation limit is a performance property, never
 a consumer contract. Exceeding a reservation may relocate the column, and
 allocation failure propagates without changing logical contents or ownership.
-Borrowed serialized views own no backing memory and cannot grow.
+Borrowed serialized views own no backing memory. A sealed borrowed view
+cannot grow. A writable one copies its entries into storage it owns the first
+time it grows, frees nothing, and leaves the serialized bytes alone.
 
 Groupings use CSR for dense keys and sorted pairs for sparse keys. Chains are
 appropriate only when construction and queries interleave. Group order is
@@ -743,6 +745,48 @@ Writers stage complete files beside their destination and install them by atomic
 rename. Readers own an open file or mapping; no writer truncates an installed
 file. Missing, corrupt, or incompatible entries are ordinary cache misses.
 
+Every cache file the compiler reads back as data records its own total length
+in bytes at both ends: a 16-byte prefix holding the length (prefix and trailer
+included) as a little-endian `u64`, then zeros, and an 8-byte trailer holding
+the same length, read unaligned. The cache manager writes this framing around
+every entry of the checked, canonicalized (including source import
+inventories), pairing, Boxy object and test outcome families
+(`artifact_store.length_prefix_len`, `length_trailer_len`). Sixteen prefix
+bytes keep every payload at the 16-byte alignment in-place loads need, and the
+trailer follows the payload, so it disturbs nothing positioned from the start;
+a format that needs a larger alignment inside its file, such as a Boxy object's
+page-aligned image, aligns relative to the file. Once a file is mapped or read,
+both recorded lengths are compared with its actual length before any other
+byte is trusted, and a file too short to hold both is a mismatch. This is the
+one check that a file is as long as it was written, the same for every format;
+it computes no checksum. It catches truncation and appended bytes, and, because
+entries are renamed into place without being synced, a power loss that leaves
+a file at its full length with never-flushed blocks reading as zeros: flushing
+usually proceeds from the front, so such a file's trailer is what is lost. Loss
+confined to the middle of a file is not detected. A format's header lengths
+only locate its bodies: each body is bounds-checked against the payload (the
+file without its prefix and trailer) before it is sliced, so a header with a
+correct file length and garbage body lengths is still memory-safe, but bodies
+need not cover the payload exactly.
+
+The two prelinked-host families are not framed. A prelinked host record is
+copied into outputs by file range from block-aligned offsets, and each of its
+formats (ELF, Mach-O and COFF records, wasm unit images) already records its
+total size in its own header and checks it on load; a run host is an
+executable copied whole and launched, with no header of ours to carry a
+length.
+
+A loaded entry that fails the length check, or that its format then rejects as
+corrupt (an envelope that does not decode, a body that does not fit, an
+environment that fails validation, a parse-stage record or Boxy object that
+does not decode, a prelinked host record that is not one), is a miss: it is
+counted as an invalidation, named in one line under `--verbose`, and its file
+is deleted so no later build reads it again. The delete removes the path only
+while it still names the file that was loaded (same inode and size); a file
+another writer has renamed into place since is left alone. A failed delete is
+not an error. A test outcome file that does not parse records no outcomes and
+is replaced when the run files its outcomes.
+
 There is no cache catalog, index, lease, or background maintenance protocol.
 Each invocation owns a unique scratch directory and removes it on completion
 unless `--keep-temp` was requested.
@@ -751,6 +795,82 @@ Specialized compilation does not persist post-check IR, native procedure packs,
 linked objects, executables, or glue plugins. Every invocation
 specializes and emits its requested program from the current checked modules.
 In-memory sharing within a compilation remains independent of disk caching.
+
+### Loading environments in place
+
+A cached `ModuleEnv` is never copied into fresh storage. A canonicalized-cache
+hit, a checked-cache hit and a typing restore all load the entry's env body with
+the one loader, `ModuleEnv.Serialized.deserializeInPlace`, over a copy-on-write
+private mapping of the entry (or, where the platform cannot map files, a heap
+buffer holding it). Every list in the env borrows the entry's bytes: a
+`SafeList` with capacity 0 and a nonzero length, a `SafeMultiList` whose
+capacity word carries the borrowed mark, or a `ReservedList` whose storage is
+`borrowed`. A borrowed list reads and writes its items where they lie, so the
+probe tables of the interners and of the string-literal and import stores take
+new cells in place, and solving writes type rows in place. The first growth of
+a list copies its items into memory the env's allocator owns and leaves the
+entry's bytes alone. `deinit` frees only those copies: a borrowed list frees
+nothing, so a loaded env is released with the same `deinit` as a freshly built
+one.
+
+The env owns its entry as `loaded_entry` and releases it (an unmapping, or a
+free with the env's allocator) at the end of `deinit`, after every list that
+might still borrow it. The entry therefore lives exactly as long as the env,
+whichever thread loaded it and whichever thread releases it, and is released
+once on every path. Anything else read from the entry, such as a checked
+artifact's body or the typing metadata, lives as long as the env does.
+
+The loader takes the type store's access: `.sealed` for a checked hit, whose
+types are solved and only read, and `.writable` for a canonicalized hit and a
+typing restore, whose types checking solves further; a writable load also gives
+the node store its scratch buffers. Nothing in a loaded env is rebuilt: the
+identifier interners, the string-literal dedup table, the import lookup table,
+sorted method and exposure tables, and the type store's
+`invalid_nominal_decl_written` and `err_written` flags are all stored in the
+entry and used as loaded.
+
+Validation runs before the loader dereferences anything: every relocatable list
+must lie inside the body, and each probe table must have its stored shape (a
+power-of-two length, or empty with no entries; parallel columns of equal
+length; fewer entries than cells; list lengths agreeing with their counts). A
+violation is a cache miss. The checks are constant time and read no cell, so a
+corrupt table whose occupied cells outnumber its count, or a cell naming an
+entry that does not exist, is not detected.
+
+The stores of a checked artifact relocated beside its env, and of a pairing
+entry, load over the entry's bytes the same way. A store's list fields are
+`SafeList`s loaded borrowing the entry, so growth copies and `deinit` frees
+nothing borrowed; `SliceStoreSerde` rejects a `std.ArrayList` field at compile
+time, since one over loaded bytes would hand them to an allocator on growth or
+`deinit`. A store's plain slice fields have no growth operation; a loaded
+artifact frees only its own buffer (`serialized_backing`), never a sub-store's
+slices, which alias it. A loaded store whose build-only dedup tables are not
+stored (a checked type store's interning tables, a const store's blob index)
+takes no new entries.
+
+A LirImage view loads the same way. Every list of its LIR store (a
+`GuardedList`, whose backing is a `SafeList`) and every plain column of its
+layout store borrows the image; the compact layout columns, whose image form
+is portable typed columns, are rebuilt with the view's allocator. The image
+stores the string-literal dedup table beside the string bytes, so a viewed
+store deduplicates exactly as the store it was copied from. A view is released
+with the stores' ordinary `deinit`. Nothing writes through a view of an image
+in shared memory: the interpreter only reads it.
+
+The compiler's embedded Builtin module is viewed the same way, with a sealed
+type store, over the executable's static data. Every compilation in the process
+shares those bytes, so nothing writes through the view: it has no imports and
+no node scratch, and it is baked already prepared for checked-artifact use, so
+nothing inserts into its identifier or string-literal tables. The embedded
+Builtin artifact is viewed beside it the same way. On native targets both blobs
+are `const` data, and the loaders drop the bytes' constness in one place each
+(`ModuleEnv.Serialized.viewStatic`, `CheckedModuleArtifact.viewStaticBuiltin`),
+because lists hold mutable item pointers. An optimized native build (LLVM)
+places const data in read-only memory, so a write through either view faults
+where it happens. Debug builds made by Zig's self-hosted x86_64 backend place
+const data in a writable segment, and the compressed variant embedded in
+echo.wasm is decompressed into writable storage at startup, on a target with
+no page protection; in those builds the property rests on the invariant alone.
 
 ### Test outcome files
 
@@ -4375,8 +4495,9 @@ no field that could express one, so an entry stays valid when any other module
 changes and is shared by identical modules in different packages, directories,
 or workspaces.
 
-An entry holds two bodies behind one header (magic, entry-version hash, the
-key, and both body lengths):
+Inside the file's length framing, an entry holds two bodies behind one header
+(magic, entry-version hash, the key, and both body lengths, which locate the
+bodies and are bounds-checked):
 
 - the serialized `ModuleEnv` exactly as canonicalization left it, which carries
   its diagnostics, import store, deferred import worklist, file-dependency
@@ -4386,8 +4507,11 @@ key, and both body lengths):
   renders from, plus the parser's own import inventory (each local import's
   spelling, base, and parent count, and each package-qualified import name).
   The parse stage produces these source-local records in the AST rather than in
-  the env, and a hit has no AST, so they are encoded explicitly, field by
-  field, and decoded the same way. Nothing is re-parsed to recover them.
+  the env, and a hit has no AST, so they are stored as an extern header over
+  lists of fixed-size records and one name-byte list, read in place after their
+  bounds are checked; each record's enum values and name ranges are checked as
+  it is read, and any failure is a miss. Nothing is re-parsed to recover them.
+  The env body is padded to 16 bytes so the record starts aligned.
 
 Location-dependent import normalization is deliberately absent from an entry:
 an import's package-root-relative module name depends on the importing module's
@@ -4396,18 +4520,20 @@ is a canonicalization input. The parse task normalizes the record's spellings
 against its own task inputs on a hit exactly as it does on a miss.
 
 The parse task probes this cache after reading and digesting the source and
-before parsing. A
-hit loads the env into fully owned, growable storage (every store copied, the
-identifier interner and module-identity table reopened for insertion, the
-string-literal builder rebuilt from the loaded store's own entries, and the node
-store given its scratch) because the drain patches nodes in place and appends
-nodes, diagnostics, identifiers, string literals, method rows, and module
-identities, and checking then grows types and regions. A hit then reads the
-module's file imports and renders both the parse-stage and canonicalization
-reports, and the coordinator handles it as a parse result followed by a
-canonicalized result, through the same two steps a miss takes. A miss parses,
-canonicalizes, and stores the entry before the env leaves the canonicalize task.
-A corrupt, truncated, stale, or misaligned entry is a miss.
+before parsing. A hit first reads the parse-stage record, renders its reports (a
+diagnostic's report reads only the source and the line starts of the env's
+common store, which alone is validated for it), and delivers them with the
+discovered imports as a `cached_parse` result. It then loads the env in place
+with a writable type store ("Loading environments in place"); the drain patches
+nodes in place and appends nodes, diagnostics, identifiers, string literals,
+method rows, and module identities, and checking then grows types and regions,
+each list copying itself on its first growth. The env takes the entry over as
+its `loaded_entry`. A hit then reads the module's file imports and renders the
+canonicalization reports in a `canonicalized_cached` result. The coordinator
+handles the two results as a parse result followed by a canonicalized result,
+through the same two steps a miss takes. A miss parses, canonicalizes, and
+stores the entry before the env leaves the canonicalize task. A corrupt,
+truncated, stale, or misaligned entry is a miss.
 
 Cache state never changes compiler output: a warm, cold, or disabled
 canonicalized cache yields identical diagnostics, identical checked data, and
@@ -4417,9 +4543,13 @@ The checked-module cache is unchanged in role: it stores the fully checked
 module after the drain, keyed by content identity and the direct imports'
 checked-module cache keys, and is probed once the direct imports are complete. A
 checked hit makes the drain unnecessary; a canonicalized hit makes parsing
-unnecessary. A checked hit installs the entry's env with the package-qualified
-display identity of the module being installed, exactly as a canonicalized
-result does.
+unnecessary. A checked hit loads the entry's env with the same in-place loader
+and a sealed type store, relocates the checked artifact in place beside it, and
+installs the env, which owns the entry, with the package-qualified display
+identity of the module being installed, exactly as a canonicalized result does.
+A typing restore loads the env of an entry whose typing inputs match with a
+writable type store, takes the entry over from the checking context, and seals
+the store once the reused typing is installed.
 
 A module's file imports are part of its source-input identity. They are read
 in the canonicalize task, after the canonicalized-cache entry is stored and
@@ -4433,7 +4563,9 @@ source digest of the normalized source bytes within the compiler compatibility
 namespace. The parse task passes the digest it already took; a graph tool
 digests each file it reads once, and only when it has a cache to key. It holds
 parser-produced local import spellings, bases and parent counts, qualified
-imports, and public-name-to-source-module mappings. Syntax errors never produce
+imports, and public-name-to-source-module mappings, stored like the
+parse-stage record: an extern header over lists of fixed-size records and one
+name-byte list, read in place after bounds checks. Syntax errors never produce
 a reusable inventory. The inventory contains no filesystem paths or checked
 state. Graph tools consume this same parser output; a missing or corrupt
 optional record causes a fresh parse, never a guess about imports.
@@ -4458,8 +4590,9 @@ whitespace-only lines and lines whose first non-whitespace byte is `#`.
 
 ### Coordinator phases
 
-`Parse` (probe the canonicalized cache; on a hit load the env, read the file
-imports, and skip straight to the canonicalized result; on a miss parse) →
+`Parse` (probe the canonicalized cache; on a hit deliver the parse stage, load
+the env, read the file imports, and skip straight to the canonicalized result;
+on a miss parse) →
 canonicalization (enqueued as soon as the parse result is handled, never
 waiting on an import; canonicalize, store the entry, then read the file imports
 before the module leaves the task) → `WaitingOnImports` (canonicalized, waiting
@@ -4470,6 +4603,23 @@ miss drain the worklist then check) → `Done`. No phase before
 identity is recorded on the env when the canonicalized result is handled,
 before the hosted transform, on a cache hit exactly as on a miss, and again on
 the env a checked-cache hit installs.
+
+A canonicalized hit delivers its parse stage as its own `cached_parse` result
+before it loads the env, so the coordinator registers the module's imports, and
+schedules their parses, while the env is still loading. The coordinator handles
+that result exactly like a parse result's reports and imports, and the task's
+own result follows it: a worker sends both through the result channel in order,
+counting the extra one in `inflight`, and a task run on the coordinating thread
+queues the early result for `handleResult`, which handles it first. Each
+module's imports are therefore registered once, and its reports keep the order
+a miss gives them (parse-stage reports, then import-registration reports, then
+canonicalization reports), whatever the cache state. A module that
+registration, or anything after it, finished is left finished when the task's
+own result arrives. When the env cannot be loaded after its parse stage was
+delivered, the module is parsed after all and its parse result is marked as
+already delivered: its reports and imports, which come from the same source
+bytes as the record, are not taken a second time (debug builds check that they
+match).
 
 ## Cache Boundary
 
@@ -4500,11 +4650,12 @@ The canonicalized module cache is a separate, non-checked boundary; the rules
 below bind the checked module and pairing caches.
 Checked module cache entries are trusted compiler-produced data, not adversarial
 inputs. Payload-integrity checksums and recursive payload-validation scans are
-forbidden. File completeness is checked by comparing the lengths recorded in the
-header against the loaded byte slice's length, without an additional file-length
-syscall. Do not scan payloads to defend against malicious input, arbitrary
-malformed data or bit flips. Header identity, version and lengths establish which
-producer data to consume. Cache writers stage complete files and atomically
+forbidden. File completeness is the file's recorded lengths compared with the
+loaded byte slice's length ("Cache storage"), without an additional file-length
+syscall; header body lengths are bounds-checked to slice the bodies safely, not
+summed against the file. Do not scan payloads to defend against malicious input,
+arbitrary malformed data or bit flips. Header identity, version and lengths
+establish which producer data to consume. Cache writers stage complete files and atomically
 renames them. Content hashes identifying compilation inputs are separate from
 integrity verification. A cache hit never reruns checked validation, reselects
 hoisted roots, reconstructs checked data or walks expressions to prove cached
@@ -4716,11 +4867,11 @@ Checked-module cache writes stream the header and the relocatable bodies (the
 output) to a private staging file, then atomically rename it. They never gather
 another full-entry heap buffer. Each body starts at a 16-byte-aligned entry
 offset, so a cache hit relocates every body in place inside the entry's
-private mapping, which the installed module's environment storage owns. A failed write or rename removes the staging file
+private mapping, which the installed module's environment owns. A failed write or rename removes the staging file
 and records a cache-write failure; partial data never becomes a cache entry.
 
 Serialization never writes spare capacity. A `SafeMultiList` persists its live
-rows as `std.MultiArrayList`'s own column layout with capacity equal to length, so
+rows as columns in descending alignment, each exactly as long as the list, so
 both the blob's contents and its size depend on what the list holds and not on how
 it was grown. There is one column-writing implementation behind every
 `SafeMultiList` serialization entry point, so no two entry points can drift into

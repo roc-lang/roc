@@ -16401,7 +16401,7 @@ const Builder = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!Ast.ExprId {
         const raw = @backingInt(fn_id);
-        if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
+        if (raw >= store_view.const_store.fns.items().len) Common.invariant("ConstStore function id is out of range");
         const fn_value = store_view.const_store.getFn(@fromBackingInt(@intCast(raw)));
         if (fn_value.fn_def == .parser_runtime) {
             return try self.restoreConstCodecRuntimeFnExpr(.parser, store_view, fn_id, fn_value, ty, static_data_const_locator);
@@ -49271,7 +49271,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const raw = @backingInt(fn_id);
-        if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
+        if (raw >= store_view.const_store.fns.items().len) Common.invariant("ConstStore function id is out of range");
         const fn_value = store_view.const_store.getFn(@fromBackingInt(@intCast(raw)));
         switch (fn_value.fn_def) {
             .parser_runtime => return try self.restoreConstCodecRuntimeFn(.parser, store_view, fn_id, fn_value, request, static_data_const_locator),

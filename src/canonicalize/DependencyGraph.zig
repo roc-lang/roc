@@ -265,18 +265,18 @@ pub fn collectDependencies(
             return @backingInt(a.dependency) < @backingInt(b.dependency);
         }
     };
-    std.mem.sort(Dependency, dependencies.items.items, {}, DependencySort.lessThan);
+    std.mem.sort(Dependency, dependencies.items(), {}, DependencySort.lessThan);
 
     var unique_len: usize = 0;
-    for (dependencies.items.items) |dependency| {
+    for (dependencies.items()) |dependency| {
         if (unique_len != 0) {
-            const previous = dependencies.items.items[unique_len - 1];
+            const previous = dependencies.items()[unique_len - 1];
             if (previous.dependent == dependency.dependent and previous.dependency == dependency.dependency) continue;
         }
-        dependencies.items.items[unique_len] = dependency;
+        dependencies.items()[unique_len] = dependency;
         unique_len += 1;
     }
-    dependencies.items.items.len = unique_len;
+    dependencies.shrinkRetainingCapacity(unique_len);
 
     return dependencies;
 }
@@ -552,7 +552,7 @@ const DemandAnalyzer = struct {
             }
         }
 
-        for (cir.scheme_uses.items.items, 0..) |record, record_index| {
+        for (cir.scheme_uses.items(), 0..) |record, record_index| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))) {
                 .value_use, .shared_value_use => {
                     const entry = try analyzer.scheme_use_by_node.getOrPut(@fromBackingInt(@intCast(record.node_idx)));
@@ -562,7 +562,7 @@ const DemandAnalyzer = struct {
             }
         }
 
-        for (cir.for_loop_dispatch_plans.items.items) |plan| {
+        for (cir.for_loop_dispatch_plans.items()) |plan| {
             try analyzer.for_loop_dispatch.put(allocator, plan.node_idx, .{
                 @fromBackingInt(@intCast(plan.iter_fn_var)),
                 @fromBackingInt(@intCast(plan.next_fn_var)),
@@ -1796,8 +1796,8 @@ const DemandAnalyzer = struct {
         demand_node: CIR.Node.Idx,
     ) Var {
         const record_index = self.scheme_use_by_node.get(demand_node) orelse return fn_var;
-        const record = self.cir.scheme_uses.items.items[record_index];
-        const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        const record = self.cir.scheme_uses.items()[record_index];
+        const pairs = self.cir.scheme_use_pairs.items()[record.pairs_start .. record.pairs_start + record.pairs_len];
         const old_root = self.cir.types.resolveVar(fn_var).var_;
         for (pairs) |pair| {
             if (self.cir.types.resolveVar(@fromBackingInt(@intCast(pair.old_var))).var_ == old_root) {

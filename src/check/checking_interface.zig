@@ -200,7 +200,7 @@ const Publication = struct {
     fn slot(self: *Publication, raw: u32) Allocator.Error!u32 {
         const entry = try self.slots.getOrPut(@fromBackingInt(raw));
         if (!entry.found_existing) {
-            entry.value_ptr.* = std.math.cast(u32, self.references.items.items.len) orelse return error.OutOfMemory;
+            entry.value_ptr.* = std.math.cast(u32, self.references.items().len) orelse return error.OutOfMemory;
             _ = try self.references.append(self.env.gpa, raw);
         }
         return entry.value_ptr.*;
@@ -225,7 +225,7 @@ const Publication = struct {
         const dependency = self.scope.environments.get(hash) orelse
             base.invariant("checking reference owners belong to the publication scope", .{});
         if (dependency.module_role == .builtin) return raw;
-        for (dependency.checking_dependency.references.items.items, 0..) |node_id, ordinal| {
+        for (dependency.checking_dependency.references.items(), 0..) |node_id, ordinal| {
             if (node_id == raw) return @intCast(ordinal);
         }
         base.invariant("foreign checking references have producer-published slots", .{});
@@ -417,7 +417,7 @@ const Publication = struct {
         try self.bytes(@tagName(env.module_kind));
         try self.value(env.module_role);
 
-        const imports = env.imports.imports.items.items;
+        const imports = env.imports.imports.items();
         try self.section("imports", imports.len);
         for (imports, 0..) |name, i| {
             try self.bytes(env.getString(name));
@@ -425,13 +425,13 @@ const Publication = struct {
             try self.value(env.imports.getResolvedModule(import_id));
         }
 
-        const exposed = env.common.exposed_items.items.entries.items;
+        const exposed = env.common.exposed_items.items.entries.items();
         const order = try env.gpa.alloc(usize, exposed.len);
         defer env.gpa.free(order);
         for (order, 0..) |*position, i| position.* = i;
         std.mem.sort(usize, order, env, struct {
             fn lessThan(module: *const ModuleEnv, a: usize, b: usize) bool {
-                const entries = module.common.exposed_items.items.entries.items;
+                const entries = module.common.exposed_items.items.entries.items();
                 return base.Ident.textLessThan(module.getIdent(@bitCast(entries[a].key)), module.getIdent(@bitCast(entries[b].key)));
             }
         }.lessThan);
@@ -461,32 +461,32 @@ const Publication = struct {
         const declarations = env.store.sliceStatements(env.type_decls);
         try self.section("declarations", declarations.len);
         for (declarations) |declaration_id| try self.declaration(declaration_id);
-        try self.section("method definitions", env.method_defs.entries.items.len);
-        for (env.method_defs.entries.items) |entry| {
+        try self.section("method definitions", env.method_defs.entries.items().len);
+        for (env.method_defs.entries.items()) |entry| {
             const owner = entry.key.ownerIdent();
             dependencies.hashU32(&self.hasher, try self.foreignNode(env.selfModuleIdentity(), @backingInt(owner.owner)));
             try self.value(entry.key.methodIdent());
             try self.scheme(entry.value.type_node_idx);
             try self.definition(entry.value.def_idx, classify);
         }
-        try self.section("method identifiers", env.method_idents.entries.items.len);
-        for (env.method_idents.entries.items) |entry| {
+        try self.section("method identifiers", env.method_idents.entries.items().len);
+        for (env.method_idents.entries.items()) |entry| {
             const owner = entry.key.ownerIdent();
             dependencies.hashU32(&self.hasher, try self.foreignNode(env.selfModuleIdentity(), @backingInt(owner.owner)));
             try self.value(entry.key.methodIdent());
             try self.value(entry.value);
         }
-        try self.section("for aliases", env.for_clause_aliases.items.items.len);
-        for (env.for_clause_aliases.items.items) |alias| try self.value(alias);
-        try self.section("requirements", env.requires_types.items.items.len);
-        for (env.requires_types.items.items) |required| {
+        try self.section("for aliases", env.for_clause_aliases.items().len);
+        for (env.for_clause_aliases.items()) |alias| try self.value(alias);
+        try self.section("requirements", env.requires_types.items().len);
+        for (env.requires_types.items()) |required| {
             try self.value(required.ident);
             try self.anno(required.type_anno);
             try self.value(required.region);
             try self.ty(ModuleEnv.varFrom(required.type_anno));
         }
-        try self.section("hosted entries", env.hosted_entries.items.items.len);
-        for (env.hosted_entries.items.items) |entry| {
+        try self.section("hosted entries", env.hosted_entries.items().len);
+        for (env.hosted_entries.items()) |entry| {
             try self.value(entry.module_ident);
             try self.value(entry.func_ident);
             try self.bytes(env.getString(entry.symbol));

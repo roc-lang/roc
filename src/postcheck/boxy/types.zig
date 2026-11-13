@@ -2005,7 +2005,7 @@ fn hasErrorUnmemoized(allocator: Allocator, modules: *const Modules, module: Mod
 /// Only identity and checked types are consumed by these reachability tests.
 fn addErrorTestModule(modules: *Modules, store: *checked.CheckedTypeStore) Allocator.Error!ModuleIndex {
     if (store.synthesized_keys == null) {
-        store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(modules.allocator, std.testing.io, store.roots.items.len));
+        store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(modules.allocator, std.testing.io, store.roots.items().len));
     }
     var identity: [32]u8 = @splat(0);
     std.mem.writeInt(u64, identity[0..8], @intCast(modules.views.items.len), .little);
