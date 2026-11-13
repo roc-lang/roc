@@ -82,7 +82,7 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, prefe
 			if rec.name == "" {
 				"void*"
 			} else {
-				record_struct_name(duplicate_record_names, type_id, rec)
+				record_struct_name(type_table, duplicate_record_names, type_id, rec)
 			}
 		RocTagUnion(tu) => resolve_tag_union_type_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, type_id, tu)
 		# A function stored inside a value is one erased-callable allocation,
@@ -99,7 +99,7 @@ resolve_tag_union_type_c = |type_table, duplicate_record_names, duplicate_tag_na
 		SingleNoPayload => "void"
 		NotSingleVariant =>
 			if tu.name != "" {
-				tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)
+				tag_union_struct_name(type_table, preferred_names, duplicate_tag_names, type_id, tu)
 			} else {
 				"void*"
 			}
@@ -217,36 +217,26 @@ c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names,
 duplicate_record_names : TypeTable -> List(Str)
 duplicate_record_names = |type_table| type_table.duplicate_record_names()
 
-record_struct_name : List(Str), U64, RecordRepr -> Str
-record_struct_name = |duplicate_names, type_id, rec| {
-	base = name_to_struct_name(rec.name)
-	if List.contains(duplicate_names, rec.name) {
-		"${base}Type${U64.to_str(type_id)}"
-	} else {
-		base
-	}
+record_struct_name : TypeTable, List(Str), U64, RecordRepr -> Str
+record_struct_name = |type_table, duplicate_names, type_id, rec| {
+	Str.concat(name_to_struct_name(rec.name), type_table.shape_suffix(duplicate_names, rec.name, type_id))
 }
 
 duplicate_tag_union_names : TypeTable -> List(Str)
 duplicate_tag_union_names = |type_table| type_table.duplicate_tag_union_names()
 
-default_tag_union_struct_name : List(Str), U64, TagUnionRepr -> Str
-default_tag_union_struct_name = |duplicate_names, type_id, tu| {
-	base = name_to_struct_name(tu.name)
-	if List.contains(duplicate_names, tu.name) {
-		"${base}Type${U64.to_str(type_id)}"
-	} else {
-		base
-	}
+default_tag_union_struct_name : TypeTable, List(Str), U64, TagUnionRepr -> Str
+default_tag_union_struct_name = |type_table, duplicate_names, type_id, tu| {
+	Str.concat(name_to_struct_name(tu.name), type_table.shape_suffix(duplicate_names, tu.name, type_id))
 }
 
-tag_union_struct_name : TypeNamePlan.PreferredNames, List(Str), U64, TagUnionRepr -> Str
-tag_union_struct_name = |preferred_names, duplicate_names, type_id, tu| {
+tag_union_struct_name : TypeTable, TypeNamePlan.PreferredNames, List(Str), U64, TagUnionRepr -> Str
+tag_union_struct_name = |type_table, preferred_names, duplicate_names, type_id, tu| {
 	preferred = preferred_names.lookup(type_id)
 	if preferred.found {
 		preferred.name
 	} else {
-		default_tag_union_struct_name(duplicate_names, type_id, tu)
+		default_tag_union_struct_name(type_table, duplicate_names, type_id, tu)
 	}
 }
 
@@ -268,11 +258,11 @@ generated_type_names_c = |type_table, duplicate_records, duplicate_tags| {
 		match type_info.repr {
 			RocRecord(rec) =>
 				if rec.name != "" {
-					$names = $names.append(record_struct_name(duplicate_records, $type_id, rec))
+					$names = $names.append(record_struct_name(type_table, duplicate_records, $type_id, rec))
 				}
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" {
-					$names = $names.append(default_tag_union_struct_name(duplicate_tags, $type_id, tu))
+					$names = $names.append(default_tag_union_struct_name(type_table, duplicate_tags, $type_id, tu))
 				}
 			_ => {}
 		}
@@ -283,17 +273,20 @@ generated_type_names_c = |type_table, duplicate_records, duplicate_tags| {
 	$names
 }
 
-type_name_root_alias_base_c : TypeTable, Str, U64 -> Str
-type_name_root_alias_base_c = |type_table, fallback, type_id|
+## A named type lends its name to the aliases of the root it is reached
+## from, unless that name is ambiguous: a name several host types are emitted
+## under denotes none of them, so the root keeps its own name.
+type_name_root_alias_base_c : TypeTable, List(Str), Str, U64 -> Str
+type_name_root_alias_base_c = |type_table, ambiguous_names, fallback, type_id|
 	match type_table.get(type_id) {
 		RocRecord(rec) =>
-			if rec.name != "" and !rec.anonymous {
+			if rec.name != "" and !rec.anonymous and !List.contains(ambiguous_names, rec.name) {
 				name_to_struct_name(rec.name)
 			} else {
 				fallback
 			}
 		RocTagUnion(tu) =>
-			if tu.name != "" and tu.name != "Try" and tu.name != "IOErr" {
+			if tu.name != "" and tu.name != "Try" and tu.name != "IOErr" and !List.contains(ambiguous_names, tu.name) {
 				name_to_struct_name(tu.name)
 			} else {
 				fallback
@@ -301,29 +294,19 @@ type_name_root_alias_base_c = |type_table, fallback, type_id|
 		_ => fallback
 	}
 
-record_alias_fields_c : TypeTable, RecordRepr -> List(RecordField)
-record_alias_fields_c = |type_table, rec| {
-	var $fields = rec.fields
-	var $found = Bool.False
-
-	if rec.name != "" and !rec.anonymous {
-		for type_info in type_table.entries() {
-			match type_info.repr {
-				RocRecord(candidate) =>
-					if !$found and candidate.name == rec.name {
-						$fields = candidate.fields
-						$found = Bool.True
-					}
-				_ => {}
-			}
+## The fields a record's aliases are named from: those of the row its
+## declaration is emitted from, which is the first row with its shape.
+record_alias_fields_c : TypeTable, U64 -> List(RecordField)
+record_alias_fields_c = |type_table, type_id|
+	match type_table.get(type_table.shape_id(type_id)) {
+		RocRecord(declared) => declared.fields
+		_ => {
+			crash "glue invariant violated: a record's shape id named a row that is not a record"
 		}
 	}
 
-	$fields
-}
-
-type_name_roots_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable -> List(TypeNamePlan.Root)
-type_name_roots_c = |hosted_functions, provides_list, type_table| {
+type_name_roots_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(TypeNamePlan.Root)
+type_name_roots_c = |hosted_functions, provides_list, type_table, ambiguous_names| {
 	var $roots = []
 
 	for func in hosted_functions {
@@ -334,7 +317,7 @@ type_name_roots_c = |hosted_functions, provides_list, type_table| {
 		for arg_type_id in func.arg_type_ids {
 			arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
 			$roots = $roots.append({
-				alias_base: type_name_root_alias_base_c(type_table, arg_fallback, arg_type_id),
+				alias_base: type_name_root_alias_base_c(type_table, ambiguous_names, arg_fallback, arg_type_id),
 				module_base,
 				type_id: arg_type_id,
 			})
@@ -358,7 +341,7 @@ type_name_roots_c = |hosted_functions, provides_list, type_table| {
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
 					$roots = $roots.append({
-						alias_base: type_name_root_alias_base_c(type_table, arg_fallback, arg_type_id),
+						alias_base: type_name_root_alias_base_c(type_table, ambiguous_names, arg_fallback, arg_type_id),
 						module_base,
 						type_id: arg_type_id,
 					})
@@ -373,7 +356,7 @@ type_name_roots_c = |hosted_functions, provides_list, type_table| {
 			}
 			ProvidedData(type_id) => {
 				$roots = $roots.append({
-					alias_base: type_name_root_alias_base_c(type_table, base, type_id),
+					alias_base: type_name_root_alias_base_c(type_table, ambiguous_names, base, type_id),
 					module_base,
 					type_id,
 				})
@@ -384,33 +367,33 @@ type_name_roots_c = |hosted_functions, provides_list, type_table| {
 	$roots
 }
 
-append_type_alias_roots_c : List(TypeNamePlan.Root), TypeTable, Str, Str, U64, List(U64) -> List(TypeNamePlan.Root)
-append_type_alias_roots_c = |roots, type_table, alias_base, module_base, type_id, visited_type_ids| {
+append_type_alias_roots_c : List(TypeNamePlan.Root), TypeTable, List(Str), Str, Str, U64, List(U64) -> List(TypeNamePlan.Root)
+append_type_alias_roots_c = |roots, type_table, ambiguous_names, alias_base, module_base, type_id, visited_type_ids| {
 	if List.contains(visited_type_ids, type_id) {
 		return roots
 	}
 
 	next_visited = visited_type_ids.append(type_id)
-	root_alias_base = type_name_root_alias_base_c(type_table, alias_base, type_id)
+	root_alias_base = type_name_root_alias_base_c(type_table, ambiguous_names, alias_base, type_id)
 
 	var $roots = roots.append({ alias_base: root_alias_base, module_base, type_id })
 
 	match type_table.get(type_id) {
-		RocRecord(rec) => {
-			for field in record_alias_fields_c(type_table, rec) {
+		RocRecord(_) => {
+			for field in record_alias_fields_c(type_table, type_id) {
 				field_base = "${root_alias_base}${RocName.from_str(field.name).to_pascal_clean()}"
-				$roots = append_type_alias_roots_c($roots, type_table, field_base, module_base, field.type_id, next_visited)
+				$roots = append_type_alias_roots_c($roots, type_table, ambiguous_names, field_base, module_base, field.type_id, next_visited)
 			}
 			$roots
 		}
-		RocList(elem_id) => append_type_alias_roots_c($roots, type_table, root_alias_base, module_base, elem_id, next_visited)
-		RocBox(inner_id) => append_type_alias_roots_c($roots, type_table, root_alias_base, module_base, inner_id, next_visited)
+		RocList(elem_id) => append_type_alias_roots_c($roots, type_table, ambiguous_names, root_alias_base, module_base, elem_id, next_visited)
+		RocBox(inner_id) => append_type_alias_roots_c($roots, type_table, ambiguous_names, root_alias_base, module_base, inner_id, next_visited)
 		RocTagUnion(tu) => {
 			var $next = $roots
 			for tag in tu.tags {
 				child_base = "${root_alias_base}${RocName.capitalize_first(tag.name)}"
 				for payload_id in tag.payload {
-					$next = append_type_alias_roots_c($next, type_table, child_base, module_base, payload_id, next_visited)
+					$next = append_type_alias_roots_c($next, type_table, ambiguous_names, child_base, module_base, payload_id, next_visited)
 				}
 			}
 			$next
@@ -419,8 +402,8 @@ append_type_alias_roots_c = |roots, type_table, alias_base, module_base, type_id
 	}
 }
 
-type_alias_roots_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable -> List(TypeNamePlan.Root)
-type_alias_roots_c = |hosted_functions, provides_list, type_table| {
+type_alias_roots_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTable, List(Str) -> List(TypeNamePlan.Root)
+type_alias_roots_c = |hosted_functions, provides_list, type_table, ambiguous_names| {
 	var $roots = []
 
 	for func in hosted_functions {
@@ -430,11 +413,11 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table| {
 		var $arg_idx = 0
 		for arg_type_id in func.arg_type_ids {
 			arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
-			$roots = append_type_alias_roots_c($roots, type_table, arg_fallback, module_base, arg_type_id, [])
+			$roots = append_type_alias_roots_c($roots, type_table, ambiguous_names, arg_fallback, module_base, arg_type_id, [])
 			$arg_idx = $arg_idx + 1
 		}
 
-		$roots = append_type_alias_roots_c($roots, type_table, base, module_base, func.ret_type_id, [])
+		$roots = append_type_alias_roots_c($roots, type_table, ambiguous_names, base, module_base, func.ret_type_id, [])
 	}
 
 	for entry in provides_list {
@@ -446,14 +429,14 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table| {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
-					$roots = append_type_alias_roots_c($roots, type_table, arg_fallback, module_base, arg_type_id, [])
+					$roots = append_type_alias_roots_c($roots, type_table, ambiguous_names, arg_fallback, module_base, arg_type_id, [])
 					$arg_idx = $arg_idx + 1
 				}
 
-				$roots = append_type_alias_roots_c($roots, type_table, base, module_base, func.ret, [])
+				$roots = append_type_alias_roots_c($roots, type_table, ambiguous_names, base, module_base, func.ret, [])
 			}
 			ProvidedData(type_id) => {
-				$roots = append_type_alias_roots_c($roots, type_table, base, module_base, type_id, [])
+				$roots = append_type_alias_roots_c($roots, type_table, ambiguous_names, base, module_base, type_id, [])
 			}
 		}
 	}
@@ -465,7 +448,7 @@ preferred_type_names_c : List(HostedFunctionInfo), List(ProvidesEntry), TypeTabl
 preferred_type_names_c = |hosted_functions, provides_list, type_table, duplicate_records, duplicate_tags|
 	TypeNamePlan.from_table(type_table).preferred_names(
 		generated_type_names_c(type_table, duplicate_records, duplicate_tags),
-		type_name_roots_c(hosted_functions, provides_list, type_table),
+		type_name_roots_c(hosted_functions, provides_list, type_table, List.concat(duplicate_records, duplicate_tags)),
 	)
 
 # =============================================================================
@@ -646,7 +629,7 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags, pre
 		match type_info.repr {
 			RocRecord(rec) =>
 				if rec.name != "" {
-					type_name = record_struct_name(duplicate_records, $type_id, rec)
+					type_name = record_struct_name(type_table, duplicate_records, $type_id, rec)
 					if !(List.contains($seen_names, type_name)) {
 						$seen_names = $seen_names.append(type_name)
 						$forwards = Str.concat($forwards, "typedef struct ${type_name} ${type_name};\n")
@@ -654,7 +637,7 @@ generate_opaque_type_decls = |type_table, duplicate_records, duplicate_tags, pre
 				}
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" {
-					type_name = tag_union_struct_name(preferred_names, duplicate_tags, $type_id, tu)
+					type_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, $type_id, tu)
 					if !(List.contains($seen_names, type_name)) {
 						$seen_names = $seen_names.append(type_name)
 						$forwards = Str.concat($forwards, "typedef struct ${type_name} ${type_name};\n")
@@ -687,7 +670,7 @@ generate_type_decl_c = |state, type_table, duplicate_records, duplicate_tags, pr
 			if rec.name == "" {
 				state
 			} else {
-				type_name = record_struct_name(duplicate_records, type_id, rec)
+				type_name = record_struct_name(type_table, duplicate_records, type_id, rec)
 				if List.contains(state.seen_names, type_name) {
 					state
 				} else {
@@ -711,7 +694,7 @@ generate_type_decl_c = |state, type_table, duplicate_records, duplicate_tags, pr
 					if tu.name == "" {
 						state
 					} else {
-						type_name = tag_union_struct_name(preferred_names, duplicate_tags, type_id, tu)
+						type_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, type_id, tu)
 						if List.contains(state.seen_names, type_name) {
 							state
 						} else {
@@ -806,7 +789,7 @@ c_tag_union_layout_assertions = |type_name, abi_layout, width| {
 
 generate_tag_union_type_decl : TypeTable, List(Str), List(Str), TypeNamePlan.PreferredNames, U64, TagUnionRepr, AbiLayout -> Str
 generate_tag_union_type_decl = |type_table, duplicate_records, duplicate_tags, preferred_names, type_id, tu, abi_layout| {
-	struct_name = tag_union_struct_name(preferred_names, duplicate_tags, type_id, tu)
+	struct_name = tag_union_struct_name(type_table, preferred_names, duplicate_tags, type_id, tu)
 	disc_type = c_discriminant_type(abi_layout.discriminant_size())
 	abi_tags = abi_tag_layouts_c(abi_layout)
 	is_pure_enum = !abi_layout.tag_union_has_payload()
@@ -1017,7 +1000,7 @@ generate_platform_type_aliases_c = |hosted_functions, provides_list, type_table,
 	var $state = { content: "", seen: generated_type_names_c(type_table, duplicate_records, duplicate_tags) }
 	name_plan = TypeNamePlan.from_table(type_table)
 
-	for plan in name_plan.alias_plan(type_alias_roots_c(hosted_functions, provides_list, type_table)) {
+	for plan in name_plan.alias_plan(type_alias_roots_c(hosted_functions, provides_list, type_table, List.concat(duplicate_records, duplicate_tags))) {
 		target = type_id_to_c(type_table, duplicate_records, duplicate_tags, preferred_names, plan.type_id)
 		$state = add_type_alias_c($state, plan.alias, target)
 	}

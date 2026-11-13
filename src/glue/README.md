@@ -144,6 +144,31 @@ Concrete build targets still exist, but only in the test harness and `roc
 build`: the runtime matrix compiles the same generated source for native and
 wasm32 hosts and runs it in both.
 
+## Type Names
+
+A Roc name does not identify a host type. Two instantiations of one generic
+nominal (`Wrap(U64)` and `Wrap(Str)`) share a name and have different layouts,
+and the same instantiation can occupy several type table rows, because it is
+reached from several signatures or from inside another nominal's backing.
+
+The compiler therefore gives every row a `shape_id`: the id of the first row
+that describes the same host type. Rows with equal shape ids agree on repr,
+layout, and ownership at every depth, recursive types included, so a generator
+emits one declaration for all of them. Rows that share a name but not a shape
+id are different host types. `TypeTable.duplicate_record_names` and
+`TypeTable.duplicate_tag_union_names` report those names, and
+`TypeTable.shape_suffix` gives each shape its suffix, so the generated names
+are `TypesWrapType2` and `TypesWrapType5` in every language. A name that is
+not shared keeps its bare form.
+
+An ambiguous bare name is never emitted, not even as an alias: `TypesWrap`
+would denote one instantiation chosen by table order. Roots that reach such a
+type are aliased by their own position instead (`Take_wrapsArg0`,
+`Take_wrapsArg1`), and those aliases are the stable names for host code.
+
+Generators must not decide type identity themselves, by comparing names,
+sizes, or field lists.
+
 ## Regenerating the C Header Snapshot
 
 `glue command with CGlue generates expected C header` byte-compares CGlue

@@ -817,6 +817,7 @@ const CustomCase = enum {
     glue_hosted_erased_generic_callback,
     glue_boxed_sequences,
     glue_boxed_app_type,
+    glue_generic_nominal_shapes,
     glue_application_only_requires,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
@@ -2710,6 +2711,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
     .{ .id = 0, .suite = .glue, .name = "issue 12887: boxed sequences are opaque owning handles in every generator", .body = .{ .custom = .glue_boxed_sequences } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: a heap payload holding the app's type by value is opaque in every generator", .body = .{ .custom = .glue_boxed_app_type } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: each instantiation of a generic nominal is its own type in every generator", .body = .{ .custom = .glue_generic_nominal_shapes } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
@@ -6621,6 +6623,7 @@ fn runCustomCase(
         .glue_hosted_erased_generic_callback => customGlueHostedErasedGenericCallback(io, allocator, &env, &timer, timeout_ms),
         .glue_boxed_sequences => customGlueBoxedSequences(io, allocator, &env, &timer, timeout_ms),
         .glue_boxed_app_type => customGlueBoxedAppType(io, allocator, &env, &timer, timeout_ms),
+        .glue_generic_nominal_shapes => customGlueGenericNominalShapes(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -19323,6 +19326,101 @@ fn customGlueBoxedAppType(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     });
 }
 
+fn customGlueGenericNominalShapes(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Two instantiations of one generic nominal share a Roc name and are
+    // different host types, so each gets its own declaration, while one
+    // instantiation is one type however it is reached: boxed, by value, in a
+    // list, or from inside another generic nominal's backing. Instantiations
+    // that differ only below their own fields (`Wrap(Opt(U64))` and
+    // `Wrap(Opt(I64))`), and anonymous records that differ only there, are
+    // told apart too.
+    //
+    // Only `Wrap(U64)` has a `U64` field named `model`, and the C and Rust
+    // outputs declare each struct once per pointer width, so they hold exactly
+    // two such fields. Merging instantiations loses the `Str` and `U8` model
+    // fields, and declaring one instantiation twice adds `U64` ones.
+    if (checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/generic-nominal-shapes/main.roc", .{
+        .zig = &.{},
+        .c = &.{ "    uint64_t model;", "    RocStr model;", "    uint8_t model;" },
+        .rust = &.{ "    pub model: u64,", "    pub model: RocStr,", "    pub model: u8," },
+        .absent = &.{ "struct TypesWrap {", "struct TypesPair {", "struct TypesOuter {", "pub const TypesWrap =", "pub const TypesPair =", "pub const TypesOuter =" },
+        .zig_checks =
+        \\fn Param(comptime function: anytype, comptime index: usize) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".param_types[index].?;
+        \\}
+        \\fn Result(comptime function: anytype) type {
+        \\    return @typeInfo(@TypeOf(function)).@"fn".return_type.?;
+        \\}
+        \\fn Pointee(comptime Pointer: type) type {
+        \\    return @typeInfo(Pointer).pointer.child;
+        \\}
+        \\fn expectSame(comptime A: type, comptime B: type) void {
+        \\    if (A != B) @compileError("expected " ++ @typeName(A) ++ " and " ++ @typeName(B) ++ " to be one type");
+        \\}
+        \\fn expectDistinct(comptime A: type, comptime B: type) void {
+        \\    if (A == B) @compileError("expected two types, found " ++ @typeName(A) ++ " twice");
+        \\}
+        \\comptime {
+        \\    const WrapU64 = Pointee(Param(abi.take_wraps, 0));
+        \\    const WrapStr = Param(abi.take_wraps, 1);
+        \\    expectSame(@FieldType(WrapU64, "model"), u64);
+        \\    expectSame(@FieldType(WrapStr, "model"), abi.RocStr);
+        \\
+        \\    // One instantiation is one type wherever it is reached.
+        \\    expectSame(Param(abi.take_wraps_again, 0), WrapU64);
+        \\    expectSame(Result(abi.take_wraps_again), WrapU64);
+        \\    expectSame(Param(abi.take_wraps_again, 1), abi.RocList(WrapStr));
+        \\    expectSame(@FieldType(Param(abi.take_outers, 0), "inner"), WrapU64);
+        \\    expectSame(@FieldType(Param(abi.take_outers, 1), "inner"), WrapStr);
+        \\    expectSame(@FieldType(Param(abi.take_pairs, 2), "first"), WrapU64);
+        \\    expectSame(@FieldType(Param(abi.take_pairs, 2), "second"), WrapStr);
+        \\    expectSame(@FieldType(Param(abi.take_deep, 2), "w"), WrapU64);
+        \\    expectSame(@FieldType(Param(abi.take_deep, 3), "w"), WrapStr);
+        \\
+        \\    expectSame(@FieldType(Param(abi.take_pairs, 0), "first"), u8);
+        \\    expectSame(@FieldType(Param(abi.take_pairs, 0), "second"), abi.RocStr);
+        \\    expectSame(@FieldType(Param(abi.take_pairs, 1), "first"), abi.RocStr);
+        \\    expectSame(@FieldType(Param(abi.take_pairs, 1), "second"), u8);
+        \\
+        \\    expectDistinct(Param(abi.take_unions, 0), Param(abi.take_unions, 1));
+        \\    expectDistinct(Param(abi.take_unions, 2), Param(abi.take_unions, 3));
+        \\    expectDistinct(Param(abi.take_outers, 0), Param(abi.take_outers, 1));
+        \\    expectSame(@FieldType(Param(abi.take_outers, 0), "opt"), Param(abi.take_unions, 0));
+        \\    expectSame(@FieldType(Param(abi.take_outers, 1), "opt"), Param(abi.take_unions, 1));
+        \\
+        \\    const WrapWrapU8 = Param(abi.take_outers, 2);
+        \\    expectDistinct(@FieldType(WrapWrapU8, "model"), WrapWrapU8);
+        \\    expectSame(@FieldType(@FieldType(WrapWrapU8, "model"), "model"), u8);
+        \\
+        \\    // These differ only inside the field's own type.
+        \\    expectDistinct(Param(abi.take_deep, 0), Param(abi.take_deep, 1));
+        \\    expectSame(@FieldType(Param(abi.take_deep, 0), "model"), Param(abi.take_unions, 0));
+        \\    expectDistinct(Param(abi.take_deep, 2), Param(abi.take_deep, 3));
+        \\
+        \\    // A field's alias names that field's own instantiation.
+        \\    expectSame(abi.Take_outersArg0Inner, WrapU64);
+        \\    expectSame(abi.Take_outersArg1Inner, WrapStr);
+        \\}
+        ,
+    })) |failure| return failure;
+
+    // The generators above ran into these directories.
+    for ([_]struct { subdir: []const u8, file: []const u8, field: []const u8 }{
+        .{ .subdir = "c-glue-out", .file = "roc_platform_abi.h", .field = "    uint64_t model;" },
+        .{ .subdir = "rust-glue-out", .file = "roc_platform_abi.rs", .field = "    pub model: u64," },
+    }) |output| {
+        const generated_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, output.subdir, output.file }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate generated glue path: {}", .{err});
+        const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+            return customFailure(allocator, timer, "failed to read generated glue file {s}: {}", .{ output.file, err });
+        const count = std.mem.count(u8, generated, output.field);
+        if (count != 2) {
+            return customFailure(allocator, timer, "{s} declares {d} `Wrap` model fields of type U64, expected one struct at two pointer widths", .{ output.file, count });
+        }
+    }
+    return null;
+}
+
 fn customGlueApplicationOnlyRequires(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // Issue 11504: an application requirement (`main : Program(state)`) is a
     // Roc-internal binding that never crosses the host boundary, so glue
@@ -19352,6 +19450,11 @@ const GlueOutputExpectations = struct {
     rust: []const []const u8,
     /// Text that must appear in none of the generated files.
     absent: []const []const u8 = &.{},
+    /// Zig source appended to the file that compiles the generated Zig as a
+    /// test, where the bindings are in scope as `abi`. It states what the
+    /// generated types are, which text needles cannot do for a type whose
+    /// name is not fixed.
+    zig_checks: []const u8 = "",
 
     fn forLanguage(self: GlueOutputExpectations, language: GlueLanguage) []const []const u8 {
         return switch (language) {
@@ -19409,13 +19512,18 @@ fn checkGlueOutput(
         // declaration and helper body.
         const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
-        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data =
+        const test_zig_source = std.mem.concat(allocator, u8, &.{
             \\const std = @import("std");
             \\const abi = @import("roc_platform_abi.zig");
             \\comptime {
             \\    std.testing.refAllDecls(abi);
             \\}
+            \\
+            ,
+            expectations.zig_checks,
         }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate test Zig source: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_source }) catch |err|
             return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
             "zig",

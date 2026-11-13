@@ -1345,6 +1345,30 @@ const CollectedTypeInfo = struct {
     /// has selected this entry's layout. Every entry has one before the type
     /// table is handed to a glue spec.
     abi: ?CollectedAbiLayout = null,
+    /// Assigned by `assignHostRcPlans` once every entry has its layout.
+    rc: HostRcPlan = .noop,
+    /// Index of the first entry describing the same host type, assigned by
+    /// `assignShapeIds`. Entries with equal shape ids agree on their repr,
+    /// layout and ownership at every depth, so a generator emits one
+    /// declaration for all of them, and two entries that share a name but not
+    /// a shape id are different host types that need different names.
+    shape_id: u64 = 0,
+};
+
+/// What a host that owns a value of a glue type has to do about the Roc
+/// references inside it.
+const HostRcPlan = enum {
+    /// The value holds no Roc reference.
+    noop,
+    /// The value holds Roc references, and the host can release all of them.
+    refcounted,
+    /// The value holds a reference to an opaque heap target (a `Box` payload
+    /// or `List` item with no committed layout), directly or through anything
+    /// it owns. Releasing such a reference means tearing down the target and
+    /// freeing an allocation whose header depends on the target's layout, and
+    /// only compiled Roc code knows either. The host can move the value,
+    /// retain it, and pass it back to Roc; it cannot release it.
+    roc_released,
 };
 
 /// Maps checked artifact keys to artifacts. Populated once from the compiled
@@ -2447,6 +2471,237 @@ const TypeTable = struct {
             if (entry.abi == null) {
                 glueInvariant("missing compiler-emitted ABI layout for glue type id {d}", .{idx});
             }
+        }
+
+        try self.assignHostRcPlans();
+        try self.assignShapeIds();
+    }
+
+    /// Decide each entry's `HostRcPlan`.
+    ///
+    /// An entry holds an opaque heap target when it is a box or list over an
+    /// `unknown` entry, or when anything it owns does. Ownership follows box
+    /// payloads, list items, record fields and tag payloads; an erased
+    /// callable releases its own captures, so its signature is not followed.
+    /// The committed layout cannot answer this: it was selected with the
+    /// application's type variables sealed, so it reports `Box(model)` as a
+    /// box over nothing and `Box({ model : model, n : U64 })` as a box over a
+    /// struct. Both are one Roc reference the host owns and cannot release.
+    fn assignHostRcPlans(self: *TypeTable) Allocator.Error!void {
+        const holds_opaque = try self.gpa.alloc(bool, self.entries.items.len);
+        defer self.gpa.free(holds_opaque);
+        @memset(holds_opaque, false);
+
+        // Least fixed point: a recursive type holds an opaque target only if
+        // some entry in its group reaches one.
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (self.entries.items, holds_opaque) |entry, *holds| {
+                if (holds.*) continue;
+                if (!self.ownsOpaqueTarget(entry.repr, holds_opaque)) continue;
+                holds.* = true;
+                changed = true;
+            }
+        }
+
+        for (self.entries.items, holds_opaque) |*entry, holds| {
+            const abi = &entry.abi.?;
+            if (holds) {
+                abi.contains_refcounted = true;
+                entry.rc = .roc_released;
+            } else {
+                entry.rc = if (abi.contains_refcounted) .refcounted else .noop;
+            }
+        }
+    }
+
+    fn ownsOpaqueTarget(self: *const TypeTable, repr: CollectedTypeRepr, holds_opaque: []const bool) bool {
+        switch (repr) {
+            .box => |box| return self.isOpaqueOrHolds(box.inner_id, holds_opaque),
+            .list => |list_repr| return self.isOpaqueOrHolds(list_repr.elem_id, holds_opaque),
+            .record => |rec| {
+                for (rec.fields) |field| {
+                    if (!field.is_padding and holds_opaque[@intCast(field.type_id)]) return true;
+                }
+                return false;
+            },
+            .tag_union => |tu| {
+                for (tu.tags) |tag| {
+                    for (tag.payload_ids) |payload_id| {
+                        if (holds_opaque[@intCast(payload_id)]) return true;
+                    }
+                }
+                return false;
+            },
+            .erased_callable, .unknown, .unit, .bool_, .dec, .f32_, .f64_, .i8_, .i16_, .i32_, .i64_, .i128_, .u8_, .u16_, .u32_, .u64_, .u128_, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .str_ => return false,
+        }
+    }
+
+    fn isOpaqueOrHolds(self: *const TypeTable, target: u64, holds_opaque: []const bool) bool {
+        return self.entries.items[@intCast(target)].repr == .unknown or holds_opaque[@intCast(target)];
+    }
+
+    /// Assign every entry its `shape_id` by partition refinement.
+    ///
+    /// Entries start grouped by everything a generator reads from one entry
+    /// alone (repr variant, names, layout facts, ownership plan). Each round
+    /// splits a group whose members' children fall in different groups, and
+    /// the partition is final once a round splits nothing. Two entries end in
+    /// the same group exactly when no path through their children ever tells
+    /// them apart, which is the equality recursive types need: comparing the
+    /// two graphs field by field would never terminate on them.
+    fn assignShapeIds(self: *TypeTable) Allocator.Error!void {
+        const count = self.entries.items.len;
+        if (count == 0) return;
+
+        var arena_state = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        var classes = try arena.alloc(u32, count);
+        var next_classes = try arena.alloc(u32, count);
+        var first_entries = std.ArrayList(u64).empty;
+        var key = std.ArrayList(u8).empty;
+
+        var class_count: usize = 0;
+        {
+            var interned = std.StringHashMap(u32).init(arena);
+            for (self.entries.items, 0..) |entry, idx| {
+                key.clearRetainingCapacity();
+                try appendEntryShapeKey(arena, &key, entry);
+                const slot = try interned.getOrPut(key.items);
+                if (!slot.found_existing) {
+                    slot.key_ptr.* = try arena.dupe(u8, key.items);
+                    slot.value_ptr.* = @intCast(interned.count() - 1);
+                }
+                classes[idx] = slot.value_ptr.*;
+            }
+            class_count = interned.count();
+        }
+
+        while (true) {
+            var interned = std.StringHashMap(u32).init(arena);
+            first_entries.clearRetainingCapacity();
+            for (self.entries.items, 0..) |entry, idx| {
+                key.clearRetainingCapacity();
+                try appendShapeInt(arena, &key, classes[idx]);
+                try appendChildClasses(arena, &key, entry.repr, classes);
+                const slot = try interned.getOrPut(key.items);
+                if (!slot.found_existing) {
+                    slot.key_ptr.* = try arena.dupe(u8, key.items);
+                    slot.value_ptr.* = @intCast(interned.count() - 1);
+                    try first_entries.append(arena, idx);
+                }
+                next_classes[idx] = slot.value_ptr.*;
+            }
+            const refined_count = interned.count();
+            std.mem.swap([]u32, &classes, &next_classes);
+            // A round only ever splits groups, so an unchanged count means an
+            // unchanged partition.
+            if (refined_count == class_count) break;
+            class_count = refined_count;
+        }
+
+        for (self.entries.items, classes) |*entry, class| {
+            entry.shape_id = first_entries.items[class];
+        }
+    }
+
+    fn appendShapeInt(gpa: Allocator, key: *std.ArrayList(u8), value: u64) Allocator.Error!void {
+        try key.appendSlice(gpa, std.mem.asBytes(&value));
+    }
+
+    fn appendShapeText(gpa: Allocator, key: *std.ArrayList(u8), text: []const u8) Allocator.Error!void {
+        try appendShapeInt(gpa, key, text.len);
+        try key.appendSlice(gpa, text);
+    }
+
+    fn appendShapeFields(gpa: Allocator, key: *std.ArrayList(u8), fields: []const CollectedAbiFieldLayout) Allocator.Error!void {
+        try appendShapeInt(gpa, key, fields.len);
+        for (fields) |field| {
+            try appendShapeText(gpa, key, field.name);
+            for ([_]u64{ field.original_index, @intFromBool(field.is_padding), field.offset32, field.offset64, field.size32, field.alignment32, field.size64, field.alignment64 }) |fact| {
+                try appendShapeInt(gpa, key, fact);
+            }
+        }
+    }
+
+    /// Everything a generator reads from `entry` itself, with every reference
+    /// to another entry left out; `appendChildClasses` covers those.
+    fn appendEntryShapeKey(gpa: Allocator, key: *std.ArrayList(u8), entry: CollectedTypeInfo) Allocator.Error!void {
+        try appendShapeInt(gpa, key, @backingInt(std.meta.activeTag(entry.repr)));
+        try appendShapeInt(gpa, key, @backingInt(entry.rc));
+        switch (entry.repr) {
+            .record => |rec| {
+                try appendShapeText(gpa, key, rec.name);
+                try appendShapeInt(gpa, key, @intFromBool(rec.anonymous));
+                try appendShapeInt(gpa, key, rec.fields.len);
+                for (rec.fields) |field| {
+                    try appendShapeText(gpa, key, field.name);
+                    try appendShapeInt(gpa, key, @intFromBool(field.is_padding));
+                }
+            },
+            .tag_union => |tu| {
+                try appendShapeText(gpa, key, tu.name);
+                try appendShapeInt(gpa, key, tu.tags.len);
+                for (tu.tags) |tag| {
+                    try appendShapeText(gpa, key, tag.name);
+                    try appendShapeInt(gpa, key, tag.payload_ids.len);
+                }
+            },
+            .unknown => |unknown| try appendShapeText(gpa, key, unknown.name),
+            .erased_callable => |callable| {
+                const arity: u64 = if (callable.signature) |signature| signature.arg_ids.len + 1 else 0;
+                try appendShapeInt(gpa, key, arity);
+            },
+            .box, .list, .unit, .bool_, .dec, .f32_, .f64_, .i8_, .i16_, .i32_, .i64_, .i128_, .u8_, .u16_, .u32_, .u64_, .u128_, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .str_ => {},
+        }
+
+        const abi = entry.abi.?;
+        for ([_]u64{ abi.size_align.size32, abi.size_align.alignment32, abi.size_align.size64, abi.size_align.alignment64, @intFromBool(abi.contains_refcounted) }) |fact| {
+            try appendShapeInt(gpa, key, fact);
+        }
+        switch (abi.details) {
+            .builtin => {},
+            .record => |fields| try appendShapeFields(gpa, key, fields),
+            .tag_union => |tu| {
+                for ([_]u64{ tu.discriminant_size, tu.discriminant_offset32, tu.discriminant_offset64, @intFromBool(tu.has_payload), tu.tags.len }) |fact| {
+                    try appendShapeInt(gpa, key, fact);
+                }
+                for (tu.tags) |tag| {
+                    try appendShapeText(gpa, key, tag.name);
+                    for ([_]u64{ tag.discriminant, tag.payload_size32, tag.payload_alignment32, tag.payload_size64, tag.payload_alignment64 }) |fact| {
+                        try appendShapeInt(gpa, key, fact);
+                    }
+                    try appendShapeFields(gpa, key, tag.payload_fields);
+                }
+            },
+        }
+    }
+
+    /// The current classes of the entries `repr` refers to, in repr order.
+    fn appendChildClasses(gpa: Allocator, key: *std.ArrayList(u8), repr: CollectedTypeRepr, classes: []const u32) Allocator.Error!void {
+        switch (repr) {
+            .box => |box| try appendShapeInt(gpa, key, classes[@intCast(box.inner_id)]),
+            .list => |list_repr| try appendShapeInt(gpa, key, classes[@intCast(list_repr.elem_id)]),
+            .record => |rec| {
+                for (rec.fields) |field| {
+                    if (!field.is_padding) try appendShapeInt(gpa, key, classes[@intCast(field.type_id)]);
+                }
+            },
+            .tag_union => |tu| {
+                for (tu.tags) |tag| {
+                    for (tag.payload_ids) |payload_id| try appendShapeInt(gpa, key, classes[@intCast(payload_id)]);
+                }
+            },
+            .erased_callable => |callable| {
+                if (callable.signature) |signature| {
+                    for (signature.arg_ids) |arg_id| try appendShapeInt(gpa, key, classes[@intCast(arg_id)]);
+                    try appendShapeInt(gpa, key, classes[@intCast(signature.ret_id)]);
+                }
+            },
+            .unknown, .unit, .bool_, .dec, .f32_, .f64_, .i8_, .i16_, .i32_, .i64_, .i128_, .u8_, .u16_, .u32_, .u64_, .u128_, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .str_ => {},
         }
     }
 
@@ -3935,10 +4190,14 @@ fn writeHostRcPlan(
     writer: *const GlueRocValueWriter,
     value_base: [*]u8,
     rc_layout_idx: layout.Idx,
-    contains_refcounted: bool,
+    plan: HostRcPlan,
 ) void {
     writer.zeroValue(value_base, rc_layout_idx);
-    const tag_name: []const u8 = if (contains_refcounted) "RcRefcounted" else "RcNoop";
+    const tag_name: []const u8 = switch (plan) {
+        .noop => "RcNoop",
+        .refcounted => "RcRefcounted",
+        .roc_released => "RcRocReleased",
+    };
     writer.writeTagDiscriminant(value_base, rc_layout_idx, writer.tagIndex("HostRcPlan", tag_name));
 }
 
@@ -4040,8 +4299,9 @@ fn writeTypeInfo(
     const rc_slot = writer.recordField(value_base, type_info_layout, "TypeInfo", "rc");
     const repr_slot = writer.recordField(value_base, type_info_layout, "TypeInfo", "repr");
     writeAbiLayout(writer, layout_slot.ptr, layout_slot.layout_idx, abi);
-    writeHostRcPlan(writer, rc_slot.ptr, rc_slot.layout_idx, abi.contains_refcounted);
+    writeHostRcPlan(writer, rc_slot.ptr, rc_slot.layout_idx, entry.rc);
     writeTypeRepr(writer, repr_slot.ptr, repr_slot.layout_idx, entry.repr);
+    writer.writeField(value_base, type_info_layout, "TypeInfo", "shape_id", u64, entry.shape_id);
 }
 
 fn writeFunctionInfo(
@@ -4966,7 +5226,7 @@ const GlueProtocolLock = struct {
                 .{ .name = "ret_type_id", .type = .u64_ },                  .{ .name = "type_str", .type = .str_ },
             }),
             .record_field_info => try self.record(idx, "RecordFieldInfo", &.{ .{ .name = "name", .type = .str_ }, .{ .name = "type_str", .type = .str_ } }),
-            .type_info => try self.record(idx, "TypeInfo", &.{ .{ .name = "layout", .type = .abi_layout }, .{ .name = "rc", .type = .rc_plan }, .{ .name = "repr", .type = .type_repr } }),
+            .type_info => try self.record(idx, "TypeInfo", &.{ .{ .name = "layout", .type = .abi_layout }, .{ .name = "rc", .type = .rc_plan }, .{ .name = "repr", .type = .type_repr }, .{ .name = "shape_id", .type = .u64_ } }),
             .file => try self.record(idx, "File", &.{ .{ .name = "content", .type = .str_ }, .{ .name = "name", .type = .str_ } }),
             .abi_layout => try self.record(idx, "AbiLayout", &.{
                 .{ .name = "alignment32", .type = .u64_ },    .{ .name = "alignment64", .type = .u64_ }, .{ .name = "contains_refcounted", .type = .bool_ },
@@ -4990,7 +5250,7 @@ const GlueProtocolLock = struct {
                 .{ .name = "payload_fields", .type = .list_abi_field }, .{ .name = "payload_alignment32", .type = .u64_ }, .{ .name = "payload_alignment64", .type = .u64_ },
                 .{ .name = "payload_size32", .type = .u64_ },           .{ .name = "payload_size64", .type = .u64_ },
             }),
-            .rc_plan => try self.tagUnion(idx, "HostRcPlan", &.{ .{ .name = "RcNoop", .type = .unit }, .{ .name = "RcRefcounted", .type = .unit } }),
+            .rc_plan => try self.tagUnion(idx, "HostRcPlan", &.{ .{ .name = "RcNoop", .type = .unit }, .{ .name = "RcRefcounted", .type = .unit }, .{ .name = "RcRocReleased", .type = .unit } }),
             .type_repr => try self.tagUnion(idx, "TypeRepr", &.{
                 .{ .name = "RocBool", .type = .unit },                         .{ .name = "RocBox", .type = .u64_ },   .{ .name = "RocDec", .type = .unit },
                 .{ .name = "RocErasedCallable", .type = .callable_signature }, .{ .name = "RocF32", .type = .unit },   .{ .name = "RocF64", .type = .unit },
@@ -5067,11 +5327,12 @@ test "glue platform schema lock rejects field rename addition and type mutation"
         .{ .path = "ProvidedExport.roc", .source = "import FunctionSignature\nProvidedExport := [ProvidedData(U32), ProvidedProcedure(FunctionSignature)]" },
         .{ .path = "FunctionSignature.roc", .source = "FunctionSignature := { args : List(U64), result : U64 }" },
         .{ .path = "CallableSignature.roc", .source = "import FunctionSignature\nCallableSignature := [Known(FunctionSignature), Opaque(U64)]" },
-        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr }" },
-        .{ .path = "TypeInfo.roc", .source = "import HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr }" },
-        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64 }" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr, shape_id : U64 }" },
+        .{ .path = "TypeInfo.roc", .source = "import HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr, shape_id : U64 }" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64, shape_id : U64 }" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : TypeRepr, shape_id : U32 }" },
         .{ .path = "RecordField.roc", .source = "RecordField := { is_padding : Bool, name : Str, type_id : U32 }" },
-        .{ .path = "HostRcPlan.roc", .source = "HostRcPlan := [RcNoop(U64), RcRefcounted]" },
+        .{ .path = "HostRcPlan.roc", .source = "HostRcPlan := [RcNoop(U64), RcRefcounted, RcRocReleased]" },
     };
     for (mutations) |mutation| {
         var tmp = std.testing.tmpDir(.{});

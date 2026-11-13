@@ -26393,6 +26393,16 @@ Code-to-data and data-to-function relocations are resolved together, and both
 images outlive extraction of the returned files; returned static strings must
 not become dangling pointers when the entrypoint returns.
 
+Glue's type table gives every row a shape id, the id of the first row that
+describes the same host type. Two rows have the same shape id exactly when
+their reprs, committed layouts, and ownership plans agree at every depth, which
+glue decides by partition refinement over the table so that recursive types
+compare by what they contain. A Roc name is not a host type's identity: two
+instantiations of one generic nominal share a name and differ in layout, and
+one instantiation can occupy several rows. Generators emit one declaration per
+shape, give shapes that share a name distinct names derived from the shape id,
+and never emit the shared bare name, as a declaration or as an alias.
+
 Glue's type table describes values. A function value, wherever it appears
 (boxed, in a record or tag payload, or in a stored signature), is one
 erased-callable pointer whose own layout does not depend on its argument or
