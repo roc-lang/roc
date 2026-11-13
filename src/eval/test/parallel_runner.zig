@@ -1818,6 +1818,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .type_module_missing_matching_type,
         .type_module_has_alias_not_nominal,
         .default_app_missing_main,
+        .module_name_reserved,
         .default_app_wrong_arity,
         .cannot_import_default_app,
         .type_name_case_mismatch,

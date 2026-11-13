@@ -58,7 +58,7 @@ fib = |n| if (n <= 1) n else fib(n - 1) + fib(n - 2)
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_lte") (constraint-fn-var 242)
+						(e-dispatch-call (method "is_lte") (constraint-fn-var 236)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -67,22 +67,22 @@ fib = |n| if (n <= 1) n else fib(n - 1) + fib(n - 2)
 						(e-lookup-local
 							(p-assign (ident "n")))))
 				(if-else
-					(e-dispatch-call (method "plus") (constraint-fn-var 268)
+					(e-dispatch-call (method "plus") (constraint-fn-var 262)
 						(receiver
-							(e-call (constraint-fn-var 257)
+							(e-call (constraint-fn-var 251)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 255)
+								(e-dispatch-call (method "minus") (constraint-fn-var 249)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(args
 										(e-num (value "1"))))))
 						(args
-							(e-call (constraint-fn-var 267)
+							(e-call (constraint-fn-var 261)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 265)
+								(e-dispatch-call (method "minus") (constraint-fn-var 259)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))

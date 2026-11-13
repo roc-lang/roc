@@ -188,6 +188,30 @@ pub fn renderTypeHeader(
     }
 }
 
+/// Render the header of a nominal type under `public_name`, the name of the
+/// alias that renames it, with the nominal's own parameters, which are the
+/// ones its backing type mentions.
+pub fn renderRenamedTypeHeaderToString(
+    gpa: Allocator,
+    public_name: []const u8,
+    nominal_env: *const ModuleEnv,
+    nominal_header_idx: CIR.TypeHeader.Idx,
+) Allocator.Error![]u8 {
+    var buf = RenderBuffer.init();
+    errdefer buf.deinit(gpa);
+    try buf.appendSlice(gpa, public_name);
+    const args_slice = nominal_env.store.sliceTypeAnnos(nominal_env.store.getTypeHeader(nominal_header_idx).args);
+    if (args_slice.len > 0) {
+        try buf.append(gpa, '(');
+        for (args_slice, 0..) |arg_idx, i| {
+            if (i > 0) try buf.appendSlice(gpa, ", ");
+            try renderTypeAnno(&buf, gpa, nominal_env, arg_idx, false);
+        }
+        try buf.append(gpa, ')');
+    }
+    return buf.toOwnedSlice(gpa);
+}
+
 /// Render a type header (e.g. `Maybe(a)`) to a newly allocated Roc syntax string.
 pub fn renderTypeHeaderToString(
     gpa: Allocator,

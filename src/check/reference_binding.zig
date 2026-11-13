@@ -14,9 +14,17 @@ pub fn source(env: *ModuleEnv, mapper: anytype) @TypeOf(mapper.*).Error!void {
             const id: CIR.Node.Idx = @fromBackingInt(@as(u32, @intCast(i)));
             var node = nodes.get(id);
             switch (node.tag) {
-                inline .expr_external_lookup, .expr_nominal_external, .pattern_nominal_external => |tag| {
-                    var payload = @field(node.getPayload(), @tagName(tag));
+                .expr_external_lookup => {
+                    var payload = node.getPayload().expr_external_lookup;
                     payload.target_node_idx = try mapper.importNode(env, payload.module_idx, payload.target_node_idx);
+                    node.setPayload(.{ .expr_external_lookup = payload });
+                },
+                inline .expr_nominal_external, .pattern_nominal_external => |tag| {
+                    var payload = @field(node.getPayload(), @tagName(tag));
+                    payload.target_node_idx = switch (payload.module_kind) {
+                        .import => try mapper.importNode(env, payload.module_idx, payload.target_node_idx),
+                        .identity => try mapper.node(@as(base.ModuleIdentity.Idx, @fromBackingInt(payload.module_idx)), payload.target_node_idx),
+                    };
                     node.setPayload(@unionInit(CIR.Node.Payload, @tagName(tag), payload));
                 },
                 .expr_associated_lookup => {
@@ -198,6 +206,7 @@ pub fn source(env: *ModuleEnv, mapper: anytype) @TypeOf(mapper.*).Error!void {
                 .diag_type_module_missing_matching_type,
                 .diag_type_module_has_alias_not_nominal,
                 .diag_default_app_missing_main,
+                .diag_module_name_reserved,
                 .diag_default_app_wrong_arity,
                 .diag_cannot_import_default_app,
                 .diag_type_name_case_mismatch,

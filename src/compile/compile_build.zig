@@ -3285,6 +3285,27 @@ pub const BuildEnv = struct {
         return public_modules.toOwnedSlice(allocator);
     }
 
+    /// Every checked module of the root package, public or not.
+    pub fn getRootPackageModuleEnvs(self: *BuildEnv, allocator: Allocator) Allocator.Error![]*const ModuleEnv {
+        const root_name = self.discovered_pkg_name orelse {
+            base.invariant("build env invariant violated: root package modules requested before dependency discovery", .{});
+        };
+        const coord = self.coordinator orelse {
+            base.invariant("build env invariant violated: root package modules requested before coordinator initialization", .{});
+        };
+        const root_coord_pkg = coord.packages.get(root_name) orelse {
+            base.invariant("build env invariant violated: root coordinator package is unavailable", .{});
+        };
+
+        var envs = std.ArrayList(*const ModuleEnv).empty;
+        errdefer envs.deinit(allocator);
+        for (root_coord_pkg.modules.items) |*module_state| {
+            const checked = module_state.checkedModule() orelse continue;
+            try envs.append(allocator, checked.env);
+        }
+        return envs.toOwnedSlice(allocator);
+    }
+
     /// Return the compiled modules that belong in generated documentation.
     /// Package roots use their public modules. Platform roots additionally use
     /// their root module when the header exposes root-owned names. Callers
