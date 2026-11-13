@@ -2193,13 +2193,6 @@ pub const Builder = struct {
                 try self.emitAdapt(target, value, from, to);
                 return target;
             },
-            // Records hold the difference at any depth, even below a list,
-            // so it is rebuilt by descriptors whatever the types.
-            .record_order => {
-                const target = try self.localOf(to, .frame);
-                try self.emitAdapt(target, value, from, to);
-                return target;
-            },
             .function => {
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
                 const inputs = try self.descInputWords(0, self.program.descCount(adapter));
@@ -2342,7 +2335,7 @@ pub const Builder = struct {
                 if (descs.len != 0) captures[1] = try self.tableWord(adapter, descs);
                 return .{ .recipe = try self.recipes.intern(.{ .callable = .{ .entry = adapter, .captures = captures[0..count] } }) };
             },
-            .rows, .record_order => invariant("two callable types of a dictionary differ outside the signature of the function it is"),
+            .rows => invariant("two callable types of a dictionary differ outside the signature of the function it is"),
         }
     }
 
@@ -2570,7 +2563,7 @@ pub const Builder = struct {
                     }
                 }
                 for (params) |param| try self.pushValue(param);
-                try self.finishCall(target, hidden, bound, worker.params, try self.program.substitute(self.allocator, target_worker.ret, bound), worker.ret);
+                try self.finishCall(target, hidden, bound, worker.params, try self.program.signatureAt(target, target_worker.ret, bound), worker.ret);
             },
             .alias => |alias| {
                 const evidence: []const static_dispatch.CheckedEvidence = if (request.root_evidence) |span| blk: {
@@ -2644,7 +2637,7 @@ pub const Builder = struct {
         defer self.allocator.free(bound);
         const args = try self.callArgs(&.{}, worker_id, try self.descWords(bound));
         defer self.allocator.free(args);
-        const ret = try self.program.substitute(self.allocator, worker.ret, bound);
+        const ret = try self.program.signatureAt(worker_id, worker.ret, bound);
         const target = try self.localOf(ret, .frame);
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = worker.proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
         return try self.adaptValue(target, ret, field_ty);
@@ -3149,7 +3142,7 @@ pub const Builder = struct {
                         const hidden = try self.allocator.alloc(Word, bound.len);
                         defer self.allocator.free(hidden);
                         for (bound, hidden) |ty, *desc| desc.* = try self.descWord(ty);
-                        try self.finishCall(callee, hidden, bound, &.{}, try self.program.substitute(self.allocator, callee_worker.ret, bound), eval.ty);
+                        try self.finishCall(callee, hidden, bound, &.{}, try self.program.signatureAt(callee, callee_worker.ret, bound), eval.ty);
                     },
                     .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
                 }
@@ -5609,7 +5602,7 @@ pub const Builder = struct {
         // the representation its use calls it with.
         const target_worker = self.program.worker(target).*;
         const own_fn = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-        try self.pushValue(try self.adaptValue(value, try self.program.substitute(self.allocator, own_fn, instance.bound), use_ty));
+        try self.pushValue(try self.adaptValue(value, try self.program.signatureAt(target, own_fn, instance.bound), use_ty));
     }
 
     /// The instantiation of the procedure `callee` that use `expr_id`, at
@@ -6606,7 +6599,7 @@ pub const Builder = struct {
         const hidden = try self.allocator.alloc(Word, bound.len + target.dictionary_params.len + target.literal_params);
         errdefer self.allocator.free(hidden);
         if (chain_frame) {
-            const ret = try self.program.substitute(self.allocator, target.ret, bound);
+            const ret = try self.program.signatureAt(callee, target.ret, bound);
             if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = bound, .ret = ret };
             const context = self.templateParamContext(callee, bound);
             var deferred = try self.deferredDictionaries(evidence, context, target.dictionary_params.len);
@@ -6650,7 +6643,7 @@ pub const Builder = struct {
                 dict.* = try self.declarationDictionary(&declaration, slot);
             }
         }
-        return .{ .hidden = hidden, .bound = bound, .ret = try self.program.substitute(self.allocator, target.ret, bound) };
+        return .{ .hidden = hidden, .bound = bound, .ret = try self.program.signatureAt(callee, target.ret, bound) };
     }
 
     /// Dictionary slot `slot`, with a reserved recipe for a recursive read.
@@ -6940,7 +6933,7 @@ pub const Builder = struct {
                 const bound = try self.boundTypesAt(target, subst, callable);
                 defer self.allocator.free(bound);
                 const own_fn = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-                return try self.adaptDictionary(dictionary, try self.program.substitute(self.allocator, own_fn, bound), expected);
+                return try self.adaptDictionary(dictionary, try self.program.signatureAt(target, own_fn, bound), expected);
             },
             .structural => |structural| {
                 const method: lower.StructuralMethod = switch (structural.derivation) {
@@ -7112,7 +7105,7 @@ pub const Builder = struct {
     fn adaptTargetDictionary(self: *Builder, dictionary: Word, target: lower.DictionaryNode.Target, callable: TypeId) Allocator.Error!Word {
         const worker = self.program.worker(target.target).*;
         const own_fn = try self.program.store.intern(.{ .function = .{ .args = worker.params, .ret = worker.ret, .effectful = false } });
-        return try self.adaptDictionary(dictionary, try self.program.substitute(self.allocator, own_fn, target.instance.bound), callable);
+        return try self.adaptDictionary(dictionary, try self.program.signatureAt(target.target, own_fn, target.instance.bound), callable);
     }
 
     /// The dictionary this body's scopes hold for method `method_text` on
@@ -7417,7 +7410,7 @@ pub const Builder = struct {
                         .scopes => try self.fillLiteralArgs(null, .{ .use = alias_step.lookup }, target_literals),
                         .derived => try self.derivedLiteralArgs(callee, target_bound, target_literals),
                     }
-                    const ret = try self.program.substitute(self.allocator, target.ret, target_bound);
+                    const ret = try self.program.signatureAt(callee, target.ret, target_bound);
                     if (chain_frame) {
                         if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = target_bound, .ret = ret };
                         return .{ .hidden = hidden, .bound = target_bound, .ret = ret, .deferred_dicts = try self.deferredDictionaries(evidence, null, target.dictionary_params.len) };
@@ -7536,7 +7529,7 @@ pub const Builder = struct {
         const hidden = try self.allocator.alloc(Word, bound.len + target.dictionary_params.len + target.literal_params);
         errdefer self.allocator.free(hidden);
         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
-        const ret = try self.program.substitute(self.allocator, target.ret, bound);
+        const ret = try self.program.signatureAt(callee, target.ret, bound);
         try self.derivedLiteralArgs(callee, bound, hidden[bound.len + target.dictionary_params.len ..]);
         if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = bound, .ret = ret };
         const instance = try self.program.targetRequirements(callee, bound);
@@ -8014,10 +8007,7 @@ pub const Builder = struct {
             const owner = self.program.module(key.module);
             const template = owner.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
             if (template.provided_low_level) |op| {
-                const adapted_types = try self.allocator.dupe(TypeId, arg_types);
-                defer self.allocator.free(adapted_types);
-                try self.argsAtParams(explicit, arg_types, callee, bound, adapted_types);
-                try self.emitLowLevelCall(op, explicit, ret, adapted_types);
+                try self.emitLowLevelCall(op, explicit, ret, arg_types);
                 const value = self.popValue();
                 return try self.pushValue(try self.adaptValue(value, ret, result_ty));
             }
@@ -8026,7 +8016,6 @@ pub const Builder = struct {
         // its integer list worker for that type, whose inputs are the
         // generic worker's.
         const direct = try self.program.directCallTarget(callee, bound);
-        try self.argsAtParams(explicit, arg_types, direct, bound, null);
         // The callee's one hidden argument: its type table at the hidden
         // words.
         const args = try self.callArgs(explicit, direct, hidden_words);
@@ -8035,71 +8024,6 @@ pub const Builder = struct {
         const proc = self.program.worker(direct).proc;
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
-    }
-
-    /// `args` of types `arg_types`, where one parameter of `callee` under
-    /// `bound` stores a record in another order: a padded nominal passed to
-    /// a parameter of its record row (design.md "Nominal Record Field
-    /// Order"), which the callee reads by the structural rule.
-    fn argsAtParams(self: *Builder, args: []LocalId, arg_types: []const TypeId, callee: WorkerId, bound: []const TypeId, adapted_types: ?[]TypeId) Allocator.Error!void {
-        const store = &self.program.store;
-        for (args, arg_types, self.program.worker(callee).params[0..args.len], 0..) |*arg, arg_ty, param, index| {
-            // A variable has the one representation of whatever it binds.
-            if (store.get(param) == .variable) continue;
-            const param_ty = if (store.isClosed(param)) param else try self.program.substitute(self.allocator, param, bound);
-            if (try self.recordOrderDiffers(arg_ty, param_ty)) {
-                arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
-                // A direct primitive consumes these adapted bytes, so its
-                // descriptor operands must describe the adapted type too.
-                if (adapted_types) |types_after_adaptation| types_after_adaptation[index] = param_ty;
-            }
-        }
-    }
-
-    /// Whether two types of one value store a record in different orders,
-    /// outside the function values each holds.
-    fn recordOrderDiffers(self: *Builder, from_root: TypeId, to_root: TypeId) Allocator.Error!bool {
-        const store = &self.program.store;
-        var pending: std.ArrayList([2]TypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ from_root, to_root });
-        while (pending.pop()) |pair| {
-            if (pair[0] == pair[1]) continue;
-            const from = store.get(pair[0]);
-            const to = store.get(pair[1]);
-            if (std.meta.activeTag(from) != std.meta.activeTag(to)) {
-                if (from == .nominal and from.nominal.has_backing) {
-                    try pending.append(self.allocator, .{ try self.program.converter().backing(pair[0]), pair[1] });
-                } else if (to == .nominal and to.nominal.has_backing) {
-                    try pending.append(self.allocator, .{ pair[0], try self.program.converter().backing(pair[1]) });
-                } else if (Program.paddedAgainstEmpty(from, to)) {
-                    return true;
-                }
-                continue;
-            }
-            switch (from) {
-                .record => |record| {
-                    if (!store.sameRecordOrder(record, to.record)) return true;
-                    for (store.fieldSpan(to.record.fields)) |to_field| {
-                        for (store.fieldSpan(record.fields)) |from_field| {
-                            if (from_field.name == to_field.name) try pending.append(self.allocator, .{ from_field.ty, to_field.ty });
-                        }
-                    }
-                },
-                .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ a, b }),
-                .tag_union => |tag_union| for (store.tagSpan(to.tag_union.tags)) |to_tag| {
-                    for (store.tagSpan(tag_union.tags)) |from_tag| {
-                        if (from_tag.name != to_tag.name or from_tag.payloads.len != to_tag.payloads.len) continue;
-                        for (store.span(from_tag.payloads), store.span(to_tag.payloads)) |a, b| try pending.append(self.allocator, .{ a, b });
-                    }
-                },
-                .list => |elem| try pending.append(self.allocator, .{ elem, to.list }),
-                .box => |payload| try pending.append(self.allocator, .{ payload, to.box }),
-                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(to.nominal)) |a, b| try pending.append(self.allocator, .{ a, b }),
-                .primitive, .empty_record, .function, .variable => {},
-            }
-        }
-        return false;
     }
 
     /// A debug rendering of `ty`, for invariant messages.

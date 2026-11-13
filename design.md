@@ -21000,14 +21000,13 @@ A record literal checked at a padded nominal is built at it. A record a
 function built or takes apart with an uncommitted tail never becomes a
 padded nominal at a use (Uncommitted Record Tails), so no function's open
 record crosses between the two layouts. A padded nominal can still reach a
-parameter whose row is open, from field uses or a `..` pattern, because a
-generic function has one body, which reads the record by the structural
-rule. The two types are one value in two memory orders, so where such a
-value crosses between them it is rebuilt by the plan-driven `adapt`
-(Coercion Plans), whose plan moves each field by offset at any depth:
-`StorageDifference.record_order` on a result or a read, and the check of
-each explicit argument at a direct call. A function value converts by an
-adapter around it, like one a row widening reaches.
+parameter whose row is open, from field uses or a `..` pattern; a generic
+function has one body, but that body describes such a record as the whole
+value each call supplies (Methods On Open Rows, `Worker.row_nodes`), so it
+reads the padded nominal at the nominal's own layout through its descriptor,
+and the call's argument, result and function value all have that type. No
+value is stored in two record orders within data: `StorageDifference` holds
+that as an invariant.
 
 A specialized program specializes each use at its own types, so a call that hands
 a padded nominal to a row parameter gets an instance at that nominal, and the row

@@ -1748,6 +1748,12 @@ pub const Program = struct {
         return try self.rewriteTypeWithRowNodes(self.allocator, ty, identity, null, target.row_nodes);
     }
 
+    /// A type of worker `id`'s signature at the instantiation `bound`, its
+    /// row nodes at their whole values (`Worker.row_nodes`).
+    pub fn signatureAt(self: *Program, id: WorkerId, ty: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
+        return try self.substitute(self.allocator, try self.rowNodesAsVariables(id, ty), bound);
+    }
+
     pub fn keptSubstitution(self: *Program, id: WorkerId, subst: []const checked.CheckedTypeId) Allocator.Error![]const checked.CheckedTypeId {
         const target = self.worker(id).*;
         if (subst.len == 0 or target.key != .template) return subst;
@@ -3333,10 +3339,13 @@ pub const Program = struct {
 
     /// Where two types of one value differ: nowhere; only in the tags of
     /// rows, one widening the other along the coercion's reach (design.md
-    /// "Sealed Result Rows"); in the memory order of a record, one being the
-    /// record a padded nominal lifts it into (design.md "Nominal Record Field
-    /// Order"); or inside the function type the value has.
-    pub const StorageDifference = enum { none, rows, record_order, function };
+    /// "Sealed Result Rows"); or inside the function type the value has.
+    pub const StorageDifference = enum { none, rows, function };
+
+    /// A padded nominal reaches a generic body as the whole value it is,
+    /// described by its own descriptor (`Worker.row_nodes`), so no value is
+    /// ever stored in two record orders within data.
+    const record_order_in_data = "one value is stored in two record orders, though a padded nominal reaches a generic body as the whole value it is";
 
     /// A function value inside data is outside every row widening's reach
     /// (design.md "Row Coercion Primitive"), so both types of the value store
@@ -3381,7 +3390,7 @@ pub const Program = struct {
                     try pending.append(self.allocator, .{ .from = pair.from, .to = try self.converter().backing(pair.to), .place = pair.place });
                 } else if (paddedAgainstEmpty(from, to)) {
                     switch (pair.place) {
-                        .data => result = .record_order,
+                        .data => invariant(record_order_in_data),
                         .root_function, .signature_data => return .function,
                         .nested_function => invariant(nested_function_storage),
                     }
@@ -3393,7 +3402,7 @@ pub const Program = struct {
             switch (from) {
                 .record => |record| {
                     if (!store.sameRecordOrder(record, to.record)) switch (pair.place) {
-                        .data => result = .record_order,
+                        .data => invariant(record_order_in_data),
                         .root_function, .signature_data => return .function,
                         .nested_function => invariant(nested_function_storage),
                     };
