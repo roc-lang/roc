@@ -3385,8 +3385,9 @@ const WaitingPredeclaredDispatchUse = struct {
 /// still gets a record. Each use site keeps the policy it applies to every
 /// other scheme it instantiates.
 const PredeclaredRecordPolicy = enum {
-    /// Record only a nonempty substitution or a scheme with evidence params,
-    /// as `instantiateVarHelp` decides.
+    /// Record only a nonempty substitution, a scheme with evidence params (as
+    /// `instantiateVarHelp` decides), or a scheme that shares hole variables
+    /// with its body (`PredeclaredSlots.shares_holes`).
     when_needed,
     /// Always record, as `instantiateDispatchTargetMethodVar` does for every
     /// same-module target.
@@ -3413,6 +3414,12 @@ const VarRange = struct {
 /// binding's template publishes.
 const PredeclaredSlots = struct {
     scheme_var: Var,
+    /// Whether the predeclared scheme shares live `_` hole variables with the
+    /// body's annotation. The binding's own scheme can quantify such a
+    /// variable, which no identity slot enumerates, so a use's record with an
+    /// empty substitution still says something: the use shares every one of
+    /// them with the body.
+    shares_holes: bool,
     /// Enumerated from the pristine predeclared scheme at its first use.
     predeclared: ?VarRange = null,
     /// Enumerated when the body generates the annotation, before anything
@@ -21203,9 +21210,9 @@ fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error
         const def = self.cir.store.getDef(def_idx);
         const annotation_idx = def.annotation orelse continue;
         if (!self.annotationIsPredeclarableScheme(def.pattern, annotation_idx)) continue;
-        const scheme_var = try self.predeclareAnnotationScheme(annotation_idx, env);
-        self.setPredeclaredSchemeVar(def_idx, scheme_var);
-        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+        const scheme = try self.predeclareAnnotationScheme(annotation_idx, env);
+        self.setPredeclaredSchemeVar(def_idx, scheme.scheme_var);
+        try self.registerPredeclaredSlots(annotation_idx, scheme);
     }
 }
 
@@ -21247,9 +21254,9 @@ fn predeclareHoledAnnotationSchemes(
         const annotation_idx = self.appliedAnnotation(def.pattern, def.annotation) orelse continue;
         if (!self.cir.store.getAnnotation(annotation_idx).contains_underscore) continue;
         if (self.predeclared_slots.contains(annotation_idx)) continue;
-        const scheme_var = try self.predeclareAnnotationSchemeKeepingHolesShared(annotation_idx, env, hole_rank);
-        self.setPredeclaredSchemeVar(def_idx, scheme_var);
-        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+        const scheme = try self.predeclareAnnotationSchemeKeepingHolesShared(annotation_idx, env, hole_rank);
+        self.setPredeclaredSchemeVar(def_idx, scheme.scheme_var);
+        try self.registerPredeclaredSlots(annotation_idx, scheme);
     }
 }
 
@@ -21270,7 +21277,7 @@ fn predeclareAnnotationScheme(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!PredeclaredScheme {
     return self.predeclareAnnotationSchemeHelp(annotation_idx, env, null);
 }
 
@@ -21294,16 +21301,23 @@ fn predeclareAnnotationSchemeKeepingHolesShared(
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
     hole_rank: Rank,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!PredeclaredScheme {
     return self.predeclareAnnotationSchemeHelp(annotation_idx, env, hole_rank);
 }
+
+/// A standalone scheme predeclared from an annotation, and whether it shares
+/// live `_` hole variables with the body's annotation.
+const PredeclaredScheme = struct {
+    scheme_var: Var,
+    shares_holes: bool,
+};
 
 fn predeclareAnnotationSchemeHelp(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
     hole_rank: ?Rank,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!PredeclaredScheme {
     const problems_len = self.problems.len();
     const snapshots_mark = self.snapshots.mark();
 
@@ -21402,7 +21416,7 @@ fn predeclareAnnotationSchemeHelp(
         try self.hole_shared_vars.appendSlice(self.gpa, shared_vars.items);
         try self.hole_shared_schemes.put(self.gpa, scheme_var, .{ .start = start, .len = len });
     }
-    return scheme_var;
+    return .{ .scheme_var = scheme_var, .shares_holes = live_holes.items.len > 0 };
 }
 
 const HoleSharedRun = struct { start: u32, len: u32 };
@@ -21439,8 +21453,8 @@ fn retainUndecidedHoles(self: *const Self, holes: *std.ArrayListUnmanaged(Var)) 
 /// are enumerated later; see `PredeclaredSlots`. A block-local annotation is
 /// predeclared again each time its statement is checked, and each check
 /// generates the body annotation afresh, so re-registration starts over.
-fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, scheme_var: Var) Allocator.Error!void {
-    try self.predeclared_slots.put(self.gpa, annotation_idx, .{ .scheme_var = scheme_var });
+fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, scheme: PredeclaredScheme) Allocator.Error!void {
+    try self.predeclared_slots.put(self.gpa, annotation_idx, .{ .scheme_var = scheme.scheme_var, .shares_holes = scheme.shares_holes });
 }
 
 fn predeclaredSlotsPtr(self: *Self, annotation_idx: CIR.Annotation.Idx) *PredeclaredSlots {
@@ -21649,11 +21663,13 @@ fn writePredeclaredSchemeUse(
 ) Allocator.Error!void {
     defer self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
-    if (policy == .when_needed and
-        self.scratch_evidence_pairs.items.len == 0 and
-        !try self.predeclaredHasEvidenceParams(annotation_idx))
-    {
-        return;
+    if (policy == .when_needed and self.scratch_evidence_pairs.items.len == 0) {
+        const slots = self.predeclaredSlotsPtr(annotation_idx);
+        if (!slots.shares_holes and
+            !(slots.has_evidence_params orelse try self.predeclaredHasEvidenceParams(annotation_idx)))
+        {
+            return;
+        }
     }
     try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_root, self.scratch_evidence_pairs.items);
 }
@@ -32566,13 +32582,13 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 // lookup of an enclosing function's variable is that
                 // candidate's.
                 if (is_local_procedure_candidate) try self.local_procedure_candidate_stack.append(self.gpa, decl_stmt.pattern);
-                const scheme_var = scheme: {
+                const scheme = scheme: {
                     defer if (is_local_procedure_candidate) {
                         _ = self.local_procedure_candidate_stack.pop();
                     };
                     break :scheme try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
                 };
-                try self.registerPredeclaredSlots(decl_stmt.anno.?, scheme_var);
+                try self.registerPredeclaredSlots(decl_stmt.anno.?, scheme);
                 try self.predeclared_local_annotations.put(self.gpa, decl_stmt.pattern, decl_stmt.anno.?);
             }
 
@@ -33803,7 +33819,26 @@ const CallCheck = struct {
     shape_func: types_mod.Func = undefined,
     shape_result: unifier.Result = undefined,
     arg_index: u32 = 0,
+    arg_relation_failed: bool = false,
 };
+
+/// The diagnostic context of the relation between a call's argument and its
+/// formal slot.
+fn callArgContext(
+    _: *const Self,
+    state: *const CallCheck,
+    call_expr: CIR.Expr.Idx,
+    call_arg_expr_idxs: []const CIR.Expr.Idx,
+    arg_index: u32,
+) problem.Context {
+    return .{ .fn_call_arg = .{
+        .fn_name = state.func_name,
+        .call_expr = call_expr,
+        .arg_index = arg_index,
+        .num_args = @intCast(call_arg_expr_idxs.len),
+        .arg_var = ModuleEnv.varFrom(call_arg_expr_idxs[arg_index]),
+    } };
+}
 
 fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, child_done: bool) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
@@ -33940,6 +33975,36 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
         },
         .args => {
             std.debug.assert(child_done);
+            // Relate the argument just checked to its formal slot before the
+            // next argument is checked, so the next one sees every type its
+            // earlier siblings fixed (design.md "Call Arguments Relate In
+            // Order"). A rejected relation ends the fold; an erroneous
+            // operand never relates.
+            const checked_arg_idx = call_arg_expr_idxs[state.arg_index];
+            if (state.shape_result.isEstablished() and !state.arg_relation_failed and
+                !try self.callLikeOperandsContainErroneousValue(call_arg_expr_idxs[0 .. state.arg_index + 1]))
+            {
+                const arg_result = try self.unifyOwnedRelation(
+                    self.types.getVarAt(state.shape_func.args, @intCast(state.arg_index)),
+                    ModuleEnv.varFrom(checked_arg_idx),
+                    env,
+                    self.callArgContext(state, expr_idx, call_arg_expr_idxs, state.arg_index),
+                    if (self.exprIsFreshRecordConstruction(checked_arg_idx)) .construction else .exact,
+                );
+                state.arg_relation_failed = arg_result.isProblem();
+                if (state.arg_relation_failed) {
+                    if (state.callee_scheme) |scheme_var| {
+                        try self.refineCallArgsConflict(arg_result.problem, .{
+                            .scheme_var = scheme_var,
+                            .fn_name = state.func_name,
+                            .receiver = null,
+                            .args = call_arg_expr_idxs,
+                            .failed_arg = state.arg_index,
+                            .region = expr_region,
+                        }, env);
+                    }
+                }
+            }
             state.arg_index += 1;
         },
         .derived_args => {
@@ -33949,21 +34014,12 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
         },
     }
 
-    // Check every argument against its formal slot's structural shape. The
-    // owned relations are committed in a second linear fold, after all
-    // argument expressions have checked, preserving error isolation between
-    // sibling operands.
+    // Check every argument against its formal slot's structural shape.
     if (state.arg_index < call_arg_expr_idxs.len) {
         const arg_index = state.arg_index;
         const call_arg_idx = call_arg_expr_idxs[arg_index];
         const expected_arg_var = self.types.getVarAt(state.shape_func.args, @intCast(arg_index));
-        const arg_context = problem.Context{ .fn_call_arg = .{
-            .fn_name = state.func_name,
-            .call_expr = expr_idx,
-            .arg_index = @intCast(arg_index),
-            .num_args = @intCast(call_arg_expr_idxs.len),
-            .arg_var = ModuleEnv.varFrom(call_arg_idx),
-        } };
+        const arg_context = self.callArgContext(state, expr_idx, call_arg_expr_idxs, arg_index);
         const arg_expected = if (state.shape_result.isEstablished())
             child_expected.withContextualType(.{
                 .var_ = expected_arg_var,
@@ -33979,43 +34035,8 @@ fn resumeCallCheck(self: *Self, task: *ExprTask, state: *CallCheck, env: *Env, c
 
     const func_var = state.func_var;
     const func_name = state.func_name;
-    var arg_relation_failed = false;
-    // Argument relations only unify types, so they leave whether an operand
-    // is an erroneous value as it is.
+    const arg_relation_failed = state.arg_relation_failed;
     const operands_erroneous = try self.callLikeOperandsContainErroneousValue(call_arg_expr_idxs);
-    if (state.shape_result.isEstablished() and !operands_erroneous) {
-        for (call_arg_expr_idxs, 0..) |call_arg_idx, arg_index| {
-            const expected_arg_var = self.types.getVarAt(state.shape_func.args, @intCast(arg_index));
-            const arg_context = problem.Context{ .fn_call_arg = .{
-                .fn_name = func_name,
-                .call_expr = expr_idx,
-                .arg_index = @intCast(arg_index),
-                .num_args = @intCast(call_arg_expr_idxs.len),
-                .arg_var = ModuleEnv.varFrom(call_arg_idx),
-            } };
-            const arg_result = try self.unifyOwnedRelation(
-                expected_arg_var,
-                ModuleEnv.varFrom(call_arg_idx),
-                env,
-                arg_context,
-                if (self.exprIsFreshRecordConstruction(call_arg_idx)) .construction else .exact,
-            );
-            arg_relation_failed = arg_result.isProblem();
-            if (arg_relation_failed) {
-                if (state.callee_scheme) |scheme_var| {
-                    try self.refineCallArgsConflict(arg_result.problem, .{
-                        .scheme_var = scheme_var,
-                        .fn_name = func_name,
-                        .receiver = null,
-                        .args = call_arg_expr_idxs,
-                        .failed_arg = arg_index,
-                        .region = expr_region,
-                    }, env);
-                }
-                break;
-            }
-        }
-    }
 
     const args_did_err = try self.retireCallLikeExprForErroneousOperands(expr_idx, expr_var, operands_erroneous);
     if (state.shape_result.isProblem()) {
@@ -52533,8 +52554,91 @@ fn resumeStaticDispatchDrain(
 
 const DeferredEntryOutcome = enum { next, stopped };
 
-/// Process the deferred relation at `entry_index` of the drain's queue.
+/// A variable of an enclosing scope that a frozen scheme's relation reaches,
+/// with the rank it held before the relation resolved.
+const EnclosingVarRank = struct {
+    var_: Var,
+    rank: Rank,
+
+    fn lowerRankFirst(_: void, a: EnclosingVarRank, b: EnclosingVarRank) bool {
+        return @backingInt(a.rank) < @backingInt(b.rank);
+    }
+};
+
+/// Process one deferred dispatch entry, keeping every enclosing-scope
+/// variable its relations reach at its own rank (design.md "Frozen Scheme
+/// Relations Keep Enclosing Variables Monomorphic").
 inline fn processDeferredDispatchEntry(
+    self: *Self,
+    env: *Env,
+    drain: *StaticDispatchDrain,
+    entry_index: usize,
+) std.mem.Allocator.Error!DeferredEntryOutcome {
+    var enclosing: std.ArrayList(EnclosingVarRank) = .empty;
+    defer enclosing.deinit(self.gpa);
+    if (self.captured_scheme_owners.count() != 0) {
+        try self.collectFrozenRelationEnclosingVars(env.deferred_static_dispatch_constraints.items()[entry_index], &enclosing);
+    }
+    const outcome = try self.processDeferredDispatchEntryRelations(env, drain, entry_index);
+    if (enclosing.items.len != 0) try self.restoreEnclosingVarRanks(enclosing.items, env);
+    return outcome;
+}
+
+/// Every non-generalized variable reachable from a relation of `entry` whose
+/// owning scheme has already generalized. Such a relation's callable holds
+/// the scheme's quantified variables next to the enclosing scope's own.
+fn collectFrozenRelationEnclosingVars(
+    self: *Self,
+    entry: DeferredConstraintCheck,
+    out: *std.ArrayList(EnclosingVarRank),
+) Allocator.Error!void {
+    var reachable = collections.DenseMap(Var, void).init(self.gpa);
+    defer reachable.deinit();
+    const constraints_start: usize = @backingInt(entry.constraints.start);
+    for (0..entry.constraints.len()) |offset| {
+        const constraint = self.types.static_dispatch_constraints.items()[constraints_start + offset];
+        const owner = (self.dispatch_relation_owners.get(constraint.fn_var) orelse continue).get() orelse continue;
+        if (!self.captured_scheme_owners.contains(owner)) continue;
+        try self.collectReachableVars(constraint.fn_var, &reachable);
+    }
+    if (reachable.count() == 0) return;
+    try self.collectReachableVars(entry.var_, &reachable);
+    var iter = reachable.iterator();
+    while (iter.next()) |reached| {
+        const rank = self.types.resolveVar(reached.key_ptr.*).desc.rank;
+        if (rank == .generalized) continue;
+        try out.append(self.gpa, .{ .var_ = reached.key_ptr.*, .rank = rank });
+    }
+    std.mem.sort(EnclosingVarRank, out.items, {}, EnclosingVarRank.lowerRankFirst);
+}
+
+/// Give back its rank to every enclosing-scope variable that resolving a
+/// frozen scheme's relation merged into one of the scheme's quantified
+/// variables, along with everything that variable now reaches: the parts of
+/// its type, and the callables of the relations attached to it.
+fn restoreEnclosingVarRanks(
+    self: *Self,
+    enclosing: []const EnclosingVarRank,
+    env: *Env,
+) Allocator.Error!void {
+    var reachable = collections.DenseMap(Var, void).init(self.gpa);
+    defer reachable.deinit();
+    for (enclosing) |entry| {
+        if (self.types.resolveVar(entry.var_).desc.rank != .generalized) continue;
+        reachable.clearRetainingCapacity();
+        try self.collectReachableVars(entry.var_, &reachable);
+        var iter = reachable.iterator();
+        while (iter.next()) |reached| {
+            const resolved = self.types.resolveVar(reached.key_ptr.*);
+            if (resolved.desc.rank != .generalized) continue;
+            try self.types.setDescRank(resolved.desc_idx, entry.rank);
+            try env.var_pool.addVarToRank(resolved.var_, entry.rank);
+        }
+    }
+}
+
+/// Process the deferred relation at `entry_index` of the drain's queue.
+inline fn processDeferredDispatchEntryRelations(
     self: *Self,
     env: *Env,
     drain: *StaticDispatchDrain,
@@ -62446,8 +62550,11 @@ fn reportConstraintErrorAt(
 
 /// A dispatcher/method pair fails once no matter how many deferred checks
 /// replay it (an instantiation can queue the same obligation for both the call
-/// and the callee lookup). When this pair was already reported, poison this
-/// replay's failure site and return true so the caller reports nothing new.
+/// and the callee lookup). A later unification can move the dispatcher's class
+/// to another root between two replays, so a relation whose own callable was
+/// already rejected counts as reported too. When this pair or this relation
+/// was already reported, poison this replay's failure site and return true so
+/// the caller reports nothing new.
 fn constraintErrorAlreadyReported(
     self: *Self,
     dispatcher_var: Var,
@@ -62460,7 +62567,7 @@ fn constraintErrorAlreadyReported(
         .fn_name = constraint.fn_name,
     };
     const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
-    if (!dedup_entry.found_existing) return false;
+    if (!dedup_entry.found_existing and !self.types.varStaticDispatchRejected(constraint.fn_var)) return false;
 
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
     try self.markStaticDispatchRejected(constraint);

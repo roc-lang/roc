@@ -435,7 +435,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 711)
+				(e-call (constraint-fn-var 714)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local
@@ -445,7 +445,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 						(args
 							(p-assign (ident "sum"))
 							(p-assign (ident "foo")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 702)
+						(e-dispatch-call (method "plus") (constraint-fn-var 708)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum"))))
@@ -461,7 +461,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 746)
+				(e-call (constraint-fn-var 756)
 					(e-lookup-external
 						(builtin))
 					(e-field-access
@@ -475,7 +475,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 						(args
 							(p-assign (ident "sum"))
 							(p-assign (ident "foo")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 742)
+						(e-dispatch-call (method "plus") (constraint-fn-var 752)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum"))))
@@ -491,7 +491,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 781)
+				(e-call (constraint-fn-var 795)
 					(e-lookup-external
 						(builtin))
 					(e-field-access
@@ -505,7 +505,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 						(args
 							(p-assign (ident "sum"))
 							(p-assign (ident "foo")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 777)
+						(e-dispatch-call (method "plus") (constraint-fn-var 791)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum"))))
@@ -521,7 +521,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 820)
+				(e-call (constraint-fn-var 836)
 					(e-lookup-external
 						(builtin))
 					(e-field-access
@@ -535,7 +535,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 						(args
 							(p-assign (ident "sum"))
 							(p-assign (ident "foo")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 816)
+						(e-dispatch-call (method "plus") (constraint-fn-var 834)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum"))))

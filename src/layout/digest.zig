@@ -171,16 +171,16 @@ pub const Digests = struct {
     }
 
     /// The child layouts of one layout, in encoding order.
-    const Children = struct {
+    pub const Children = struct {
         store: *const Store,
         layout: layout_mod.Layout,
         next_index: usize = 0,
 
-        fn init(store: *const Store, idx: Idx) Children {
+        pub fn init(store: *const Store, idx: Idx) Children {
             return .{ .store = store, .layout = store.getLayout(idx) };
         }
 
-        fn next(self: *Children) ?Idx {
+        pub fn next(self: *Children) ?Idx {
             const index = self.next_index;
             self.next_index += 1;
             const layout = self.layout;

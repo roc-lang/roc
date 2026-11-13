@@ -44,18 +44,19 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 33 stores reproducible checking
+/// reflected in layout fingerprints. Version 37 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
 /// completion and cached literal argument roots for both strategies,
 /// body-local type context arguments, generated-codec recurrences,
 /// field-default identities in Boxy stored-function types, integer list
-/// worker item-type bindings, nominal declaration backings whose formals
-/// bind by binder identity rather than by name, stored function recipes
-/// naming modules the storing module imports, type stores listing their
-/// widening field names once, and anonymous structure that every use shares
-/// when nothing visible can lift or widen it. It rejects every earlier
-/// format. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 33;
+/// worker item-type bindings, Boxy stored-function type tables that store a
+/// padded record's declaration entries rather than its slots, nominal
+/// declaration backings whose formals bind by binder identity rather than by
+/// name, stored function recipes naming modules the storing module imports,
+/// type stores listing their widening field names once, and anonymous
+/// structure that every use shares when nothing visible can lift or widen it.
+/// It rejects every earlier format. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 37;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
