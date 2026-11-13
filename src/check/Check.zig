@@ -31895,13 +31895,13 @@ const RecordUpdateCheck = struct {
 fn recordUpdateFieldContext(
     self: *Self,
     field: CIR.RecordField,
-    record_being_updated_var: Var,
+    record_being_updated_expr: CIR.Expr.Idx,
     record_being_updated_name: ?Ident.Idx,
 ) problem.Context {
     return .{ .record_update = .{
         .field_name = field.name,
         .field_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(field.value)),
-        .record_region = self.getRegionAt(record_being_updated_var),
+        .record_region = self.cir.store.getExprRegion(record_being_updated_expr),
         .record_name = record_being_updated_name,
     } };
 }
@@ -31937,7 +31937,7 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
                 state.field_index += 1;
                 break :field_relation;
             }
-            const update_context = self.recordUpdateFieldContext(field, record_being_updated_var, state.record_being_updated_name);
+            const update_context = self.recordUpdateFieldContext(field, record_being_updated_expr, state.record_being_updated_name);
             const field_value_var = try self.storedValueVar(field.value, env);
 
             // The base row owns the final update judgment and its
@@ -31985,7 +31985,7 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
         // The child borrows this field's structural context. A construction
         // resolves it on demand; a stored lookup proceeds directly to the
         // actual update judgment after the child.
-        const update_context = self.recordUpdateFieldContext(field, record_being_updated_var, state.record_being_updated_name);
+        const update_context = self.recordUpdateFieldContext(field, record_being_updated_expr, state.record_being_updated_name);
         const field_expected = child_expected.withContextualType(.{
             .var_ = record_being_updated_var,
             .record_field = field.name,
@@ -32030,7 +32030,7 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
         _ = try self.unifyRecordInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
             .field_name = field.name,
             .field_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(field_idx)),
-            .record_region = self.getRegionAt(record_being_updated_var),
+            .record_region = self.cir.store.getExprRegion(record_being_updated_expr),
             .record_name = state.record_being_updated_name,
         } });
     }
@@ -33666,7 +33666,7 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
                             .fn_args_bound_var = .{
                                 .fn_name = self.enclosing_func_name,
                                 .first_arg_var = arg_1,
-                                .second_arg_region = self.getRegionAt(arg_2),
+                                .second_arg_region = self.cir.store.getPatternRegion(self.cir.store.patternAt(lambda.args, j)),
                                 .first_arg_index = @intCast(i),
                                 .second_arg_index = @intCast(j),
                                 .num_args = @intCast(arg_count),
@@ -39375,7 +39375,7 @@ fn prepareNominalTypeUsage(
         if (!nominal_type.canLiftInner(self.cir.selfModuleIdentity())) {
             _ = try self.problems.appendProblem(.{ .cannot_access_opaque_nominal = .{
                 .var_ = target_var,
-                .region = self.getRegionAt(target_var),
+                .region = region,
                 .nominal_type_name = nominal_type.ident.ident_idx,
             } });
 
@@ -39413,7 +39413,7 @@ fn prepareNominalTypeUsage(
         // structure, report the error and set the expression to error type.
         _ = try self.problems.appendProblem(.{ .nominal_type_resolution_failed = .{
             .var_ = target_var,
-            .region = self.getRegionAt(target_var),
+            .region = region,
             .nominal_type_decl_var = nominal_type_decl_var,
         } });
         try self.markErroneous(target_var);
