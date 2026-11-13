@@ -14,7 +14,7 @@
 
 const harness = @import("lower_to_lir_harness.zig");
 
-fn expectLowersUnderBothStrategies(comptime source: []const u8) !void {
+fn expectLowersUnderBothStrategies(comptime source: []const u8) harness.LowerToLirHarnessError!void {
     try harness.expectLowersToLirWithOptions(source, .{});
     try harness.expectLowersToLirWithOptions(source, .{ .specialization_strategy = .boxy });
 }

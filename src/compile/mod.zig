@@ -159,6 +159,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/specialization_identity_test.zig"));
     std.testing.refAllDecls(@import("test/callable_generated_result_interface_test.zig"));
     std.testing.refAllDecls(@import("test/control_flow_representation_join_test.zig"));
+    std.testing.refAllDecls(@import("test/iterator_item_evidence_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10842_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10848_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10849_test.zig"));

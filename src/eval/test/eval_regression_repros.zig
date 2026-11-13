@@ -1467,4 +1467,66 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "128" },
     },
+    .{
+        // The adapter's step matches the inner step result against a pattern
+        // whose public `Iter(item)` holds private evidence through `item`, so
+        // both sides of the relation hold some.
+        .name = "an adapter over an iterator of produced iterators",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |seed| {
+        \\    sums = [[1.U8, 2].iter(), [3.U8].iter()].iter().map(|it| digits(it))
+        \\    var $total = seed
+        \\    for sum in sums {
+        \\        $total = $total * 100 + sum
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "1203" },
+    },
+    .{
+        // The items are functions whose results are produced iterators.
+        .name = "adapters over an iterator of functions returning produced iterators",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |seed| {
+        \\    made = [|| [1.U8, 2].iter(), || [3.U8].iter()].iter().map(|make| make())
+        \\    kept = [|| [4.U8, 5].iter(), || [6.U8].iter()].iter().keep_if(|make| digits(make()) > 10)
+        \\    var $total = seed
+        \\    for it in made {
+        \\        $total = $total * 100 + digits(it)
+        \\    }
+        \\    for make in kept {
+        \\        $total = $total * 100 + digits(make())
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "120345" },
+    },
 };

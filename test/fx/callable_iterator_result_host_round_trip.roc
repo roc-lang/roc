@@ -8,7 +8,9 @@ import pf.Stdout
 # through a place that knows it only as a type variable (a `Box`, a list, a
 # record, a tag, a tuple, a nominal, or a generic function), calls it on the far
 # side, and iterates the result. The first group also sends the box through the
-# host. `main!` runs each one with both flags.
+# host. The last group runs adapters over iterators whose items hold a produced
+# iterator, directly or as a function's result. `main!` runs each one with both
+# flags.
 
 digits : Iter(U8) -> U64
 digits = |items| {
@@ -436,6 +438,60 @@ function_default! = |use| {
 	digits(f())
 }
 
+iterator_of_functions_mapped_to_results! : Bool => U64
+iterator_of_functions_mapped_to_results! = |use| {
+	its = [|| [1.U8, 2].iter(), || [3.U8].iter()].iter().map(|f| f())
+	var $t = 0.U64
+	for it in its {
+		if use {
+			$t = $t * 100 + digits(it)
+		}
+	}
+	$t
+}
+
+iterator_of_functions_filtered! : Bool => U64
+iterator_of_functions_filtered! = |use| {
+	its = [|| [1.U8, 2].iter(), || [3.U8].iter()].iter().keep_if(|f| digits(f()) > 5)
+	var $t = 0.U64
+	for f in its {
+		if use {
+			$t = $t * 100 + digits(f())
+		}
+	}
+	$t
+}
+
+iterator_of_functions_folded! : Bool => U64
+iterator_of_functions_folded! = |use| {
+	_u = use
+	[|| [1.U8, 2].iter(), || [3.U8].iter()].iter().map(|f| digits(f())).fold(0, |acc, v| acc * 100 + v)
+}
+
+iterator_of_iterators_mapped! : Bool => U64
+iterator_of_iterators_mapped! = |use| {
+	its = [[1.U8, 2].iter(), [3.U8].iter()].iter().map(|it| digits(it))
+	var $t = 0.U64
+	for n in its {
+		if use {
+			$t = $t * 100 + n
+		}
+	}
+	$t
+}
+
+iterator_of_records_mapped! : Bool => U64
+iterator_of_records_mapped! = |use| {
+	its = [{ it: [1.U8, 2].iter() }, { it: [3.U8].iter() }].iter().map(|r| digits(r.it))
+	var $t = 0.U64
+	for n in its {
+		if use {
+			$t = $t * 100 + n
+		}
+	}
+	$t
+}
+
 report! : Str, (Bool => U64) => {}
 report! = |name, run!| {
 	used = run!(Bool.True)
@@ -478,4 +534,9 @@ main! = || {
 	report!("nominal of a function through a generic", nominal_of_a_function_through_a_generic!)
 	report!("function taking a function", function_taking_a_function!)
 	report!("function default", function_default!)
+	report!("iterator of functions mapped to results", iterator_of_functions_mapped_to_results!)
+	report!("iterator of functions filtered", iterator_of_functions_filtered!)
+	report!("iterator of functions folded", iterator_of_functions_folded!)
+	report!("iterator of iterators mapped", iterator_of_iterators_mapped!)
+	report!("iterator of records mapped", iterator_of_records_mapped!)
 }

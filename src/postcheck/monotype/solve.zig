@@ -5744,7 +5744,9 @@ pub const InstGraph = struct {
     /// opaque backing at every structural depth.
     /// `public_node` drives checked relations. A generated-private
     /// specialization lowers its callable body against `private_node`, which
-    /// also supplies the specialization identity.
+    /// also supplies the specialization identity. The two roles hold for the
+    /// roots; below them a pair whose public side is the generated-private
+    /// nominal relates with the roles exchanged.
     pub fn relateOpaqueInterface(self: *InstGraph, public_node: NodeId, private_node: NodeId) Allocator.Error!void {
         try self.relateOpaqueInterfaceAtWidth(public_node, private_node, .exact);
     }
@@ -5836,6 +5838,12 @@ pub const InstGraph = struct {
         const private_content = try self.rootContent(private_node);
         if (isGeneratedPrivateRootContent(public_content) and isGeneratedPrivateRootContent(private_content)) {
             try self.unifyAtRowWidth(public_node, private_node, pair.row_width);
+            return;
+        }
+        if (isGeneratedPrivateRootContent(public_content) and private_content != .unresolved) {
+            // The representation is on the public side of this pair. An
+            // unresolved private side joins it below instead.
+            try pending.append(self.allocator, .{ .left = private_node, .right = public_node, .row_width = pair.row_width });
             return;
         }
         const private_contains_generated = try self.containsGeneratedPrivate(private_node);
@@ -13095,6 +13103,82 @@ test "opaque interface relation preserves forced-dynamic iterator identity" {
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, (try graph.content(private)).named.backing.?.authority);
     try std.testing.expectEqual(Type.IteratorRepresentation.none, (try graph.content(public)).named.def.iterator_representation);
     try std.testing.expectEqual(Type.IteratorRepresentation.forced_dynamic, (try graph.content(private)).named.def.iterator_representation);
+}
+
+test "opaque interface relation exchanges roles at a pair whose public side is the representation" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x53))));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{} };
+    const Pair = struct { public: NodeId, private: NodeId };
+    const iterators = struct {
+        fn pair(g: *InstGraph, module: names.ModuleIdentityId, name: names.TypeNameId, ty: Type.NamedType, public_item: NodeId, private_item: NodeId) Allocator.Error!Pair {
+            return .{
+                .public = try g.newNode(try g.namedContent(.{
+                    .named_type = ty,
+                    .def = .{ .module = module, .type_name = name },
+                    .kind = .@"opaque",
+                    .builtin_owner = .iter,
+                    .args = try g.arena().dupe(NodeId, &.{public_item}),
+                    .backing = .{ .node = try g.newNode(.empty_record), .use = .runtime_layout_only },
+                })),
+                .private = try g.newNode(try g.namedContent(.{
+                    .named_type = ty,
+                    .def = .{
+                        .module = module,
+                        .type_name = name,
+                        .iterator_representation = .forced_dynamic,
+                        .iterator_kind = .forced_dynamic,
+                    },
+                    .kind = .@"opaque",
+                    .builtin_owner = .iter,
+                    .args = try g.arena().dupe(NodeId, &.{private_item}),
+                    .backing = .{
+                        .node = try g.newNode(.empty_record),
+                        .use = .runtime_layout_only,
+                        .authority = .generated_private,
+                    },
+                })),
+            };
+        }
+    };
+
+    // An iterator whose item is itself a private iterator: the public view of
+    // the outer one holds private evidence too, so both sides of the outer
+    // pair do and only the roots tell them apart.
+    const inner = try iterators.pair(
+        graph,
+        module_identity,
+        type_name,
+        named_type,
+        try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }),
+        try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }),
+    );
+    const outer = try iterators.pair(graph, module_identity, type_name, named_type, inner.private, inner.private);
+    const left = try graph.newNode(.{ .list = outer.private });
+    const right = try graph.newNode(.{ .list = outer.public });
+
+    try graph.relateOpaqueInterface(left, right);
+
+    try std.testing.expect(!graph.sameClass(outer.public, outer.private));
+    try std.testing.expectEqual(
+        Type.BackingAuthority.generated_private,
+        (try graph.content(outer.private)).named.backing.?.authority,
+    );
+    try std.testing.expectEqual(
+        Type.BackingAuthority.checked_public,
+        (try graph.content(outer.public)).named.backing.?.authority,
+    );
 }
 
 test "opaque iterator relation materializes unresolved public interface from provenance" {

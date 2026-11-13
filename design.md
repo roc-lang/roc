@@ -9304,6 +9304,18 @@ from (Tier Unification And Callable Flow), so a call of the unboxed function
 lowers its result from that ABI at an explicit typed boundary, whichever view
 of the function the call site holds.
 
+The relation names its two sides public and private, and those roles belong to
+each pair it visits, not to the roots it started from. A public iterator whose
+item type is itself a produced iterator, or a record or function holding one,
+contains generated-private evidence through that item alone. An adapter's step
+matches the inner iterator's step result against a pattern typed at that public
+view, so both rows hold evidence, and within them the scrutinee's `rest` is the
+representation while the pattern's `rest` is its public view. At every pair the
+side whose root is a generated-private nominal is the representation, and two
+such roots are one representation and unify. A pair entered with the
+representation on the public side is therefore related with the roles
+exchanged, at any depth.
+
 `Iter.custom` marks its exact transition-function request with the capability
 to propagate constructor-carried representation evidence. That capability is
 consumed directly while lowering the transition and inherited by its nested
