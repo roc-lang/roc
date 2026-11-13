@@ -99,7 +99,7 @@ pub fn main(init: std.process.Init) SmokeError!void {
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
 
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(arena, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(arena, root.root_requests.runtime_requests.items());
 
     const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         runtime_alloc,

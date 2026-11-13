@@ -673,6 +673,9 @@ const TestsSummaryStep = struct {
     producers: std.StringHashMapUnmanaged(void) = .empty,
     serialize_runs: bool = false,
     last_run: ?*Step = null,
+    /// Set by `finish`, after which the summary's argument list ends in the
+    /// passthrough separator and no further report can be counted.
+    finished: bool = false,
 
     fn create(b: *std.Build, test_filters: []const []const u8, forced_passes: usize) *TestsSummaryStep {
         const self = b.allocator.create(TestsSummaryStep) catch @panic("OOM");
@@ -693,6 +696,7 @@ const TestsSummaryStep = struct {
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
         const run: *Step.Run = @fieldParentPtr("step", run_step);
         const b = run.step.owner;
+        if (self.finished) std.debug.panic("test report producer registered after its summary finished: {s}", .{run.producer.?.name});
         const entry = self.producers.getOrPut(b.allocator, run.producer.?.name) catch @panic("OOM");
         if (entry.found_existing) std.debug.panic("duplicate test report producer: {s}", .{run.producer.?.name});
         const basename = b.fmt("{s}.tsv", .{run.producer.?.name});
@@ -715,6 +719,14 @@ const TestsSummaryStep = struct {
             self.last_run = run_step;
         }
         self.step.dependOn(run_step);
+    }
+
+    /// End the report list: arguments after the separator are passthrough
+    /// filters, so every report must be added before this.
+    fn finish(self: *TestsSummaryStep) void {
+        self.finished = true;
+        self.run.addArg("--");
+        self.run.addPassthruArgs();
     }
 };
 
@@ -4660,8 +4672,6 @@ pub fn build(b: *std.Build) void {
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);
     run_check_cli_global_stdio_step.dependOn(&check_cli_stdio.step);
 
-    tests_summary.run.addArg("--");
-    tests_summary.run.addPassthruArgs();
     run_test_zig_step.dependOn(tests_summary.step);
 
     b.default_step.dependOn(build_web_step);
@@ -5204,6 +5214,9 @@ pub fn build(b: *std.Build) void {
     }
 
     test_fixtures.addUpdateStep(&.{build_test_hosts_step});
+
+    // After every suite is registered, so each report precedes the separator.
+    tests_summary.finish();
 
     // Last, so that every top-level step exists -- including the ones created
     // inside addMainExe.

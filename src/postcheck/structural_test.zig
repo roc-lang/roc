@@ -1419,7 +1419,7 @@ test "Monotype evidence chains retain checker-recorded lexical scope topology" {
     try expectNotContains(lower_source, "parent.* = source_ctx.evidence");
     try expectNotContains(lower_source, "publicOpaqueUnificationType");
     try expectContains(lower_source, "const EvidenceScope = struct");
-    try expectContains(lower_source, "const scope_record = view.templates.dispatch_scopes[raw_scope]");
+    try expectContains(lower_source, "const scope_record = view.templates.dispatch_scopes.items()[raw_scope]");
     try expectContains(lower_source, "context.evidence");
     try expectContains(lower_source, "const_evidence_frames");
 

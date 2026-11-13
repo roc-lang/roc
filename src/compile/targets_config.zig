@@ -990,7 +990,7 @@ fn topLevelConstNode(
     ident: []const u8,
     reason: *TargetConfigResolveReason,
 ) ?checked.ConstNodeId {
-    for (checked_module.top_level_values.entries) |entry| {
+    for (checked_module.top_level_values.entries.items()) |entry| {
         const source_name = checked_module.canonical_names.exportNameText(entry.source_name);
         if (!Ident.textEql(source_name, ident)) continue;
 

@@ -838,15 +838,56 @@ corrupt table whose occupied cells outnumber its count, or a cell naming an
 entry that does not exist, is not detected.
 
 The stores of a checked artifact relocated beside its env, and of a pairing
-entry, load over the entry's bytes the same way. A store's list fields are
-`SafeList`s loaded borrowing the entry, so growth copies and `deinit` frees
-nothing borrowed; `SliceStoreSerde` rejects a `std.ArrayList` field at compile
-time, since one over loaded bytes would hand them to an allocator on growth or
-`deinit`. A store's plain slice fields have no growth operation; a loaded
-artifact frees only its own buffer (`serialized_backing`), never a sub-store's
-slices, which alias it. A loaded store whose build-only dedup tables are not
-stored (a checked type store's interning tables, a const store's blob index)
-takes no new entries.
+entry, load over the entry's bytes the same way. Every list field of such a
+store, and the artifact's own `direct_import_module_keys`, is a `SafeList` that
+a build owns and a load borrows from the entry, so growth copies and `deinit`
+frees nothing borrowed. `SliceStoreSerde` rejects a `std.ArrayList` field at
+compile time, since one over loaded bytes would hand them to an allocator on
+growth or `deinit`, and it rejects a raw slice field, since a slice cannot
+record whether it borrows. A built and a loaded artifact are therefore
+released by the same `deinit`: every sub-store's `deinit` runs, and a loaded
+artifact then releases its buffer (`serialized_backing`) last, after every list
+that borrowed it.
+
+Every dedup table a checked artifact's stores intern through is stored with
+them: the checked type store's structural-root interner (synthesized roots
+whose payloads carry no identity variable) and its scheme index (schemes by
+root and domain), the const store's blob index (blobs by bytes), and the
+canonical name store's proc-base index, beside the name store's interners,
+which keep their own tables. Each of the four is one `HashedProbeTable`
+(`collections/hashed_probe_table.zig`), the same code for building and for a
+loaded store: an open-addressed table in a `SafeList` of cells, each naming
+an entry and recording its 32-bit hash, at most half full, with a power-of-two
+length. Every hash is computed from fixed-width fields (a type payload hashes
+exactly the fields its structural comparison reads), so it is the same on
+every host, and placement depends only on the entries and their insertion
+order, so equal stores hold byte-identical tables. Growing rehashes from the
+recorded hashes alone. A loaded store therefore returns the same id for an
+existing entry as the store it was written from and deduplicates new entries
+against loaded ones; nothing marks a store as loaded and no store refuses
+additions. A table's shape is validated when the artifact or pairing body is
+loaded, together with every list's bounds (`validateLayout`, constant time):
+its length is a power of two or zero, it holds at most half as many entries as
+cells, and it holds no more entries than its column (the blob and proc-base
+indexes exactly as many). A violation is a miss.
+
+Reopening a finalized artifact for evaluation (`reopenForEvaluation`) copies
+nothing. Its evaluation columns and name store keep the storage they have;
+evaluation writes them in place and a borrowed list copies on its first
+growth, into the artifact's owning allocator, so `deinit` frees exactly the
+copies. This writes through a loaded artifact's bytes, which is sound because
+an artifact that can be reopened owns them: a checked-cache artifact borrows
+its environment's private copy-on-write mapping (or heap buffer), which no
+other artifact reads; a pairing with compile-time requests owns its evaluation
+columns (arena copies, or its arena's copy of the pairing entry), and a pairing
+without them has nothing to evaluate and is never reopened; a published
+artifact owns its lists. A platform is retired from its module once it is
+paired, so nothing reopens a platform a pairing reads. The one artifact whose
+bytes several compilations share is the embedded Builtin view below; it is
+baked with every root evaluated under both strategies, so it never has an
+unevaluated request, and `reopenForEvaluation` asserts that it is not the
+artifact being reopened (`assertExtensible`). That assertion is the single
+point where extension of a shared artifact would begin.
 
 A LirImage view loads the same way. Every list of its LIR store (a
 `GuardedList`, whose backing is a `SafeList`) and every plain column of its
@@ -2596,8 +2637,9 @@ requests, evaluation resumes on that module: its evaluation output (the
 compile-time roots, the constant templates, the constant store, and the
 `CheckedModule` name store, since a stored type names its labels and nominal types
 there and a value evaluated here can reach names the module's own source never
-mentions, such as the capture types of an imported closure) moves into storage
-the module owns, every unevaluated root returns to `pending`, and the module
+mentions, such as the capture types of an imported closure) grows where it
+was loaded, interning against its stored dedup tables ("Loading environments
+in place"), every unevaluated root returns to `pending`, and the module
 joins finalization with the compilation's other modules. Finalization
 requests only the pending roots of the modules it finalizes, so the reopened
 module's evaluated roots are restored from its store like any other module's,
@@ -5992,6 +6034,17 @@ classification, root requests, exhaustiveness policy) are per-pairing
 on-demand analyses. Bodies, templates, names and roots are never rewritten:
 both lowering strategies read the platform's own CIR, templates and roots, and
 only the types they read through the pairing differ.
+
+A pairing's type store borrows the platform's columns and copies a column
+before its first write. It interns its new types and schemes against the
+platform's stored tables without writing them: it probes a read-only view of
+each platform table first and its own table second, and enters new roots and
+schemes only in its own (`CheckedTypeStore.inherited_tables`). An image or
+scheme equal to one the platform already holds is therefore that platform
+entry, under a cold platform and a loaded one alike, and any number of apps
+pair with one platform while its bytes stay unchanged. A pairing entry stores
+only the pairing's own tables; installing one gives its store the platform's
+views again.
 
 Calls to requirement declarations receive their direct-call classification
 from the bound app procedure kind using the checked output rule;

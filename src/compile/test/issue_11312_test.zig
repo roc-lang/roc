@@ -63,7 +63,7 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
     var found_good = false;
     var found_fine = false;
     const store = &artifact.moduleEnvConst().store;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());
         const region = store.getNodeRegion(@fromBackingInt(root_node));
         const expr_source = module_source[region.start.offset..region.end.offset];
