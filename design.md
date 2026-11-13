@@ -12434,14 +12434,22 @@ receiver is an evidence-dependent dispatch: Monotype specializes it at each
 instantiation from the use's evidence, and `.boxy` passes one dictionary per
 requirement, filled with the nominal's method or the compiler-derived
 structural implementation, as for a type variable's requirement. Under
-`.boxy` a record or tag union whose row is a variable is described by one
-descriptor of the whole value as the use has it (the nominal's, or the plain
-record's), replacing a descriptor of the row variable's remainder; the
-position of a field or tag (`field_index`, `tag_index`) comes from that
-whole value's closed type, and `dyn_eq`, `dyn_hash` and `dyn_inspect` read
-the whole value's descriptor, so printing a value of such a type renders what
-each call supplied, a nominal's inspect override included, in both lowering
-modes.
+`.boxy` each record or tag union of a worker's signature whose row ends in a
+row variable (`Worker.row_nodes`) is described by one hidden descriptor of
+the whole value as the use has it: the nominal type a caller supplied, or the
+plain record or tag union. A call fills it with the type at that position of
+its actual function type (Bool as `[False, True]`); a use with no actual type
+there fills it with the node over the use's other bindings, the plain value.
+Every descriptor the body takes of a type containing such a node reads that
+input, so the position of a field or tag (`field_index`, `tag_index`) comes
+from the whole value's closed type through its nominal wrapper, and `dyn_eq`,
+`dyn_hash` and `dyn_inspect` read the whole value's descriptor: printing a
+value of such a type renders what each call supplied, a nominal's inspect
+override included, in both lowering modes. The body's own types keep the
+node's written fields and row variable, whose descriptor stays an input for
+types the body writes over the row variable alone. The node's scheme
+position is a hidden input after the worker's variables; lambdas of the
+worker share it.
 
 Both sides are pinned by tests that do every case through an operator and
 through a method named `foo` (`test/cli/MethodsOnOpenRows*.roc`).

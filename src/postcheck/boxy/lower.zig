@@ -453,6 +453,15 @@ pub const StructuralMap = struct { name: types.NameId, payload_index: u32, arity
 /// Names a worker by its index among the program's workers.
 pub const WorkerId = enum(u32) { _ };
 
+/// A record or tag union of a worker's signature whose row ends in a row
+/// variable (`Worker.row_nodes`).
+pub const RowNode = struct {
+    /// Its descriptor's position among the worker's scheme variables.
+    index: u32,
+    /// The type as the worker's signature has it, over its variables.
+    ty: TypeId,
+};
+
 /// One worker: its procedure and the signature callers use.
 pub const Worker = struct {
     key: WorkerKey,
@@ -464,6 +473,13 @@ pub const Worker = struct {
     scheme_vars: []const checked.CheckedTypeId,
     /// For a template worker: its scheme's kind variables.
     kinds: SchemeKinds = .{},
+    /// The records and tag unions of the worker's signature whose rows end in
+    /// a row variable, each with the scheme position of the hidden
+    /// descriptor that describes it as a whole, as the instantiation has it
+    /// (a nominal type a caller supplied, or the plain record or tag union):
+    /// design.md "Methods On Open Rows". The position's checked entry is the
+    /// row variable's, so conversion never names it; only descriptors read it.
+    row_nodes: []const RowNode = &.{},
     /// For a template worker: the position of each of `scheme_vars` in the
     /// template's checked `scheme_vars`, which a use's substitution is
     /// indexed by, and that checked list's length.
@@ -1444,6 +1460,13 @@ pub const Program = struct {
             kind_roots[1 + 2 * index] = try self.converter().convert(module_index, param.callable_ty, env);
             kind_roots[2 + 2 * index] = try self.converter().convert(module_index, param.dispatcher_ty, env);
         }
+        const real_count = scheme_vars.items.len;
+        const row_nodes = try self.collectRowNodes(kind_roots, real_count);
+        for (row_nodes) |node| {
+            const row = self.rowVariableOf(node.ty);
+            try scheme_vars.append(self.arena.allocator(), scheme_vars.items[row]);
+            try checked_slots.append(self.arena.allocator(), checked_slots.items[row]);
+        }
         const kinds = try self.schemeKinds(kind_roots, scheme_vars.items.len);
 
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
@@ -1462,6 +1485,7 @@ pub const Program = struct {
             .module = module_index,
             .scheme_vars = scheme_vars.items,
             .kinds = kinds,
+            .row_nodes = row_nodes,
             .checked_slots = checked_slots.items,
             .checked_scheme_count = @intCast(checked_scheme_vars.len),
             .dictionary_params = dictionary_params.items,
@@ -1531,6 +1555,9 @@ pub const Program = struct {
         int_worker.params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args));
         int_worker.ret = signature.ret;
         int_worker.list_int = .{ .slot = slot, .item = item };
+        const int_nodes = try self.arena.allocator().alloc(RowNode, generic.row_nodes.len);
+        for (int_nodes, generic.row_nodes) |*node, generic_node| node.* = .{ .index = generic_node.index, .ty = try self.substitute(self.allocator, generic_node.ty, bound) };
+        int_worker.row_nodes = int_nodes;
         int_worker.queued = false;
         int_worker.lowered = generic.imported;
         int_worker.needs = null;
@@ -1638,11 +1665,94 @@ pub const Program = struct {
     /// template worker `id`: the sealed variables' entries are dropped, since
     /// the worker takes no descriptor for them. An empty substitution (a use
     /// checking recorded none for) stays empty.
+    /// The records and tag unions `roots` reach whose rows end in one of the
+    /// first `count` variables, in the order a walk first reaches them, each
+    /// given the next scheme position after `count` (`Worker.row_nodes`).
+    fn collectRowNodes(self: *Program, roots: []const TypeId, count: usize) Allocator.Error![]const RowNode {
+        var found: std.ArrayList(RowNode) = .empty;
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var index = roots.len;
+        while (index > 0) {
+            index -= 1;
+            try pending.append(self.allocator, roots[index]);
+        }
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            const start = pending.items.len;
+            switch (self.store.get(ty)) {
+                .record => |record| {
+                    if (record.ext.get()) |ext| if (self.store.get(ext) == .variable and self.store.get(ext).variable < count) {
+                        try found.append(self.arena.allocator(), .{ .index = @intCast(count + found.items.len), .ty = ty });
+                    };
+                    for (self.store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
+                },
+                .tag_union => |tag_union| {
+                    if (tag_union.ext) |ext| if (self.store.get(ext) == .variable and self.store.get(ext).variable < count) {
+                        try found.append(self.arena.allocator(), .{ .index = @intCast(count + found.items.len), .ty = ty });
+                    };
+                    for (self.store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(self.allocator, self.store.span(tag.payloads));
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, self.store.span(items)),
+                .list => |elem| try pending.append(self.allocator, elem),
+                .box => |payload| try pending.append(self.allocator, payload),
+                .nominal => |nominal| try pending.appendSlice(self.allocator, self.store.nominalArgs(nominal)),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, self.store.span(function.args));
+                    try pending.append(self.allocator, function.ret);
+                },
+                .primitive, .empty_record, .variable => {},
+            }
+            std.mem.reverse(TypeId, pending.items[start..]);
+        }
+        return found.items;
+    }
+
+    /// The scheme position of the row variable a row node's row ends in.
+    fn rowVariableOf(self: *Program, node: TypeId) u32 {
+        const ext = switch (self.store.get(node)) {
+            .record => |record| record.ext.get().?,
+            .tag_union => |tag_union| tag_union.ext.?,
+            .primitive, .empty_record, .tuple, .list, .box, .nominal, .function, .variable => unreachable, // `collectRowNodes` keeps only records and tag unions
+        };
+        return self.store.get(ext).variable;
+    }
+
+    /// Give each row node of worker `id` its binding in `bound`: the type at
+    /// its position in the use's actual type where a relation captured one
+    /// (`captured`, by row node), otherwise the node with the use's other
+    /// variables substituted, the plain record or tag union.
+    pub fn fillRowNodes(self: *Program, id: WorkerId, bound: []TypeId, captured: ?[]const Related) Allocator.Error!void {
+        const target = self.worker(id).*;
+        for (target.row_nodes, 0..) |node, position| {
+            if (captured) |relation| {
+                if (relation[position].get()) |actual| {
+                    bound[node.index] = actual;
+                    continue;
+                }
+            }
+            bound[node.index] = try self.substitute(self.allocator, node.ty, bound);
+        }
+    }
+
+    /// `ty` with each of worker `id`'s row nodes read as its whole-value
+    /// variable, for a descriptor of it (`Worker.row_nodes`).
+    pub fn rowNodesAsVariables(self: *Program, id: WorkerId, ty: TypeId) Allocator.Error!TypeId {
+        const target = self.worker(id).*;
+        if (target.row_nodes.len == 0) return ty;
+        const identity = try self.allocator.alloc(TypeId, target.scheme_vars.len);
+        defer self.allocator.free(identity);
+        for (identity, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
+        return try self.rewriteTypeWithRowNodes(self.allocator, ty, identity, null, target.row_nodes);
+    }
+
     pub fn keptSubstitution(self: *Program, id: WorkerId, subst: []const checked.CheckedTypeId) Allocator.Error![]const checked.CheckedTypeId {
         const target = self.worker(id).*;
         if (subst.len == 0 or target.key != .template) return subst;
         if (subst.len != target.checked_scheme_count) invariant("a use's checked substitution differs from its target's scheme");
-        if (target.checked_slots.len == subst.len) return subst;
+        if (target.checked_slots.len == subst.len and target.row_nodes.len == 0) return subst;
         const kept = try self.arena.allocator().alloc(checked.CheckedTypeId, target.checked_slots.len);
         for (kept, target.checked_slots) |*entry, slot| entry.* = subst[slot];
         return kept;
@@ -1711,6 +1821,7 @@ pub const Program = struct {
             .proc = proc,
             .module = outer_worker.module,
             .scheme_vars = scheme_vars,
+            .row_nodes = outer_worker.row_nodes,
             .list_int = outer_worker.list_int,
             .dictionary_params = &.{},
             .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
@@ -1750,6 +1861,13 @@ pub const Program = struct {
     /// related as an open tag row's remainder: the actual row's tags the open
     /// row does not name (design.md "Row Joins", `.boxy`).
     pub fn relateVariablesRows(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool) Allocator.Error![]Related {
+        return try self.relateVariablesCapturing(allocator, roots, count, row_vars, &.{}, null);
+    }
+
+    /// `relateVariablesRows`, also recording in `captured` the actual type
+    /// at each of `row_nodes`' positions, as a whole: a nominal type stays
+    /// that nominal type (`Worker.row_nodes`).
+    pub fn relateVariablesCapturing(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool, row_nodes: []const RowNode, captured: ?[]Related) Allocator.Error![]Related {
         const store = &self.store;
         const bound = try allocator.alloc(Related, count);
         defer allocator.free(bound);
@@ -1758,6 +1876,12 @@ pub const Program = struct {
         defer pending.deinit(allocator);
         try pending.appendSlice(allocator, roots);
         while (pending.pop()) |pair| {
+            if (captured) |out| for (row_nodes, out) |node, *slot| {
+                if (node.ty != pair[0] or slot.* != .none) continue;
+                // Bool is the tag union `[False, True]`.
+                const actual = store.get(pair[1]);
+                slot.* = .some(if (actual == .primitive and actual.primitive == .bool) try self.boolUnion() else pair[1]);
+            };
             const formal = store.get(pair[0]);
             if (formal == .variable) {
                 bound[formal.variable] = .some(pair[1]);
@@ -2000,6 +2124,11 @@ pub const Program = struct {
     }
 
     fn rewriteType(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId) Allocator.Error!TypeId {
+        return try self.rewriteTypeWithRowNodes(allocator, root, bound, function_as, &.{});
+    }
+
+    /// `rewriteType`, reading each of `row_nodes` as its variable.
+    fn rewriteTypeWithRowNodes(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId, row_nodes: []const RowNode) Allocator.Error!TypeId {
         var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
         defer done.deinit(allocator);
         const Frame = struct { ty: TypeId, expanded: bool };
@@ -2010,6 +2139,13 @@ pub const Program = struct {
             if (done.contains(frame.ty)) continue;
             const node = self.store.get(frame.ty);
             if (!frame.expanded) {
+                const row_node = for (row_nodes) |candidate| {
+                    if (candidate.ty == frame.ty) break candidate;
+                } else null;
+                if (row_node) |whole| {
+                    try done.put(allocator, frame.ty, try self.store.variable(whole.index));
+                    continue;
+                }
                 try stack.append(allocator, .{ .ty = frame.ty, .expanded = true });
                 switch (node) {
                     .record => |record| {
@@ -2470,11 +2606,15 @@ pub const Program = struct {
     pub fn instantiateTarget(self: *Program, target: WorkerId, formal: TypeId, actual: TypeId) Allocator.Error!TargetInstance {
         const target_worker = self.worker(target).*;
         const count = target_worker.scheme_vars.len;
-        const related = try self.relateVariablesPartial(self.allocator, &.{.{ formal, actual }}, count);
+        const captured = try self.allocator.alloc(Related, target_worker.row_nodes.len);
+        defer self.allocator.free(captured);
+        @memset(captured, .none);
+        const related = try self.relateVariablesCapturing(self.allocator, &.{.{ formal, actual }}, count, null, target_worker.row_nodes, captured);
         defer self.allocator.free(related);
         try self.relateThroughTargetRequirements(target, related);
         const bound = try self.arena.allocator().alloc(TypeId, count);
         for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty.get() orelse try self.converter().sealedScheme(target_worker.module, variable);
+        try self.fillRowNodes(target, bound, captured);
         try self.resolveKindSlots(target_worker.kinds, bound);
         return try self.targetRequirements(target, bound);
     }

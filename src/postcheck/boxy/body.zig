@@ -1338,7 +1338,10 @@ pub const Builder = struct {
     /// (unless a body must compose it, `Program.composedInBody`), a scope
     /// variable's input, or the recipe of a type over the worker's
     /// variables.
-    pub fn descWord(self: *Builder, ty: TypeId) Allocator.Error!Word {
+    pub fn descWord(self: *Builder, written: TypeId) Allocator.Error!Word {
+        // A record or tag union of the signature whose row ends in a row
+        // variable is described as a whole, by its own input.
+        const ty = try self.program.rowNodesAsVariables(self.worker_id, written);
         if (try self.closed(ty) and !try self.program.composedInBody(ty)) return .{ .static = .{ .desc = ty } };
         switch (self.program.store.get(ty)) {
             .variable => |index| return try self.inputWord(index),
@@ -2549,7 +2552,7 @@ pub const Builder = struct {
             .worker => |target| {
                 const target_worker = self.program.worker(target).*;
                 const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-                const bound = try self.relateVariables(formal, fn_ty, target_worker.scheme_vars.len);
+                const bound = try self.relateWorkerVariables(target, formal, fn_ty);
                 defer self.allocator.free(bound);
                 const hidden = try self.allocator.alloc(Word, bound.len + target_worker.dictionary_params.len + target_worker.literal_params);
                 defer self.allocator.free(hidden);
@@ -3141,7 +3144,7 @@ pub const Builder = struct {
                         const callee = try self.program.templateRefWorker(wrapper);
                         const callee_worker = self.program.worker(callee).*;
                         if (callee_worker.params.len != 0 or callee_worker.dictionary_params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
-                        const bound = try self.relateVariables(callee_worker.ret, eval.ty, callee_worker.scheme_vars.len);
+                        const bound = try self.relateWorkerVariables(callee, callee_worker.ret, eval.ty);
                         defer self.allocator.free(bound);
                         const hidden = try self.allocator.alloc(Word, bound.len);
                         defer self.allocator.free(hidden);
@@ -6805,9 +6808,12 @@ pub const Builder = struct {
         const row_vars = try self.allocator.alloc(bool, target.scheme_vars.len);
         defer self.allocator.free(row_vars);
         @memset(row_vars, false);
+        const captured = try self.allocator.alloc(lower.Related, target.row_nodes.len);
+        defer self.allocator.free(captured);
+        @memset(captured, .none);
         const related: []lower.Related = if (call_fn) |actual| blk: {
             const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
-            break :blk try self.program.relateVariablesRows(self.allocator, &.{.{ formal, actual }}, target.scheme_vars.len, row_vars);
+            break :blk try self.program.relateVariablesCapturing(self.allocator, &.{.{ formal, actual }}, target.scheme_vars.len, row_vars, target.row_nodes, captured);
         } else try self.allocator.alloc(lower.Related, 0);
         defer self.allocator.free(related);
         // Without a recorded instantiation, a variable the function type
@@ -6825,6 +6831,7 @@ pub const Builder = struct {
             }
             slot.* = ty orelse try self.program.converter().sealedScheme(target.module, target.scheme_vars[index]);
         }
+        try self.program.fillRowNodes(callee, bound, captured);
         try self.program.resolveKindSlots(target.kinds, bound);
         return bound;
     }
@@ -7710,6 +7717,23 @@ pub const Builder = struct {
     /// row's entries the formal row does not name.
     pub fn relateVariables(self: *Builder, formal_root: TypeId, actual_root: TypeId, count: usize) Allocator.Error![]TypeId {
         return try self.relateVariablesAll(&.{.{ formal_root, actual_root }}, count);
+    }
+
+    /// `relateVariables` for the scheme of worker `target`, whose row nodes
+    /// take the actual types at their positions (`Worker.row_nodes`).
+    pub fn relateWorkerVariables(self: *Builder, target: WorkerId, formal: TypeId, actual: TypeId) Allocator.Error![]TypeId {
+        const target_worker = self.program.worker(target).*;
+        const captured = try self.allocator.alloc(lower.Related, target_worker.row_nodes.len);
+        defer self.allocator.free(captured);
+        @memset(captured, .none);
+        const related = try self.program.relateVariablesCapturing(self.allocator, &.{.{ formal, actual }}, target_worker.scheme_vars.len, null, target_worker.row_nodes, captured);
+        defer self.allocator.free(related);
+        const result = try self.allocator.alloc(TypeId, related.len);
+        const row_node_start = target_worker.scheme_vars.len - target_worker.row_nodes.len;
+        for (related[0..row_node_start], result[0..row_node_start], 0..) |ty, *slot, index| slot.* = ty.get() orelse
+            invariantFmt("a related type leaves variable {d} of {d} unrelated", .{ index, related.len });
+        try self.program.fillRowNodes(target, result, captured);
+        return result;
     }
 
     /// `relateVariables` over several formal and actual type pairs at once.

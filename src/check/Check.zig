@@ -1502,6 +1502,9 @@ deciding_plain_rank: ?Rank = null,
 /// Whether a method call on a plain record or tag union is waiting for its
 /// definition's boundary (`deciding_plain_rank`).
 plain_decisions_waiting: bool = false,
+/// The walk `waitsForPlainDecision` runs over a compared value's data.
+plain_wait_pending: std.ArrayListUnmanaged(Var) = .empty,
+plain_wait_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// The expression that fails when a requirement a row variable holds fails,
 /// keyed by the requirement's callable var: the first one it was held with,
 /// which for a requirement copied from a scheme is the use that instantiated
@@ -2074,6 +2077,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .reporting_annotated_row_value = .lexical,
     .deciding_plain_rank = .lexical,
     .plain_decisions_waiting = .settled,
+    .plain_wait_pending = .scratch,
+    .plain_wait_seen = .scratch,
     .open_row_failure_exprs = .keyed,
     .interpolation_part_numerals = .keyed,
     .retired_literal_dispatch_plans = .keyed,
@@ -54683,10 +54688,10 @@ fn waitsForPlainDecision(self: *Self, constraints_range: StaticDispatchConstrain
         .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => {},
     }
     if (!compares) return false;
-    var seen: collections.DenseMapUnmanaged(Var, void) = .empty;
-    defer seen.deinit(self.gpa);
-    var pending: std.ArrayListUnmanaged(Var) = .empty;
-    defer pending.deinit(self.gpa);
+    const seen = &self.plain_wait_seen;
+    seen.clearRetainingCapacity();
+    const pending = &self.plain_wait_pending;
+    pending.clearRetainingCapacity();
     try pending.append(self.gpa, resolved.var_);
     while (pending.pop()) |var_| {
         const current = self.types.resolveVar(var_);
