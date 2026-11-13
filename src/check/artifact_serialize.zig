@@ -546,15 +546,6 @@ pub fn comptimeStrEq(comptime a: []const u8, comptime b: []const u8) bool {
     return true;
 }
 
-/// The store's `serialized: bool` frozen flag, if present. `deserialize` sets it to
-/// `true`; it never appears in `Serialized` (it is build-only state).
-fn frozenFlagField(comptime Store: type) ?[]const u8 {
-    for (@typeInfo(Store).@"struct".field_names, @typeInfo(Store).@"struct".field_types) |f_name, f_type| {
-        if (comptimeStrEq(f_name, "serialized") and f_type == bool) return "serialized";
-    }
-    return null;
-}
-
 /// The store's retained build-only `allocator: Allocator` field, if present. A store
 /// with one keeps the load allocator for its build-only fields; its `deserialize`
 /// takes the allocator as a parameter (`deserializeWithAllocator`).
@@ -565,12 +556,12 @@ fn allocatorField(comptime Store: type) ?[]const u8 {
     return null;
 }
 
-/// Build-only store fields that are NOT serialized, beyond the auto-detected frozen
-/// flag and allocator (e.g. dedup hashmaps, scratch buffers, side-index tables). A
+/// Build-only store fields that are NOT serialized, beyond the auto-detected
+/// allocator (e.g. scratch buffers, side-index tables). A
 /// store lists them in a `pub const serde_transient_fields = [_][]const u8{...}` decl;
 /// `deserialize` resets each to its struct default (so they must declare one). They
 /// are excluded from the serialized set, and a store field that is neither serialized,
-/// the flag, the allocator, nor listed here is a compile error—closing the
+/// the allocator, nor listed here is a compile error—closing the
 /// "forgot to serialize a data field" footgun the strict field set otherwise guards.
 fn transientFields(comptime Store: type) []const []const u8 {
     if (@hasDecl(Store, "serde_transient_fields")) return &Store.serde_transient_fields;
@@ -600,7 +591,6 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 ///     };
 ///
 /// Stores carrying extra runtime state are handled by reflection, not excluded:
-///   * a `serialized: bool` frozen flag—auto-detected and set `true` on load;
 ///   * a retained `allocator: Allocator`—auto-detected; the store aliases
 ///     `deserialize = Serde.deserializeWithAllocator` and the allocator is injected;
 ///   * build-only side tables—declared in `serde_transient_fields` and reset to
@@ -611,8 +601,8 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 ///     hand the buffer to an allocator on growth or `deinit`. A raw slice field is
 ///     a compile error too: a slice cannot record whether it borrows, so a built
 ///     and a loaded store could not share one `deinit`.
-/// Every store field must be one of: serialized (a `Serialized` field), the frozen
-/// flag, the allocator, or a declared transient—otherwise a compile error fires, so
+/// Every store field must be one of: serialized (a `Serialized` field), the
+/// allocator, or a declared transient—otherwise a compile error fires, so
 /// a data field accidentally left out of `Serialized` cannot silently vanish. A
 /// store's `deinit` (`SliceStoreDeinit` or hand-written) is one path for built and
 /// loaded stores alike.
@@ -632,17 +622,15 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
                     " is a raw slice, which a load would point into the buffer with no way to tell it from an owned one; make it a SafeList.",
             );
         }
-        // Every store field must be accounted for: serialized, the frozen flag, the
-        // allocator, or a declared transient. A forgotten data field is a compile error.
-        const flag = frozenFlagField(Store);
+        // Every store field must be accounted for: serialized, the allocator,
+        // or a declared transient. A forgotten data field is a compile error.
         const alloc = allocatorField(Store);
         for (@typeInfo(Store).@"struct".field_names) |f_name| {
             const persistent = @hasField(Serialized, f_name);
-            const is_flag = flag != null and comptimeStrEq(f_name, flag.?);
             const is_alloc = alloc != null and comptimeStrEq(f_name, alloc.?);
-            if (!persistent and !is_flag and !is_alloc and !isTransientField(Store, f_name)) @compileError(
+            if (!persistent and !is_alloc and !isTransientField(Store, f_name)) @compileError(
                 "SliceStoreSerde: store field '" ++ f_name ++ "' of " ++ @typeName(Store) ++
-                    " is neither serialized, the frozen flag, the allocator, nor a declared transient" ++
+                    " is neither serialized, the allocator, nor a declared transient" ++
                     " (add it to `Serialized` or `serde_transient_fields`).",
             );
         }
@@ -666,7 +654,6 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
         }
 
         fn fill(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) Store {
-            const flag = comptime frozenFlagField(Store);
             const alloc = comptime allocatorField(Store);
             var store: Store = undefined;
             // Serialized (persistent) fields come straight from the relocated blob.
@@ -691,13 +678,11 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
                     @field(store, field_name) = value;
                 }
             }
-            // The remaining (build-only) fields: the frozen flag is set, the retained
-            // allocator is injected, and every declared transient resets to its default.
+            // The remaining (build-only) fields: the retained allocator is
+            // injected, and every declared transient resets to its default.
             inline for (@typeInfo(Store).@"struct".field_names) |f_name| {
                 if (comptime @hasField(Serialized, f_name)) continue;
-                if (comptime flag != null and comptimeStrEq(f_name, flag.?)) {
-                    @field(store, f_name) = true;
-                } else if (comptime alloc != null and comptimeStrEq(f_name, alloc.?)) {
+                if (comptime alloc != null and comptimeStrEq(f_name, alloc.?)) {
                     @field(store, f_name) = allocator;
                 } else {
                     @field(store, f_name) = initTransient(@FieldType(Store, f_name), Store, f_name, allocator);

@@ -4938,6 +4938,10 @@ pub const Coordinator = struct {
         const buffer = arena.allocator().alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.artifact_body.len) catch return null;
         @memcpy(buffer, bodies.artifact_body);
         const header: *const CheckedArtifact.PlatformPairing.Serialized = @ptrCast(buffer.ptr);
+        header.validate(buffer.len) catch {
+            manager.rejectEntry(.checked, .pairing, key.bytes, directory, data.stamp, "its artifact body fails validation", .{});
+            return null;
+        };
         const reports = loadCachedReports(arena.allocator(), bodies.reports_body) catch |err| switch (err) {
             error.OutOfMemory => return null,
             error.CorruptArtifact => {
@@ -5213,11 +5217,17 @@ pub const Coordinator = struct {
 
         const artifact_serialized: *const check.CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
         // The envelope establishes completeness and layout compatibility.
-        // Payloads are trusted producer output; do not recursively validate them.
+        // Every list must lie inside the body and every interning table must
+        // have its stored shape (constant time, no item read); the items
+        // themselves are trusted producer output.
         if (!std.mem.eql(u8, &artifact_serialized.key.bytes, &cache_key.bytes)) {
             manager.rejectEntry(.checked, .checked, typing_context.key.bytes, entries_dir, cache_data.stamp, "its artifact names another key", .{});
             return false;
         }
+        artifact_serialized.validateLayout(artifact_buffer.len) catch {
+            manager.rejectEntry(.checked, .checked, typing_context.key.bytes, entries_dir, cache_data.stamp, "its artifact body fails validation", .{});
+            return false;
+        };
         const cached_reports = loadCachedReports(null, bodies.reports_body) catch |err| switch (err) {
             error.OutOfMemory => {
                 manager.stats.recordInvalidation();
@@ -9000,6 +9010,11 @@ const ReuseRun = struct {
     values: []?i64,
     /// The app module's checked key.
     module_key: [32]u8,
+    /// Whether this compilation reopened the app's loaded artifact.
+    app_reopened: bool,
+    /// Whether the app artifact's compile-time root column still borrows the
+    /// cache entry it was loaded from (written in place, never grown).
+    app_roots_borrowed: bool,
 
     fn deinit(self: *ReuseRun, allocator: Allocator) void {
         for (self.names) |name| allocator.free(name);
@@ -9097,7 +9112,52 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
         .names = try names.toOwnedSlice(allocator),
         .values = try values.toOwnedSlice(allocator),
         .module_key = app.key.bytes,
+        .app_reopened = app.reopened,
+        .app_roots_borrowed = app.compile_time_roots.roots.capacity == 0 and app.compile_time_roots.roots.length != 0,
     };
+}
+
+test "a warm build that demands another strategy's roots reopens the loaded artifact in place" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeReuseFixture(&tmp,
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\adder = |n| |x| x + n
+        \\add_one = adder(1.I64)
+        \\answer = add_one(41.I64)
+    );
+    try tmp.dir.createDirPath(std.testing.io, "cold");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const cold_cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cold", allocator);
+    defer allocator.free(cold_cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var lss = try compileForReuseWithStrategy(allocator, cache, app, null, .lss);
+    defer lss.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 42), lss.value("answer"));
+    try std.testing.expect(!lss.app_reopened);
+
+    // The Boxy build loads the entry the LSS build stored, which lacks the
+    // Boxy form of `add_one`, so it reopens the artifact: the root column is
+    // written where it was loaded, and the result matches a cold build.
+    var reopened = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer reopened.deinit(allocator);
+    try std.testing.expect(reopened.app_reopened);
+    try std.testing.expect(reopened.app_roots_borrowed);
+    var cold = try compileForReuseWithStrategy(allocator, cold_cache, app, null, .boxy);
+    defer cold.deinit(allocator);
+    try std.testing.expectEqual(cold.value("answer"), reopened.value("answer"));
+    try std.testing.expectEqualStrings(cold.stderr, reopened.stderr);
+
+    // The entry the reopened build stored again holds both forms.
+    var warm = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer warm.deinit(allocator);
+    try std.testing.expect(!warm.app_reopened);
+    try std.testing.expectEqual(cold.value("answer"), warm.value("answer"));
 }
 
 const reuse_platform =

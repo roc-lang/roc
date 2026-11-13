@@ -367,7 +367,9 @@ pub const Constants = struct {
     /// 184: combines the independent 179 and 183 entry changes.
     /// 185: combines the independent 181 and 184 entry changes.
     /// 186: combines the independently merged 183 and 185 entry layouts.
-    pub const CACHE_VERSION = 186;
+    /// 187: checked artifacts store their type, scheme, blob and proc-base
+    ///      interning tables.
+    pub const CACHE_VERSION = 187;
 };
 
 /// Configuration for the Roc cache system.

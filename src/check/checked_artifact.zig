@@ -3620,7 +3620,7 @@ pub const StoredNominalId = enum(u32) { _ };
 /// must not retain a returned slice across a subsequent pool-growing call
 /// (`appendPool`/`commitPayload`/…), which may reallocate and dangle it; snapshot
 /// or `dupe` first (as `cloneCheckedTypeRootSubstituting` and `instantiateNominalBacking`
-/// do). `appendPool` asserts `!serialized` to mark that growth boundary.
+/// do). `appendPool` marks that growth boundary.
 fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype) Live {
     const Stored = @typeInfo(@TypeOf(stored)).pointer.child;
     const info = @typeInfo(Live);
@@ -4528,12 +4528,6 @@ pub const CheckedNominalDeclaration = struct {
     }
 };
 
-const CheckedStructuralRootEntry = struct {
-    domain: CheckedStructuralKeyDomain,
-    root: CheckedTypeId,
-    next_plus_one: u32,
-};
-
 const CheckedTypePublication = struct {
     store: CheckedTypeStore,
     /// The source graph is immutable throughout publication. Keep its direct
@@ -4657,12 +4651,12 @@ pub const CheckedTypeStore = struct {
     /// Explicit ownership of columns borrowed from an immutable platform.
     borrowed_columns: std.EnumSet(BorrowedColumn) = .{},
 
-    /// Build-only immediate-payload interner. The fast hash selects a collision
-    /// chain; equality is always checked against the stored payload, so this is
-    /// exact even if two distinct payloads have the same hash. Child ids are
-    /// already interned, making this the DAG's structural-consing index.
-    structural_root_heads: std.AutoHashMapUnmanaged(u64, u32) = .empty,
-    structural_root_entries: std.ArrayListUnmanaged(CheckedStructuralRootEntry) = .empty,
+    /// Structural interner of the synthesized roots whose payloads carry no
+    /// identity variable, by synthesized index. A probe compares the stored
+    /// payload, so two payloads with equal hashes stay distinct. Child ids
+    /// are already interned, making this the DAG's structural-consing index.
+    /// Stored with the store, so a loaded store interns against it.
+    structural_roots: collections.HashedProbeTable = .{},
     /// Build-only record of the identity instance each substitution-cloned
     /// flex or rigid root was minted from (clone → source). Substituting an
     /// identity-bearing root reserves distinct roots for the variables it
@@ -4676,9 +4670,9 @@ pub const CheckedTypeStore = struct {
     synthetic_variable_roots: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
     roots: collections.SafeList(CheckedTypeRoot) = .{},
     schemes: collections.SafeList(CheckedTypeScheme) = .{},
-    /// Build-only scheme of each root and domain, so a root asked for its
-    /// scheme twice names one scheme.
-    scheme_by_root: std.AutoHashMapUnmanaged(SchemeRootKey, CheckedTypeSchemeId) = .empty,
+    /// Index of `schemes` by root and domain, so a root asked for its scheme
+    /// twice names one scheme. Stored with the store.
+    scheme_index: collections.HashedProbeTable = .{},
     payloads: collections.SafeList(StoredCheckedTypePayload) = .{},
     /// Out-of-line rows of `alias` and `nominal` payloads.
     alias_row_pool: collections.SafeList(StoredAlias) = .{},
@@ -4729,11 +4723,16 @@ pub const CheckedTypeStore = struct {
     /// by importing module and imported id, so an imported type projected
     /// twice names one root.
     projected_imports: std.AutoHashMapUnmanaged(ProjectedImportKey, CheckedTypeId) = .empty,
-    /// True for a store reconstructed from a serialized buffer. Its build-only
-    /// interning tables are not stored, so such a store takes no new types.
-    serialized: bool = false,
+    /// The interning tables of the platform store a pairing overlay extends
+    /// (`borrowForPairing`), probed read-only before the overlay's own
+    /// tables, so the overlay interns against the platform's types without
+    /// writing to the platform. Empty on every other store.
+    inherited_tables: InheritedTables = .{},
 
-    const SchemeRootKey = struct { root: CheckedTypeId, domain: CheckedTypeSchemeDomain };
+    const InheritedTables = struct {
+        structural_roots: collections.HashedProbeTable.View = .empty,
+        scheme_index: collections.HashedProbeTable.View = .empty,
+    };
     const ProjectedImportKey = struct { module: [32]u8, ty: CheckedTypeId };
 
     const BorrowedColumn = enum {
@@ -4764,9 +4763,17 @@ pub const CheckedTypeStore = struct {
         }
         result.builtin_nominal_declarations = source.builtin_nominal_declarations;
         result.borrowed_columns = std.EnumSet(BorrowedColumn).full;
+        result.inherited_tables = source.tablesForOverlay();
         result.sealed_env = source.sealed_env;
         result.sealed_keys = source.sealed_keys;
         return result;
+    }
+
+    /// Read-only views of this store's interning tables, for an overlay
+    /// that extends it.
+    fn tablesForOverlay(self: *const CheckedTypeStore) InheritedTables {
+        std.debug.assert(self.inherited_tables.structural_roots.cells.len == 0 and self.inherited_tables.scheme_index.cells.len == 0);
+        return .{ .structural_roots = self.structural_roots.view(), .scheme_index = self.scheme_index.view() };
     }
 
     fn ownColumn(self: *CheckedTypeStore, allocator: Allocator, comptime column: BorrowedColumn) Allocator.Error!void {
@@ -4784,14 +4791,12 @@ pub const CheckedTypeStore = struct {
     pub const serde_transient_fields = [_][]const u8{
         "template_use_active",
         "borrowed_columns",
-        "structural_root_heads",
-        "structural_root_entries",
+        "inherited_tables",
         "identity_origins",
         "synthetic_variable_roots",
         "synthesized_keys",
         "key_names",
         "projected_imports",
-        "scheme_by_root",
         "sealed_env",
         "sealed_keys",
     };
@@ -4817,11 +4822,8 @@ pub const CheckedTypeStore = struct {
 
     /// Append `items` to the pool holding `T`, returning their range.
     fn appendPool(self: *CheckedTypeStore, allocator: Allocator, comptime T: type, items: []const T) Allocator.Error!CheckedTypeRange {
-        // Pools only grow during construction. A frozen (deserialized) store has
-        // none of its build-only interning tables, so appending to it is a bug—this
-        // catches such a bug, and is the boundary where build-time aliasing slices
-        // could be invalidated (see the `payload`/`formalArgs` aliasing-invariant docs).
-        std.debug.assert(!self.serialized);
+        // The boundary where build-time aliasing slices could be invalidated
+        // (see the `payload`/`formalArgs` aliasing-invariant docs).
         const field = comptime poolField(CheckedTypeStore, T);
         if (items.len != 0) try self.ownColumn(allocator, @field(BorrowedColumn, field));
         return artifact_serialize.appendSpan(CheckedTypeRange, T, &@field(self, field), allocator, items);
@@ -5257,43 +5259,37 @@ pub const CheckedTypeStore = struct {
         try self.identity_origins.put(allocator, root, root);
     }
 
+    /// Compares a candidate payload with an interned synthesized root.
+    const StructuralRootContext = struct {
+        store: *const CheckedTypeStore,
+        recipe: CheckedTypeKeyRecipe,
+        payload: CheckedTypePayloadBuild,
+
+        pub fn eql(self: StructuralRootContext, entry: u32) bool {
+            return self.store.roots.items()[entry].recipe == self.recipe and
+                checkedTypePayloadBuildEqlStored(self.payload, self.store.payload(type_ids.fromSynthesized(entry)));
+        }
+    };
+
     fn structuralRootForPayload(
         self: *const CheckedTypeStore,
         domain: CheckedStructuralKeyDomain,
-        fingerprint: u64,
+        hash: u32,
         build_payload: CheckedTypePayloadBuild,
     ) ?CheckedTypeId {
-        var entry_plus_one = self.structural_root_heads.get(fingerprint) orelse return null;
-        while (entry_plus_one != 0) {
-            const entry = self.structural_root_entries.items[entry_plus_one - 1];
-            if (entry.domain == domain and
-                checkedTypePayloadBuildEqlStored(build_payload, self.payload(entry.root))) return entry.root;
-            entry_plus_one = entry.next_plus_one;
-        }
-        return null;
+        const context = StructuralRootContext{ .store = self, .recipe = domain.recipe(), .payload = build_payload };
+        const entry = self.inherited_tables.structural_roots.find(hash, context) orelse
+            self.structural_roots.find(hash, context) orelse return null;
+        return type_ids.fromSynthesized(entry);
     }
 
     fn indexStructuralRoot(
         self: *CheckedTypeStore,
         allocator: Allocator,
-        domain: CheckedStructuralKeyDomain,
         root: CheckedTypeId,
-        fingerprint: u64,
+        hash: u32,
     ) Allocator.Error!void {
-        const head = try self.structural_root_heads.getOrPut(allocator, fingerprint);
-        if (!head.found_existing) head.value_ptr.* = 0;
-        errdefer {
-            if (!head.found_existing) _ = self.structural_root_heads.remove(fingerprint);
-        }
-        const previous_plus_one = head.value_ptr.*;
-        const entry_index: u32 = @intCast(self.structural_root_entries.items.len);
-        try self.structural_root_entries.append(allocator, .{
-            .domain = domain,
-            .root = root,
-            .next_plus_one = previous_plus_one,
-        });
-        // Set the head only after the entry exists.
-        head.value_ptr.* = entry_index + 1;
+        try self.structural_roots.insertNew(allocator, hash, @intCast(type_ids.synthesizedIndex(root)));
     }
 
     pub fn scheme(self: *const CheckedTypeStore, id: CheckedTypeSchemeId) CheckedTypeScheme {
@@ -5308,16 +5304,33 @@ pub const CheckedTypeStore = struct {
         domain: CheckedTypeSchemeDomain,
         root: CheckedTypeId,
     ) Allocator.Error!CheckedTypeSchemeId {
-        std.debug.assert(!self.serialized);
-        const entry = try self.scheme_by_root.getOrPut(allocator, .{ .root = root, .domain = domain });
-        if (entry.found_existing) return entry.value_ptr.*;
-        errdefer _ = self.scheme_by_root.remove(.{ .root = root, .domain = domain });
+        var hasher = std.hash.Wyhash.init(0x726f635f73636865);
+        std.hash.autoHash(&hasher, root);
+        std.hash.autoHash(&hasher, domain);
+        const hash: u32 = @truncate(hasher.final());
+        const context = SchemeContext{ .schemes = self.schemes.items(), .root = root, .domain = domain };
+        if (self.inherited_tables.scheme_index.find(hash, context) orelse self.scheme_index.find(hash, context)) |existing| {
+            return @fromBackingInt(existing);
+        }
         try self.ownColumn(allocator, .schemes);
         const id: CheckedTypeSchemeId = @fromBackingInt(@intCast(self.schemes.items().len));
         _ = try self.schemes.append(allocator, .{ .id = id, .domain = domain, .root = root });
-        entry.value_ptr.* = id;
+        errdefer _ = self.schemes.pop();
+        try self.scheme_index.insertNew(allocator, hash, @backingInt(id));
         return id;
     }
+
+    /// Compares a root and domain with an interned scheme's.
+    const SchemeContext = struct {
+        schemes: []const CheckedTypeScheme,
+        root: CheckedTypeId,
+        domain: CheckedTypeSchemeDomain,
+
+        pub fn eql(self: SchemeContext, entry: u32) bool {
+            const scheme_row = self.schemes[entry];
+            return scheme_row.root == self.root and scheme_row.domain == self.domain;
+        }
+    };
 
     pub fn appendSyntheticFunctionRoot(
         self: *CheckedTypeStore,
@@ -5337,7 +5350,7 @@ pub const CheckedTypeStore = struct {
             .ret = ret,
         } };
         const fingerprint = if (!contains_identity_variables)
-            checkedTypePayloadStructuralFingerprint(.synthetic_function, build_payload)
+            checkedTypePayloadStructuralHash(.synthetic_function, build_payload)
         else
             null;
         if (fingerprint) |value| {
@@ -5356,7 +5369,7 @@ pub const CheckedTypeStore = struct {
             _ = self.payloads.pop();
             _ = self.roots.pop();
         }
-        if (fingerprint) |value| try self.indexStructuralRoot(allocator, .synthetic_function, id, value);
+        if (fingerprint) |value| try self.indexStructuralRoot(allocator, id, value);
         return id;
     }
 
@@ -5371,7 +5384,7 @@ pub const CheckedTypeStore = struct {
 
         const structurally_internable = !try checkedTypePayloadBuildContainsIdentityVariables(self, owned_payload);
         const fingerprint = if (structurally_internable)
-            checkedTypePayloadStructuralFingerprint(.checked_payload, owned_payload)
+            checkedTypePayloadStructuralHash(.checked_payload, owned_payload)
         else
             null;
         if (fingerprint) |value| {
@@ -5393,7 +5406,7 @@ pub const CheckedTypeStore = struct {
             _ = self.payloads.pop();
             _ = self.roots.pop();
         }
-        if (fingerprint) |value| try self.indexStructuralRoot(allocator, .checked_payload, id, value);
+        if (fingerprint) |value| try self.indexStructuralRoot(allocator, id, value);
         return id;
     }
 
@@ -5608,12 +5621,11 @@ pub const CheckedTypeStore = struct {
     }
 
     pub fn deinit(self: *CheckedTypeStore, allocator: Allocator) void {
-        self.structural_root_entries.deinit(allocator);
-        self.structural_root_heads.deinit(allocator);
-
+        // A loaded store's tables borrow the relocated buffer.
+        self.structural_roots.deinit(allocator);
+        self.scheme_index.deinit(allocator);
         self.identity_origins.deinit(allocator);
         self.synthetic_variable_roots.deinit(allocator);
-        self.scheme_by_root.deinit(allocator);
         self.projected_imports.deinit(allocator);
         if (self.synthesized_keys) |keys| keys.destroy();
         // A loaded store's columns borrow the relocated buffer, and a borrowed
@@ -5648,12 +5660,22 @@ pub const CheckedTypeStore = struct {
         sealed_nominals: SerializedSlice(sealed_type_view.SealedNominalRow) = .{},
         sealed_var_facts: SerializedSlice(sealed_type_view.SealedVarFacts) = .{},
         sealed_capabilities: SerializedSlice(sealed_type_view.SealedCapabilityRow) = .{},
+        structural_roots: collections.HashedProbeTable.Serialized = .{},
+        scheme_index: collections.HashedProbeTable.Serialized = .{},
 
         comptime {
-            // 20 = 17 `SerializedSlice` fields + 3 for `var_names`
-            // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
-            // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 20);
+            // 22 = 17 `SerializedSlice` fields + 3 for `var_names`
+            // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers)
+            // + 1 cell column per interning table. The count is the true total
+            // fixups, independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 22);
+        }
+
+        /// A table indexes at most the entries of its column (a pairing's
+        /// tables index only the entries it added). Constant time.
+        pub fn validateShape(self: *const Serialized) error{CorruptArtifact}!void {
+            if (self.structural_roots.len > self.roots.len) return error.CorruptArtifact;
+            if (self.scheme_index.len > self.schemes.len) return error.CorruptArtifact;
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -7172,7 +7194,7 @@ fn appendExplicitCheckedTypePayload(
 
     const structurally_internable = !try checkedTypePayloadBuildContainsIdentityVariables(store, owned_payload);
     const fingerprint = if (structurally_internable)
-        checkedTypePayloadStructuralFingerprint(.checked_payload, owned_payload)
+        checkedTypePayloadStructuralHash(.checked_payload, owned_payload)
     else
         null;
     if (fingerprint) |value| {
@@ -7189,7 +7211,7 @@ fn appendExplicitCheckedTypePayload(
     payload_owned = false;
     const id = try store.appendRootRow(allocator, .payload);
     _ = store.payloads.appendAssumeCapacity(stored);
-    if (fingerprint) |value| try store.indexStructuralRoot(allocator, .checked_payload, id, value);
+    if (fingerprint) |value| try store.indexStructuralRoot(allocator, id, value);
     return id;
 }
 
@@ -7317,26 +7339,87 @@ fn checkedTypeRootKeySliceEql(store: *const CheckedTypeStore, a: []const Checked
     return true;
 }
 
-const CheckedStructuralKeyDomain = enum {
-    source,
+const CheckedStructuralKeyDomain = enum(u8) {
     checked_payload,
     synthetic_function,
+
+    /// The key recipe of the roots interned in this domain.
+    fn recipe(self: CheckedStructuralKeyDomain) CheckedTypeKeyRecipe {
+        return switch (self) {
+            .checked_payload => .payload,
+            .synthetic_function => .synthetic_function,
+        };
+    }
 };
 
-/// Non-cryptographic on purpose: this fingerprint only selects a
-/// `structural_root_heads` chain, and `structuralRootForPayload` accepts an
-/// entry only after `checkedTypePayloadBuildEqlStored` compares the full
-/// payload, so a crafted collision costs a chain walk and never an identity.
-/// It is never serialized. Identity across modules and caches is the SHA-256
-/// `CheckedTypeRoot.key`.
-fn checkedTypePayloadStructuralFingerprint(
+/// Non-cryptographic on purpose: this hash only places a root in
+/// `structural_roots`, and `structuralRootForPayload` accepts an entry only
+/// after `checkedTypePayloadBuildEqlStored` compares the full payload, so a
+/// crafted collision costs a longer probe and never an identity. The table
+/// is stored, so the hash covers exactly the fields that comparison reads,
+/// each as a fixed-width value, and is the same on every host. Identity
+/// across modules and caches is the SHA-256 `CheckedTypeRoot.key`.
+fn checkedTypePayloadStructuralHash(
     domain: CheckedStructuralKeyDomain,
     payload: CheckedTypePayloadBuild,
-) u64 {
+) u32 {
     var hasher = std.hash.Wyhash.init(0x726f635f74797065);
     std.hash.autoHash(&hasher, domain);
-    std.hash.autoHashStrat(&hasher, payload, .DeepRecursive);
-    return hasher.final();
+    std.hash.autoHash(&hasher, std.meta.activeTag(payload));
+    switch (payload) {
+        .pending, .err, .empty_record, .empty_tag_union => {},
+        .field_kind => |kind| std.hash.autoHash(&hasher, kind),
+        .flex, .rigid => checkedArtifactInvariant("identity-bearing payload reached the closed structural interner", .{}),
+        .alias => |alias| {
+            std.hash.autoHash(&hasher, alias.name);
+            std.hash.autoHash(&hasher, alias.origin_module);
+            std.hash.autoHash(&hasher, alias.owner_module);
+            std.hash.autoHash(&hasher, alias.source_decl);
+            std.hash.autoHash(&hasher, alias.builtin_origin);
+            std.hash.autoHash(&hasher, alias.backing);
+            hashCheckedTypeIds(&hasher, alias.args);
+        },
+        .record => |record| {
+            std.hash.autoHash(&hasher, record.ext);
+            std.hash.autoHash(&hasher, @as(u32, @intCast(record.fields.len)));
+            for (record.fields) |field| {
+                std.hash.autoHash(&hasher, field.name);
+                std.hash.autoHash(&hasher, field.ty);
+                std.hash.autoHash(&hasher, field.kind);
+            }
+        },
+        .tuple => |elems| hashCheckedTypeIds(&hasher, elems),
+        .nominal => |nominal| {
+            std.hash.autoHash(&hasher, nominal.name);
+            std.hash.autoHash(&hasher, nominal.origin_module);
+            std.hash.autoHash(&hasher, nominal.owner_module);
+            std.hash.autoHash(&hasher, nominal.source_decl);
+            std.hash.autoHash(&hasher, nominal.builtin);
+            std.hash.autoHash(&hasher, nominal.is_opaque);
+            std.hash.autoHash(&hasher, nominal.representation);
+            hashCheckedTypeIds(&hasher, nominal.args);
+            hashCheckedTypeIds(&hasher, nominal.padding_field_types);
+        },
+        .function => |function| {
+            std.hash.autoHash(&hasher, finalizedFunctionKind(function.kind));
+            std.hash.autoHash(&hasher, function.ret);
+            hashCheckedTypeIds(&hasher, function.args);
+        },
+        .tag_union => |tag_union| {
+            std.hash.autoHash(&hasher, tag_union.ext);
+            std.hash.autoHash(&hasher, @as(u32, @intCast(tag_union.tags.len)));
+            for (tag_union.tags) |tag| {
+                std.hash.autoHash(&hasher, tag.name);
+                hashCheckedTypeIds(&hasher, tag.args);
+            }
+        },
+    }
+    return @truncate(hasher.final());
+}
+
+fn hashCheckedTypeIds(hasher: *std.hash.Wyhash, ids: []const CheckedTypeId) void {
+    std.hash.autoHash(hasher, @as(u32, @intCast(ids.len)));
+    for (ids) |id| std.hash.autoHash(hasher, id);
 }
 
 fn checkedTypePayloadBuildContainsIdentityVariables(
@@ -22721,8 +22804,6 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
                     @field(result, field_name) = if (field_attrs.defaultValue(field_type)) |value| value else field_type.init(allocator);
                 } else if (comptime field_type == Allocator) {
                     @field(result, field_name) = allocator;
-                } else if (comptime pairingFieldNameEql(field_name, "serialized")) {
-                    @field(result, field_name) = false;
                 } else {
                     @field(result, field_name) = try copyPairingColumns(field_type, @field(source, field_name), allocator);
                 }
@@ -22753,7 +22834,7 @@ pub const PlatformPairing = struct {
     /// versioning folds it into the platform-pairing cache entry's admission hash.
     // Bump the version for changes to the borrowed-column mask interpretation as
     // well as other semantics not visible in the serialized layout fingerprint.
-    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 5);
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 6);
 
     pub const Serialized = extern struct {
         relation: [32]u8,
@@ -22904,6 +22985,7 @@ pub const PlatformPairing = struct {
                 const bit = @backingInt(@field(CheckedTypeStore.BorrowedColumn, field_name));
                 if (self.borrowed_types & (@as(u32, 1) << bit) != 0) @field(result.checked_types, field_name) = @field(platform.checked_types, field_name);
             }
+            result.checked_types.inherited_tables = platform.checked_types.tablesForOverlay();
             result.checked_types.sealed_env = platform.checked_types.sealed_env;
             result.checked_types.sealed_keys = platform.checked_types.sealed_keys;
             result.checked_types.synthesized_keys = null;
@@ -30495,52 +30577,41 @@ pub const CheckedModuleArtifact = struct {
 
     /// Reopen a finalized artifact so this compilation can evaluate the roots
     /// earlier compilations did not demand (design.md "Demand-Driven
-    /// Compile-Time Evaluation"). The evaluation columns move into storage
-    /// this artifact owns, this strategy's unevaluated roots await evaluation,
-    /// and the artifact awaits finalization. Roots this compilation does not
-    /// demand either return to `unevaluated` when it seals the artifact.
+    /// Compile-Time Evaluation"). This strategy's unevaluated roots await
+    /// evaluation and the artifact awaits finalization. Roots this
+    /// compilation does not demand either return to `unevaluated` when it
+    /// seals the artifact.
+    ///
+    /// Nothing is copied: the evaluation columns and the name store keep
+    /// whatever storage they have, and evaluation writes them in place and
+    /// copies a borrowed list on its first growth. That is sound because a
+    /// reopened artifact's bytes are its own: a cache entry's are a private
+    /// copy-on-write mapping its environment owns, a pairing's are its arena's
+    /// copies (a pairing with compile-time requests never shares its
+    /// platform's evaluation columns), and a published artifact owns its
+    /// lists. The one artifact whose bytes every compilation in the process
+    /// shares, the embedded Builtin view, is baked with every root evaluated
+    /// under both strategies and is never reopened, which
+    /// `assertExtensible` enforces.
     pub fn reopenForEvaluation(self: *CheckedModuleArtifact, strategy: base.SpecializationStrategy) Allocator.Error!void {
         if (self.evaluation_state != .finalized) checkedArtifactInvariant("only a finalized artifact can be reopened for evaluation", .{});
         if (self.reopened) checkedArtifactInvariant("checked artifact was reopened for evaluation twice", .{});
+        self.assertExtensible();
+        std.debug.assert(self.hasUnevaluatedRequests(strategy));
         self.reopened = true;
-        // A relocated cache entry's columns borrow its buffer and a pairing
-        // overlay's borrow its platform, so they move into storage the
-        // artifact's owning allocator (or the pairing arena) owns; an artifact
-        // this process published already owns them. A replaced column is
-        // deinitialized, which frees only what it owns: its lists borrow.
-        if (self.serialized_backing != null or self.pairing_arena != null) {
-            const owner = if (self.pairing_arena) |arena| arena.allocator() else self.owningAllocator();
-            try self.ownEvaluationColumn("compile_time_roots", owner);
-            try self.ownEvaluationColumn("const_templates", owner);
-            try self.ownEvaluationColumn("exported_const_templates", owner);
-            try self.ownEvaluationColumn("const_store", owner);
-            // A stored type names its labels and nominal types in this name
-            // store, and a value evaluated here can reach names the module's
-            // own source never mentions (the capture types of an imported
-            // closure), so the name store grows with the evaluation columns.
-            // A pairing overlay cloned its platform's names when it was
-            // composed; a store read from a cache entry still aliases the
-            // entry's buffer.
-            if (self.canonical_names.serialized) {
-                var frozen = self.canonical_names;
-                self.canonical_names = try frozen.clone(owner);
-                frozen.deinit();
-            }
-        }
         for (self.compile_time_roots.roots.items()) |*root| {
             if (root.payload == .unevaluated and root.needsEvaluation(strategy)) root.payload = .pending;
         }
         self.evaluation_state = .prepared;
     }
 
-    /// Replace evaluation column `name` with a copy `owner` owns.
-    fn ownEvaluationColumn(self: *CheckedModuleArtifact, comptime name: []const u8, owner: Allocator) Allocator.Error!void {
-        const Column = @FieldType(CheckedModuleArtifact, name);
-        const copied = try copyPairingColumns(Column, @field(self, name), owner);
-        if (self.freesReplacedEvaluationColumns()) {
-            if (comptime @typeInfo(@TypeOf(Column.deinit)).@"fn".param_types.len == 1) @field(self, name).deinit() else @field(self, name).deinit(owner);
-        }
-        @field(self, name) = copied;
+    /// The embedded Builtin artifact is viewed over bytes every compilation
+    /// in the process shares (read-only memory in an optimized native
+    /// build), so nothing may extend it or write through it; every other
+    /// artifact owns the bytes it borrows. Reopening is the one way a
+    /// finalized artifact is extended, so this is checked there.
+    fn assertExtensible(self: *const CheckedModuleArtifact) void {
+        std.debug.assert(self.module_env != .static_builtin);
     }
 
     /// The allocator that owns this artifact's evaluation columns: the bytes
@@ -30695,12 +30766,13 @@ pub const CheckedModuleArtifact = struct {
         comptime {
             // The TRUE total relocation fixup count: 1 (`direct_import_module_keys`)
             // + the recursive sum of every sub-store, including the `SafeList`/
-            // interner base pointers (`canonical_names` = 22 via its 7 interners +
-            // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
+            // interner base pointers (`canonical_names` = 23 via its interners,
+            // `proc_bases` and `proc_base_index`; `checked_types` includes its
+            // `var_names` interner = 3 and its two interning tables).
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 223);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 227);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -30754,13 +30826,19 @@ pub const CheckedModuleArtifact = struct {
         /// dangling out-of-bounds slices. Callers run this immediately after casting
         /// the buffer to `*const Serialized` and before `deserialize`.
         pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptArtifact}!void {
-            if (backing_len < @sizeOf(Serialized)) return error.CorruptArtifact;
-            try artifact_serialize.validateSerialized(Serialized, self, backing_len);
+            try self.validateLayout(backing_len);
             const base_addr = @intFromPtr(self);
             const observations = self.compile_time_debug.deserialize(base_addr);
             const roots = self.compile_time_roots.deserialize(base_addr);
             try observations.validate(roots.roots.items().len);
             try self.compile_time_root_reads.deserialize(base_addr).validate(roots.roots.items().len);
+        }
+
+        /// The constant-time part of `validate`: every relocatable list lies
+        /// inside the buffer and every interning table has its stored shape.
+        pub fn validateLayout(self: *const Serialized, backing_len: usize) error{CorruptArtifact}!void {
+            if (backing_len < @sizeOf(Serialized)) return error.CorruptArtifact;
+            try artifact_serialize.validateSerialized(Serialized, self, backing_len);
         }
 
         /// A deserialized artifact reads its source types once
@@ -30828,7 +30906,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 116;
+    const serialized_layout_version: u32 = 117;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -36621,8 +36699,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x66, 0x07, 0x23, 0x42, 0x6F, 0x16, 0xF2, 0x18, 0x73, 0x9C, 0x62, 0xFC, 0x19, 0xB5, 0xA3, 0x4F,
-        0xBC, 0xCF, 0x6E, 0x4A, 0x6D, 0xA6, 0x2B, 0xC0, 0x3D, 0x0F, 0xD4, 0x07, 0x5E, 0xE9, 0x8C, 0x8F,
+        0x4D, 0x76, 0xC4, 0x96, 0xE2, 0x82, 0xEE, 0xE7, 0xD2, 0x75, 0xF9, 0x06, 0x3B, 0xAD, 0x33, 0x08,
+        0x2B, 0x75, 0x2F, 0x8B, 0x7C, 0xBB, 0x40, 0x59, 0x61, 0x0B, 0x8A, 0x99, 0xE7, 0x56, 0x88, 0xBA,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -37361,6 +37439,75 @@ test "pairing type columns borrow frozen storage until written" {
     try paired.replaceTypeRootPayload(allocator, root, .err);
     try std.testing.expect(paired.payload(root) == .err);
     try std.testing.expect(frozen.payload(root) == .empty_record);
+}
+
+test "a loaded type store keeps its interned ids and a pairing interns against it without writing" {
+    const allocator = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var source = CheckedTypeStore{};
+    defer source.deinit(allocator);
+    try attachTestSynthesizedKeys(allocator, &source, &names);
+    const record = try source.appendSyntheticPayloadRoot(allocator, .empty_record);
+    const function = try source.appendSyntheticFunctionRoot(allocator, .pure, &.{record}, record);
+    const scheme_id = try source.ensureSchemeForRoot(allocator, function);
+
+    var arena = base.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    var writer = CompactWriter.init();
+    const header = try writer.appendAlloc(arena.allocator(), CheckedTypeStore.Serialized);
+    try header.serialize(&source, arena.allocator(), &writer);
+    const bytes = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer allocator.free(bytes);
+    _ = try writer.writeToBuffer(bytes);
+    const serialized: *CheckedTypeStore.Serialized = @ptrCast(bytes.ptr);
+    try collections.validateSerializedRelocations(CheckedTypeStore.Serialized, serialized, bytes.len);
+    const written = try allocator.dupe(u8, bytes);
+    defer allocator.free(written);
+
+    var loaded = serialized.deserialize(@intFromPtr(bytes.ptr));
+    defer loaded.deinit(allocator);
+    try attachTestSynthesizedKeys(allocator, &loaded, &names);
+
+    // A pairing over the loaded store finds the platform's entries through
+    // its read-only views and enters only its own.
+    {
+        var paired = CheckedTypeStore.borrowForPairing(&loaded);
+        defer paired.deinit(allocator);
+        try attachTestSynthesizedKeys(allocator, &paired, &names);
+        try std.testing.expectEqual(record, try paired.appendSyntheticPayloadRoot(allocator, .empty_record));
+        try std.testing.expectEqual(function, try paired.appendSyntheticFunctionRoot(allocator, .pure, &.{record}, record));
+        try std.testing.expectEqual(scheme_id, try paired.ensureSchemeForRoot(allocator, function));
+        const own = try paired.appendSyntheticPayloadRoot(allocator, .empty_tag_union);
+        try std.testing.expectEqual(own, try paired.appendSyntheticPayloadRoot(allocator, .empty_tag_union));
+        const own_scheme = try paired.ensureSchemeForRoot(allocator, own);
+        try std.testing.expectEqual(own_scheme, try paired.ensureSchemeForRoot(allocator, own));
+        try std.testing.expect(own_scheme != scheme_id);
+        try std.testing.expectEqualSlices(u8, written, bytes);
+    }
+
+    // The loaded store itself returns its original ids and deduplicates
+    // what it adds.
+    try std.testing.expectEqual(record, try loaded.appendSyntheticPayloadRoot(allocator, .empty_record));
+    try std.testing.expectEqual(function, try loaded.appendSyntheticFunctionRoot(allocator, .pure, &.{record}, record));
+    try std.testing.expectEqual(scheme_id, try loaded.ensureSchemeForRoot(allocator, function));
+    try std.testing.expectEqual(@as(usize, 2), loaded.roots.items().len);
+    const added = try loaded.appendSyntheticPayloadRoot(allocator, .empty_tag_union);
+    try std.testing.expectEqual(type_ids.fromSynthesized(2), added);
+    try std.testing.expectEqual(added, try loaded.appendSyntheticPayloadRoot(allocator, .empty_tag_union));
+    const added_scheme = try loaded.ensureSchemeForRoot(allocator, added);
+    try std.testing.expectEqual(added_scheme, try loaded.ensureSchemeForRoot(allocator, added));
+
+    // A table a probe could not trust is a corrupt entry.
+    const intact = serialized.*;
+    serialized.structural_roots.len = @intCast(serialized.roots.len + 1);
+    try std.testing.expectError(error.CorruptArtifact, collections.validateSerializedRelocations(CheckedTypeStore.Serialized, serialized, bytes.len));
+    serialized.* = intact;
+    serialized.scheme_index.cells.len = 3;
+    try std.testing.expectError(error.CorruptArtifact, collections.validateSerializedRelocations(CheckedTypeStore.Serialized, serialized, bytes.len));
+    serialized.* = intact;
+    serialized.scheme_index.len = @intCast(serialized.scheme_index.cells.len);
+    try std.testing.expectError(error.CorruptArtifact, collections.validateSerializedRelocations(CheckedTypeStore.Serialized, serialized, bytes.len));
 }
 
 test "issue 11737: identical callable contract vectors share their checked storage" {
