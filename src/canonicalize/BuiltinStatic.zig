@@ -13,9 +13,10 @@ pub const BuiltinModuleView = struct {
     env: *ModuleEnv,
     gpa: Allocator,
 
-    /// Destroy the wrapper ModuleEnv without freeing the static builtin backing bytes.
+    /// Destroy the wrapper ModuleEnv. Its lists borrow the static builtin
+    /// bytes, which `deinit` never frees.
     pub fn deinit(self: *BuiltinModuleView) void {
-        self.env.common.idents.deinitTextRanks();
+        self.env.deinit();
         self.gpa.destroy(self.env);
         self.* = undefined;
     }
@@ -33,7 +34,7 @@ pub const StaticViewError = Allocator.Error || error{CorruptEmbeddedBuiltins};
 /// Build a ModuleEnv view over aligned static Builtin.bin bytes without copying the backing data.
 pub fn moduleView(
     gpa: Allocator,
-    backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+    backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) const u8,
     module_name: []const u8,
     source: []const u8,
 ) StaticViewError!BuiltinModuleView {
@@ -44,11 +45,15 @@ pub fn moduleView(
     errdefer gpa.destroy(env);
 
     env.* = serialized.viewStatic(
-        @intFromPtr(backing.ptr),
+        backing,
         gpa,
         source,
         module_name,
-    ) catch return error.CorruptEmbeddedBuiltins;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.CorruptSerializedModuleEnv => return error.CorruptEmbeddedBuiltins,
+    };
+    errdefer env.deinit();
 
     // Checked publication can request many keys from this frozen source view.
     // Share its lazy rank generation across those walks without touching the

@@ -513,8 +513,8 @@ const Builder = struct {
         const view = self.views.get(template.artifact.bytes) orelse return Flags.all;
         const table = view.checked_procedure_templates;
         const raw = @backingInt(template.template);
-        if (raw >= table.templates.items.len) return Flags.all;
-        return requirementFlagsOf(view, table.templates.items[raw]);
+        if (raw >= table.templates.items().len) return Flags.all;
+        return requirementFlagsOf(view, table.templates.items()[raw]);
     }
 
     fn addTemplateTarget(self: *Builder, from: NodeId, target: ?TemplateOrUnbounded) Allocator.Error!void {
@@ -700,7 +700,7 @@ const Builder = struct {
     /// their own schemes.
     fn addConvertedLiterals(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
         const table = view.checked_procedure_templates;
-        for (table.templates.items) |*template| {
+        for (table.templates.items()) |*template| {
             for (table.templateLiteralRequirements(template)) |requirement| try self.addConvertedLiteral(view, requirement);
         }
         for (table.dispatch_scopes) |*scope| {
@@ -826,7 +826,7 @@ pub fn compute(
     // Every template has its node before any edge names one.
     var views = builder.views.valueIterator();
     while (views.next()) |view| {
-        for (0..view.checked_procedure_templates.templates.items.len) |index| {
+        for (0..view.checked_procedure_templates.templates.items().len) |index| {
             const node = try builder.addNode(.{});
             try demand.templates.put(allocator, .{ .module = view.key.bytes, .template = @intCast(index) }, node);
         }
@@ -839,7 +839,7 @@ pub fn compute(
     while (views.next()) |view| try builder.addMethods(view.*);
     views = builder.views.valueIterator();
     while (views.next()) |view| {
-        for (view.checked_procedure_templates.templates.items, 0..) |template, index| {
+        for (view.checked_procedure_templates.templates.items(), 0..) |template, index| {
             const node = demand.templates.get(.{ .module = view.key.bytes, .template = @intCast(index) }).?;
             try builder.addTemplate(view.*, node, template);
             const requirement = requirementFlagsOf(view.*, template);

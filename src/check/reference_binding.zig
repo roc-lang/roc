@@ -267,7 +267,7 @@ pub fn source(env: *ModuleEnv, mapper: anytype) @TypeOf(mapper.*).Error!void {
             nodes.set(id, node);
         }
     }
-    for (env.store.type_apply_data.items.items) |*data| {
+    for (env.store.type_apply_data.items()) |*data| {
         switch (@as(CIR.TypeAnno.LocalOrExternal.Tag, @fromBackingInt(@intCast(data.base_tag)))) {
             .external => data.value2 = try mapper.importNode(env, data.value1, data.value2),
             .external_identity => data.value2 = try mapper.node(@fromBackingInt(data.value1), data.value2),
@@ -283,7 +283,7 @@ pub fn source(env: *ModuleEnv, mapper: anytype) @TypeOf(mapper.*).Error!void {
             if (node.tag != .ty_lookup) continue;
             const payload = node.getPayload().ty_lookup;
             if ((try visited.getOrPut(@fromBackingInt(payload.base_span2_idx))).found_existing) continue;
-            const data = &env.store.span2_data.items.items[payload.base_span2_idx];
+            const data = &env.store.span2_data.items()[payload.base_span2_idx];
             switch (@as(CIR.TypeAnno.LocalOrExternal.Tag, @fromBackingInt(@intCast(payload.base)))) {
                 .external => data.len = try mapper.importNode(env, data.start, data.len),
                 .external_identity => data.len = try mapper.node(@fromBackingInt(data.start), data.len),
@@ -293,15 +293,15 @@ pub fn source(env: *ModuleEnv, mapper: anytype) @TypeOf(mapper.*).Error!void {
     }
     // Method owners are local declarations; foreign-reference rebinding leaves
     // their producer-owned keys and ordering unchanged.
-    for (env.numeric_suffix_targets.items.items) |*suffix| {
+    for (env.numeric_suffix_targets.items()) |*suffix| {
         switch (suffix.target()) {
             .external => |target| suffix.data2 = try mapper.importNode(env, @backingInt(target.import_idx), target.target_node_idx),
             .external_identity => |target| suffix.data2 = try mapper.node(target.module_identity, target.target_node_idx),
             .builtin, .local, .pending, .invalid => {},
         }
     }
-    for (env.record_omitted_defaults.items.items) |*record| record.default_expr_node = try mapper.node(record.origin_module, record.default_expr_node);
-    for (env.hosted_entries.items.items) |*entry| {
+    for (env.record_omitted_defaults.items()) |*record| record.default_expr_node = try mapper.node(record.origin_module, record.default_expr_node);
+    for (env.hosted_entries.items()) |*entry| {
         if (entry.target_import) |import_idx| {
             if (entry.target_def) |def| entry.target_def = @fromBackingInt(try mapper.importNode(env, @backingInt(import_idx), @backingInt(def)));
         }

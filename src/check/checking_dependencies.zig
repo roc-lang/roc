@@ -96,7 +96,7 @@ pub const Scope = struct {
 /// stay unchanged; each now resolves to the corresponding current content
 /// identity. No solved type or stamped dispatch relation is rewritten.
 pub fn bindOwners(env: *ModuleEnv, current: *const Scope) Allocator.Error!void {
-    const previous = env.checking_dependency.owners.items.items;
+    const previous = env.checking_dependency.owners.items();
     if (previous.len != current.owners.items.len) {
         base.invariant("typing cache admission established the same owner-binding domain", .{});
     }

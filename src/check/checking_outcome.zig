@@ -117,14 +117,14 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: ?*const dependenci
         .pending = checker.problems.pending_static_exhaustiveness.items,
         .extra_strings = checker.problems.extra_strings_backing.items,
         .missing_patterns = checker.problems.missing_patterns_backing.items,
-        .regions = checker.regions.items.items,
-        .contents = snapshots.contents.items.items,
+        .regions = checker.regions.items(),
+        .contents = snapshots.contents.items(),
         .node_formats = snapshots.node_formats.items,
         .captures = snapshots.captures.items,
-        .content_indexes = snapshots.content_indexes.items.items,
+        .content_indexes = snapshots.content_indexes.items(),
         .record_fields = fields,
         .tags = tags.items,
-        .constraints = snapshots.static_dispatch_constraints.items.items,
+        .constraints = snapshots.static_dispatch_constraints.items(),
         .formatted = formatted.items,
         .text = text.items,
         .sources = sources.items,
@@ -148,7 +148,7 @@ pub fn sourcesMatch(self: Self, scope: *const dependencies.Scope) bool {
 /// exhaustiveness recipes. Ordinary publication and reporting decide failures.
 pub fn install(self: Self, checker: anytype) Allocator.Error!void {
     try self.installProblems(&checker.problems);
-    checker.regions.items.clearRetainingCapacity();
+    checker.regions.clearRetainingCapacity();
     try self.installRendering(checker.gpa, &checker.snapshots, &checker.regions, snapshot.FormatContext.of(&checker.type_writer));
 }
 

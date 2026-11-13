@@ -362,7 +362,12 @@ pub const Constants = struct {
     /// 181: type stores list the names of their optional and defaulted fields
     ///      once, and anonymous structure nothing visible can lift or widen is
     ///      shared by every use instead of copied per use.
-    pub const CACHE_VERSION = 181;
+    /// 183: module envs store their string-literal dedup table, the import
+    ///      store's lookup table and the type store's written flags.
+    /// 184: combines the independent 179 and 183 entry changes.
+    /// 185: combines the independent 181 and 184 entry changes.
+    /// 186: combines the independently merged 183 and 185 entry layouts.
+    pub const CACHE_VERSION = 186;
 };
 
 /// Configuration for the Roc cache system.

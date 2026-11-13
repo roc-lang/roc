@@ -406,7 +406,7 @@ test "issue 10804: imported generalized derived codec revalidates accepted and r
     // scheme. Import copying replays this exact relation under B's
     // substitution instead of treating A's successful open validation as a
     // proof for every concrete use.
-    try std.testing.expect(test_env_a.module_env.binding_scheme_codec_requirements.items.items.len > 0);
+    try std.testing.expect(test_env_a.module_env.binding_scheme_codec_requirements.items().len > 0);
 
     const accepted_source =
         \\import A
