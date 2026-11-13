@@ -11691,15 +11691,24 @@ const Builder = struct {
                     },
                     .field => |field| {
                         const value_ty = type_run.results.pop().?;
+                        const optional = switch (field.kind.tag) {
+                            .required, .defaulted => false,
+                            .optional => true,
+                            // This lowering gives each variable its one
+                            // instantiation, which for a kind variable is
+                            // `required`.
+                            .undetermined => switch (checkedPayload(frame.view, field.kind.undeterminedVariable() orelse
+                                Common.invariant("undetermined checked field kind carried no presence variable"))) {
+                                .flex, .rigid => false,
+                                .field_kind => |committed| committed == .optional,
+                                .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("undetermined checked field kind named no kind in direct record-row lowering"),
+                            },
+                            .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
+                        };
                         try type_run.fields.append(self.allocator, .{
                             .name = try recordFieldName(self.activeNameStore(), frame.view, field.name),
-                            .ty = switch (field.kind.tag) {
-                                .required, .defaulted => value_ty,
-                                .optional => try self.optionalSlotType(value_ty),
-                                .undetermined => Common.invariant("undetermined checked field kind reached direct record-row lowering"),
-                                .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
-                            },
-                            .value_ty = .of(if (field.kind.tag == .optional) value_ty else null),
+                            .ty = if (optional) try self.optionalSlotType(value_ty) else value_ty,
+                            .value_ty = .of(if (optional) value_ty else null),
                             .default = .of(try self.monoFieldDefault(frame.view, field)),
                         });
                     },
@@ -47485,9 +47494,9 @@ const BodyContext = struct {
     /// it is closed by digest, or every variable it reaches seals without
     /// specialization (`CheckedTypePayload.variableSealsWithoutSpecialization`,
     /// the same variable decision the checked artifact's direct-dispatch
-    /// classification makes) and it reaches no undetermined field kind. This
-    /// is the sealing half of the `direct_closed` rule (design.md "Decided
-    /// Variables").
+    /// classification makes), an undetermined field kind's variable among
+    /// them. This is the sealing half of the `direct_closed` rule (design.md
+    /// "Decided Variables").
     ///
     /// Trust boundary: the quantification half is not checked here. It is
     /// guaranteed by the two sealed-cell producers—`beginPatternStatementValue`
@@ -47523,10 +47532,7 @@ const BodyContext = struct {
                     for (0..record.fields.len()) |field_index| {
                         const field = record.fields.get(field_index);
                         try pending.append(self.allocator, field.ty);
-                        if (field.kind.undeterminedVariable()) |variable| {
-                            if (checkedPayload(self.view, variable).isFieldKindVariable()) return false;
-                            try pending.append(self.allocator, variable);
-                        }
+                        if (field.kind.undeterminedVariable()) |variable| try pending.append(self.allocator, variable);
                     }
                     try pending.append(self.allocator, record.ext);
                 },

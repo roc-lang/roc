@@ -3488,9 +3488,8 @@ pub const CheckedTypePayload = union(enum) {
 
     /// Whether this payload, read at an undetermined field kind's variable,
     /// is still a kind variable rather than the kind a substitution committed
-    /// it to. A kind variable is no type variable: nothing seals it, so a
-    /// type that reaches one depends on its instance (design.md "Decided
-    /// Variables").
+    /// it to. A kind variable is decided by the rule a type variable is, and
+    /// its one instantiation is `required` (design.md "Decided Variables").
     pub fn isFieldKindVariable(self: CheckedTypePayload) bool {
         return switch (self) {
             .flex, .rigid => true,
@@ -5757,7 +5756,7 @@ pub const CheckedTypeStore = struct {
             }
 
             var cloned = CheckedTypeProjectResults{ .items = results.items[frame.results_start..] };
-            const cloned_payload = try cloneCheckedTypeBuildPayload(allocator, frame.snapshot, &cloned);
+            const cloned_payload = try cloneCheckedTypeBuildPayload(allocator, self, frame.snapshot, &cloned);
             std.debug.assert(cloned.next == cloned.items.len);
             try self.fillSyntheticTypeRoot(allocator, frame.target, cloned_payload);
 
@@ -5918,9 +5917,12 @@ fn appendCheckedTypeBuildChildren(
 }
 
 /// Assemble a snapshot payload over its cloned children, read in the order
-/// `appendCheckedTypeBuildChildren` listed them.
+/// `appendCheckedTypeBuildChildren` listed them. A field whose kind variable
+/// the substitution committed carries the committed kind itself: a
+/// `field_kind` payload is a substitution entry, never part of a type.
 fn cloneCheckedTypeBuildPayload(
     allocator: Allocator,
+    store: *const CheckedTypeStore,
     payload: CheckedTypePayloadBuild,
     cloned: *CheckedTypeProjectResults,
 ) Allocator.Error!CheckedTypePayloadBuild {
@@ -5952,10 +5954,17 @@ fn cloneCheckedTypeBuildPayload(
                     slot.* = .{
                         .name = field.name,
                         .ty = ty,
-                        .kind = if (field.kind.undeterminedVariable() != null)
-                            .undetermined(cloned.typeId())
-                        else
-                            field.kind,
+                        .kind = if (field.kind.undeterminedVariable() != null) kind: {
+                            const variable = cloned.typeId();
+                            break :kind switch (store.payload(variable)) {
+                                .field_kind => |committed| switch (committed) {
+                                    .required => .required,
+                                    .optional => .optional,
+                                },
+                                .pending => checkedArtifactInvariant("a cloned record field's kind was still pending", .{}),
+                                .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .undetermined(variable),
+                            };
+                        } else field.kind,
                     };
                 }
                 break :fields_blk out;
@@ -20381,10 +20390,11 @@ const EnclosingDispatchIdentity = struct {
 /// `direct_closed`): every variable it reaches is decided (design.md "Decided
 /// Variables"). A rigid, a numeric-defaulting flex, and a constrained flex
 /// each stand for a specialization input, as does any variable the enclosing
-/// schemes quantify and any undetermined field kind; an unconstrained flex
-/// nothing enclosing quantifies has exactly one instantiation—its row
-/// default, or the empty tag union when it carries none, which the closed
-/// path seals it to—and does not. `rootContainsIdentityVariables` keeps
+/// schemes quantify; an unconstrained flex nothing enclosing quantifies has
+/// exactly one instantiation, which the closed path seals it to, and does
+/// not: its row default, or the empty tag union when it carries none, for a
+/// type variable, and `required` for an undetermined field kind's variable.
+/// `rootContainsIdentityVariables` keeps
 /// answering the digest-identity question (is any variable reachable at
 /// all); this answers the specialization question.
 fn callableIdentityIsSpecializationIndependent(
@@ -20417,10 +20427,8 @@ fn callableIdentityIsSpecializationIndependent(
                 for (0..record.fields.len()) |field_index| {
                     const field = record.fields.get(field_index);
                     try pending.append(allocator, field.ty);
-                    if (field.kind.undeterminedVariable()) |variable| {
-                        if (store.payload(variable).isFieldKindVariable()) return false;
-                        try pending.append(allocator, variable);
-                    }
+                    // A kind variable is judged as the variable it is.
+                    if (field.kind.undeterminedVariable()) |variable| try pending.append(allocator, variable);
                 }
                 try pending.append(allocator, record.ext);
             },
@@ -20980,16 +20988,12 @@ const LiteralRequirementInstance = enum {
 /// `key` names (null inside a defaulted field expression, which no scheme
 /// encloses) instantiates a literal requirement at. `ty` reaches a variable.
 fn literalRequirementInstance(
-    allocator: Allocator,
     store: *const CheckedTypeStore,
     orderer: *CheckedIdentityOrderer,
     templates: *const CheckedProcedureTemplateTable,
     key: anytype,
     ty: CheckedTypeId,
 ) Allocator.Error!LiteralRequirementInstance {
-    var kind_variables: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
-    defer kind_variables.deinit(allocator);
-    try appendFieldKindVariables(allocator, store, ty, &kind_variables);
     var any_quantified = false;
     for (try orderer.identityRoots(ty)) |variable| {
         if (key) |scheme| {
@@ -20998,7 +21002,6 @@ fn literalRequirementInstance(
                 continue;
             }
         }
-        if (sliceContains(CheckedTypeId, kind_variables.items, variable)) return .unbound;
         if (!store.payload(variable).variableSealsWithoutSpecialization()) return .unbound;
     }
     return if (any_quantified) .open else .decided;
@@ -21067,32 +21070,12 @@ fn walkCheckedTypeStructure(
     }
 }
 
-/// Append every undetermined field kind `ty` reaches that is still a kind
-/// variable.
-fn appendFieldKindVariables(
-    allocator: Allocator,
-    store: *const CheckedTypeStore,
-    ty: CheckedTypeId,
-    out: *std.ArrayListUnmanaged(CheckedTypeId),
-) Allocator.Error!void {
-    const Visitor = struct {
-        allocator: Allocator,
-        out: *std.ArrayListUnmanaged(CheckedTypeId),
-
-        fn variable(_: @This(), _: CheckedTypeId, _: CheckedTypePayload) Allocator.Error!void {}
-
-        fn kindVariable(self: @This(), root: CheckedTypeId) Allocator.Error!void {
-            try self.out.append(self.allocator, root);
-        }
-    };
-    try walkCheckedTypeStructure(allocator, store, ty, Visitor{ .allocator = allocator, .out = out });
-}
-
 /// `ty` with every variable it reaches replaced by the one instantiation a
-/// decided variable has (design.md "Decided Variables"): its row default, or
-/// the empty tag union when it carries none. The caller has proved each
-/// variable `ty` reaches decided at its site, so the result names no
-/// variable. A type that reaches no variable is returned as it is.
+/// decided variable has (design.md "Decided Variables"): for a type variable
+/// its row default, or the empty tag union when it carries none, and for an
+/// undetermined field kind's variable the `required` kind. The caller has
+/// proved each variable `ty` reaches decided at its site, so the result names
+/// no variable. A type that reaches no variable is returned as it is.
 fn sealDecidedVariables(
     allocator: Allocator,
     store: *CheckedTypeStore,
@@ -21100,28 +21083,37 @@ fn sealDecidedVariables(
 ) Allocator.Error!CheckedTypeId {
     if (!try store.rootContainsIdentityVariables(ty)) return ty;
 
+    const Instantiation = enum { empty_record, empty_tag_union, required_kind };
     const Visitor = struct {
         allocator: Allocator,
+        store: *const CheckedTypeStore,
         formals: *std.ArrayListUnmanaged(CheckedTypeId),
-        defaults: *std.ArrayListUnmanaged(RowDefault),
+        defaults: *std.ArrayListUnmanaged(Instantiation),
 
         fn variable(self: @This(), root: CheckedTypeId, payload: CheckedTypePayload) Allocator.Error!void {
             if (!payload.variableSealsWithoutSpecialization()) {
                 checkedArtifactInvariant("a type sealed at its decided variables reached a variable that is not decided", .{});
             }
             try self.formals.append(self.allocator, root);
-            try self.defaults.append(self.allocator, payload.flex.row_default orelse .empty_tag_union);
+            try self.defaults.append(self.allocator, if (payload.flex.row_default) |row_default| switch (row_default) {
+                .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            } else .empty_tag_union);
         }
 
-        fn kindVariable(_: @This(), _: CheckedTypeId) Allocator.Error!void {
-            checkedArtifactInvariant("a type sealed at its decided variables reached an undetermined field kind", .{});
+        fn kindVariable(self: @This(), root: CheckedTypeId) Allocator.Error!void {
+            if (!self.store.payload(root).variableSealsWithoutSpecialization()) {
+                checkedArtifactInvariant("a type sealed at its decided variables reached a field kind variable that is not decided", .{});
+            }
+            try self.formals.append(self.allocator, root);
+            try self.defaults.append(self.allocator, .required_kind);
         }
     };
     var formals: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
     defer formals.deinit(allocator);
-    var defaults: std.ArrayListUnmanaged(RowDefault) = .empty;
+    var defaults: std.ArrayListUnmanaged(Instantiation) = .empty;
     defer defaults.deinit(allocator);
-    try walkCheckedTypeStructure(allocator, store, ty, Visitor{ .allocator = allocator, .formals = &formals, .defaults = &defaults });
+    try walkCheckedTypeStructure(allocator, store, ty, Visitor{ .allocator = allocator, .store = store, .formals = &formals, .defaults = &defaults });
 
     // The walk reads payloads that alias the store's pools, so the sealed
     // roots are appended only once it is over.
@@ -21131,6 +21123,7 @@ fn sealDecidedVariables(
         actual.* = try store.appendSyntheticPayloadRoot(allocator, switch (default) {
             .empty_record => .empty_record,
             .empty_tag_union => .empty_tag_union,
+            .required_kind => .{ .field_kind = .required },
         });
     }
     var substitution = CheckedTypeSubstitution.init(allocator, formals.items, actuals);
@@ -21831,7 +21824,7 @@ fn publishLiteralArgumentRoots(
                 // whose every variable is decided at the edge: its root
                 // converts the literal at the type those variables seal to.
                 const instance: ?LiteralRequirementInstance = if (try store.rootContainsIdentityVariables(instantiated))
-                    try literalRequirementInstance(allocator, store, &identity_orderer, templates, edge.scope, instantiated)
+                    try literalRequirementInstance(store, &identity_orderer, templates, edge.scope, instantiated)
                 else
                     null;
                 const closed = instance == null or instance.? == .decided;
@@ -37506,7 +37499,7 @@ test "direct dispatch classification treats a decided variable as closed" {
     ));
 }
 
-test "direct dispatch classification never decides an undetermined field kind" {
+test "direct dispatch classification decides an undetermined field kind no enclosing scheme quantifies" {
     const allocator = std.testing.allocator;
 
     var names = canonical.CanonicalNameStore.init(allocator);
@@ -37525,29 +37518,89 @@ test "direct dispatch classification never decides an undetermined field kind" {
         .scopes = &.{},
     };
 
-    // `{} -> { value ?: {} }` whose field kind is still a kind variable: the
-    // variable is an unconstrained flex, yet nothing seals a kind.
+    // `{} -> { value : {} }` whose field kind is still a kind variable.
     const unit = try store.appendSyntheticPayloadRoot(allocator, .empty_record);
     const kind_variable = try testRowTail(allocator, &store, .{ .flex = .{} });
-    const fields = try allocator.alloc(CheckedRecordField, 1);
-    fields[0] = .{
-        .name = try names.internRecordFieldLabel("value"),
-        .ty = unit,
-        .kind = .undetermined(kind_variable),
-    };
-    const record = try store.appendSyntheticPayloadRoot(allocator, .{ .record = .{ .fields = fields, .ext = unit } });
-    const callable = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{unit}, record);
-    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+    const callable = try testCallableWithFieldKind(allocator, &names, &store, kind_variable);
+
+    // Nothing quantifies the kind, so it is decided.
+    try std.testing.expect(try store.rootContainsIdentityVariables(callable));
+    try std.testing.expect(try callableIdentityIsSpecializationIndependent(
         allocator,
         &store,
         callable,
         nothing_enclosing,
     ));
 
-    var kind_variables: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
-    defer kind_variables.deinit(allocator);
-    try appendFieldKindVariables(allocator, &store, callable, &kind_variables);
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{kind_variable}, kind_variables.items);
+    // A scheme that does not reach the kind leaves it decided.
+    const unrelated_root = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{unit}, unit);
+    const unrelated_site = [_]EnclosingDispatchSite{.{ .template_root = unrelated_root, .scope = .root }};
+    try std.testing.expect(try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        callable,
+        .{ .index = &identity_index, .sites = &unrelated_site, .scopes = &.{} },
+    ));
+
+    // The same kind is a specialization input once an enclosing scheme
+    // quantifies it: the template's root, or a generalized-local scope's.
+    const quantifying_root = try testCallableWithFieldKind(allocator, &names, &store, kind_variable);
+    const quantifying_site = [_]EnclosingDispatchSite{.{ .template_root = quantifying_root, .scope = .root }};
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        callable,
+        .{ .index = &identity_index, .sites = &quantifying_site, .scopes = &.{} },
+    ));
+    const scopes = [_]DispatchRefScope{.{
+        .parent = .none,
+        .scheme_var = testIndexId(Var, 0),
+        .scheme_root = quantifying_root,
+        .checked_expr = testIndexId(CIR.Expr.Idx, 0),
+    }};
+    const scope_site = [_]EnclosingDispatchSite{.{ .template_root = unrelated_root, .scope = .{ .generalized = testIndexId(DispatchScopeId, 0) } }};
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        callable,
+        .{ .index = &identity_index, .sites = &scope_site, .scopes = &scopes },
+    ));
+
+    // A rigid kind variable is never decided.
+    const rigid_kind = try testRowTail(allocator, &store, .{ .rigid = .{} });
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        try testCallableWithFieldKind(allocator, &names, &store, rigid_kind),
+        nothing_enclosing,
+    ));
+
+    // A kind a substitution committed is no variable.
+    const committed = try store.appendSyntheticPayloadRoot(allocator, .{ .field_kind = .optional });
+    try std.testing.expect(try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        try testCallableWithFieldKind(allocator, &names, &store, committed),
+        nothing_enclosing,
+    ));
+}
+
+/// `{} -> { value : {} }` whose field kind is undetermined at `kind`.
+fn testCallableWithFieldKind(
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    kind: CheckedTypeId,
+) Allocator.Error!CheckedTypeId {
+    const unit = try store.appendSyntheticPayloadRoot(allocator, .empty_record);
+    const fields = try allocator.alloc(CheckedRecordField, 1);
+    fields[0] = .{
+        .name = try names.internRecordFieldLabel("value"),
+        .ty = unit,
+        .kind = .undetermined(kind),
+    };
+    const record = try store.appendSyntheticPayloadRoot(allocator, .{ .record = .{ .fields = fields, .ext = unit } });
+    return try store.appendSyntheticFunctionRoot(allocator, .pure, &.{unit}, record);
 }
 
 test "sealing decided variables replaces each with its one instantiation" {
@@ -37593,6 +37646,56 @@ test "sealing decided variables replaces each with its one instantiation" {
     // the source type keeps its variables.
     try std.testing.expectEqual(sealed, try sealDecidedVariables(allocator, &store, sealed));
     try std.testing.expect(try store.rootContainsIdentityVariables(open));
+
+    // An undetermined field kind's variable seals to `required`, leaving a
+    // concrete compile-time root type.
+    const kind_variable = try testRowTail(allocator, &store, .{ .flex = .{} });
+    const open_kind = try testCallableWithFieldKind(allocator, &names, &store, kind_variable);
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, open_kind));
+    const sealed_kind = try sealDecidedVariables(allocator, &store, open_kind);
+    try std.testing.expect(sealed_kind != open_kind);
+    try std.testing.expect(!try store.rootContainsIdentityVariables(sealed_kind));
+    try std.testing.expect(try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, sealed_kind));
+    const sealed_kind_record = store.payload(checkedFunctionPayload(&store, sealed_kind, "test callable").ret).record;
+    try std.testing.expectEqual(CheckedFieldKind.Tag.required, sealed_kind_record.fields.get(0).kind.tag);
+    try std.testing.expectEqual(
+        CheckedFieldKind.Tag.undetermined,
+        store.payload(checkedFunctionPayload(&store, open_kind, "test callable").ret).record.fields.get(0).kind.tag,
+    );
+}
+
+test "a substituting clone gives a field the kind its kind variable was committed to" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    try attachTestSynthesizedKeys(allocator, &store, &names);
+
+    const kind_variable = try testRowTail(allocator, &store, .{ .flex = .{} });
+    const open = try testCallableWithFieldKind(allocator, &names, &store, kind_variable);
+    for ([_]CheckedCommittedKind{ .required, .optional }, [_]CheckedFieldKind.Tag{ .required, .optional }) |committed, expected| {
+        const actual = try store.appendSyntheticPayloadRoot(allocator, .{ .field_kind = committed });
+        var substitution = CheckedTypeSubstitution.init(allocator, &.{kind_variable}, &.{actual});
+        defer substitution.deinit();
+        const cloned = try store.cloneCheckedTypeRootSubstituting(allocator, open, &substitution);
+        const record = store.payload(checkedFunctionPayload(&store, cloned, "test callable").ret).record;
+        try std.testing.expectEqual(expected, record.fields.get(0).kind.tag);
+        try std.testing.expect(record.fields.get(0).kind.undeterminedVariable() == null);
+    }
+
+    // A kind variable the substitution does not bind stays a kind variable
+    // of the clone, with the source's identity.
+    const other = try testRowTail(allocator, &store, .{ .flex = .{} });
+    const unit = try store.appendSyntheticPayloadRoot(allocator, .empty_record);
+    var unrelated = CheckedTypeSubstitution.init(allocator, &.{other}, &.{unit});
+    defer unrelated.deinit();
+    const kept = try store.cloneCheckedTypeRootSubstituting(allocator, open, &unrelated);
+    const kept_kind = store.payload(checkedFunctionPayload(&store, kept, "test callable").ret).record.fields.get(0).kind;
+    try std.testing.expectEqual(kind_variable, store.identityOrigin(kept_kind.undeterminedVariable().?));
 }
 
 test "a literal requirement's instantiation is closed exactly when every variable is decided" {
@@ -37638,14 +37741,23 @@ test "a literal requirement's instantiation is closed exactly when every variabl
     const over_rigid = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{quantified}, rigid);
     const over_numeric = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{unit}, numeric);
 
-    try std.testing.expectEqual(LiteralRequirementInstance.decided, try literalRequirementInstance(allocator, &store, &orderer, &templates, in_scope, over_decided));
-    try std.testing.expectEqual(LiteralRequirementInstance.open, try literalRequirementInstance(allocator, &store, &orderer, &templates, in_scope, over_quantified));
-    try std.testing.expectEqual(LiteralRequirementInstance.open, try literalRequirementInstance(allocator, &store, &orderer, &templates, in_scope, over_both));
-    try std.testing.expectEqual(LiteralRequirementInstance.unbound, try literalRequirementInstance(allocator, &store, &orderer, &templates, in_scope, over_rigid));
-    try std.testing.expectEqual(LiteralRequirementInstance.unbound, try literalRequirementInstance(allocator, &store, &orderer, &templates, in_scope, over_numeric));
+    try std.testing.expectEqual(LiteralRequirementInstance.decided, try literalRequirementInstance(&store, &orderer, &templates, in_scope, over_decided));
+    try std.testing.expectEqual(LiteralRequirementInstance.open, try literalRequirementInstance(&store, &orderer, &templates, in_scope, over_quantified));
+    try std.testing.expectEqual(LiteralRequirementInstance.open, try literalRequirementInstance(&store, &orderer, &templates, in_scope, over_both));
+    try std.testing.expectEqual(LiteralRequirementInstance.unbound, try literalRequirementInstance(&store, &orderer, &templates, in_scope, over_rigid));
+    try std.testing.expectEqual(LiteralRequirementInstance.unbound, try literalRequirementInstance(&store, &orderer, &templates, in_scope, over_numeric));
     // Where no scheme encloses the edge, the scope's variable is one
     // nothing quantifies.
-    try std.testing.expectEqual(LiteralRequirementInstance.decided, try literalRequirementInstance(allocator, &store, &orderer, &templates, no_scheme, over_quantified));
+    try std.testing.expectEqual(LiteralRequirementInstance.decided, try literalRequirementInstance(&store, &orderer, &templates, no_scheme, over_quantified));
+
+    // An undetermined field kind's variable follows the same rule: decided
+    // where nothing quantifies it, and open where the edge's scheme does.
+    const decided_kind = try testRowTail(allocator, &store, .{ .flex = .{} });
+    const over_decided_kind = try testCallableWithFieldKind(allocator, &names, &store, decided_kind);
+    const over_quantified_kind = try testCallableWithFieldKind(allocator, &names, &store, quantified);
+    try std.testing.expectEqual(LiteralRequirementInstance.decided, try literalRequirementInstance(&store, &orderer, &templates, in_scope, over_decided_kind));
+    try std.testing.expectEqual(LiteralRequirementInstance.open, try literalRequirementInstance(&store, &orderer, &templates, in_scope, over_quantified_kind));
+    try std.testing.expectEqual(LiteralRequirementInstance.decided, try literalRequirementInstance(&store, &orderer, &templates, no_scheme, over_quantified_kind));
 }
 
 test "direct dispatch classification follows instantiation clones to the scheme that quantifies them" {
