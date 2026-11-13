@@ -1100,9 +1100,17 @@ pub const Program = struct {
                 if (record.declared.get()) |declared| {
                     hasher.update(&[_]u8{1});
                     try self.hashTypes(&hasher, store.span(declared.padding));
-                    const slots = store.declaredSlots(declared);
-                    hashWord(&hasher, @intCast(slots.len));
-                    for (slots) |slot| hashWord(&hasher, slot);
+                    // The entries identify the order; the slots derived
+                    // from them can coincide for different entries.
+                    const entries = store.declaredEntries(declared);
+                    hashWord(&hasher, @intCast(entries.len));
+                    for (entries) |entry| {
+                        hasher.update(&[_]u8{@backingInt(std.meta.activeTag(entry))});
+                        switch (entry) {
+                            .named => |name| hashLengthPrefixed(&hasher, store.nameText(name)),
+                            .padding => |ordinal| hashWord(&hasher, ordinal),
+                        }
+                    }
                 } else hasher.update(&[_]u8{0});
             },
             .tuple => |items| try self.hashTypes(&hasher, store.span(items)),
@@ -1999,6 +2007,26 @@ pub const Program = struct {
         return try self.store.intern(.{ .function = .{ .args = &.{}, .ret = try self.store.emptyRecord(), .effectful = false } });
     }
 
+    /// Sorts `fields` by label, given that `fields[0..own]` and
+    /// `fields[own..]` are each sorted already.
+    fn mergeSortedFields(allocator: Allocator, store: *const types.Store, fields: []types.Field, own: usize) Allocator.Error!void {
+        if (own == 0 or own == fields.len) return;
+        if (store.nameLessThan(fields[own - 1].name, fields[own].name)) return;
+        const first = try allocator.dupe(types.Field, fields[0..own]);
+        defer allocator.free(first);
+        var left: usize = 0;
+        var right: usize = own;
+        for (fields) |*out| {
+            if (right == fields.len or (left < first.len and store.nameLessThan(first[left].name, fields[right].name))) {
+                out.* = first[left];
+                left += 1;
+            } else {
+                out.* = fields[right];
+                right += 1;
+            }
+        }
+    }
+
     fn rewriteType(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId) Allocator.Error!TypeId {
         var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
         defer done.deinit(allocator);
@@ -2073,17 +2101,23 @@ pub const Program = struct {
                         }
                     }
                     var ext: ?TypeId = if (record.ext.get()) |ext| done.get(ext).? else null;
+                    // The row's own fields stay sorted by label under
+                    // substitution, and so do the remainder's, so a
+                    // remainder that substituted to a record merges in.
                     if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
                         .empty_record => ext = null,
                         .record => |ext_record| {
+                            const own = fields.items.len;
                             try fields.appendSlice(allocator, self.store.fieldSpan(ext_record.fields));
+                            try mergeSortedFields(allocator, &self.store, fields.items, own);
                             ext = ext_record.ext.get();
                         },
                         .variable => {},
                         .primitive, .tuple, .tag_union, .list, .box, .nominal, .function => invariant("a record row's remainder substituted to a non-record type"),
                     };
-                    // A declared order's slots index its row, which no
-                    // substitution of its closed remainder extends.
+                    // A padded record's store derives its slots from its
+                    // entries, so the fields a remainder brings get slots
+                    // just as they would had the row been closed already.
                     if (record.declared.get()) |declared| {
                         const padding = try allocator.alloc(TypeId, declared.padding.len);
                         defer allocator.free(padding);
@@ -2091,16 +2125,10 @@ pub const Program = struct {
                         break :blk try self.store.intern(.{ .record = .{
                             .fields = fields.items,
                             .ext = ext,
-                            .declared = .{ .padding = padding, .slots = self.store.declaredSlots(declared) },
+                            .declared = .{ .padding = padding, .entries = self.store.declaredEntries(declared) },
                         } });
                     }
                     if (fields.items.len == 0 and ext == null) break :blk try self.store.emptyRecord();
-                    const store = &self.store;
-                    std.mem.sort(types.Field, fields.items, store, struct {
-                        fn lessThan(s: *types.Store, a: types.Field, b: types.Field) bool {
-                            return s.nameLessThan(a.name, b.name);
-                        }
-                    }.lessThan);
                     break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
                 },
                 .tag_union => |tag_union| blk: {

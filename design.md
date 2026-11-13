@@ -12606,7 +12606,14 @@ including a generated codec call, waits and records when that generation
 happens, so checking order is unchanged. Each site keeps the record policy it
 applies to every other scheme: a value use or generated codec call with an
 empty substitution is recorded only when the scheme has evidence params, and
-a source dispatch edge to a same-module target is always recorded.
+a source dispatch edge to a same-module target is always recorded. A
+group-start predeclaration that shares hole variables adds one case: its use
+is recorded even with an empty substitution and no evidence params. The
+binding's own scheme can quantify a hole, which no slot enumerates, and the
+record's substitution maps every unpaired variable to itself, which states
+that the use shares the hole with the body. Post-check stages read that
+identity to forward what the body's instantiation supplies, such as a literal
+argument whose type a hole decides.
 A receiver already at `Rank.generalized` is never captured as an outer-rank
 pending requirement. Generalization boundaries cannot run inside a commit
 probe; probes may append candidates, but rollback rewinds those candidates and
@@ -20763,6 +20770,14 @@ alignment to the struct, so pure padding never inflates a struct's alignment.
 Using an unnamed field in a structural record type is rejected during
 canonicalization.
 
+A padded nominal's record can extend a row variable, as in
+`Pad(r) := { z : U64, _ : U8, ..r }`. Its memory order is the declaration's
+entries in declaration order, then every field the extension supplies, in
+label order. The declaration cannot name those fields, so they have no
+declared position. Label order depends only on the type, not on the target
+or on committed layouts, so every stage computes the same order from the
+type alone.
+
 Declared field order is explicit checked data. Record rows are sorted
 lexicographically by name at several stages (checking, Monotype row lowering,
 and Monotype instantiation) because field-name resolution and digests depend on
@@ -20783,7 +20798,12 @@ layout store, so all backends agree.
 Under `.boxy` the backing of a padded nominal is a record type of its own,
 distinct from the record of the same fields: `Converter.backing` reads the
 declaration's declared fields and padding types, at the nominal's arguments, and
-interns a record node that carries them. Its fields stay in lexicographic order,
+interns a record node that carries them. The node keeps the declaration's
+entries, and the type store derives its complete slot list from them when it
+interns the node, including slots for fields a row extension supplies. A
+substitution that resolves the extension re-interns the node with the same
+entries, so resolving the extension early or late gives one type and one
+layout, and no stage remaps a slot. Its fields stay in lexicographic order,
 so a literal, a field read, a pattern, or a codec treats it as it treats any
 record. A padding type may mention the declaration's type variables, so it is a
 component of the node like a field: it counts toward the type's closedness and
@@ -26294,7 +26314,12 @@ interning gives equal acyclic layouts one index, but a cyclic layout is
 built in raw slots of its own, so a commit that creates cyclic layouts looks
 each new layout's digest up among the layouts earlier such commits created
 and among its own, and commits again with every duplicate redirected to the
-existing layout. Each runtime representation therefore has one layout index,
+existing layout. The redirect sees graph nodes only, and the recursion boxes
+a commit inserts are not nodes. So a recursive slot edge whose target has an
+explicit `.box` node, seen through nominal wrappers, reads that node rather
+than inserting a box of the same content, and a debug build checks that the
+layouts a recursive commit reaches have distinct digests. Each runtime
+representation therefore has one layout index,
 which is what lets refcount helper names and layout-keyed procedure
 identities treat equal digests as equal layouts.
 
