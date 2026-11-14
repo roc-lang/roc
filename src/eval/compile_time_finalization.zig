@@ -104,6 +104,9 @@ pub const Options = struct {
     std_io: ?std.Io = null,
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
+    /// The slow-root reporter of the evaluation session, which
+    /// `finalizeProgram` and `finalizeProgramBoxy` install.
+    dev_progress: ?*DevProgressReporter = null,
     timing: ?*Timing = null,
     /// Retain each stage's native excerpts for in-memory consumers.
     keep_artifacts: bool = false,
@@ -980,6 +983,13 @@ pub fn finalizeProgram(
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     unfiltered_options: Options,
 ) FinalizeError!ProgramSession {
+    if (unfiltered_options.dev_progress == null) {
+        var progress = DevProgressReporter.init(unfiltered_options);
+        defer progress.deinit();
+        var session_options = unfiltered_options;
+        session_options.dev_progress = &progress;
+        return finalizeProgram(allocator, modules, lowering_modules, unfiltered_program_roots, runtime_roots, runtime_target, session_options);
+    }
     const total_started_ns = if (unfiltered_options.timing) |timing| timing.start() else 0;
     defer if (unfiltered_options.timing) |timing| timing.finish(total_started_ns, .total);
     if (unfiltered_program_roots.source_modules.len != 0 and unfiltered_program_roots.source_modules.len != unfiltered_program_roots.requests.len)
@@ -2009,6 +2019,13 @@ fn finalizeProgramBoxy(
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     options: Options,
 ) FinalizeError!ProgramSession {
+    if (options.dev_progress == null) {
+        var progress = DevProgressReporter.init(options);
+        defer progress.deinit();
+        var session_options = options;
+        session_options.dev_progress = &progress;
+        return finalizeProgramBoxy(allocator, modules, lowering_modules, program_roots, runtime_roots, runtime_target, session_options);
+    }
     var debug_events = DebugEvents{ .allocator = allocator };
     defer debug_events.deinit();
     const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
@@ -5038,12 +5055,12 @@ const DevRootJob = struct {
     progress: std.atomic.Value(u8) = std.atomic.Value(u8).init(@backingInt(DevRootProgressState.pending)),
     start_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
     last_progress_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
-    label: DevRootLabel,
+    /// The root's module, which the progress line names.
+    module: *const checked.CheckedModuleArtifact,
 
     fn deinit(self: *DevRootJob, allocator: Allocator) void {
         self.host.deinit();
         allocator.free(self.ret_buf);
-        self.label.deinit(allocator);
     }
 };
 
@@ -5057,18 +5074,21 @@ const DevRunContext = struct {
 
 const DevProgressThread = if (base.parallel.is_freestanding) struct {} else std.Thread;
 
+/// Prints a progress line for each root that runs long. One reporter serves
+/// an evaluation session: its thread starts with the first batch of roots
+/// and watches each batch's jobs while that batch runs.
 const DevProgressReporter = struct {
     options: Options,
-    jobs: []DevRootJob,
+    /// The running batch's jobs, empty between batches. The reporter thread
+    /// reads them only while holding `mutex`.
+    jobs: []DevRootJob = &.{},
+    mutex: std.atomic.Mutex = .unlocked,
     stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     wake_epoch: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     thread: ?DevProgressThread = null,
 
-    fn init(options: Options, jobs: []DevRootJob) DevProgressReporter {
-        return .{
-            .options = options,
-            .jobs = jobs,
-        };
+    fn init(options: Options) DevProgressReporter {
+        return .{ .options = options };
     }
 
     fn deinit(self: *DevProgressReporter) void {
@@ -5076,14 +5096,30 @@ const DevProgressReporter = struct {
         self.* = undefined;
     }
 
-    fn start(self: *DevProgressReporter) std.Thread.SpawnError!void {
-        if (comptime base.parallel.is_freestanding) return;
-        if (self.options.stderr == null) return;
-        if (self.options.std_io == null) return;
-        if (self.jobs.len == 0) return;
-        if (self.options.slow_root_threshold_ns == 0) return;
-        if (self.options.slow_root_period_ns == 0) return;
-        self.thread = try std.Thread.spawn(.{}, progressThreadMain, .{self});
+    /// Watch `jobs` until `endBatch`, starting the thread on the first
+    /// batch. Returns whether the reporter watches them.
+    fn beginBatch(self: *DevProgressReporter, jobs: []DevRootJob) std.Thread.SpawnError!bool {
+        if (comptime base.parallel.is_freestanding) return false;
+        if (self.options.stderr == null) return false;
+        if (self.options.std_io == null) return false;
+        if (jobs.len == 0) return false;
+        if (self.options.slow_root_threshold_ns == 0) return false;
+        if (self.options.slow_root_period_ns == 0) return false;
+        self.lock();
+        self.jobs = jobs;
+        self.unlock();
+        if (self.thread == null) {
+            errdefer self.endBatch();
+            self.thread = try std.Thread.spawn(.{}, progressThreadMain, .{self});
+        }
+        return true;
+    }
+
+    /// Stop watching the current batch's jobs before they are freed.
+    fn endBatch(self: *DevProgressReporter) void {
+        self.lock();
+        self.jobs = &.{};
+        self.unlock();
     }
 
     fn finish(self: *DevProgressReporter) void {
@@ -5093,6 +5129,16 @@ const DevProgressReporter = struct {
         self.wake();
         thread.join();
         self.thread = null;
+    }
+
+    fn lock(self: *DevProgressReporter) void {
+        while (!self.mutex.tryLock()) {
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    fn unlock(self: *DevProgressReporter) void {
+        self.mutex.unlock();
     }
 
     fn rootStarted(self: *DevProgressReporter) void {
@@ -5112,8 +5158,10 @@ const DevProgressReporter = struct {
         while (!self.stop.load(.acquire)) {
             const epoch = self.wake_epoch.load(.acquire);
             const now = nowMs(io);
+            self.lock();
             self.reportDue(now);
             const next_wait_ms = self.nextWaitMs(now);
+            self.unlock();
             if (self.stop.load(.acquire)) break;
             if (next_wait_ms) |wait_ms| {
                 if (wait_ms == 0) continue;
@@ -5151,7 +5199,7 @@ const DevProgressReporter = struct {
             if (job.last_progress_ms.cmpxchgStrong(last, now, .acq_rel, .acquire) != null) continue;
             const elapsed_s = elapsed_since_start / std.time.ms_per_s;
             var line_buf: [4096]u8 = undefined;
-            const line = progressLine(&line_buf, spinner, job.label, @intCast(elapsed_s)) catch return;
+            const line = progressLine(&line_buf, spinner, job.module, job.compile_time_root, @intCast(elapsed_s)) catch return;
             stderr.writeAll(line);
         }
     }
@@ -5179,21 +5227,27 @@ const DevProgressReporter = struct {
         return next;
     }
 
+    /// The progress line of a root, located and quoted from its module's
+    /// source only when it is printed.
     fn progressLine(
         buf: []u8,
         spinner: u8,
-        label: DevRootLabel,
+        module: *const checked.CheckedModuleArtifact,
+        root: checked.CompileTimeRoot,
         elapsed_s: u64,
     ) std.fmt.BufPrintError![]u8 {
+        const location = devRootLocation(module, root);
+        const snippet = truncatedSnippetParts(location.line_text, dev_root_snippet_max_bytes);
         return std.fmt.bufPrint(
             buf,
-            "{c} Evaluating `{s}` at compile time in {s}:{d}:{d} ({d}s)\n",
+            "{c} Evaluating `{s}{s}` at compile time in {s}:{d}:{d} ({d}s)\n",
             .{
                 spinner,
-                label.snippet,
-                label.module_name,
-                label.line,
-                label.column,
+                snippet.prefix,
+                snippet.suffix,
+                location.module_name,
+                location.line,
+                location.column,
                 elapsed_s,
             },
         );
@@ -6200,11 +6254,6 @@ fn evalDevProgramRoots(
 
             const root_id = root_ids[i];
             const compile_time_root = module.compile_time_roots.root(root_id);
-            const label = try devRootLabel(allocator, module, compile_time_root);
-            errdefer {
-                var owned = label;
-                owned.deinit(allocator);
-            }
 
             jobs[i] = .{
                 .root = root,
@@ -6213,7 +6262,7 @@ fn evalDevProgramRoots(
                 .entry_offset = entry_offset,
                 .ret_buf = ret_buf,
                 .host = CompileTimeHost.init(host_allocator),
-                .label = label,
+                .module = module,
             };
             jobs[i].host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
             jobs[i].host.timing_io = if (options.timing) |timing| timing.std_io else null;
@@ -6226,14 +6275,14 @@ fn evalDevProgramRoots(
     }
 
     const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
-    var progress = DevProgressReporter.init(options, jobs[0..jobs_len]);
-    defer progress.deinit();
-    try progress.start();
+    const progress = options.dev_progress orelse finalizationInvariant("compile-time evaluation ran roots outside a session's progress reporter");
+    const watched = try progress.beginBatch(jobs[0..jobs_len]);
+    defer if (watched) progress.endBatch();
     var run_context = DevRunContext{
         .program = native,
         .jobs = jobs[0..jobs_len],
         .std_io = options.std_io,
-        .progress_reporter = if (progress.thread == null) null else &progress,
+        .progress_reporter = if (watched) progress else null,
     };
     const max_threads = if (options.max_threads == 0)
         0
@@ -6278,7 +6327,7 @@ fn evalDevProgramRoots(
             },
         );
     }
-    progress.finish();
+    if (watched) progress.endBatch();
     if (options.timing) |timing| {
         timing.finishExecution(execution_started_ns);
     }
@@ -6484,23 +6533,41 @@ fn spinnerByte(tick: usize) u8 {
     return frames[tick % frames.len];
 }
 
-fn devRootLabel(
-    allocator: Allocator,
-    module: *const checked.CheckedModuleArtifact,
-    root: checked.CompileTimeRoot,
-) Allocator.Error!DevRootLabel {
+const dev_root_snippet_max_bytes = 96;
+
+/// Where a compile-time root's source starts, and the text of that line.
+const DevRootLocation = struct {
+    module_name: []const u8,
+    line_text: []const u8,
+    line: u32,
+    column: u32,
+};
+
+fn devRootLocation(module: *const checked.CheckedModuleArtifact, root: checked.CompileTimeRoot) DevRootLocation {
     const env = module.moduleEnvConst();
     const region = devRootSourceRegion(module, root);
     const info = env.calcRegionInfo(region);
     const source = env.getSourceAll();
     const line_starts = env.getLineStartsAll();
-    const raw_line = base.RegionInfo.getLineText(source, line_starts, info.start_line_idx, info.start_line_idx);
-    const snippet = try truncateSnippet(allocator, raw_line, 96);
     return .{
         .module_name = env.module_name,
-        .snippet = snippet,
+        .line_text = base.RegionInfo.getLineText(source, line_starts, info.start_line_idx, info.start_line_idx),
         .line = info.start_line_idx + 1,
         .column = info.start_col_idx + 1,
+    };
+}
+
+fn devRootLabel(
+    allocator: Allocator,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+) Allocator.Error!DevRootLabel {
+    const location = devRootLocation(module, root);
+    return .{
+        .module_name = location.module_name,
+        .snippet = try truncateSnippet(allocator, location.line_text, dev_root_snippet_max_bytes),
+        .line = location.line,
+        .column = location.column,
     };
 }
 
@@ -6548,11 +6615,17 @@ fn literalSourceRegion(module: *const checked.CheckedModuleArtifact, node: u32) 
 }
 
 fn truncateSnippet(allocator: Allocator, bytes: []const u8, max_bytes: usize) Allocator.Error![]u8 {
+    const parts = truncatedSnippetParts(bytes, max_bytes);
+    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ parts.prefix, parts.suffix });
+}
+
+/// `bytes` cut to at most `max_bytes`, as a prefix of it and the ellipsis
+/// that marks a cut.
+fn truncatedSnippetParts(bytes: []const u8, max_bytes: usize) struct { prefix: []const u8, suffix: []const u8 } {
     const ellipsis = "…";
-    if (bytes.len <= max_bytes) return try allocator.dupe(u8, bytes);
-    if (max_bytes <= ellipsis.len) return try allocator.dupe(u8, ellipsis);
-    const prefix_len = validUtf8PrefixLen(bytes, max_bytes - ellipsis.len);
-    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ bytes[0..prefix_len], ellipsis });
+    if (bytes.len <= max_bytes) return .{ .prefix = bytes, .suffix = "" };
+    if (max_bytes <= ellipsis.len) return .{ .prefix = "", .suffix = ellipsis };
+    return .{ .prefix = bytes[0..validUtf8PrefixLen(bytes, max_bytes - ellipsis.len)], .suffix = ellipsis };
 }
 
 fn validUtf8PrefixLen(bytes: []const u8, max_bytes: usize) usize {
