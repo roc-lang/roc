@@ -13270,6 +13270,27 @@ the outermost commit registers them. Builds with runtime safety check that
 no instantiation copies a placeholder, and that by the end of checking every
 use not replayed is linked.
 
+Late-settled scheme requirements. A scheme-use record's pairs are its
+instantiation's substitution, so they must name every quantified variable
+of the scheme as published. A stored requirement whose receiver depends on
+an unannotated value of an enclosing scope (`weak = "a,b,c"` with
+`f = |g| weak.split_on(",").map(g)`) can settle after a use copied it. Its
+target instance then refines the scheme's type, which can let more of the
+scheme's relations settle, and each target instance those select adds its
+variables to the scheme (`map`'s result item above). The use's copies
+settle separately, on their own instances of the same method schemes, and
+the use's substitution does not yet name the new variables. When a stored
+requirement retires as settled after its scheme was copied, its callable is
+logged. Once solving ends, and only when that log is nonempty, every record
+that pairs a logged callable is extended. For each callable pair in the
+record whose original and copy both selected a target, the two target
+records instantiate one method scheme, so their pairs match one-to-one by
+method-scheme variable. Each variable of the original's instance is paired
+with the copy's variable for the same method-scheme variable, and the
+relations those instances derived are followed the same way. Builds with
+runtime safety check that each such original and copy selected the same
+method target. The regression test is the compile test "issue 13051".
+
 A generalization boundary captures its owned requirements before literal
 defaulting, then drains grounded copied requirements together with local codec
 constraint production to quiescence. Capture transfers a settled local codec
