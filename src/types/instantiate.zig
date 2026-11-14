@@ -718,8 +718,8 @@ pub const Instantiator = struct {
         machine.reach_stack.clearRetainingCapacity();
         reach_state.clearRetainingCapacity();
 
-        const root_resolved = self.store.resolveVar(root);
-        try reach_state.put(root_resolved.var_, schemeCopiesNode(root_resolved.desc));
+        const root_resolved = self.store.resolveVarWord(root);
+        try reach_state.put(root_resolved.var_, schemeCopiesNode(root_resolved.word));
         try machine.reach_stack.append(self.store.gpa, root_resolved.var_);
 
         while (machine.reach_stack.pop()) |parent| {
@@ -834,7 +834,7 @@ pub const Instantiator = struct {
     /// Record the edge to `child` and schedule the child's own children once.
     fn visitReachChild(self: *Self, parent: Var, child: Var) std.mem.Allocator.Error!void {
         const machine = self.scratch();
-        const resolved = self.store.resolveVar(child);
+        const resolved = self.store.resolveVarWord(child);
         const edge_idx: u32 = @intCast(machine.reach_edges.items.len);
         const head = try machine.reach_heads.?.getOrPut(resolved.var_);
         try machine.reach_edges.append(self.store.gpa, .{
@@ -844,7 +844,7 @@ pub const Instantiator = struct {
         head.value_ptr.* = edge_idx;
         const entry = try machine.reach_state.?.getOrPut(resolved.var_);
         if (entry.found_existing) return;
-        entry.value_ptr.* = schemeCopiesNode(resolved.desc);
+        entry.value_ptr.* = schemeCopiesNode(resolved.word);
         try machine.reach_stack.append(self.store.gpa, resolved.var_);
     }
 
@@ -852,8 +852,8 @@ pub const Instantiator = struct {
     /// generalized variable, or anonymous structure made in the scheme's own
     /// scope, which a use may lift into a nominal type
     /// (`DescriptorFlags.per_use_structure`).
-    fn schemeCopiesNode(desc: types_mod.Descriptor) bool {
-        return desc.rank == .generalized or desc.flags.per_use_structure;
+    fn schemeCopiesNode(word: types_mod.Descriptor.Word) bool {
+        return word.rank == .generalized or word.flags.per_use_structure;
     }
 
     /// Resolve shared declaration binders before copying. Every semantic

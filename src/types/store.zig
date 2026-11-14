@@ -1776,6 +1776,13 @@ pub const Store = struct {
 
     /// Whether the solver can still refine or poison what this content
     /// denotes: a variable, a field presence, or an error.
+    fn kindIsLeaf(kind: types.ContentKind) bool {
+        return switch (kind) {
+            .flex, .rigid, .field_presence, .err => true,
+            .alias, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => false,
+        };
+    }
+
     fn contentIsLeaf(content: Content) bool {
         return switch (content) {
             .flex, .rigid, .field_presence, .err => true,
@@ -2862,6 +2869,13 @@ pub const Store = struct {
         return storage;
     }
 
+    /// What `resolveVar` gives for `checked_var`, the checked representative
+    /// of descriptor `desc_idx`'s class, without walking to the root again.
+    pub inline fn resolvedAtRoot(self: *const Self, checked_var: Var, desc_idx: DescStore.Idx) ResolvedVarDesc {
+        std.debug.assert(self.getRootMeta(desc_idx).checked_var == checked_var);
+        return .{ .var_ = checked_var, .is_root = true, .desc_idx = desc_idx, .desc = self.descAt(desc_idx) };
+    }
+
     /// Given a type var, find its class descriptor and checked representative.
     pub inline fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
         return publicResolved(initial_var, self.resolveStorageRoot(initial_var));
@@ -2940,10 +2954,12 @@ pub const Store = struct {
 
     /// Merge two storage trees by structural union rank while adopting
     /// `destination_desc_idx` and `checked_var` for the resulting class.
+    /// `a` and `b` are `StorageRoot`s or `ResolvedStorageRoot`s; only their
+    /// storage vars and descriptor indices are read.
     fn linkStorageRoots(
         self: *Self,
-        a: ResolvedStorageRoot,
-        b: ResolvedStorageRoot,
+        a: anytype,
+        b: anytype,
         destination_desc_idx: DescStore.Idx,
         checked_var: Var,
     ) Allocator.Error!void {
@@ -2989,50 +3005,49 @@ pub const Store = struct {
     /// alias views stay separate from the concrete solved backing variable.
     pub fn union_(self: *Self, a_var: Var, b_var: Var, new_desc: Desc) Allocator.Error!void {
         self.debugAssertUnsealed();
-        const a_data = self.resolveStorageRoot(a_var);
-        const b_data = self.resolveStorageRoot(b_var);
-        if (a_data.desc.flags.frozen or b_data.desc.flags.frozen) return self.unionWithFrozen(a_data, b_data, new_desc);
+        // Only the two classes' words are read: their kinds and flags.
+        const a_data = self.findStorageRoot(a_var);
+        const b_data = self.findStorageRoot(b_var);
+        const a_word = self.descs.getWord(a_data.desc_idx);
+        const b_word = self.descs.getWord(b_data.desc_idx);
+        if (a_word.flags.frozen or b_word.flags.frozen) return self.unionWithFrozen(a_data, a_word, b_data, b_word, new_desc);
 
         var merged_desc = new_desc;
         merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
-            (a_data.desc.flags.annotation_tag_ext or b_data.desc.flags.annotation_tag_ext);
-        merged_desc.flags.bounded_row_ext = a_data.desc.flags.bounded_row_ext or b_data.desc.flags.bounded_row_ext;
-        merged_desc.flags.host_fixed_row = a_data.desc.flags.host_fixed_row or b_data.desc.flags.host_fixed_row;
+            (a_word.flags.annotation_tag_ext or b_word.flags.annotation_tag_ext);
+        merged_desc.flags.bounded_row_ext = a_word.flags.bounded_row_ext or b_word.flags.bounded_row_ext;
+        merged_desc.flags.host_fixed_row = a_word.flags.host_fixed_row or b_word.flags.host_fixed_row;
         const merged_is_empty_tag_union = merged_desc.content == .structure and
             merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {
-            const a_is_explicit_empty = a_data.desc.content == .structure and
-                a_data.desc.content.structure == .empty_tag_union and
-                !a_data.desc.flags.empty_tag_union_is_default;
-            const b_is_explicit_empty = b_data.desc.content == .structure and
-                b_data.desc.content.structure == .empty_tag_union and
-                !b_data.desc.flags.empty_tag_union_is_default;
+            const a_is_explicit_empty = a_word.kind == .empty_tag_union and !a_word.flags.empty_tag_union_is_default;
+            const b_is_explicit_empty = b_word.kind == .empty_tag_union and !b_word.flags.empty_tag_union_is_default;
             merged_desc.flags.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
-                (a_data.desc.flags.empty_tag_union_is_default or b_data.desc.flags.empty_tag_union_is_default);
+                (a_word.flags.empty_tag_union_is_default or b_word.flags.empty_tag_union_is_default);
         } else {
             merged_desc.flags.empty_tag_union_is_default = false;
         }
         // A rejected dispatch edge is a fact about the constraint callable's
         // equivalence class, so merging two classes rejects the result if
         // either side was rejected.
-        merged_desc.flags.static_dispatch_rejected = a_data.desc.flags.static_dispatch_rejected or
-            b_data.desc.flags.static_dispatch_rejected;
+        merged_desc.flags.static_dispatch_rejected = a_word.flags.static_dispatch_rejected or
+            b_word.flags.static_dispatch_rejected;
         // Declared backing structure stays declared: a class that merged with
         // an opened nominal backing component is that component.
-        merged_desc.flags.nominal_backing_structure = a_data.desc.flags.nominal_backing_structure or
-            b_data.desc.flags.nominal_backing_structure;
+        merged_desc.flags.nominal_backing_structure = a_word.flags.nominal_backing_structure or
+            b_word.flags.nominal_backing_structure;
         // Structure copied per use stays so only while it is nothing else: a
         // class it merged with keeps its own sharing.
-        merged_desc.flags.per_use_structure = a_data.desc.flags.per_use_structure and
-            b_data.desc.flags.per_use_structure;
+        merged_desc.flags.per_use_structure = a_word.flags.per_use_structure and
+            b_word.flags.per_use_structure;
         // A defaulting decision about one side is a decision about the merged
         // class: the default it committed is the type both sides now share.
-        merged_desc.flags.default_decided = a_data.desc.flags.default_decided or
-            b_data.desc.flags.default_decided;
+        merged_desc.flags.default_decided = a_word.flags.default_decided or
+            b_word.flags.default_decided;
         if ((contentIsLeaf(merged_desc.content) and
-            (!contentIsLeaf(a_data.desc.content) or !contentIsLeaf(b_data.desc.content))) or
-            !sameCopiedFlags(merged_desc.flags, a_data.desc.flags) or
-            !sameCopiedFlags(merged_desc.flags, b_data.desc.flags))
+            (!kindIsLeaf(a_word.kind) or !kindIsLeaf(b_word.kind))) or
+            !sameCopiedFlags(merged_desc.flags, a_word.flags) or
+            !sameCopiedFlags(merged_desc.flags, b_word.flags))
         {
             self.ground_epoch +%= 1;
         }
@@ -3071,13 +3086,17 @@ pub const Store = struct {
     /// stays the checked representative as in every merge. Relating a frozen
     /// class to an error leaves the two classes apart: the error side is
     /// already poisoned, and the frozen side must not change.
-    fn unionWithFrozen(self: *Self, a: ResolvedStorageRoot, b: ResolvedStorageRoot, new_desc: Desc) Allocator.Error!void {
+    fn unionWithFrozen(self: *Self, a: StorageRoot, a_word: Desc.Word, b: StorageRoot, b_word: Desc.Word, new_desc: Desc) Allocator.Error!void {
         if (a.storage_var == b.storage_var) return;
         if (new_desc.content == .err) return;
-        const frozen = if (b.desc.flags.frozen) b else a;
-        const other = if (b.desc.flags.frozen) a else b;
-        if (std.debug.runtime_safety and other.desc.flags.static_dispatch_rejected and !frozen.desc.flags.static_dispatch_rejected) {
-            base.invariant("a rejected dispatch callable was related to a frozen type class", .{});
+        const frozen = if (b_word.flags.frozen) b else a;
+        const other = if (b_word.flags.frozen) a else b;
+        if (std.debug.runtime_safety) {
+            const frozen_word = if (b_word.flags.frozen) b_word else a_word;
+            const other_word = if (b_word.flags.frozen) a_word else b_word;
+            if (other_word.flags.static_dispatch_rejected and !frozen_word.flags.static_dispatch_rejected) {
+                base.invariant("a rejected dispatch callable was related to a frozen type class", .{});
+            }
         }
         try self.linkStorageRoots(a, b, frozen.desc_idx, b.meta.checked_var);
         try self.freeDesc(other.desc_idx, other.storage_var);

@@ -971,8 +971,8 @@ const Unifier = struct {
             },
             .restore_enclosing_records => |saved| self.enclosing_records = saved,
             .unify_vars => |pair| try self.unifyVars(&.{
-                .a = self.types_store.resolveVar(pair.a),
-                .b = self.types_store.resolveVar(pair.b),
+                .a = self.types_store.resolvedAtRoot(pair.a, pair.a_desc),
+                .b = self.types_store.resolvedAtRoot(pair.b, pair.b_desc),
             }),
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
             .merge_to_nominal => |merge_frame| try self.mergeToNominal(&merge_frame.vars, merge_frame.direction),
@@ -1030,7 +1030,12 @@ const Unifier = struct {
                     .saved_unresolved_a = saved_unresolved_a,
                     .saved_unresolved_b = saved_unresolved_b,
                 } });
-                try self.pushWorkFrame(.{ .unify_vars = .{ .a = vars.a.var_, .b = vars.b.var_ } });
+                try self.pushWorkFrame(.{ .unify_vars = .{
+                    .a = vars.a.var_,
+                    .a_desc = vars.a.desc_idx,
+                    .b = vars.b.var_,
+                    .b_desc = vars.b.desc_idx,
+                } });
             },
         }
     }
@@ -4199,12 +4204,15 @@ const WorkFrame = union(enum) {
     /// Restores the enclosing record pair once a record relation's scheduled
     /// children have drained. Pushed before those children so it pops after them.
     restore_enclosing_records: ?[2]Var,
-    /// The checked representatives of two classes to relate, resolved again
-    /// when the frame runs: it runs right after it is pushed, so nothing has
-    /// changed them, and the frame need not carry their descriptors.
+    /// The checked representatives of two classes to relate and their
+    /// descriptors, decoded when the frame runs: it runs right after it is
+    /// pushed, so nothing has changed them, and the frame need not carry the
+    /// decoded descriptors.
     unify_vars: struct {
         a: Var,
+        a_desc: types_mod.DescStoreIdx,
         b: Var,
+        b_desc: types_mod.DescStoreIdx,
     },
     merge: struct {
         vars: ResolvedVarDescs,
