@@ -367,7 +367,9 @@ pub const Layouts = struct {
 
     /// The committed layout of the closed type `ty`.
     pub fn layoutOf(self: *Layouts, ty: TypeId) Allocator.Error!layout.Idx {
-        if (!try self.converter.representationClosed(ty)) types.invariant("asked for the committed layout of an open type");
+        if (std.debug.runtime_safety) {
+            if (!try self.converter.representationClosed(ty)) types.invariant("asked for the committed layout of an open type");
+        }
         if (self.memo.get(ty)) |committed| return committed.idx;
         if (try self.directLayout(ty)) |idx| {
             try self.memo.put(self.allocator, ty, .{ .idx = idx, .digest = null });
