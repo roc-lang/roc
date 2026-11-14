@@ -204,9 +204,20 @@ pub const Descriptor = struct {
         flags: DescriptorFlags,
         /// A flex's `Flex.literal`; `.none` for every other kind.
         literal: Flex.Literal = .none,
-        /// Always zero.
-        spare: u2 = 0,
+        /// Generalization's marks (`Generalizer.generalize`): the class is one
+        /// the running pass is generalizing, and the pass has adjusted its
+        /// rank. A pass sets them and clears them before it returns, so both
+        /// are false in every descriptor outside a pass. They are the pass's
+        /// scratch, not part of the descriptor: nothing that copies,
+        /// compares, journals or stores a descriptor sees one set.
+        generalizing: bool = false,
+        rank_adjusted: bool = false,
         rank: Rank,
+
+        /// Whether either generalization mark is set.
+        pub fn marked(self: Word) bool {
+            return self.generalizing or self.rank_adjusted;
+        }
 
         /// `Descriptor.liftsIntoNominal`, read from the word alone.
         pub fn liftsIntoNominal(self: Word) bool {
