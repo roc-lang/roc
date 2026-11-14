@@ -1486,10 +1486,8 @@ fn staticDataSymbol(self: *Self, id: LIR.StaticDataId) Allocator.Error!SymbolInd
     const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
     errdefer self.allocator.free(symbol_name);
 
-    const symbol = if (self.module.findSymbolByNameAndKind(symbol_name, .data)) |existing|
-        SymbolIndex.fromRaw(existing)
-    else
-        try self.module.addUndefinedDataSymbol(symbol_name);
+    // Returns the module's existing data symbol of that name when it has one.
+    const symbol = try self.module.addUndefinedDataSymbol(symbol_name);
 
     try self.static_data_names.append(self.allocator, symbol_name);
     try self.static_data_symbols.put(raw_id, symbol);
