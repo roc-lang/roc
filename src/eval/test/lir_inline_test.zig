@@ -188,7 +188,7 @@ fn lowerModuleWithOptions(
     const main_request = for (resources.checked_artifact.root_requests.requests) |request| {
         switch (request.source) {
             .def => |def| if (def == main_def) break request,
-            .expr, .statement, .required_binding, .hoisted, .literal => {},
+            .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => {},
         }
     } else return error.MissingRootProcedure;
     const published_roots = [_]check.CheckedArtifact.RootRequest{main_request};
