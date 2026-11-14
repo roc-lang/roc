@@ -250,10 +250,10 @@ noinline fn increfComposite(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops
 
 const DecrefWork = union(enum) {
     value: Value,
-    /// Release a unique box whose payload was released before it.
-    release_box: struct { alloc: ?[*]u8, alignment: u32 },
-    /// Release a unique list whose elements were released before it.
-    release_list: struct { list: RocList, alignment: u32 },
+    /// Free a box whose last reference was released, after its payload.
+    free_box: struct { alloc: ?[*]u8, alignment: u32 },
+    /// Free a list whose last reference was released, after its elements.
+    free_list: struct { list: RocList, alignment: u32 },
 };
 
 const DecrefWalker = struct {
@@ -310,8 +310,8 @@ noinline fn decrefComposite(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) voi
     defer walker.stack.deinit(ops);
     walker.stack.push(.{ .value = .at(desc, ptr) }, ops);
     while (walker.stack.pop()) |work| switch (work) {
-        .release_box => |box| utils.decrefDataPtr(box.alloc, box.alignment, true, .atomic, ops),
-        .release_list => |list| utils.decref(list.list.getAllocationDataPtr(ops), list.list.capacity_or_alloc_ptr, list.alignment, true, .atomic, ops),
+        .free_box => |box| utils.freeDataPtrC(box.alloc, box.alignment, true, ops),
+        .free_list => |list| list.list.freeAllocation(list.alignment, true, ops),
         .value => |pending| {
             var value = pending;
             // Keep cleanup sentinels and siblings pending while following a child.
@@ -324,25 +324,29 @@ noinline fn decrefComposite(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) voi
                         const elem = d.child.?;
                         const list = value.rocList().*;
                         const alignment: u32 = if (elem.size == 0) 1 else elem.alignment;
-                        if (elem.flags.contains_refcounted and list.isUnique(ops)) {
-                            walker.stack.push(.{ .release_list = .{ .list = list, .alignment = alignment } }, ops);
-                            walker.element_desc = elem;
-                            const start = walker.stack.len;
-                            list.decrefElements(elem.size, @ptrCast(&walker), &DecrefWalker.pushElement, ops);
-                            walker.stack.reverseFrom(start);
-                        } else {
-                            list.decref(alignment, elem.size, elem.flags.contains_refcounted, null, &builtins.list.rcNone, ops);
+                        if (list.releaseAllocation(.atomic, ops)) {
+                            if (elem.flags.contains_refcounted) {
+                                walker.stack.push(.{ .free_list = .{ .list = list, .alignment = alignment } }, ops);
+                                walker.element_desc = elem;
+                                const start = walker.stack.len;
+                                list.decrefElements(elem.size, @ptrCast(&walker), &DecrefWalker.pushElement, ops);
+                                walker.stack.reverseFrom(start);
+                            } else {
+                                list.freeAllocation(alignment, false, ops);
+                            }
                         }
                     },
                     .box, .recursive_box => {
                         const payload = d.child.?;
                         if (payload.size == 0) break;
                         const alloc = value.word();
-                        if (payload.flags.contains_refcounted and alloc != null and utils.isUnique(alloc, ops)) {
-                            walker.stack.push(.{ .release_box = .{ .alloc = alloc, .alignment = payload.alignment } }, ops);
-                            walker.stack.push(.{ .value = value.boxPayload() }, ops);
-                        } else {
-                            utils.decrefDataPtr(alloc, payload.alignment, payload.flags.contains_refcounted, .atomic, ops);
+                        if (utils.releaseDataPtr(alloc, .atomic, ops)) {
+                            if (payload.flags.contains_refcounted) {
+                                walker.stack.push(.{ .free_box = .{ .alloc = alloc, .alignment = payload.alignment } }, ops);
+                                walker.stack.push(.{ .value = value.boxPayload() }, ops);
+                            } else {
+                                utils.freeDataPtrC(alloc, payload.alignment, false, ops);
+                            }
                         }
                     },
                     .erased_callable => erased_callable.decref(value.word(), ops),
