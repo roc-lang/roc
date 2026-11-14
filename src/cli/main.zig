@@ -19262,17 +19262,18 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
     };
 }
 
-const spec_constr_counter_count = 9 + 2 * @typeInfo(lir.CheckedPipeline.SpecConstrPhase).@"enum".field_names.len;
+const spec_constr_counter_count = 10 + 2 * @typeInfo(lir.CheckedPipeline.SpecConstrPhase).@"enum".field_names.len;
 
 fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMetrics) [spec_constr_counter_count]progress.Counter {
     var rows: [spec_constr_counter_count]progress.Counter = undefined;
-    rows[0..9].* = .{
+    rows[0..10].* = .{
         .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
         .{ .name = "Tasks committed", .count = parallel.tasks_committed },
         .{ .name = "Patterns recorded", .count = parallel.patterns_recorded },
         .{ .name = "Patterns admitted", .count = parallel.patterns_admitted },
         .{ .name = "Workers written", .count = parallel.workers_written },
         .{ .name = "Worker budget denials", .count = parallel.spec_count_denials },
+        .{ .name = "Prefix functions", .count = parallel.prefix_functions },
         .{ .name = "Bodies committed", .count = parallel.bodies_committed },
         .{ .name = "Expressions committed", .count = parallel.expressions_committed },
         .{ .name = "Peak retained body shards", .count = parallel.peak_retained_shards },
@@ -19283,8 +19284,8 @@ fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMe
             .unused_loop_results => "Loop-result projection",
             .iterator_fusion => "Iterator fusion",
         };
-        rows[9 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
-        rows[10 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
+        rows[10 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
+        rows[11 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
     }
     return rows;
 }
@@ -19297,17 +19298,30 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
         .patterns_admitted = 4,
         .workers_written = 5,
         .spec_count_denials = 6,
-        .bodies_committed = 7,
-        .expressions_committed = 8,
-        .peak_retained_shards = 9,
-        .committed_by_phase = .{ 10, 12, 14 },
-        .changed_by_phase = .{ 11, 13, 15 },
+        .prefix_functions = 7,
+        .bodies_committed = 8,
+        .expressions_committed = 9,
+        .peak_retained_shards = 10,
+        .committed_by_phase = .{ 11, 13, 15 },
+        .changed_by_phase = .{ 12, 14, 16 },
     });
     const names = [_][]const u8{
-        "Tasks submitted",                "Tasks committed",         "Patterns recorded",         "Patterns admitted",
-        "Workers written",                "Worker budget denials",   "Bodies committed",          "Expressions committed",
-        "Peak retained body shards",      "Pattern discovery tasks", "Pattern discovery changes", "Loop-result projection tasks",
-        "Loop-result projection changes", "Iterator fusion tasks",   "Iterator fusion changes",
+        "Tasks submitted",
+        "Tasks committed",
+        "Patterns recorded",
+        "Patterns admitted",
+        "Workers written",
+        "Worker budget denials",
+        "Prefix functions",
+        "Bodies committed",
+        "Expressions committed",
+        "Peak retained body shards",
+        "Pattern discovery tasks",
+        "Pattern discovery changes",
+        "Loop-result projection tasks",
+        "Loop-result projection changes",
+        "Iterator fusion tasks",
+        "Iterator fusion changes",
     };
     for (rows, names, 1..) |row, name, count| {
         try std.testing.expectEqualStrings(name, row.name);

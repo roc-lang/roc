@@ -10131,6 +10131,38 @@ uses its state whole keeps the aggregate in the copy too. The walk follows the r
 known tag or callable in a field still counts where a `match` or call inside
 the loop reads it.
 
+An admitted copy carries only the part of the body the known value improves.
+A gainable slot is a parameter or capture whose type holds a tag union or a
+function. A stretch of a source body is a maximal run of its top-level
+statements none of which reads a gainable slot (directly or through a local
+bound by a statement that does), binds or reads a top-level local whose type
+holds a tag union or function, or is fixed in place: a `return`, loop control
+or join jump that leaves the statement, a recursive or uninitialized binding,
+a payload-initialization construct, a crash, or a call into the function's
+own cycle of the call graph. Each stretch divides into runs, each the longest
+segment from where the previous one ended that binds exactly one local a
+later position reads (SpecConstr creates no types, so a run's function
+returns that local's type); a statement that starts no such segment stays,
+as does a run of a single wrapper-shaped statement (`wrapper_body.zig`),
+which costs less than a call. Optional productive inlines and call-pattern
+workers count as copies of their callee (iterator-protocol, wrapper and
+foreign-capture inlines do not, and functions that call or produce iterators
+are never split). The copy that leaves two copies of a body in the program
+(a second copy, or a first copy of a function the source names at two or
+more places or that is a root) splits it at that serial point: each run moves
+into a prefix function, reserved then and written like a worker in the
+source function's root context, and the source body becomes the same
+statements with a binding of the run's live-out to a call on its live-ins in
+place of each run. The run therefore runs at the same point, once, with the
+same effects in the same order, and ARC sees an ordinary call. Every later
+clone reads the split source, a prefix function is never inlined, and a
+worker or the function's own body already written from the old source is
+written again, so the program holds one copy of each run. The first copy of
+a body that only one place names is not split, since the body's own function
+is then unused; if a later copy appears after all, the split leaves the
+first copy's run as the only second copy. The split applies wherever
+SpecConstr runs with `.all_calls` clone inlining.
+
 A known argument is one the clone holds as a constructor, callable, or known
 local at the consumed path, or a nested direct call whose callee constructs
 that part on every path or always passes it through from a known argument.
