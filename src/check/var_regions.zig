@@ -239,7 +239,7 @@ test "a copy has the region of the variable it was copied from" {
     regions.setOrigin(first_copies, @fromBackingInt(3), @fromBackingInt(1));
     regions.setOrigin(first_copies, @fromBackingInt(5), @fromBackingInt(2));
     // A variable the instantiation shared is not one of its copies.
-    regions.setOrigin(first_copies, @fromBackingInt(2), @fromBackingInt(0));
+    regions.setOrigin(first_copies, @fromBackingInt(2), @fromBackingInt(1));
     // A copy of a copy reads through both.
     const second_copies = try regions.addCopies(gpa, 6, 8);
     regions.setOrigin(second_copies, @fromBackingInt(6), @fromBackingInt(5));
