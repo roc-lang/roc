@@ -4648,11 +4648,16 @@ fn canonicalizeTopLevelTypeDecl(
     }
 }
 
+/// Whether the parser recorded this `return` as occupying its function's result
+/// position, so its keyword changes nothing about the program.
+fn isRedundantReturn(self: *const Self, node_idx: u32) bool {
+    return self.enclosing_lambda != null and self.expect_context == .none and
+        self.parse_ir.redundant_returns.isSet(node_idx);
+}
+
 /// Consume the parser's explicit function-result context without reanalyzing CIR.
 fn warnRedundantReturn(self: *Self, node_idx: u32, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
-    if (self.enclosing_lambda != null and self.expect_context == .none and
-        self.parse_ir.redundant_returns.isSet(node_idx))
-    {
+    if (self.isRedundantReturn(node_idx)) {
         try self.env.pushDiagnostic(.{ .redundant_return = .{
             .region = self.parse_ir.tokenizedRegionToRegion(region),
         } });
@@ -12032,6 +12037,7 @@ fn runExprKernel(
                     try self.warnRedundantReturn(@backingInt(idx), e.region);
                     try stacks.push(.finish_return, frame_allocator, .{
                         .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .redundant = self.isRedundantReturn(@backingInt(idx)),
                     });
                     try stacks.push(.parse, frame_allocator, .{ .idx = e.expr, .target = .scratch });
                 },
@@ -12476,6 +12482,7 @@ fn runExprKernel(
                             .next = next,
                             .region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region),
                             .final_expr = true,
+                            .redundant = self.isRedundantReturn(@backingInt(ast_stmt_idx)),
                         });
                         try stacks.push(.parse, frame_allocator, .{ .idx = return_stmt.expr, .target = .scratch });
                     },
@@ -12569,6 +12576,7 @@ fn runExprKernel(
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(r.region),
                         .final_expr = false,
+                        .redundant = false,
                     });
                     try stacks.push(.parse, frame_allocator, .{ .idx = r.expr, .target = .scratch });
                 },
@@ -12901,7 +12909,12 @@ fn runExprKernel(
             const expr = child_slots.items[result_start].expr;
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try self.warnTrailingTrySuffix(expr.idx);
-            if (state.final_expr) {
+            if (state.final_expr and state.redundant) {
+                // The return already occupies the function's result position,
+                // so the block's final expression is its operand.
+                const block_expr = try self.finishBlockState(state.block, expr);
+                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, block_expr);
+            } else if (state.final_expr) {
                 const return_expr_idx = if (self.expect_context != .none)
                     try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
                         .region = state.region,
@@ -13331,6 +13344,13 @@ fn runExprKernel(
             const can_inner = child_slots.items[result_start].expr;
 
             try self.warnTrailingTrySuffix(can_inner.idx);
+            if (state.redundant) {
+                // The return already occupies the function's result position,
+                // so the expression is its operand.
+                child_slots.shrinkRetainingCapacity(result_start);
+                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, can_inner);
+                continue :expr_kernel_loop .dispatch;
+            }
             const return_expr = if (self.expect_context != .none)
                 try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
                     .region = state.region,
@@ -16762,6 +16782,8 @@ const ExprFinishBlockReturnStmtWork = struct {
     next: usize,
     region: Region,
     final_expr: bool,
+    /// The parser recorded this return in its function's result position.
+    redundant: bool,
 };
 
 const ExprFinishBlockVarStmtWork = struct {
@@ -16874,6 +16896,8 @@ const ExprFinishCrashWork = struct {
 
 const ExprFinishReturnWork = struct {
     region: Region,
+    /// The parser recorded this return in its function's result position.
+    redundant: bool,
 };
 
 const ExprFinishTupleAccessWork = struct {

@@ -375,7 +375,9 @@ pub const Constants = struct {
     /// 190: type tags record whether they are in their row only because `match`
     ///      branch patterns asked for them.
     /// 191: combines the independent 189 and 190 entry changes.
-    pub const CACHE_VERSION = 191;
+    /// 192: a `return` in its function's result position canonicalizes to its
+    ///      operand rather than to a return node.
+    pub const CACHE_VERSION = 192;
 };
 
 /// Configuration for the Roc cache system.
