@@ -23251,6 +23251,15 @@ pending work before treating its result slot as a value. The versioned pack
 format records the summary alongside the ownership ABI; an older entry without
 the result is incompatible, never assumed to return a completed value.
 
+ARC reports whether its insertion deferred any erased call
+(`Arc.InsertResult`): each emission records the fact for its own body, and the
+ordered shard append merges the records. No stage before ARC emits a deferred
+call. When ARC deferred none and no cache-supplied procedure's summary says it
+may leave a call pending, nothing can be pending after any statement, so the
+pass skips its walk and only commits `may_leave_pending` as false for every
+procedure. A Debug compiler walks anyway and asserts that it finds no deferred
+call and no procedure that may leave one.
+
 A call's result may be converted to another representation before it is
 returned, by statements after the call. The pass marks a direct call or a
 deferred call `returns_pending` when its value reaches the return through
