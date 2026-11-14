@@ -19916,10 +19916,11 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
         }
     }
     if (timing.program_finalization_ns != 0) recordCompileTimeDetail(reporter, timing.program_finalization_ns, compile_time);
-    if (compile_time.roots_declared != 0) {
+    if (compile_time.roots_declared != 0 or compile_time.roots_completed_directly != 0) {
         reporter.recordCounters("Compile-time roots", &.{
             .{ .name = "Declared", .count = compile_time.roots_declared },
             .{ .name = "Evaluated", .count = compile_time.roots_evaluated },
+            .{ .name = "Completed directly", .count = compile_time.roots_completed_directly },
         });
     }
     const counters = timing.compile_time_counters;
@@ -19934,6 +19935,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
 
 fn compileTimeStepLabel(step: eval.CompileTimeFinalization.Timing.Step) []const u8 {
     return switch (step) {
+        .value_form_roots => "Value-Form Roots",
         .root_graph => "Root Graph",
         .root_classification => "Root Classification",
         .scheduler_wait => "Waiting for Builds",
@@ -19956,7 +19958,6 @@ fn compileTimeStepLabel(step: eval.CompileTimeFinalization.Timing.Step) []const 
 
 fn compileTimeCountLabel(count: eval.CompileTimeFinalization.Timing.Count) []const u8 {
     return switch (count) {
-        .value_form_roots => "Value-form roots",
         .programs => "Programs",
         .function_programs => "Function-value programs",
         .batches => "Batches (dependency levels)",
