@@ -3583,7 +3583,10 @@ test "single-use block helper with return is not inlined" {
     try expectInlinePlanDecision(
         \\helper : U64 -> U64
         \\helper = |x| {
-        \\    return x
+        \\    if x > 3 {
+        \\        return 0
+        \\    }
+        \\    x + 1
         \\}
         \\
         \\main : U64
