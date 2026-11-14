@@ -50994,18 +50994,16 @@ fn extendSubstitutionsWithLateSettledRequirements(self: *Self) Allocator.Error!v
 
     for (0..record_count) |record_idx| {
         const record = self.cir.scheme_uses.items()[record_idx];
+        const record_pairs = self.cir.scheme_use_pairs.items()[record.pairs_start..][0..record.pairs_len];
+        const first_late = for (record_pairs, 0..) |pair, index| {
+            if (late_by_root.contains(self.types.resolveVar(@fromBackingInt(@intCast(pair.old_var))).var_)) break index;
+        } else continue;
         links.clearRetainingCapacity();
-        var copies_late_requirement = false;
-        for (self.cir.scheme_use_pairs.items()[record.pairs_start..][0..record.pairs_len]) |pair| {
-            const root = self.types.resolveVar(@fromBackingInt(@intCast(pair.old_var))).var_;
-            if (late_by_root.get(root)) |late| {
-                copies_late_requirement = true;
-                try links.append(self.gpa, .{ .old_var = @backingInt(late), .fresh_var = pair.fresh_var });
-            } else {
-                try links.append(self.gpa, pair);
-            }
+        try links.appendSlice(self.gpa, record_pairs);
+        for (links.items[first_late..]) |*link| {
+            const root = self.types.resolveVar(@fromBackingInt(@intCast(link.old_var))).var_;
+            if (late_by_root.get(root)) |late| link.old_var = @backingInt(late);
         }
-        if (!copies_late_requirement) continue;
 
         visited.clearRetainingCapacity();
         extended.clearRetainingCapacity();
