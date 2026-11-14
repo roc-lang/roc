@@ -987,7 +987,8 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     }
 
     if (config.time_report) |report| {
-        const llvm_text = llvm_time_report orelse unreachable;
+        // The glue leaves the report null on success only when its `malloc` failed.
+        const llvm_text = llvm_time_report orelse return error.OutOfMemory;
         defer externs.LLVMDisposeMessage(llvm_text);
         report.text = try report.allocator.dupe(u8, std.mem.span(llvm_text));
     }
