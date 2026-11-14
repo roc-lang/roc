@@ -5835,7 +5835,7 @@ pub const ReportBuilder = struct {
             },
             .compared_plain => |nominal| {
                 try D.renderSlice(&.{
-                    D.bytes("The function that built this record compared or hashed it as a plain record, so it can't become a"),
+                    D.bytes("The function that built this record compared or hashed it as a plain record, so it can't become"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
                     D.bytes(".").withNoPrecedingSpace(),
                 }, self, report);
@@ -5844,22 +5844,22 @@ pub const ReportBuilder = struct {
                 defer self.gpa.free(constructor);
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("If you want a"),
+                    D.bytes("If you want"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
                     D.bytes(", you can write").withNoPrecedingSpace(),
                     D.bytes(try report.addOwnedString(constructor)).withAnnotation(.inline_code),
                     D.bytes("instead of"),
                     D.bytes("{ ... }").withAnnotation(.inline_code),
-                    D.bytes("where this record is built, so the function compares it as a"),
+                    D.bytes("where this record is built, so the function compares it as"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
-                    D.bytes(". You can also give the function that builds it a type annotation that says it's a").withNoPrecedingSpace(),
+                    D.bytes(". You can also give the function that builds it a type annotation that says it's").withNoPrecedingSpace(),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
                     D.bytes(".").withNoPrecedingSpace(),
                 }, self, report);
             },
             .compared_plain_tags => |nominal| {
                 try D.renderSlice(&.{
-                    D.bytes("The function that built this value compared or hashed it as a plain tag union, so it can't become a"),
+                    D.bytes("The function that built this value compared or hashed it as a plain tag union, so it can't become"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
                     D.bytes(".").withNoPrecedingSpace(),
                 }, self, report);
@@ -5868,13 +5868,13 @@ pub const ReportBuilder = struct {
                 defer self.gpa.free(qualifier);
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("If you want a"),
+                    D.bytes("If you want"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
                     D.bytes(", you can write its tags with"),
                     D.bytes(try report.addOwnedString(qualifier)).withAnnotation(.inline_code),
-                    D.bytes("in front where this value is built, so the function compares it as a"),
+                    D.bytes("in front where this value is built, so the function compares it as"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
-                    D.bytes(". You can also give the function that builds it a type annotation that says it's a").withNoPrecedingSpace(),
+                    D.bytes(". You can also give the function that builds it a type annotation that says it's").withNoPrecedingSpace(),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
                     D.bytes(".").withNoPrecedingSpace(),
                 }, self, report);
@@ -5996,7 +5996,7 @@ pub const ReportBuilder = struct {
         len = 0;
         const annotation_hint = [_]D{
             D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("To use a"),
+            D.bytes("To use"),
             D.typeIdent(nominal).withAnnotation(.inline_code),
             D.bytes("here, write"),
             D.typeIdent(nominal).withAnnotation(.inline_code),
@@ -6009,21 +6009,19 @@ pub const ReportBuilder = struct {
         if (converts_both_ways) {
             const syntax = try report.addOwnedString(record_syntax);
             const conversion = [_]D{
-                D.bytes("You can also convert between a"),
+                D.bytes("You can also convert between"),
                 D.typeIdent(nominal).withAnnotation(.inline_code),
                 D.bytes("and a plain record with"),
                 D.bytes(syntax).withAnnotation(.inline_code),
-                D.bytes(": build a").withNoPrecedingSpace(),
+                D.bytes(": build a value of type").withNoPrecedingSpace(),
                 D.typeIdent(nominal).withAnnotation(.inline_code),
-                D.bytes("from a record's fields, or take a"),
-                D.typeIdent(nominal).withAnnotation(.inline_code),
-                D.bytes("apart and build a record from its fields."),
+                D.bytes("from a record's fields, or take one apart and build a record from its fields."),
             };
             @memcpy(docs[len..][0..conversion.len], &conversion);
             len += conversion.len;
         } else if (builds) {
             const building = [_]D{
-                D.bytes("You can also build a"),
+                D.bytes("You can also build"),
                 D.typeIdent(nominal).withAnnotation(.inline_code),
                 D.bytes("from the record's fields with"),
                 D.bytes(try report.addOwnedString(record_syntax)).withAnnotation(.inline_code),
@@ -6041,17 +6039,17 @@ pub const ReportBuilder = struct {
         return types_mod.TypeWriter.stripBuiltinQualification(self.can_ir.getIdent(mapped));
     }
 
-    /// "If you want a `Name`, you can write `Name.{ ... }` instead of
+    /// "If you want `Name`, you can write `Name.{ ... }` instead of
     /// `{ ... }` where this record is built, since that provides `field` (or
     /// the anonymous fields) automatically. You can also give the function
-    /// that builds it a type annotation that says it's a `Name`."
+    /// that builds it a type annotation that says it's `Name`."
     fn renderNominalConstructorHint(self: *Self, report: *Report, nominal: Ident.Idx, field: ?Ident.Idx) Allocator.Error!void {
         const constructor = try std.fmt.allocPrint(self.gpa, "{s}.{{ ... }}", .{self.nominalDisplayName(nominal)});
         defer self.gpa.free(constructor);
         const provided: D = if (field) |name| D.ident(name).withAnnotation(.inline_code) else D.bytes("the anonymous fields");
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("If you want a"),
+            D.bytes("If you want"),
             D.typeIdent(nominal).withAnnotation(.inline_code),
             D.bytes(", you can write").withNoPrecedingSpace(),
             D.bytes(try report.addOwnedString(constructor)).withAnnotation(.inline_code),
@@ -6059,16 +6057,16 @@ pub const ReportBuilder = struct {
             D.bytes("{ ... }").withAnnotation(.inline_code),
             D.bytes("where this record is built, since that provides"),
             provided,
-            D.bytes("automatically. You can also give the function that builds it a type annotation that says it's a"),
+            D.bytes("automatically. You can also give the function that builds it a type annotation that says it's"),
             D.typeIdent(nominal).withAnnotation(.inline_code),
             D.bytes(".").withNoPrecedingSpace(),
         }, self, report);
     }
 
-    /// "If you want this function to take a `Name`, you can write `pattern`
+    /// "If you want this function to take `Name`, you can write `pattern`
     /// instead of `{ ... }` in its pattern (ending it with `..` to match the
     /// fields it doesn't name, when `rest`). You can also give it a type
-    /// annotation that says it takes a `Name`."
+    /// annotation that says it takes `Name`."
     fn renderNominalPatternHint(self: *Self, report: *Report, nominal: Ident.Idx, comptime pattern_format: []const u8, rest: bool) Allocator.Error!void {
         const pattern = try std.fmt.allocPrint(self.gpa, pattern_format, .{self.nominalDisplayName(nominal)});
         defer self.gpa.free(pattern);
@@ -6076,7 +6074,7 @@ pub const ReportBuilder = struct {
         if (rest) {
             try D.renderSlice(&.{
                 D.bytes("Hint:").withAnnotation(.emphasized),
-                D.bytes("If you want this function to take a"),
+                D.bytes("If you want this function to take"),
                 D.typeIdent(nominal).withAnnotation(.inline_code),
                 D.bytes(", you can write").withNoPrecedingSpace(),
                 D.bytes(name).withAnnotation(.inline_code),
@@ -6084,20 +6082,20 @@ pub const ReportBuilder = struct {
                 D.bytes("{ ... }").withAnnotation(.inline_code),
                 D.bytes("in its pattern, ending it with"),
                 D.bytes("..").withAnnotation(.inline_code),
-                D.bytes("to match the fields it doesn't name. You can also give it a type annotation that says it takes a"),
+                D.bytes("to match the fields it doesn't name. You can also give it a type annotation that says it takes"),
                 D.typeIdent(nominal).withAnnotation(.inline_code),
                 D.bytes(".").withNoPrecedingSpace(),
             }, self, report);
         } else {
             try D.renderSlice(&.{
                 D.bytes("Hint:").withAnnotation(.emphasized),
-                D.bytes("If you want this function to take a"),
+                D.bytes("If you want this function to take"),
                 D.typeIdent(nominal).withAnnotation(.inline_code),
                 D.bytes(", you can write").withNoPrecedingSpace(),
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes("instead of"),
                 D.bytes("{ ... }").withAnnotation(.inline_code),
-                D.bytes("in its pattern. You can also give it a type annotation that says it takes a"),
+                D.bytes("in its pattern. You can also give it a type annotation that says it takes"),
                 D.typeIdent(nominal).withAnnotation(.inline_code),
                 D.bytes(".").withNoPrecedingSpace(),
             }, self, report);

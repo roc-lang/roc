@@ -15491,9 +15491,9 @@ test "methods on open rows - a record a function compared cannot become a nomina
         \\
         \\    (Tagged, Tagged)
         \\
-        \\The function that built this record compared or hashed it as a plain record, so it can't become a `Tagged`.
+        \\The function that built this record compared or hashed it as a plain record, so it can't become `Tagged`.
         \\
-        \\**Hint:** If you want a `Tagged`, you can write `Tagged.{ ... }` instead of `{ ... }` where this record is built, so the function compares it as a `Tagged`. You can also give the function that builds it a type annotation that says it's a `Tagged`.
+        \\**Hint:** If you want `Tagged`, you can write `Tagged.{ ... }` instead of `{ ... }` where this record is built, so the function compares it as `Tagged`. You can also give the function that builds it a type annotation that says it's `Tagged`.
         \\
         \\
     );
@@ -15526,9 +15526,9 @@ test "methods on open rows - a row variable joining a built record leaves it pla
         \\        a.is_eq : a, a -> Bool,
         \\      ]
         \\
-        \\The function that built this record compared or hashed it as a plain record, so it can't become a `Tagged`.
+        \\The function that built this record compared or hashed it as a plain record, so it can't become `Tagged`.
         \\
-        \\**Hint:** If you want a `Tagged`, you can write `Tagged.{ ... }` instead of `{ ... }` where this record is built, so the function compares it as a `Tagged`. You can also give the function that builds it a type annotation that says it's a `Tagged`.
+        \\**Hint:** If you want `Tagged`, you can write `Tagged.{ ... }` instead of `{ ... }` where this record is built, so the function compares it as `Tagged`. You can also give the function that builds it a type annotation that says it's `Tagged`.
         \\
         \\
     );

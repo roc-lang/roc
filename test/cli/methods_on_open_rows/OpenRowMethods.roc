@@ -16,4 +16,11 @@ OpenRowMethods := [].{
 	is_red = |c| c == Red
 
 	red_foo = |c| c.foo(Red)
+
+	show = |l| {
+		_ = l.id
+		Str.inspect(l)
+	}
+
+	show_alias = show
 }

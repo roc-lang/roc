@@ -1842,6 +1842,58 @@ pub const Program = struct {
         }
     }
 
+    /// Whether checked type `root` of `module_index` holds a tag union with
+    /// a tag whose row ends in an uncommitted tag tail
+    /// (`CheckedTypeStoreView.uncommittedTagTail`). A binding that
+    /// quantifies one is a scheme even when its scheme has no variable: each
+    /// use copies the union, which may lift into a nominal type there
+    /// (design.md "Uncommitted Tag Tails").
+    pub fn holdsUncommittedTagTail(self: *Program, module_index: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error!bool {
+        const types_view = self.module(module_index).types();
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            switch (types_view.payload(ty)) {
+                .alias => |alias| try pending.append(self.allocator, alias.backing),
+                .record => |record| {
+                    for (0..record.fields.len()) |index| try pending.append(self.allocator, record.fields.get(index).ty);
+                    try pending.append(self.allocator, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    var tags = tag_union.tags;
+                    var current = tag_union.ext;
+                    var tag_count: usize = 0;
+                    while (true) {
+                        tag_count += tags.len();
+                        for (0..tags.len()) |index| try pending.appendSlice(self.allocator, tags.get(index).args);
+                        tags = .empty;
+                        switch (types_view.payload(current)) {
+                            .alias => |alias| current = alias.backing,
+                            .tag_union => |ext_union| {
+                                tags = ext_union.tags;
+                                current = ext_union.ext;
+                            },
+                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .record, .empty_tag_union, .field_kind => break,
+                        }
+                    }
+                    if (tag_count != 0 and types_view.uncommittedTagTail(current)) return true;
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(self.allocator, nominal.args),
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .field_kind => {},
+            }
+        }
+        return false;
+    }
+
     /// The scheme position of the row variable a row node's row ends in.
     fn rowVariableOf(self: *Program, node: TypeId) u32 {
         const ext = switch (self.store.get(node)) {

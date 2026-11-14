@@ -10,11 +10,16 @@ PrintingFollowsUse :: [].{}
 Shown := { id : U64 }.{
 	to_inspect : Shown -> Str
 	to_inspect = |s| Str.concat("shown ", s.id.to_str())
+
+	# A method bound to an alias of a function with a row node.
+	text = taken_apart
 }
 
 Light := [Red, Green].{
 	to_inspect : Light -> Str
 	to_inspect = |_| "a light"
+
+	label = name
 }
 
 Bare := { id : U64 }
@@ -72,6 +77,16 @@ name_via_helper = |c| {
 	(show(c), n)
 }
 
+# The tag union an exhaustive match closes is this function's only row node,
+# and its type has no type variable.
+light_text = |c| {
+	_ = match c {
+		Red => 1
+		Green => 2
+	}
+	Str.inspect(c)
+}
+
 pick = |b| {
 	c = if b Red else Green
 	(Str.inspect(c), c)
@@ -95,6 +110,16 @@ local_only = |id| {
 
 # A compile-time constant computed through a function with only a row node.
 stored = taken_apart(shown)
+
+# Top-level aliases of functions with row nodes, and an alias of an alias.
+taken_apart_alias = taken_apart
+
+alias_of_alias = taken_apart_alias
+
+light_text_alias = light_text
+
+red : Light
+red = Red
 
 expect {
 	a : (Str, Shown)
@@ -194,3 +219,100 @@ expect {
 }
 
 expect ShownMaker.describe(Green).0 == "Green"
+
+# An alias of a function prints what each use of the alias supplies
+# (design.md "Procedure Aliases").
+expect {
+	fv = taken_apart
+	fv(shown) == "shown 7"
+}
+
+expect {
+	a = taken_apart
+	b = a
+	b(shown) == "shown 7"
+}
+
+expect taken_apart_alias(shown) == "shown 7"
+
+expect alias_of_alias(shown) == "shown 7"
+
+expect {
+	fv = taken_apart_alias
+	fv(shown) == "shown 7"
+}
+
+expect ShownMaker.peek_alias(shown) == "shown 7"
+
+expect {
+	fv = ShownMaker.peek
+	fv(shown) == "shown 7"
+}
+
+expect {
+	fv = ShownMaker.peek_alias
+	fv(shown) == "shown 7"
+}
+
+expect {
+	fv = taken_apart
+	apply(fv, shown) == "shown 7"
+}
+
+expect apply(taken_apart_alias, shown) == "shown 7"
+
+expect {
+	fv = taken_apart
+	List.map([shown], fv) == ["shown 7"]
+}
+
+expect {
+	fv = taken_apart
+	r = { f: fv }
+	(r.f)(shown) == "shown 7"
+}
+
+# Two uses of one alias, one lifting and one not.
+expect {
+	fv = taken_apart
+	(fv(shown), fv({ id: 8 })) == ("shown 7", "{ id: 8.0 }")
+}
+
+expect {
+	light : Light
+	light = Red
+	fv = name
+	(fv(light).0, fv(Green).0) == ("a light", "Green")
+}
+
+expect {
+	fv = light_text
+	(fv(red), fv(Green)) == ("a light", "Green")
+}
+
+expect {
+	a = light_text
+	b = a
+	b(red) == "a light"
+}
+
+expect {
+	fv = light_text
+	List.map([red], fv) == ["a light"]
+}
+
+expect light_text_alias(red) == "a light"
+
+expect {
+	fv = light_text_alias
+	(fv(red), fv(Green)) == ("a light", "Green")
+}
+
+# Methods bound to aliases.
+expect shown.text() == "shown 7"
+
+expect {
+	light : Light
+	light = Green
+	light.label().0 == "a light"
+}
