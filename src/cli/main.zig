@@ -10295,8 +10295,10 @@ const BoxyLibraryObjects = struct {
     /// The checked keys of the modules the root unit lowers: the root, and
     /// every module with platform requirements.
     root_modules: []const [32]u8,
-    /// The template workers the checked program reaches, by module.
-    reach: compile.boxy_reach.Reach,
+    /// The template workers the checked program reaches, by module. Only
+    /// the composition of a program object from pieces reads it, so a
+    /// build collecting images has none.
+    reach: ?compile.boxy_reach.Reach,
 
     fn deinit(self: BoxyLibraryObjects, gpa: Allocator) void {
         for (self.owned_pieces) |pieces| {
@@ -10304,8 +10306,10 @@ const BoxyLibraryObjects = struct {
             gpa.destroy(pieces);
         }
         for (self.owned_images) |image| image.deinit(gpa);
-        var reach = self.reach;
-        reach.deinit();
+        if (self.reach) |owned| {
+            var reach = owned;
+            reach.deinit();
+        }
     }
 };
 
@@ -10418,7 +10422,9 @@ fn buildBoxyLibraryObjects(
     const platform = try boxyPlatformView(ctx, build_env, root_artifact, visible);
     // The checked program's reachability runs beside the units: the
     // composition resolves the procedures it names in parallel first
-    // (design.md "Unit Pieces And Whole-Program Dead Code").
+    // (design.md "Unit Pieces And Whole-Program Dead Code"). Only a
+    // composition from pieces reads it.
+    const want_reach = !want_images;
     const link_modules = try ctx.arena.alloc(*const Artifact, digests.artifacts.count());
     const link_names = try ctx.arena.alloc([32]u8, link_modules.len);
     {
@@ -10430,7 +10436,7 @@ fn buildBoxyLibraryObjects(
         }
     }
     var reach_task: BoxyReachTask = .{ .gpa = ctx.gpa, .root = root_artifact, .modules = .{ .artifacts = link_modules, .link_names = link_names } };
-    var reach_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
+    var reach_session: ?base.post_check_task_executor.Session = if (!want_reach) null else if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
     defer if (reach_session) |*open| {
         while (open.outstanding != 0) _ = open.receive();
         open.end();
@@ -10440,7 +10446,9 @@ fn buildBoxyLibraryObjects(
         .done => |*reach| reach.deinit(),
         .pending, .failed => {},
     };
-    if (reach_session) |*open| try open.submit(.{ .id = 0, .context = &reach_task, .run = BoxyReachTask.run }) else reach_task.compute();
+    if (want_reach) {
+        if (reach_session) |*open| try open.submit(.{ .id = 0, .context = &reach_task, .run = BoxyReachTask.run }) else reach_task.compute();
+    }
     if (dev_diagnostics.isSet(.trace_boxy_work)) {
         std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_artifact.canonical_names.moduleNameText(root_artifact.module_identity.module_name), &std.fmt.bytesToHex(root_artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.module_identity.stable_hash[0..8], .lower) });
         for (units.items) |artifact| std.debug.print("boxy-work: unit {s} key {s} codegen {s} identity {s}\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), &std.fmt.bytesToHex(artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.module_identity.stable_hash[0..8], .lower) });
@@ -10658,13 +10666,13 @@ fn buildBoxyLibraryObjects(
     };
     if (reach_session) |*open| _ = open.receive();
     if (first_error) |err| return err;
-    const reach = switch (reach_task.outcome) {
+    const reach: ?compile.boxy_reach.Reach = if (want_reach) switch (reach_task.outcome) {
         .done => |reach| reach,
         .failed => |err| return err,
         .pending => base.invariant("roc build invariant violated: the checked reachability task completed without an outcome", .{}),
-    };
+    } else null;
     reach_taken = true;
-    if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: the checked program reaches {d} template workers in {d} modules\n", .{ reach.identities.len, reach.modules.count() });
+    if (dev_diagnostics.isSet(.trace_boxy_work)) if (reach) |known| std.debug.print("boxy-work: the checked program reaches {d} template workers in {d} modules\n", .{ known.identities.len, known.modules.count() });
     // The summary counts cache work; a build without a cache does none.
     if (!policy.no_cache) switch (compile.boxy_unit.imageKind(target)) {
         .native, .none => build_env.recordBoxyObjects(restored, built),
@@ -10758,10 +10766,11 @@ fn composeBoxyProgramObject(
     // parallel before the walk that decides what the object keeps.
     const seeds = try ctx.arena.alloc([]const lir.ProcIdentity, inputs.len);
     {
+        const reach = library.reach orelse base.invariant("roc build invariant violated: a program object was composed from a library built without its reach", .{});
         var root_seeds: std.ArrayList(lir.ProcIdentity) = .empty;
-        for (library.root_modules) |key| try root_seeds.appendSlice(ctx.arena, library.reach.of(key));
+        for (library.root_modules) |key| try root_seeds.appendSlice(ctx.arena, reach.of(key));
         seeds[0] = root_seeds.items;
-        for (library.module_keys, seeds[1..]) |key, *unit_seeds| unit_seeds.* = library.reach.of(key);
+        for (library.module_keys, seeds[1..]) |key, *unit_seeds| unit_seeds.* = reach.of(key);
     }
     var compiler = backend.ObjectFileCompiler.init(ctx.gpa);
     compiler.post_check_executor = executor;
