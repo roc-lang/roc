@@ -44,7 +44,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 38 stores reproducible checking
+/// reflected in layout fingerprints. Version 39 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
 /// completion and cached literal argument roots for both strategies,
 /// body-local type context arguments, generated-codec recurrences,
@@ -57,8 +57,10 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// structure that every use shares when nothing visible can lift or widen it,
 /// checked artifacts' type, scheme, blob and proc-base interning tables, and
 /// type tags that record whether only `match` branch patterns put them in
-/// their row. It rejects every earlier format. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 38;
+/// their row, and literal argument roots whose source is their edge owner and
+/// which hold no expression. It rejects every earlier format. Platform-pairing
+/// entries share it.
+const checked_envelope_version: u32 = 39;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
