@@ -50,15 +50,6 @@ describe_mode = |_|
 		Release => "release"
 	}
 
-inline_callback = |_| {
-	xs = [A, B]
-	xs.map(|v|
-		match v {
-			C => 1
-			_ => 0
-		})
-}
-
 main! = |_args| {
 	echo!(describe_mode({}))
 	Ok({})
@@ -123,14 +114,6 @@ LowerIdent,OpAssign,OpBar,Underscore,OpBar,
 KwMatch,LowerIdent,OpenCurly,
 UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
 UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
-CloseCurly,
-LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,
-LowerIdent,OpAssign,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
-LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,OpBar,LowerIdent,OpBar,
-KwMatch,LowerIdent,OpenCurly,
-UpperIdent,OpFatArrow,Int,
-Underscore,OpFatArrow,Int,
-CloseCurly,CloseRound,
 CloseCurly,
 LowerIdent,OpAssign,OpBar,NamedUnderscore,OpBar,OpenCurly,
 LowerIdent,NoSpaceOpenRound,LowerIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,CloseRound,CloseRound,
@@ -265,34 +248,6 @@ EndOfFile,
 							(e-string
 								(e-string-part (raw "release"))))))))
 		(s-decl
-			(p-ident (raw "inline_callback"))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(statements
-						(s-decl
-							(p-ident (raw "xs"))
-							(e-list
-								(e-tag (raw "A"))
-								(e-tag (raw "B"))))
-						(e-method-call (method ".map")
-							(receiver
-								(e-ident (raw "xs")))
-							(args
-								(e-lambda
-									(args
-										(p-ident (raw "v")))
-									(e-match
-										(e-ident (raw "v"))
-										(branches
-											(branch
-												(p-tag (raw "C"))
-												(e-int (raw "1")))
-											(branch
-												(p-underscore)
-												(e-int (raw "0"))))))))))))
-		(s-decl
 			(p-ident (raw "main!"))
 			(e-lambda
 				(args
@@ -354,17 +309,6 @@ describe_mode = |_|
 		Debug => "debug"
 		Release => "release"
 	}
-
-inline_callback = |_| {
-	xs = [A, B]
-	xs.map(
-		|v|
-			match v {
-				C => 1
-				_ => 0
-			},
-	)
-}
 
 main! = |_args| {
 	echo!(describe_mode({}))
@@ -450,7 +394,7 @@ main! = |_args| {
 			(e-match
 				(match
 					(cond
-						(e-call (constraint-fn-var 428)
+						(e-call (constraint-fn-var 404)
 							(e-lookup-local
 								(p-assign (ident "f")))
 							(e-empty_record)))
@@ -488,10 +432,10 @@ main! = |_args| {
 						(e-match
 							(match
 								(cond
-									(e-call (constraint-fn-var 468)
+									(e-call (constraint-fn-var 444)
 										(e-lookup-local
 											(p-assign (ident "countdown")))
-										(e-dispatch-call (method "minus") (constraint-fn-var 466)
+										(e-dispatch-call (method "minus") (constraint-fn-var 442)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "n"))))
@@ -518,7 +462,7 @@ main! = |_args| {
 			(e-match
 				(match
 					(cond
-						(e-dispatch-call (method "kind") (constraint-fn-var 480)
+						(e-dispatch-call (method "kind") (constraint-fn-var 456)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "x"))))
@@ -569,54 +513,16 @@ main! = |_args| {
 								(e-string
 									(e-literal (string "release"))))))))))
 	(d-let
-		(p-assign (ident "inline_callback"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "xs"))
-					(e-list
-						(elems
-							(e-tag (name "A"))
-							(e-tag (name "B")))))
-				(e-dispatch-call (method "map") (constraint-fn-var 531)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "xs"))))
-					(args
-						(e-lambda
-							(args
-								(p-assign (ident "v")))
-							(e-match
-								(match
-									(cond
-										(e-lookup-local
-											(p-assign (ident "v"))))
-									(branches
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-applied-tag)))
-											(value
-												(e-num (value "1"))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-underscore)))
-											(value
-												(e-num (value "0")))))))))))))
-	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
 			(args
 				(p-assign (ident "_args")))
 			(e-block
 				(s-expr
-					(e-call (constraint-fn-var 577)
+					(e-call (constraint-fn-var 512)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
-						(e-call (constraint-fn-var 576)
+						(e-call (constraint-fn-var 511)
 							(e-lookup-local
 								(p-assign (ident "describe_mode")))
 							(e-empty_record))))
@@ -629,24 +535,22 @@ main! = |_args| {
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "[A, C] -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Bool, [A, C, ..] -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "({} -> [C, ..]) -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d -> [A, B, C] where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.is_eq : d, d -> Bool, d.minus : d, e -> d, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "d -> e where [d.kind : d -> [C], e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "[A, C] -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "Bool, [A, C, ..] -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "({} -> [C, ..]) -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> [A, B, C] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.minus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> b where [a.kind : a -> [C], b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(patt (type "[Debug, Release]"))
-		(patt (type "_arg -> d where [d.from_quote : Str -> Try(d, [BadQuotedBytes(Str)])]"))
-		(patt (type "_arg -> List(b) where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "_arg -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(patt (type "_arg => [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "[A, C] -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Bool, [A, C, ..] -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "({} -> [C, ..]) -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d -> [A, B, C] where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.is_eq : d, d -> Bool, d.minus : d, e -> d, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "d -> e where [d.kind : d -> [C], e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "[A, C] -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool, [A, C, ..] -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "({} -> [C, ..]) -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> [A, B, C] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.minus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> b where [a.kind : a -> [C], b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(expr (type "[Debug, Release]"))
-		(expr (type "_arg -> d where [d.from_quote : Str -> Try(d, [BadQuotedBytes(Str)])]"))
-		(expr (type "_arg -> List(b) where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "_arg -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(expr (type "_arg => [Ok({})]"))))
 ~~~
