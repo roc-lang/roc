@@ -1966,6 +1966,16 @@ checked as one. Alias traversal has no source-text reconstruction or fixed hop
 limit; invalid and cyclic aliases must already resolve to the checker error
 type.
 
+Every other method lookup on a type follows the same rule. An alias
+declaration owns no methods (an alias cannot have an associated block), so a
+static-dispatch receiver, the format type whose methods a generated codec
+calls (`encode_record`, `parse_record_start`, ...), and a codec receiver
+classified for scheme ownership are each resolved through their aliases to the
+terminal type first: a nominal type's declaration owns the methods, and a
+structural backing derives them. The format method is still instantiated
+against the type as written, so the alias stays the presented type (Type
+Alias Invariant).
+
 A resolved lookup's module identity is local to the module owning its expression.
 Consumers visiting imported bodies resolve that identity through the expression
 owner's identity table, then use the target module's definition store. An

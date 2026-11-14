@@ -44846,7 +44846,8 @@ fn schemeCandidateUsesGeneratedCodec(
         candidate.constraint.fn_name.eql(self.cir.idents.encoder_for);
     if (!is_codec) return false;
 
-    const resolved = self.types.resolveVar(candidate.receiver_var);
+    // An alias's methods are those of the type its backing chain ends in.
+    const resolved = self.types.resolveThroughAliases(candidate.receiver_var);
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| blk: {
@@ -44872,21 +44873,7 @@ fn schemeCandidateUsesGeneratedCodec(
             => true,
             .fn_pure, .fn_effectful, .fn_unbound => false,
         },
-        .alias => |alias| blk: {
-            const original_env, _ = self.ownerEnvForOriginModule(
-                alias.origin_module,
-                alias.source_decl.toOptional(),
-                alias.source_decl.originIsBuiltin(),
-                "scheme generated codec alias",
-            );
-            const method = self.lookupStaticDispatchMethodBinding(
-                original_env,
-                alias.source_decl.toOptional(),
-                self.cir,
-                candidate.constraint.fn_name,
-            );
-            break :blk method == null or staticDispatchBindingIsDerivedMarker(method.?);
-        },
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .flex, .rigid, .field_presence, .err => false,
     };
 }
@@ -52893,8 +52880,9 @@ inline fn processDeferredDispatchEntryRelations(
     };
     defer self.passOnDeferredEntryFailureExpr(env, &ownership);
 
-    const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
-    const dispatcher_content = dispatcher_resolved.desc.content;
+    // An alias names the type its backing chain ends in: a nominal type's
+    // declaration owns the methods, and a structural backing derives them.
+    const dispatcher_content = self.types.resolveThroughAliases(deferred_constraint.var_).desc.content;
     dispatch_resolution: while (true) {
         if (dispatcher_content == .err) {
             // If the root type is an error, then skip constraint checking
@@ -53364,172 +53352,6 @@ inline fn processDeferredDispatchEntryRelations(
                                 try self.retireMergedMethodDefinitions(merged);
                             }
                         }
-                    },
-                }
-            }
-            break :dispatch_resolution;
-        } else if (dispatcher_content == .alias) {
-            const alias = dispatcher_content.alias;
-
-            // Get the module ident that this alias type was defined in
-            const original_module_ident = alias.origin_module;
-            const original_env, _ = self.ownerEnvForOriginModule(
-                original_module_ident,
-                alias.source_decl.toOptional(),
-                alias.source_decl.originIsBuiltin(),
-                "static dispatch alias",
-            );
-
-            const region = self.getRegionAt(deferred_constraint.var_);
-            const constraints_range = deferred_constraint.constraints;
-            const constraints_len = constraints_range.len();
-            const constraints_start: usize = @backingInt(constraints_range.start);
-            var constraint_i: usize = 0;
-            while (constraint_i < constraints_len) : (constraint_i += 1) {
-                const constraint = self.types.static_dispatch_constraints.items()[constraints_start + constraint_i];
-                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
-                const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
-                if (self.staticDispatchConstraintIsInactive(constraint)) continue;
-                const constraint_fn_resolved = self.types.resolveThroughAliases(constraint.fn_var).desc.content;
-                if (constraint_fn_resolved == .err) {
-                    // An erroneous method signature was already reported and
-                    // can never be discharged, so the obligation is rejected.
-                    try self.markStaticDispatchRejected(constraint);
-                    continue;
-                }
-
-                if (self.derivedMethodKind(constraint.fn_name)) |kind| derived: {
-                    if ((kind == .parser or kind == .encoder) and
-                        self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
-                    if (self.lookupStaticDispatchMethodBinding(
-                        original_env,
-                        alias.source_decl.toOptional(),
-                        self.cir,
-                        constraint.fn_name,
-                    )) |method_lookup| {
-                        // Exact attached implementations win over derivation.
-                        if (!staticDispatchBindingIsDerivedMarker(method_lookup)) break :derived;
-                    }
-                    switch (try self.satisfyDerivedForShape(
-                        kind,
-                        .{ .shape = self.types.getAliasBackingVar(alias) },
-                        deferred_constraint,
-                        constraint,
-                        env,
-                        region,
-                        failure_expr,
-                        is_numeric_default_pass,
-                    )) {
-                        .done => continue,
-                        .redeferred => break :dispatch_resolution,
-                        .unsupported => {},
-                    }
-                }
-
-                const method_lookup = self.lookupStaticDispatchMethodBinding(
-                    original_env,
-                    alias.source_decl.toOptional(),
-                    self.cir,
-                    constraint.fn_name,
-                ) orelse {
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .{ .missing_method = .nominal },
-                        env,
-                        failure_expr,
-                    );
-                    continue;
-                };
-                if (try self.rejectValuelessMethodDispatch(
-                    method_lookup,
-                    deferred_constraint.var_,
-                    constraint,
-                    env,
-                    failure_expr,
-                )) continue;
-                const method_env = method_lookup.env;
-                const method_is_this_module = method_lookup.is_this_module;
-                const method_binding = method_lookup.binding;
-                const def_idx = method_binding.def_idx;
-                if (constraint.fn_name.eql(self.cir.idents.from_numeral)) {
-                    if (try self.reportUnmaterializableNumeralLiteral(deferred_constraint.var_, constraint, env)) {
-                        continue;
-                    }
-                }
-                if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                    self.rewriteEqBinopAsMethodEq(constraint);
-                }
-
-                const def = method_env.store.getDef(def_idx);
-                var cycle_method_expr_var: ?Var = null;
-                var predeclared_scheme_for_method: ?Var = null;
-                if (method_is_this_module) {
-                    if (self.topLevelPattern(def.pattern)) |processing_def| {
-                        switch (try self.resolveLocalDispatchTargetByStatus(
-                            deferred_constraint,
-                            constraint,
-                            processing_def,
-                            def_idx,
-                            def,
-                            env,
-                        )) {
-                            .def_var => {},
-                            .predeclared_scheme => |scheme_var| predeclared_scheme_for_method = scheme_var,
-                            .in_flight_rhs => |rhs_var| cycle_method_expr_var = rhs_var,
-                            .waiting => continue,
-                        }
-                    }
-                }
-
-                const method_var = (try self.resolveDispatchTargetMethodVar(
-                    deferred_constraint.var_,
-                    self.dispatch_derivation_by_child_fn_var.get(constraint.fn_var),
-                    constraint,
-                    method_lookup,
-                    cycle_method_expr_var,
-                    predeclared_scheme_for_method,
-                    env,
-                    region,
-                    failure_expr,
-                    .{ .deferred = deferred_constraint, .retained_top = retained_top },
-                )) orelse continue;
-
-                // A requirement whose type is not a function was reported
-                // at its where clause (`reportNonFunctionWhereRequirement`).
-                if (constraint_fn_resolved.unwrapFunc() == null) {
-                    _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
-                        .method_type = .{
-                            .constraint_var = constraint.fn_var,
-                            .dispatcher_name = alias.ident.ident_idx,
-                            .method_name = constraint.fn_name,
-                        },
-                    });
-                    try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                    try self.markStaticDispatchRejected(constraint);
-                    continue;
-                }
-
-                const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
-                    .method_type = .{
-                        .constraint_var = deferred_constraint.var_,
-                        .dispatcher_name = alias.ident.ident_idx,
-                        .method_name = constraint.fn_name,
-                    },
-                });
-                switch (fn_result) {
-                    .unified => {
-                        // The method's signature has decided the item type,
-                        // so each part is now checked against it.
-                        if (constraint.origin.literalKind() == .interpolation) {
-                            try self.relateInterpolationPartsToItem(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
-                        }
-                        try self.recordSuccessfulStaticDispatch(constraint);
-                        if (self.dispatch_replay_candidates.count() != 0) try self.recordDispatchReplaySource(constraint.fn_var);
-                    },
-                    .suppressed_by_error, .problem, .mismatch => {
-                        try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                        try self.markStaticDispatchRejected(constraint);
                     },
                 }
             }
@@ -59665,6 +59487,11 @@ fn encodeFormatMethodName(self: *Self, decl: BuiltinEncodeSpecDecl) Allocator.Er
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
 }
 
+/// The format method `method_name` of the encoding type, instantiated against
+/// `encoding_var`. An alias names the nominal type at the end of its backing
+/// chain, and that nominal type's declaration owns the methods, so the lookup
+/// follows aliases while the instantiation keeps the alias the format was
+/// written through.
 fn parseFormatMethodVarForEncoding(
     self: *Self,
     encoding_var: Var,
@@ -59672,7 +59499,7 @@ fn parseFormatMethodVarForEncoding(
     env: *Env,
     region: Region,
 ) Allocator.Error!?ParseFormatMethodVar {
-    const resolved = self.types.resolveVar(encoding_var);
+    const resolved = self.types.resolveThroughAliases(encoding_var);
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| blk: {
@@ -59703,24 +59530,7 @@ fn parseFormatMethodVarForEncoding(
             .empty_tag_union,
             => null,
         },
-        .alias => |alias| blk: {
-            const original_env, _ = self.ownerEnvForOriginModule(
-                alias.origin_module,
-                alias.source_decl.toOptional(),
-                alias.source_decl.originIsBuiltin(),
-                "parser format method",
-            );
-            const method_lookup = self.lookupStaticDispatchMethodBinding(
-                original_env,
-                alias.source_decl.toOptional(),
-                self.cir,
-                method_name,
-            ) orelse break :blk null;
-            break :blk .{
-                .var_ = try self.instantiateGeneratedFormatMethodTarget(method_lookup, encoding_var, env, region),
-                .dispatcher_name = alias.ident.ident_idx,
-            };
-        },
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .err => null,
         .flex, .rigid, .field_presence => null,
     };
