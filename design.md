@@ -25429,6 +25429,29 @@ procedure code. Without an executor every body is generated inline on a
 persistent sequential lane through the same callback, so `--jobs=1` and a
 multi-worker build emit the same bytes.
 
+### Wasm Inline List And String Lowerings
+
+The Wasm backend emits some list and string low-levels as inline code instead
+of a builtin call. Every inline lowering has exactly the outcomes of the
+builtin that every other backend calls, case by case: the same result value,
+the same allocations, and the same reference count and element releases. An
+inline lowering is a faster spelling of the builtin, never a different
+operation.
+
+Every value an inline lowering produces keeps the list representation the
+builtins rely on. A list that is not a seamless slice owns an allocation
+exactly when its capacity is nonzero, and the empty list with no capacity is
+`{null, 0, 0}`. A zero-length result that owns nothing is therefore that empty
+list, never a pointer to a refcount word with no element storage: a
+capacity-zero list is one the builtins' `RocList.decref` never frees, so such
+an allocation would leak the first time a builtin consumed it.
+
+`str_to_utf8` is inline, with `strToBytes`'s outcomes: an empty string, small
+or heap, gives the empty list; a non-empty small string's bytes are copied
+into an allocation of exactly their length; a non-empty heap string's bytes
+are shared, the list retaining the string's allocation and taking its
+capacity word.
+
 ## Wasm Function Limits
 
 The WebAssembly JS API fixes implementation limits every engine a web page

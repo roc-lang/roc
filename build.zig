@@ -1876,6 +1876,9 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12782_i128_narrow_static_lib_app.wasm", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
     .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12782_i128_narrow_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
     .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "issue_12782_i128_narrow_size_static_lib_app.wasm", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
+    .{ .app = "issue_13017_empty_utf8_concat_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_13017_empty_utf8_concat_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
+    .{ .app = "str_to_utf8_shapes_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "str_to_utf8_shapes_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
+    .{ .app = "str_to_utf8_shapes_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "str_to_utf8_shapes_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
 };
 
 pub fn build(b: *std.Build) void {

@@ -14803,92 +14803,84 @@ fn emitStrSubstringUnsafe(self: *Self, args: anytype) Allocator.Error!void {
     try self.emitLocalGet(result_ptr);
 }
 
-/// Generate str_to_utf8: convert RocStr to RocList(U8).
-/// SSO strings have their bytes copied to heap memory.
-/// Non-SSO strings are converted field-by-field because RocStr stores encoded
-/// capacity before length, while RocList stores length before encoded capacity.
+/// Generate str_to_utf8: convert RocStr to RocList(U8), with the outcomes of
+/// the `strToBytes` builtin. An empty string, small or heap, converts to the
+/// empty list `{null, 0, 0}`, which owns no allocation. A non-empty small
+/// string's bytes are copied into a fresh allocation of exactly its length. A
+/// non-empty heap string's bytes are shared: the list retains the string's
+/// allocation and takes its capacity word, which encodes a seamless slice the
+/// same way for both types. The fields are copied one by one because RocStr
+/// stores its encoded capacity before its length and RocList stores them the
+/// other way around.
 fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
-    // Generate the string expression (produces i32 pointer to a RocStr)
     const str_ptr = try self.emitProcLocalToNewLocal(str_arg, .i32);
 
-    // Allocate result memory for the RocList(U8)
     const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
+    try self.emitZeroInit(result_ptr, roc_list_size);
 
-    // Read the flag byte to check SSO flag
     try self.emitLocalGet(str_ptr);
     try self.emitMemOp(Op.i32_load8_u, 0, str_flag_byte_offset);
     const last_byte = try self.emitSetNewLocal(.i32);
 
-    // Check SSO flag: last_byte & small-string flag
     try self.emitLocalGet(last_byte);
     try self.emitI32Const(small_str_flag);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    const is_small = try self.emitSetNewLocal(.i32);
 
-    // if (is_sso)
+    // len = is_small ? last_byte & length mask : the length field.
+    try self.emitLocalGet(last_byte);
+    try self.emitI32Const(small_str_len_mask);
+    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitLoadAt(str_ptr, .i32, str_len_offset);
+    try self.emitLocalGet(is_small);
+    self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+    const len = try self.emitSetNewLocal(.i32);
+
+    // An empty string leaves the zeroed empty list in place.
+    try self.emitLocalGet(len);
     try self.emitVoidIf();
     {
-        // SSO case: extract len = last_byte & length mask
-        try self.emitLocalGet(last_byte);
-        try self.emitI32Const(small_str_len_mask);
-        self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        const sso_len = try self.emitSetNewLocal(.i32);
+        try self.emitLocalGet(is_small);
+        try self.emitVoidIf();
+        {
+            try self.emitHeapAllocWithRefcount(len, 1, false);
+            const heap_ptr = try self.emitSetNewLocal(.i32);
 
-        // Allocate sso_len bytes on heap via roc_alloc
-        try self.emitHeapAllocWithRefcount(sso_len, 1, false);
-        const heap_ptr = try self.emitSetNewLocal(.i32);
+            const zero = try self.emitI32ConstToNewLocal(0);
+            try self.emitMemCopyLoop(heap_ptr, zero, str_ptr, len);
 
-        // Copy SSO bytes from str_ptr to heap: memcpy(heap_ptr+0, str_ptr, sso_len)
-        const zero = try self.emitI32ConstToNewLocal(0);
-        try self.emitMemCopyLoop(heap_ptr, zero, str_ptr, sso_len);
+            try self.emitLocalGets(.{ result_ptr, heap_ptr });
+            try self.emitStoreOp(.i32, list_bytes_offset);
+            try self.emitLocalGets(.{ result_ptr, len });
+            try self.emitStoreOp(.i32, list_len_offset);
+            try self.emitLocalGets(.{ result_ptr, len });
+            try self.emitI32Const(capacity_shift);
+            self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
+            try self.emitStoreOp(.i32, list_capacity_offset);
+        }
+        self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+        {
+            // A seamless string slice's data pointer points inside its
+            // allocation, so the allocation pointer is decoded before the
+            // shared backing is retained.
+            const alloc_ptr, const decoded_small = try self.allocAnonymousLocals(.i32, 2);
+            try self.emitDecodeStrAllocPtr(str_ptr, alloc_ptr, decoded_small);
+            try self.emitDataPtrIncref(alloc_ptr, 1);
 
-        // Write RocList {heap_ptr, sso_len, sso_len << capacity_shift} to result_ptr
-        // ptr
-        try self.emitLocalGets(.{ result_ptr, heap_ptr });
-        try self.emitStoreOp(.i32, list_bytes_offset);
-        // len
-        try self.emitLocalGets(.{ result_ptr, sso_len });
-        try self.emitStoreOp(.i32, list_len_offset);
-        // cap
-        try self.emitLocalGets(.{ result_ptr, sso_len });
-        try self.emitI32Const(capacity_shift);
-        self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
-        try self.emitStoreOp(.i32, list_capacity_offset);
+            try self.emitLocalGet(result_ptr);
+            try self.emitLoadAt(str_ptr, .i32, str_bytes_offset);
+            try self.emitStoreOp(.i32, list_bytes_offset);
+            try self.emitLocalGets(.{ result_ptr, len });
+            try self.emitStoreOp(.i32, list_len_offset);
+            try self.emitLocalGet(result_ptr);
+            try self.emitLoadAt(str_ptr, .i32, str_capacity_offset);
+            try self.emitStoreOp(.i32, list_capacity_offset);
+        }
+        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
-    // else (non-SSO)
-    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-    {
-        const str_data, const str_len, const str_cap = try self.allocAnonymousLocals(.i32, 3);
-
-        try self.emitLoadAt(str_ptr, .i32, str_bytes_offset);
-        try self.emitLocalSet(str_data);
-
-        try self.emitLoadAt(str_ptr, .i32, str_len_offset);
-        try self.emitLocalSet(str_len);
-
-        try self.emitLoadAt(str_ptr, .i32, str_capacity_offset);
-        try self.emitLocalSet(str_cap);
-
-        // Non-SSO Str.to_utf8 returns a List(U8) that aliases the string bytes.
-        // A seamless string slice's data pointer points inside its allocation,
-        // so decode the allocation pointer before retaining the shared backing.
-        const alloc_ptr, const is_small = try self.allocAnonymousLocals(.i32, 2);
-        try self.emitDecodeStrAllocPtr(str_ptr, alloc_ptr, is_small);
-        try self.emitDataPtrIncref(alloc_ptr, 1);
-
-        try self.emitLocalGets(.{ result_ptr, str_data });
-        try self.emitStoreOp(.i32, list_bytes_offset);
-
-        try self.emitLocalGets(.{ result_ptr, str_len });
-        try self.emitStoreOp(.i32, list_len_offset);
-
-        try self.emitLocalGets(.{ result_ptr, str_cap });
-        try self.emitStoreOp(.i32, list_capacity_offset);
-    }
-    // end if
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
-    // Leave result pointer on stack
     try self.emitLocalGet(result_ptr);
 }
 
