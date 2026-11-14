@@ -376,6 +376,27 @@ pub const Solution = struct {
         return (self.unique_conds[index] & ~seeds) == 0;
     }
 
+    /// `isUniqueUnder` for the value a runtime uniqueness check reads through
+    /// `local`. A borrowed pure same-value alias that is only ever read is a
+    /// view: it holds no unit and has no origin of its own, and the count the
+    /// check reads is that of the value it views. The claim therefore holds
+    /// when the local owning the viewed unit is unique under `seeds` and no
+    /// link of the borrowed alias chain down to it adds a holder.
+    pub fn isUniqueThroughViewsUnder(self: *const Solution, local: LIR.LocalId, seeds: arc_sig.ParamMask) bool {
+        var cursor = @backingInt(local);
+        var steps: usize = 0;
+        while (cursor < self.alias_source.len and
+            self.isBorrowed(@fromBackingInt(@intCast(cursor))))
+        {
+            const source = self.alias_source[cursor].get() orelse break;
+            if (cursor >= self.leader.len or self.unique_destroyed.isSet(cursor)) return false;
+            cursor = source;
+            steps += 1;
+            if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
+        }
+        return self.isUniqueUnder(@fromBackingInt(@intCast(cursor)), seeds);
+    }
+
     /// True when the proc's signature is pinned by ABI and must never be
     /// weakened or specialized.
     pub fn isPinnedProc(self: *const Solution, proc: LIR.LirProcSpecId) bool {
@@ -3891,7 +3912,13 @@ pub const Uniqueness = struct {
     /// Bit set => some statement consumes the local's value (moves its
     /// unit, or would retain to do so).
     consumed: std.bit_set.DynamicBitSetUnmanaged,
+    /// Per local bound by exactly one definition that is a pure same-value
+    /// alias or a read-only view, the local it aliases. A runtime uniqueness
+    /// check that only reads such a local reads the count of that source's
+    /// value.
+    read_source: []OptionalU32,
     pub fn deinit(self: *Uniqueness, allocator: Allocator) void {
+        allocator.free(self.read_source);
         self.born_unique.deinit(allocator);
         self.unique.deinit(allocator);
         self.destroyed.deinit(allocator);
@@ -3914,6 +3941,7 @@ pub const Uniqueness = struct {
                 .conds = try allocator.dupe(arc_sig.ParamMask, self.field_conds.conds),
             },
             .consumed = try self.consumed.clone(allocator),
+            .read_source = try allocator.dupe(OptionalU32, self.read_source),
         };
     }
 };
@@ -6681,7 +6709,20 @@ fn computeUniquenessDetailed(
         if (conds[index] != 0) unique.unset(index);
     }
 
+    // The value a check that only reads `local` reads: the source of the one
+    // pure same-value alias or view definition that binds it.
+    const read_source = try allocator.alloc(OptionalU32, local_count);
+    for (read_source, 0..) |*slot, index| {
+        slot.* = if (def_counts[index] != 1)
+            .none
+        else if (view_source[index] != .none)
+            view_source[index]
+        else
+            alias_source[index];
+    }
+
     const result = Uniqueness{
+        .read_source = read_source,
         .born_unique = born,
         .unique = unique,
         .destroyed = destroyed,
