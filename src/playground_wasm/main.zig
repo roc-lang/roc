@@ -996,8 +996,9 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
 
     // The strategy the expression's runtime program lowers under, which is
     // therefore the one whose evaluator completes the modules' compile-time
-    // roots.
-    const strategy: base.SpecializationStrategy = .lss;
+    // roots. The program runs on the LIR interpreter, as an
+    // `--opt=interpreter` program does, and lowers under the same strategy.
+    const strategy: base.SpecializationStrategy = .boxy;
     const ctfe_options: eval.CompileTimeFinalization.Options = .{ .strategy = strategy };
 
     var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(

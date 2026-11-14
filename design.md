@@ -16952,14 +16952,15 @@ runtime. The coordinator's compilations take it from their command
 (`BuildEnv.setSpecializationStrategy`). The REPL session
 (`roc repl` and the REPL WebAssembly module) evaluates each expression as a
 compile-time root and lowers no runtime program, so it names `.boxy`. The
-playground, whose expressions run as `.lss` runtime programs, names `.lss`,
-as the snapshot tool's REPL programs and the eval harness's programs do by
-the harness's default (`Inspected.ParseOptions.strategy`); a harness program
-lowered under `.boxy` reopens its modules for the Boxy representation of
-their function values. The snapshot tool's documentation snapshots name
-`.boxy`, as `roc docs` does. The Builtin bake names `.lss` and
-`complete_baked_module`, which adds the Boxy representation of every root
-holding a function value ("Stored Function Values").
+playground runs each expression as a `.boxy` runtime program on the LIR
+interpreter, as an `--opt=interpreter` program runs, and names `.boxy`. The
+snapshot tool's REPL programs and the eval harness's programs are published
+under `.lss`, the harness's default (`Inspected.ParseOptions.strategy`); a
+harness program lowered under `.boxy` reopens its modules for the Boxy
+representation of their function values. The snapshot tool's documentation
+snapshots name `.boxy`, as `roc docs` does. The Builtin bake names `.lss`
+and `complete_baked_module`, which adds the Boxy representation of every
+root holding a function value ("Stored Function Values").
 
 The `.boxy` compile-time evaluator (`evaluateRootsBoxy`) orders the pending
 roots by the values they read,
