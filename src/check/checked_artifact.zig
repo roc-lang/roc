@@ -10795,20 +10795,94 @@ pub const CheckedExhaustivenessSite = struct {
     requires_pairing: bool = false,
 };
 
+/// The site `CheckedExhaustivenessSiteTable.lookupByMatchExpr` or
+/// `lookupByDestructurePattern` finds for a CIR node
+/// (`CheckedExhaustivenessSiteTable.sites_by_match_expr`,
+/// `sites_by_destructure_pattern`).
+pub const NodeExhaustivenessSite = extern struct {
+    node: u32,
+    site: CheckedExhaustivenessSiteId,
+
+    fn order(entry: NodeExhaustivenessSite, key: u32) std.math.Order {
+        return std.math.order(entry.node, key);
+    }
+
+    fn lessThan(_: void, a: NodeExhaustivenessSite, b: NodeExhaustivenessSite) bool {
+        if (a.node != b.node) return a.node < b.node;
+        return @backingInt(a.site) < @backingInt(b.site);
+    }
+};
+
 /// Table of checked exhaustiveness sites keyed by checked expressions or patterns.
 pub const CheckedExhaustivenessSiteTable = struct {
     sites: collections.SafeList(CheckedExhaustivenessSite) = .{},
+    /// For each match expression a site names, the first such site, by
+    /// expression, ascending.
+    sites_by_match_expr: collections.SafeList(NodeExhaustivenessSite) = .{},
+    /// For each destructure pattern a site names, the first such site, by
+    /// pattern, ascending.
+    sites_by_destructure_pattern: collections.SafeList(NodeExhaustivenessSite) = .{},
+
+    /// A table of `sites`, indexed for lookup. A site's id is its position
+    /// in `sites`. The table owns `sites` once this returns; on failure the
+    /// caller still does.
+    pub fn fromOwnedSites(allocator: Allocator, sites: []CheckedExhaustivenessSite) Allocator.Error!CheckedExhaustivenessSiteTable {
+        const by_match_expr = try nodeSiteIndex(allocator, sites, .match_expr);
+        errdefer allocator.free(by_match_expr);
+        const by_destructure_pattern = try nodeSiteIndex(allocator, sites, .destructure_pattern);
+        return .{
+            .sites = .fromOwnedSlice(sites),
+            .sites_by_match_expr = .fromOwnedSlice(by_match_expr),
+            .sites_by_destructure_pattern = .fromOwnedSlice(by_destructure_pattern),
+        };
+    }
+
+    const IndexedNode = enum { match_expr, destructure_pattern };
+
+    fn indexedNode(site: CheckedExhaustivenessSite, comptime kind: IndexedNode) ?u32 {
+        return switch (kind) {
+            .match_expr => if (site.checked_expr.get()) |expr| @backingInt(expr) else null,
+            .destructure_pattern => if (site.checked_pattern.get()) |pattern| @backingInt(pattern) else null,
+        };
+    }
+
+    fn nodeSiteIndex(allocator: Allocator, sites: []const CheckedExhaustivenessSite, comptime kind: IndexedNode) Allocator.Error![]NodeExhaustivenessSite {
+        var entries = std.ArrayList(NodeExhaustivenessSite).empty;
+        errdefer entries.deinit(allocator);
+        for (sites) |site| {
+            const node = indexedNode(site, kind) orelse continue;
+            try entries.append(allocator, .{ .node = node, .site = site.id });
+        }
+        std.mem.sort(NodeExhaustivenessSite, entries.items, {}, NodeExhaustivenessSite.lessThan);
+        // Site ids ascend in table order, so the first entry of each node is
+        // the first site naming it.
+        var unique: usize = 0;
+        for (entries.items) |entry| {
+            if (unique != 0 and entries.items[unique - 1].node == entry.node) continue;
+            entries.items[unique] = entry;
+            unique += 1;
+        }
+        entries.shrinkRetainingCapacity(unique);
+        return try entries.toOwnedSlice(allocator);
+    }
 
     pub fn lookupByMatchExpr(self: *const CheckedExhaustivenessSiteTable, expr: CIR.Expr.Idx) ?CheckedExhaustivenessSiteId {
-        for (self.sites.items()) |site| {
-            if (site.checked_expr.get() == expr) return site.id;
-        }
-        return null;
+        const found: ?CheckedExhaustivenessSiteId = if (artifact_serialize.binarySearchByKey(NodeExhaustivenessSite, u32, self.sites_by_match_expr.items(), @backingInt(expr), NodeExhaustivenessSite.order)) |entry| entry.site else null;
+        if (builtin.mode == .debug) std.debug.assert(found == self.scanByNode(@backingInt(expr), .match_expr));
+        return found;
     }
 
     pub fn lookupByDestructurePattern(self: *const CheckedExhaustivenessSiteTable, pattern: CIR.Pattern.Idx) ?CheckedExhaustivenessSiteId {
+        const found: ?CheckedExhaustivenessSiteId = if (artifact_serialize.binarySearchByKey(NodeExhaustivenessSite, u32, self.sites_by_destructure_pattern.items(), @backingInt(pattern), NodeExhaustivenessSite.order)) |entry| entry.site else null;
+        if (builtin.mode == .debug) std.debug.assert(found == self.scanByNode(@backingInt(pattern), .destructure_pattern));
+        return found;
+    }
+
+    /// `lookupByMatchExpr` or `lookupByDestructurePattern` by a scan of
+    /// every site.
+    fn scanByNode(self: *const CheckedExhaustivenessSiteTable, node: u32, comptime kind: IndexedNode) ?CheckedExhaustivenessSiteId {
         for (self.sites.items()) |site| {
-            if (site.checked_pattern.get() == pattern) return site.id;
+            if (indexedNode(site, kind) == node) return site.id;
         }
         return null;
     }
@@ -10823,6 +10897,8 @@ pub const CheckedExhaustivenessSiteTable = struct {
 
     pub const Serialized = extern struct {
         sites: SerializedSlice(CheckedExhaustivenessSite) = .{},
+        sites_by_match_expr: SerializedSlice(NodeExhaustivenessSite) = .{},
+        sites_by_destructure_pattern: SerializedSlice(NodeExhaustivenessSite) = .{},
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedExhaustivenessSiteTable, @This());
         pub const serialize = Serde.serialize;
@@ -27011,7 +27087,7 @@ fn publishCheckedExhaustivenessSites(
         };
     }
 
-    return .{ .sites = .fromOwnedSlice(sites) };
+    return CheckedExhaustivenessSiteTable.fromOwnedSites(allocator, sites);
 }
 
 /// What a checked body search looks for.
@@ -31117,7 +31193,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 228);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 230);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -36864,9 +36940,12 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .checked_pattern = .some(@fromBackingInt(@intCast(7))),
         .policy = .compile_time_only,
     });
-    const exhaustiveness_sites_src = CheckedExhaustivenessSiteTable{
-        .sites = .fromBorrowedSlice(exhaustiveness_site_entries.items),
+    const owned_sites = try exhaustiveness_site_entries.toOwnedSlice(gpa);
+    var exhaustiveness_sites_src = CheckedExhaustivenessSiteTable.fromOwnedSites(gpa, owned_sites) catch |err| {
+        gpa.free(owned_sites);
+        return err;
     };
+    defer exhaustiveness_sites_src.deinit(gpa);
 
     const identity = ModuleIdentity{
         .stable_hash = @as([32]u8, @splat(0x42)),
@@ -37109,6 +37188,27 @@ test "compile-time root read table keeps earlier rows beside newly evaluated roo
     try std.testing.expectError(error.CorruptArtifact, later.validate(4));
 }
 
+test "exhaustiveness site lookups find the first site naming a node" {
+    const gpa = std.testing.allocator;
+    const sites = try gpa.alloc(CheckedExhaustivenessSite, 4);
+    const policy: ExhaustivenessResolutionPolicy = .compile_time_only;
+    const region = base.Region.from_raw_offsets(0, 1);
+    sites[0] = .{ .id = @fromBackingInt(0), .kind = .destructure, .region = region, .checked_pattern = .some(@fromBackingInt(9)), .policy = policy };
+    sites[1] = .{ .id = @fromBackingInt(1), .kind = .match, .region = region, .checked_expr = .some(@fromBackingInt(5)), .policy = policy };
+    sites[2] = .{ .id = @fromBackingInt(2), .kind = .destructure, .region = region, .checked_pattern = .some(@fromBackingInt(9)), .policy = policy };
+    sites[3] = .{ .id = @fromBackingInt(3), .kind = .match, .region = region, .checked_expr = .some(@fromBackingInt(2)), .policy = policy };
+    var table = CheckedExhaustivenessSiteTable.fromOwnedSites(gpa, sites) catch |err| {
+        gpa.free(sites);
+        return err;
+    };
+    defer table.deinit(gpa);
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, @fromBackingInt(0)), table.lookupByDestructurePattern(@fromBackingInt(9)));
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, @fromBackingInt(1)), table.lookupByMatchExpr(@fromBackingInt(5)));
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, @fromBackingInt(3)), table.lookupByMatchExpr(@fromBackingInt(2)));
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, null), table.lookupByMatchExpr(@fromBackingInt(9)));
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, null), table.lookupByDestructurePattern(@fromBackingInt(5)));
+}
+
 test "SERIALIZED_VERSION_HASH golden value" {
     // Tripwire: an *accidental* change to `CheckedModuleArtifact.Serialized`'s layout
     // would make a previously-baked builtin blob / cached artifact relocate into a
@@ -37117,8 +37217,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xCC, 0x13, 0xD1, 0xFD, 0x32, 0x3A, 0x27, 0x5D, 0x74, 0x47, 0x5E, 0x13, 0xFE, 0xBB, 0x49, 0x7E,
-        0xAF, 0xDF, 0x1A, 0x01, 0x9D, 0xC5, 0x4C, 0xAA, 0x9D, 0x90, 0x44, 0x71, 0x39, 0xA4, 0x5A, 0xEA,
+        0x4B, 0xB1, 0x84, 0x3E, 0x77, 0x43, 0xE0, 0x65, 0xEA, 0xE5, 0x13, 0x6E, 0x8F, 0x59, 0x7B, 0x38,
+        0xAF, 0x82, 0x0F, 0x55, 0xDC, 0x8A, 0x91, 0xB8, 0x9B, 0xF2, 0x93, 0x3B, 0x08, 0x55, 0x66, 0xF2,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
