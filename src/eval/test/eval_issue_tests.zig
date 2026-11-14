@@ -5158,4 +5158,41 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(Ok(\"a\"), Err(Missing))" },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/12997
+        // `"kept"` has the type `child`, which constructing the generalized
+        // local `|_parent| "kept"` fixes, so that construction is a literal
+        // argument root's edge. The root converts the literal at the edge
+        // and evaluates none of the lambda that owns it.
+        .name = "issue 12997: literal argument root on a nested generalized lambda's construction evaluates none of the lambda",
+        .source_kind = .module,
+        .source =
+        \\wrap : { get : parent -> child } -> Str
+        \\wrap = |_config| "x"
+        \\
+        \\build : U64 -> { render : U64 -> Str }
+        \\build = |_n| { render: |_| wrap({ get: |_parent| "kept" }) }
+        \\
+        \\main = (build(1).render)(1)
+        ,
+        .expected = .{ .inspect_str = "\"x\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/12997
+        .name = "issue 12997: literal argument root on a nested generalized lambda's construction inside a tuple",
+        .source_kind = .module,
+        .source =
+        \\wrap : { get : parent -> child } -> Str
+        \\wrap = |_config| "x"
+        \\
+        \\build : U64 -> ((U64 -> Str), U64)
+        \\build = |n| (|_| wrap({ get: |_parent| "kept" }), n)
+        \\
+        \\main = {
+        \\    (f, _) = build(1)
+        \\    f(1)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"x\"" },
+    },
 };

@@ -2291,6 +2291,7 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
     const compiler_version_module = compiler_version_options.createModule();
+    roc_modules.base.addImport("compiler_version", compiler_version_module);
     roc_modules.lsp.addImport("compiler_version", compiler_version_module);
     roc_modules.build_options.addImport("compiler_identity", compiler_identity);
     const unit_test_runner = UnitTestRunner{
@@ -4232,8 +4233,8 @@ pub fn build(b: *std.Build) void {
 
     for (module_tests_result.tests) |module_test| {
         // Standalone module tests have fresh roots, so display-version imports
-        // must be declared separately from the production LSP module.
-        if (std.mem.eql(u8, module_test.test_step.name, "lsp")) {
+        // must be declared separately from the production modules.
+        if (std.mem.eql(u8, module_test.test_step.name, "base") or std.mem.eql(u8, module_test.test_step.name, "lsp")) {
             module_test.test_step.root_module.addImport("compiler_version", compiler_version_module);
         }
 
@@ -4534,6 +4535,40 @@ pub fn build(b: *std.Build) void {
         .description = "Run RcEffect conformance sweep Zig tests",
         .compile = rc_conformance_test,
     });
+
+    // The builtins' concurrent-release tests under ThreadSanitizer, which
+    // reports a refcount decrement whose memory ordering lets one thread's
+    // accesses race with another thread's free, on any architecture. The
+    // same tests run without the sanitizer in the builtins module tests.
+    // Zig ships a ThreadSanitizer runtime for Linux and macOS only, and it
+    // cannot start under musl, so this binary targets the host and its system
+    // libc rather than `target`. `build-ci` builds it, so MiniCI's
+    // `run-test-builtins-tsan` job only runs it.
+    const run_test_builtins_tsan_step = b.step("run-test-builtins-tsan", "Run the builtins' concurrent refcount tests under ThreadSanitizer");
+    const tsan_target = hostToolTarget(b, optimize);
+    const tsan_supported = (tsan_target.result.os.tag == .linux or tsan_target.result.os.tag == .macos) and
+        (tsan_target.result.cpu.arch == .x86_64 or tsan_target.result.cpu.arch == .aarch64) and
+        !tsan_target.result.abi.isMusl();
+    if (tsan_supported) {
+        const builtins_tsan_test = b.addTest(.{
+            .name = "builtins_tsan_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/atomic_rc_test.zig"),
+                .target = tsan_target,
+                .optimize = optimize,
+                .link_libc = true,
+                .sanitize_thread = true,
+            }),
+        });
+        var builtins_imports = roc_modules.builtins.import_table.iterator();
+        while (builtins_imports.next()) |entry| builtins_tsan_test.root_module.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        build_test_zig_step.dependOn(&builtins_tsan_test.step);
+        const run_builtins_tsan_test = b.addRunArtifact(builtins_tsan_test);
+        if (run_args.len != 0) run_builtins_tsan_test.addArgs(run_args);
+        run_test_builtins_tsan_step.dependOn(&run_builtins_tsan_test.step);
+    } else {
+        run_test_builtins_tsan_step.dependOn(&b.addFail("ThreadSanitizer needs a Linux (glibc) or macOS host on x86_64 or aarch64").step);
+    }
 
     const trmc_lir_test = roc_test_binaries.add(.{ .name = "trmc_lir_test", .root = "src/eval/test/trmc_lir_test.zig", .links_llvm = true });
     // Drives the interpreter thousands of frames deep to prove the Debug
