@@ -330,6 +330,24 @@ const LirProcSpec = lir.LirProcSpec;
 
 const Allocator = std.mem.Allocator;
 
+/// Code bytes and statement counts by LIR statement kind, recorded only when
+/// a caller lends a histogram for detailed timing. A statement's bytes run
+/// from its start to the next statement's start, so the code a control-flow
+/// statement emits after its branches counts toward the branch emitted last.
+pub const StmtHistogram = struct {
+    /// The number of LIR statement kinds.
+    pub const kind_count = @typeInfo(std.meta.Tag(LIR.CFStmt)).@"enum".field_names.len;
+
+    bytes: [kind_count]u64 = @splat(0),
+    count: [kind_count]u64 = @splat(0),
+
+    /// Add `other`'s bytes and counts to this histogram.
+    pub fn add(self: *StmtHistogram, other: *const StmtHistogram) void {
+        for (&self.bytes, other.bytes) |*total, value| total.* +|= value;
+        for (&self.count, other.count) |*total, value| total.* +|= value;
+    }
+};
+
 /// Code generator for statement-only LIR procs
 /// Parameterized by RocTarget for cross-compilation support
 pub fn LirCodeGen(comptime target: RocTarget) type {
@@ -511,6 +529,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// `borrowStackPlanIndexes`), otherwise this generator's own.
         stack_plan_indexes: ?*StackPlan.Indexes = null,
         owns_stack_plan_indexes: bool = false,
+        /// Receives code bytes by statement kind when detailed timing lends
+        /// one; null records nothing.
+        stmt_histogram: ?*StmtHistogram = null,
         local_location_undo: std.ArrayList(LocalLocationUndo),
 
         /// Exact reverse index for locals which currently live in vector registers.
@@ -21114,8 +21135,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var scratch = StmtScratch{ .base = self.codegen.stack_offset, .end = self.codegen.stack_offset };
             defer scratch.finish(self);
+            var histogram_kind: ?usize = null;
+            var histogram_offset: usize = 0;
+            defer if (self.stmt_histogram) |histogram| if (histogram_kind) |kind| {
+                histogram.bytes[kind] +|= self.codegen.currentOffset() -| histogram_offset;
+            };
             while (work.pop()) |item| switch (scratch.begin(self, item)) {
                 .node => |stmt_id| {
+                    if (self.stmt_histogram) |histogram| {
+                        const offset = self.codegen.currentOffset();
+                        if (histogram_kind) |kind| histogram.bytes[kind] +|= offset -| histogram_offset;
+                        const kind = @backingInt(std.meta.activeTag(self.store.getCFStmt(stmt_id)));
+                        histogram.count[kind] += 1;
+                        histogram_kind = kind;
+                        histogram_offset = offset;
+                    }
                     switch (isa) {
                         .aarch64 => try self.emitBranchIslandIfNeeded(),
                         .x86_64 => {},

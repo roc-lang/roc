@@ -28773,6 +28773,60 @@ compiler started with `ROC_DEBUG_FORCE_ICE=<phase>[:<module or stage>]`
 panics on purpose when a matching frame is pushed; CLI tests use it to pin
 each phase's report.
 
+### Detailed Timing
+
+`--timings` turns on detailed timing (`CheckedPipeline.Timing.enableDetail`),
+which itemizes every post-check stage beneath its own line. Without the flag
+no stage reads a clock for a detail, allocates for one, or stores one: a
+stage holding a timing tests whether it is detailed once per step, and the
+per-procedure and per-statement paths test a pointer that is null. Detailed
+timing never changes what the compiler emits, takes part in no cache key,
+and orders nothing.
+
+Compile-time evaluation reports its steps (root graph, root classification,
+waiting for builds, program builds, lowering, procedure code generation,
+entry wrappers, import image selection, host splice, static data placement,
+program runs, root job setup, unit keys, the wait for every unit, module
+commit, checked cache writes) and counts its roots by kind and by value
+form, its programs, batches, retry passes, units restored and built, import
+images selected and loaded, and slow-root progress threads. Value form is a
+syntactic classification for this output only: no compiler decision reads
+it.
+
+Boxy lowering reports setup, unit worker seeding, root workers, worker
+bodies, type table filling, layout and static data requests, export needs,
+names and runtime schemas, and static descriptors, and counts the workers it
+lowers by kind. Each module unit measures its steps on a timing of its own:
+digest and key, restore, lower, LIR passes, ARC, static data, code
+generation, unit image, export records, encoding, cache write, the wait for
+its imports' objects and the wait for a worker. The steps are summed over
+units, and the ten slowest units by their own work, with the Builtin
+module's unit always, are printed one per row.
+
+The LIR passes report each procedure-local phase's elapsed time,
+preparation, summed worker time, idle worker capacity and ordered commit,
+with procedures visited and changed, and each whole-program step before ARC
+and after it. Summed worker time comes from one slot per task
+(`post_check_task_executor.TimedTasks`) or per lane, folded by the
+coordinator after the barrier, so no two lanes write one counter. Idle
+capacity is each parallel section's elapsed time times the executor's
+worker count, less the summed worker time.
+
+ARC reports its serial steps, each parallel step's elapsed time and summed
+worker time, and idle worker capacity.
+
+A module unit's native code generation reports backend setup, procedure
+setup, waves, worker setup, stack planning with emission, fragment
+extraction, idle workers, fragment commit, symbolic reference resolution,
+entrypoints, the steps lifting code into pieces, image composition, DWARF,
+object encoding and the unit image, with the bytes of code, objects,
+images, pieces and cache entries, and code bytes and statements by LIR
+statement kind. A statement's bytes run from its start to the next
+statement's start.
+
+Lambda-set solving reports its analysis solve, which finds the row-joined
+types, its solver setup, and the real solve.
+
 ### Developer Diagnostics
 
 The compiler's developer-only environment variables (`ROC_LIR_DUMP`,

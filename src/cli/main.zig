@@ -6580,7 +6580,7 @@ fn lowerDiscoveredLir(
 
     if (reporter) |r| r.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (reporter != null and reporter.?.always) spec_timing.enableDetailedMonotypeBody();
+    if (reporter != null and reporter.?.always) spec_timing.enableDetail();
     var lowered = try lowerCheckedSourceToLir(
         lir_allocator,
         ctx.gpa,
@@ -6897,7 +6897,7 @@ fn lowerRunRoot(
 ) CliMainError!lir.CheckedPipeline.LoweredProgram {
     reporter.begin(loweringProgressLabel(.boxy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (reporter.always) spec_timing.enableDetailedMonotypeBody();
+    if (reporter.always) spec_timing.enableDetail();
     const lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -10471,7 +10471,9 @@ fn buildBoxyLibraryObjects(
     // The units run on the executor's lanes, so each phase of this timing
     // sums the units' work rather than measuring elapsed time.
     var unit_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (reporter.always) unit_timing.enableDetail();
     const phase_started_ns = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+    const detail_started_ns = lir.CheckedPipeline.Timing.startDetail(&unit_timing);
     const tasks = try ctx.gpa.alloc(BoxyUnitTask, units.items.len);
     defer {
         for (tasks) |*task| task.deinit(ctx.gpa);
@@ -10498,6 +10500,7 @@ fn buildBoxyLibraryObjects(
             .timing = &unit_timing,
             .executor = build_env.postCheckExecutor(),
             .phase_started_ns = phase_started_ns,
+            .ready_ns = detail_started_ns,
             .want_pieces = !want_images,
         };
     }
@@ -10649,7 +10652,11 @@ fn buildBoxyLibraryObjects(
         }
         for (dependents[index].items) |dependent| {
             remaining[dependent] -= 1;
-            if (remaining[dependent] == 0) try ready.append(ctx.gpa, dependent);
+            if (remaining[dependent] == 0) {
+                tasks[dependent].ready_ns = lir.CheckedPipeline.Timing.startDetail(&unit_timing);
+                tasks[dependent].import_wait_ns = @intCast(@max(0, tasks[dependent].ready_ns - detail_started_ns));
+                try ready.append(ctx.gpa, dependent);
+            }
         }
     }
     // Digest tasks still out hashed for units that are done.
@@ -10871,6 +10878,12 @@ const BoxyUnitTask = struct {
     executor: ?base.post_check_task_executor.Executor,
     /// When the units' phase began, for the work trace.
     phase_started_ns: i96,
+    /// Under detailed timing, when the unit's imports' units were all done,
+    /// and how long keying it took.
+    ready_ns: i64,
+    import_wait_ns: u64 = 0,
+    key_ns: u64 = 0,
+    queue_wait_ns: u64 = 0,
     /// The unit's key, computed by its task (`keyAndBuild`).
     key: compile.boxy_object_cache.Key = undefined,
     want_pieces: bool,
@@ -10911,8 +10924,11 @@ const BoxyUnitTask = struct {
     /// Key the unit from the digests, then take the object compile-time
     /// evaluation left under that key, or restore or build it.
     fn keyAndBuild(self: *BoxyUnitTask) CliMainError!Outcome {
+        const key_started = lir.CheckedPipeline.Timing.startDetail(self.timing);
+        if (lir.CheckedPipeline.Timing.detailOf(self.timing) != null) self.queue_wait_ns = @intCast(@max(0, key_started - self.ready_ns));
         try self.digests.ensurePrepared(self.artifact);
         self.key = try boxyObjectKey(self.gpa, self.digests, self.artifact, self.platform, self.policy, self.target, &.{}, false);
+        if (lir.CheckedPipeline.Timing.detailOf(self.timing)) |timing| self.key_ns = timing.elapsedSince(key_started);
         self.trace("keyed");
         if (self.build_env.boxyObjectWithKey(self.artifact, self.key)) |known| {
             self.trace("known");
@@ -10941,6 +10957,9 @@ const BoxyUnitTask = struct {
             .want_pieces = self.want_pieces,
             .test_unit = self.policy.test_units,
             .wasm_stack_checks = self.policy.wasm_stack_checks,
+            .key_ns = self.key_ns,
+            .import_wait_ns = self.import_wait_ns,
+            .queue_wait_ns = self.queue_wait_ns,
         });
         errdefer built.deinit(self.gpa);
         return built;
@@ -10978,7 +10997,7 @@ fn lowerBuildCommandToLir(
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt);
     reporter.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
+    if (args.timings) spec_timing.enableDetail();
     const lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -15895,7 +15914,7 @@ fn unitTestRootImage(
 
     reporter.begin(loweringProgressLabel(.boxy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (reporter.always) spec_timing.enableDetailedMonotypeBody();
+    if (reporter.always) spec_timing.enableDetail();
     var requests: std.ArrayList(check.CheckedArtifact.RootRequest) = .empty;
     defer requests.deinit(ctx.gpa);
     var source_modules: std.ArrayList(check.CheckedArtifact.ModuleId) = .empty;
@@ -17402,7 +17421,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     });
 
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
+    if (args.timings) spec_timing.enableDetail();
     var dev_timing = eval.test_helpers.DevBoolRootTiming.init(ctx.io.std_io);
 
     var total = CliTestRunSummary{};
@@ -19018,6 +19037,7 @@ fn finishPostCheckLowering(
     var subs_buf: [26]progress.SubTiming = undefined;
     reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot)));
     recordLoweringCounters(reporter, snapshot, strategy, "");
+    recordLoweringDetail(reporter, snapshot, "");
 }
 
 fn recordLoweringCounters(
@@ -19068,6 +19088,319 @@ fn recordPostCheckLowering(
         measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot)),
     );
     recordLoweringCounters(reporter, snapshot, strategy, "");
+    recordLoweringDetail(reporter, snapshot, "");
+}
+
+fn boxyStepLabel(step: lir.CheckedPipeline.BoxyTiming.Step) []const u8 {
+    return switch (step) {
+        .setup => "Setup",
+        .seed_workers => "Unit Worker Seeding",
+        .roots => "Root Workers",
+        .bodies => "Worker Bodies",
+        .tables => "Type Table Filling",
+        .requests => "Layout + Static Data Requests",
+        .export_needs => "Export Needs Encoding",
+        .finish => "Names + Runtime Schemas",
+        .static_descriptors => "Static Descriptors",
+    };
+}
+
+fn unitStepLabel(step: lir.CheckedPipeline.UnitStep) []const u8 {
+    return switch (step) {
+        .key => "Digest + Key",
+        .restore => "Restore",
+        .lower => "Lower",
+        .lir_passes => "Passes",
+        .arc => "ARC",
+        .static_data => "Static Data",
+        .codegen => "Codegen",
+        .image => "Image",
+        .export_records => "Export Records",
+        .encode => "Encode",
+        .cache_write => "Cache Write",
+        .import_wait => "Import Wait",
+        .queue_wait => "Queue Wait",
+    };
+}
+
+/// Short column headings of the per-unit table, in `UnitStep` order.
+const unit_step_columns = blk: {
+    const names = @typeInfo(lir.CheckedPipeline.UnitStep).@"enum".field_names;
+    var columns: [names.len][]const u8 = undefined;
+    for (names, &columns) |name, *column| column.* = switch (@field(lir.CheckedPipeline.UnitStep, name)) {
+        .key => "key",
+        .restore => "restore",
+        .lower => "lower",
+        .lir_passes => "passes",
+        .arc => "arc",
+        .static_data => "static",
+        .codegen => "codegen",
+        .image => "image",
+        .export_records => "exports",
+        .encode => "encode",
+        .cache_write => "write",
+        .import_wait => "imp-wait",
+        .queue_wait => "q-wait",
+    };
+    break :blk columns;
+};
+
+/// The detailed steps of post-check lowering, which only detailed timing
+/// records: each stage's own steps, the module units' steps summed, and the
+/// slowest units one by one.
+fn recordLoweringDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeline.TimingSnapshot, comptime prefix: []const u8) void {
+    if (!reporter.always) return;
+    const Pipeline = lir.CheckedPipeline;
+    recordLirPassDetail(reporter, snapshot, prefix);
+    recordArcDetail(reporter, snapshot, prefix);
+    recordCodegenDetail(reporter, snapshot, prefix);
+    {
+        const Lss = lir.CheckedPipeline.LssStep;
+        const rows = [_]progress.SubTiming{
+            .{ .name = "Analysis Solve", .ns = snapshot.lss_steps_ns[@backingInt(Lss.lambda_analysis_solve)] },
+            .{ .name = "Solver Setup", .ns = snapshot.lss_steps_ns[@backingInt(Lss.lambda_solver_setup)] },
+            .{ .name = "Solve + Finish", .ns = snapshot.lss_steps_ns[@backingInt(Lss.lambda_solve)] },
+        };
+        var buf: [rows.len]progress.SubTiming = undefined;
+        const measured = measuredSubTimings(&buf, &rows);
+        if (measured.len != 0) reporter.recordCompletedWithBreakdown(prefix ++ "Lambda-Set Solving Detail", snapshot.lambda_solve_ns, .{}, measured);
+    }
+    {
+        var rows: [Pipeline.BoxyTiming.step_count]progress.SubTiming = undefined;
+        inline for (@typeInfo(Pipeline.BoxyTiming.Step).@"enum".field_names, 0..) |name, index| {
+            rows[index] = .{ .name = boxyStepLabel(@field(Pipeline.BoxyTiming.Step, name)), .ns = snapshot.boxy_steps_ns[index] };
+        }
+        var buf: [rows.len]progress.SubTiming = undefined;
+        const measured = measuredSubTimings(&buf, &rows);
+        if (measured.len != 0) reporter.recordCompletedWithBreakdown(prefix ++ "Boxy Lowering Detail", snapshot.boxy_lowering_ns, .{}, measured);
+        var counters: [Pipeline.BoxyTiming.worker_kind_count + 1]progress.Counter = undefined;
+        inline for (@typeInfo(std.meta.Tag(postcheck.Boxy.Lower.WorkerKey)).@"enum".field_names, 0..) |name, index| {
+            counters[index] = .{ .name = "Workers lowered: " ++ name, .count = snapshot.boxy_workers_by_kind[index] };
+        }
+        counters[counters.len - 1] = .{ .name = "Type tables filled", .count = snapshot.boxy_tables_filled };
+        if (measured.len != 0) reporter.recordCounters(prefix ++ "Boxy lowering work", &counters);
+    }
+    {
+        var rows: [Pipeline.unit_step_count]progress.SubTiming = undefined;
+        var total: u64 = 0;
+        inline for (@typeInfo(Pipeline.UnitStep).@"enum".field_names, 0..) |name, index| {
+            const step = @field(Pipeline.UnitStep, name);
+            const ns = switch (step) {
+                .restore => snapshot.boxy_unit_restore_ns,
+                .lower, .lir_passes, .arc => 0,
+                .key, .static_data, .codegen, .image, .export_records, .encode, .cache_write, .import_wait, .queue_wait => snapshot.unit_steps_ns[index],
+            };
+            rows[index] = .{ .name = unitStepLabel(step), .ns = ns };
+            if (step != .import_wait and step != .queue_wait) total +|= ns;
+        }
+        var buf: [rows.len]progress.SubTiming = undefined;
+        const measured = measuredSubTimings(&buf, &rows);
+        if (measured.len != 0) reporter.recordCompletedWithBreakdown(prefix ++ "Boxy Unit Steps (summed)", total, .{}, measured);
+    }
+    if (!snapshot.units.isEmpty()) {
+        var rows: [Pipeline.UnitRecords.capacity + 1]progress.TableRow = undefined;
+        var len: usize = 0;
+        var names: [Pipeline.UnitRecords.capacity + 1][64]u8 = undefined;
+        const records = snapshot.units.slowest[0..snapshot.units.len];
+        for (records) |*record| {
+            rows[len] = unitTableRow(&names[len], record);
+            len += 1;
+        }
+        if (snapshot.units.builtin) |*record| {
+            rows[len] = unitTableRow(&names[len], record);
+            len += 1;
+        }
+        reporter.recordTable(prefix ++ "Slowest Boxy Units, and Builtin", &unit_step_columns, rows[0..len]);
+    }
+}
+
+fn passStepLabel(step: lir.CheckedPipeline.PassStep) []const u8 {
+    return switch (step) {
+        .erased_owner => "Erased Owner",
+        .single_use_inline => "Single-Use Inline",
+        .return_slot => "Return Slot",
+        .str_append => "Str Append",
+        .tag_reachability => "Tag Reachability",
+        .reachable_procs_before_arc => "Reachable Procs",
+        .tail_drive => "Tail Drive",
+        .reachable_procs_after_arc => "Reachable Procs After ARC",
+        .immortal_locals => "Immortal Locals",
+        .comptime_value_guards => "Compile-Time Value Guards",
+        .lir_diagnostics => "LIR Dumps + Censuses",
+    };
+}
+
+/// Record `rows` beneath `name`, in as many phases as the reporter's row
+/// limit needs, each after the first named `continued`.
+fn recordChunkedBreakdown(reporter: *progress.Reporter, name: []const u8, continued: []const u8, total_ns: u64, rows: []const progress.SubTiming) void {
+    var start: usize = 0;
+    while (start < rows.len) {
+        const end = @min(rows.len, start + progress.max_subphase_rows);
+        reporter.recordCompletedWithBreakdown(if (start == 0) name else continued, total_ns, .{}, rows[start..end]);
+        start = end;
+    }
+}
+
+/// Detailed LIR pass timing: each procedure-local phase's elapsed time,
+/// preparation, summed worker time, idle worker capacity, and commit, then
+/// the whole-program steps before ARC and after it.
+fn recordLirPassDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeline.TimingSnapshot, comptime prefix: []const u8) void {
+    const Pipeline = lir.CheckedPipeline;
+    const phases = @typeInfo(Pipeline.LirPassPhase).@"enum".field_names;
+    var rows: [phases.len * 5]progress.SubTiming = undefined;
+    var len: usize = 0;
+    var counters: [phases.len * 2]progress.Counter = undefined;
+    var counter_len: usize = 0;
+    inline for (phases) |name| {
+        const phase = @field(Pipeline.LirPassPhase, name);
+        const wall = snapshot.procPass(.wall, phase);
+        if (wall != 0) {
+            const worker = snapshot.procPass(.worker, phase);
+            rows[len..][0..5].* = .{
+                .{ .name = name, .ns = wall },
+                .{ .name = name ++ ": prepare", .ns = snapshot.procPass(.prepare, phase) },
+                .{ .name = name ++ ": workers", .ns = worker },
+                .{ .name = name ++ ": idle workers", .ns = snapshot.procPass(.capacity, phase) -| worker },
+                .{ .name = name ++ ": commit", .ns = snapshot.procPass(.commit, phase) },
+            };
+            len += 5;
+            counters[counter_len..][0..2].* = .{
+                .{ .name = name ++ " procedures visited", .count = snapshot.procPass(.visited, phase) },
+                .{ .name = name ++ " procedures changed", .count = snapshot.procPass(.changed, phase) },
+            };
+            counter_len += 2;
+        }
+    }
+    if (len != 0) {
+        recordChunkedBreakdown(reporter, prefix ++ "LIR Pass Phases", prefix ++ "LIR Pass Phases (cont.)", snapshot.lir_passes_ns, rows[0..len]);
+        reporter.recordCounters(prefix ++ "LIR pass procedures", counters[0..counter_len]);
+    }
+    var before: [Pipeline.pass_step_count]progress.SubTiming = undefined;
+    var before_len: usize = 0;
+    var after: [Pipeline.pass_step_count]progress.SubTiming = undefined;
+    var after_len: usize = 0;
+    var after_total: u64 = 0;
+    inline for (@typeInfo(Pipeline.PassStep).@"enum".field_names, 0..) |name, index| {
+        const step = @field(Pipeline.PassStep, name);
+        const ns = snapshot.pass_steps_ns[index];
+        if (ns != 0) switch (step) {
+            .tail_drive, .reachable_procs_after_arc, .immortal_locals, .comptime_value_guards, .lir_diagnostics => {
+                after[after_len] = .{ .name = passStepLabel(step), .ns = ns };
+                after_len += 1;
+                after_total +|= ns;
+            },
+            .erased_owner, .single_use_inline, .return_slot, .str_append, .tag_reachability, .reachable_procs_before_arc => {
+                before[before_len] = .{ .name = passStepLabel(step), .ns = ns };
+                before_len += 1;
+            },
+        };
+    }
+    if (before_len != 0) reporter.recordCompletedWithBreakdown(prefix ++ "LIR Pass Steps", snapshot.lir_passes_ns, .{}, before[0..before_len]);
+    if (after_len != 0) reporter.recordCompletedWithBreakdown(prefix ++ "Post-ARC Steps", after_total, .{}, after[0..after_len]);
+}
+
+fn arcStepLabel(step: lir.CheckedPipeline.ArcTiming.Step) []const u8 {
+    return switch (step) {
+        .refcounted_locals => "Refcounted Locals",
+        .solve => "Borrow + Signature Solve",
+        .dismantle => "Dismantle Analysis",
+        .signatures => "Owned-Only Signatures",
+        .source_prep => "Source Preparation",
+        .source_prep_workers => "Source Preparation Workers",
+        .settle => "Uniqueness Settle + Facts",
+        .planning => "Planning",
+        .planning_workers => "Planning Workers",
+        .variant_reservation => "Variant Reservation",
+        .emission => "Emission",
+        .emission_workers => "Emission Workers",
+        .shard_append => "Shard Append",
+        .certify => "Certification",
+        .parallel_capacity => "Idle Workers",
+    };
+}
+
+/// Detailed ARC timing: its serial steps, each parallel step's elapsed time
+/// and summed worker time, and the workers' idle capacity over the waves.
+fn recordArcDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeline.TimingSnapshot, comptime prefix: []const u8) void {
+    const ArcTiming = lir.CheckedPipeline.ArcTiming;
+    var rows: [ArcTiming.step_count]progress.SubTiming = undefined;
+    const workers = snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.source_prep_workers)] +|
+        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.planning_workers)] +|
+        snapshot.arc_steps_ns[@backingInt(ArcTiming.Step.emission_workers)];
+    inline for (@typeInfo(ArcTiming.Step).@"enum".field_names, 0..) |name, index| {
+        const step = @field(ArcTiming.Step, name);
+        const ns = snapshot.arc_steps_ns[index];
+        rows[index] = .{ .name = arcStepLabel(step), .ns = if (step == .parallel_capacity) ns -| workers else ns };
+    }
+    var buf: [rows.len]progress.SubTiming = undefined;
+    const measured = measuredSubTimings(&buf, &rows);
+    if (measured.len != 0) reporter.recordCompletedWithBreakdown(prefix ++ "ARC Detail", snapshot.arc_ns, .{}, measured);
+}
+
+fn codegenStepLabel(step: lir.CheckedPipeline.CodegenStep) []const u8 {
+    return switch (step) {
+        .backend_setup => "Backend Setup",
+        .procedure_setup => "Procedure Setup",
+        .procedure_waves => "Procedure Waves",
+        .procedure_worker_setup => "Worker Setup (summed)",
+        .procedure_emit => "Stack Plan + Emission (summed)",
+        .procedure_extract => "Fragment Extraction (summed)",
+        .procedure_idle => "Idle Workers",
+        .procedure_commit => "Fragment Commit",
+        .procedure_resolve => "Symbolic Reference Resolution",
+        .entrypoints => "Entrypoint Instructions",
+        .finish_image => "Finish Image",
+        .catalog => "Data Catalog",
+        .piece_extraction => "Piece Extraction",
+        .content_naming => "Content Naming",
+        .piece_data => "Piece Data + Names",
+        .composition => "Image Composition",
+        .dwarf => "DWARF Generation",
+        .object_encoding => "Object Encoding",
+        .unit_image => "Object to Unit Image",
+    };
+}
+
+/// Detailed native code generation of module units, summed over units:
+/// its steps, its byte counts, and its code bytes by statement kind.
+fn recordCodegenDetail(reporter: *progress.Reporter, snapshot: lir.CheckedPipeline.TimingSnapshot, comptime prefix: []const u8) void {
+    const Pipeline = lir.CheckedPipeline;
+    var rows: [Pipeline.codegen_step_count]progress.SubTiming = undefined;
+    inline for (@typeInfo(Pipeline.CodegenStep).@"enum".field_names, 0..) |name, index| {
+        rows[index] = .{ .name = codegenStepLabel(@field(Pipeline.CodegenStep, name)), .ns = snapshot.codegen_steps_ns[index] };
+    }
+    var buf: [rows.len]progress.SubTiming = undefined;
+    const measured = measuredSubTimings(&buf, &rows);
+    if (measured.len == 0) return;
+    reporter.recordCompletedWithBreakdown(prefix ++ "Unit Codegen Detail (summed)", snapshot.boxy_unit_codegen_ns, .{}, measured);
+    var counts: [Pipeline.codegen_count_count]progress.Counter = undefined;
+    inline for (@typeInfo(Pipeline.CodegenCount).@"enum".field_names, 0..) |name, index| {
+        counts[index] = .{ .name = name, .count = snapshot.codegen_counts[index] };
+    }
+    reporter.recordCounters(prefix ++ "Unit codegen work", &counts);
+    const kinds = @typeInfo(std.meta.Tag(lir.LIR.CFStmt)).@"enum".field_names;
+    var histogram: [kinds.len * 2]progress.Counter = undefined;
+    var len: usize = 0;
+    inline for (kinds, 0..) |name, index| {
+        if (snapshot.stmt_counts[index] != 0) {
+            histogram[len] = .{ .name = name ++ " code bytes", .count = snapshot.stmt_bytes[index] };
+            histogram[len + 1] = .{ .name = name ++ " statements", .count = snapshot.stmt_counts[index] };
+            len += 2;
+        }
+    }
+    var start: usize = 0;
+    while (start < len) {
+        const end = @min(len, start + progress.max_counters_per_group);
+        reporter.recordCounters(prefix ++ "Unit code bytes by statement kind", histogram[start..end]);
+        start = end;
+    }
+}
+
+fn unitTableRow(name_buf: *[64]u8, record: *const lir.CheckedPipeline.UnitRecord) progress.TableRow {
+    const label = std.fmt.bufPrint(name_buf, "{s}{s}", .{ record.name(), if (record.restored) " (restored)" else "" }) catch record.name();
+    var row: progress.TableRow = .{ .name = label };
+    @memcpy(row.ns[0..record.steps_ns.len], &record.steps_ns);
+    return row;
 }
 
 fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot) [6]progress.SubTiming {
@@ -19736,6 +20069,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
             );
         }
     }
+    if (timing.program_finalization_ns != 0) recordCompileTimeDetail(reporter, timing.program_finalization_ns, compile_time);
     if (compile_time.roots_declared != 0) {
         reporter.recordCounters("Compile-time roots", &.{
             .{ .name = "Declared", .count = compile_time.roots_declared },
@@ -19746,9 +20080,72 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
     if (!std.meta.eql(counters.lowering, lir.CheckedPipeline.TimingSnapshot{})) {
         recordLoweringCounters(reporter, counters.lowering, .lss, "Shared ");
     }
+    if (timing.program_finalization_ns != 0) recordLoweringDetail(reporter, compile_time.lowering, "Shared ");
     if (!std.meta.eql(counters.native_emission, backend.dev.NativeProcCompiler.Metrics{})) {
         reporter.recordCounters("Shared native artifact emission", &nativeEmissionCounters(counters.native_emission));
     }
+}
+
+fn compileTimeStepLabel(step: eval.CompileTimeFinalization.Timing.Step) []const u8 {
+    return switch (step) {
+        .root_graph => "Root Graph",
+        .root_classification => "Root Classification",
+        .scheduler_wait => "Waiting for Builds",
+        .image_registration => "Import Image Registration",
+        .program_build => "Program Builds (summed)",
+        .program_lowering => "Program Lowering (summed)",
+        .procedure_codegen => "Program Procedures (summed)",
+        .entry_wrappers => "Entry Wrappers (summed)",
+        .image_selection => "Import Image Selection (summed)",
+        .host_splice => "Host Splice + Link (summed)",
+        .static_placement => "Static Data Placement (summed)",
+        .program_run => "Program Runs",
+        .root_job_setup => "Root Job Setup",
+        .unit_keys => "Unit Keys (summed)",
+        .units_wait => "Waiting for Units",
+        .module_commit => "Module Commit",
+        .cache_writes => "Checked Cache Writes",
+    };
+}
+
+fn compileTimeCountLabel(count: eval.CompileTimeFinalization.Timing.Count) []const u8 {
+    return switch (count) {
+        .value_form_roots => "Value-form roots",
+        .programs => "Programs",
+        .function_programs => "Function-value programs",
+        .batches => "Batches (dependency levels)",
+        .retry_passes => "Retry passes",
+        .units_restored => "Units restored",
+        .units_built => "Units built",
+        .images_selected => "Import images selected",
+        .images_loaded => "Import images loaded",
+        .progress_threads => "Slow-root progress threads",
+    };
+}
+
+/// The detailed steps and work counts of compile-time evaluation, which only
+/// detailed timing records.
+fn recordCompileTimeDetail(reporter: *progress.Reporter, total_ns: u64, snapshot: eval.CompileTimeFinalization.TimingSnapshot) void {
+    if (!reporter.always) return;
+    const CtfeTiming = eval.CompileTimeFinalization.Timing;
+    var steps: [CtfeTiming.step_count]progress.SubTiming = undefined;
+    inline for (@typeInfo(CtfeTiming.Step).@"enum".field_names, 0..) |name, index| {
+        steps[index] = .{ .name = compileTimeStepLabel(@field(CtfeTiming.Step, name)), .ns = snapshot.steps_ns[index] };
+    }
+    var buf: [CtfeTiming.step_count]progress.SubTiming = undefined;
+    const measured = measuredSubTimings(&buf, &steps);
+    if (measured.len != 0) reporter.recordCompletedWithBreakdown("Compile-Time Eval Detail", total_ns, .{}, measured);
+    const kind_count = CtfeTiming.root_kind_count;
+    var counters: [CtfeTiming.count_count + kind_count]progress.Counter = undefined;
+    inline for (@typeInfo(CtfeTiming.Count).@"enum".field_names, 0..) |name, index| {
+        counters[index] = .{ .name = compileTimeCountLabel(@field(CtfeTiming.Count, name)), .count = snapshot.counts[index] };
+    }
+    inline for (@typeInfo(check.CheckedArtifact.CompileTimeRootKind).@"enum".field_names, 0..) |name, index| {
+        counters[CtfeTiming.count_count + index] = .{ .name = "Roots: " ++ name, .count = snapshot.roots_by_kind[index] };
+    }
+    var any = false;
+    for (counters) |counter| any = any or counter.count != 0;
+    if (any) reporter.recordCounters("Compile-time evaluation work", &counters);
 }
 
 /// The sub-timings of stages that ran. A stage this phase reused from shared

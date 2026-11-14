@@ -48,15 +48,20 @@ const child_name_width: usize = name_width - 2;
 /// frame), which the totals row pads past so its duration shares the column.
 const row_marker_width: usize = 4;
 
-/// Maximum number of top-level phases a single operation reports.
-const max_phases: usize = 16;
-const max_subphases: usize = 32;
-// Shared lowering and a runtime continuation each report nine lowering groups
-// and native emission. Also reserve compile-time roots, test result admission,
-// dev test emission, completed compilation, completed test command, and the
-// native test artifact cache, and frontend checking work.
-const max_counter_groups: usize = 2 * 10 + 7;
-const max_counters_per_group: usize = 42;
+/// Maximum number of top-level phases a single operation reports, including
+/// the detail phases `--timings` adds beneath post-check stages.
+const max_phases: usize = 40;
+const max_subphases: usize = 40;
+/// The most sub-timings one phase shows.
+pub const max_subphase_rows = max_subphases;
+// Shared lowering and a runtime continuation each report nine lowering groups,
+// native emission, and up to eight detailed work groups. Also reserve
+// compile-time roots, test result admission, dev test emission, completed
+// compilation, completed test command, the native test artifact cache,
+// frontend checking work, and compile-time evaluation work.
+const max_counter_groups: usize = 2 * 18 + 8;
+/// The most counters one counter group holds.
+pub const max_counters_per_group: usize = 42;
 /// Rows in the ranked timing list printed after the phases.
 const max_ranked_timings: usize = 10;
 /// Bytes reserved for copies of the ranked rows' names, which the caller's
@@ -89,6 +94,27 @@ const CounterGroup = struct {
     name: []const u8,
     counters: [max_counters_per_group]Counter = undefined,
     len: u8 = 0,
+};
+
+/// Tables of per-item durations printed after the ranked timings.
+const max_tables: usize = 4;
+/// The most columns one duration table holds.
+pub const max_table_columns: usize = 16;
+const max_table_rows: usize = 16;
+const table_name_capacity: usize = 1024;
+
+/// One row of a duration table: a name and one duration per column.
+pub const TableRow = struct {
+    name: []const u8,
+    ns: [max_table_columns]u64 = @splat(0),
+};
+
+const Table = struct {
+    name: []const u8 = "",
+    columns: []const []const u8 = &.{},
+    rows: [max_table_rows]TableRow = undefined,
+    len: u8 = 0,
+    name_bytes: [table_name_capacity]u8 = undefined,
 };
 
 const RankedTimings = struct {
@@ -156,6 +182,8 @@ pub const Reporter = struct {
     counter_groups: [max_counter_groups]CounterGroup = undefined,
     counter_group_count: usize = 0,
     ranked: RankedTimings = .{},
+    tables: [max_tables]Table = undefined,
+    table_count: usize = 0,
     active: ?usize = null,
     displaying: bool = false,
     pending_partial: bool = false,
@@ -330,6 +358,53 @@ pub const Reporter = struct {
         }
     }
 
+    /// Record a table of durations, one row per item and one column per
+    /// `columns` entry, printed in milliseconds after the phases. Like
+    /// counters, tables are explicit `--timings` output. Row names are
+    /// copied; `name` and `columns` must outlive the reporter.
+    pub fn recordTable(self: *Reporter, name: []const u8, columns: []const []const u8, rows: []const TableRow) void {
+        if (!self.always) return;
+        std.debug.assert(columns.len <= max_table_columns);
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        if (self.finished or self.table_count >= max_tables) return;
+        const table = &self.tables[self.table_count];
+        table.* = .{ .name = name, .columns = columns };
+        var name_bytes_used: usize = 0;
+        for (rows[0..@min(rows.len, max_table_rows)]) |row| {
+            const copied_len = @min(row.name.len, table.name_bytes.len - name_bytes_used);
+            const copied = table.name_bytes[name_bytes_used..][0..copied_len];
+            @memcpy(copied, row.name[0..copied_len]);
+            name_bytes_used += copied_len;
+            table.rows[table.len] = .{ .name = copied, .ns = row.ns };
+            table.len += 1;
+        }
+        self.table_count += 1;
+    }
+
+    fn writeTables(self: *Reporter) void {
+        for (self.tables[0..self.table_count]) |*table| {
+            if (table.len == 0) continue;
+            var width: usize = 0;
+            for (table.rows[0..table.len]) |row| width = @max(width, row.name.len);
+            self.writer.print("  {s} (ms)\n", .{table.name}) catch {};
+            const header: PaddedName = .{ .name = "", .width = width };
+            self.writer.print("      {f}", .{header}) catch {};
+            for (table.columns) |column| self.writer.print(" {s: >9}", .{column}) catch {};
+            self.writer.print("\n", .{}) catch {};
+            for (table.rows[0..table.len]) |row| {
+                const padded: PaddedName = .{ .name = row.name, .width = width };
+                self.writer.print("      {f}", .{padded}) catch {};
+                for (row.ns[0..table.columns.len]) |ns| {
+                    var buf: [24]u8 = undefined;
+                    const text = std.fmt.bufPrint(&buf, "{d}.{d}", .{ ns / std.time.ns_per_ms, (ns % std.time.ns_per_ms) / (std.time.ns_per_ms / 10) }) catch "?";
+                    self.writer.print(" {s: >9}", .{text}) catch {};
+                }
+                self.writer.print("\n", .{}) catch {};
+            }
+        }
+    }
+
     fn endActiveLocked(self: *Reporter, subs: []const SubTiming) void {
         self.endActiveExcludingLocked(subs, 0);
     }
@@ -367,6 +442,7 @@ pub const Reporter = struct {
         }
         if (self.always) {
             self.writeRankedTimings();
+            self.writeTables();
             self.writeCounterGroups();
         }
         self.writer.flush() catch {};

@@ -40,7 +40,40 @@ pub const Phase = enum {
     box_reuse,
 };
 
-const phase_count = @typeInfo(Phase).@"enum".field_names.len;
+/// The number of procedure-local phases.
+pub const phase_count = @typeInfo(Phase).@"enum".field_names.len;
+
+/// Per-phase durations and procedure counts, recorded only when a caller
+/// asks for detailed timing. Phases run on the coordinating thread, so the
+/// fields are plain.
+pub const Timing = struct {
+    std_io: std.Io,
+    /// Each phase's elapsed time, from layout preparation to its last commit.
+    wall_ns: [phase_count]u64 = @splat(0),
+    /// Layout preparation and the scan admitting procedures.
+    prepare_ns: [phase_count]u64 = @splat(0),
+    /// Elapsed time of the rewrite callbacks, on the workers or inline.
+    rewrite_ns: [phase_count]u64 = @splat(0),
+    /// The rewrite callbacks' own time, summed over workers.
+    worker_ns: [phase_count]u64 = @splat(0),
+    /// The workers' capacity over the rewrite: its elapsed time times the
+    /// executor's worker count, or the elapsed time when it ran inline.
+    capacity_ns: [phase_count]u64 = @splat(0),
+    /// Validation and the ordered commit of rewritten procedures.
+    commit_ns: [phase_count]u64 = @splat(0),
+    /// Procedures the phase admitted and rewrote.
+    visited: [phase_count]u64 = @splat(0),
+    /// Admitted procedures whose rewrite changed them.
+    changed: [phase_count]u64 = @splat(0),
+
+    fn now(self: *const Timing) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    fn since(self: *const Timing, started: i96) u64 {
+        return @intCast(@max(0, self.now() - started));
+    }
+};
 
 /// Worker work only; inline execution leaves these counters zero.
 pub const ParallelMetrics = struct {
@@ -170,6 +203,25 @@ pub fn run(
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
 ) Allocator.Error!void {
+    return runTimed(allocator, store, layouts, phase, executor, metrics, null);
+}
+
+/// `run`, recording the phase's durations and procedure counts in `timing`
+/// when it is given.
+pub fn runTimed(
+    allocator: Allocator,
+    store: *LirStore,
+    layouts: *layout.Store,
+    phase: Phase,
+    executor: ?TaskExecutor.Executor,
+    metrics: ?*ParallelMetrics,
+    timing: ?*Timing,
+) Allocator.Error!void {
+    const phase_index = @backingInt(phase);
+    const phase_started: i96 = if (timing) |active| active.now() else 0;
+    defer if (timing) |active| {
+        active.wall_ns[phase_index] +|= active.since(phase_started);
+    };
     switch (phase) {
         .trmc => try Trmc.prepareLayouts(store, layouts),
         .box_reuse => try BoxReuse.prepareLayouts(store, layouts),
@@ -204,6 +256,7 @@ pub fn run(
             .verify_only = !admitted,
         });
     }
+    if (timing) |active| active.prepare_ns[phase_index] +|= active.since(phase_started);
     if (contexts.items.len == 0) return;
 
     // Only the coordinator scans the phase's identity domain. Workers reserve
@@ -216,13 +269,17 @@ pub fn run(
     const prefix = store.captureBodyPrefix();
     const layout_count = layouts.layoutCount();
     const parallel = if (executor) |value| value.worker_count > 1 and contexts.items.len > 1 else false;
+    const rewrite_started: i96 = if (timing) |active| active.now() else 0;
     if (parallel) {
         const tasks = try allocator.alloc(TaskExecutor.Task, contexts.items.len);
         defer allocator.free(tasks);
         const completions = try allocator.alloc(TaskExecutor.Completion, contexts.items.len);
         defer allocator.free(completions);
+        var timed: ?TaskExecutor.TimedTasks = if (timing) |active| try TaskExecutor.TimedTasks.init(allocator, contexts.items.len, active.std_io) else null;
+        defer if (timed) |*measured| measured.deinit(allocator);
         for (contexts.items, tasks, 0..) |*context, *task, index| {
             task.* = .{ .id = index, .context = context, .run = TaskContext.run };
+            if (timed) |*measured| task.* = measured.wrap(index, task.*);
         }
         if (metrics) |counts| {
             counts.tasks_submitted +|= @intCast(tasks.len);
@@ -239,6 +296,12 @@ pub fn run(
             if (completion.value != @as(*anyopaque, @ptrCast(context))) invariant("LIR pass returned the wrong task context");
             context.completed = true;
         }
+        if (timing) |active| {
+            const elapsed = active.since(rewrite_started);
+            active.rewrite_ns[phase_index] +|= elapsed;
+            active.worker_ns[phase_index] +|= timed.?.totalNs(contexts.items.len);
+            active.capacity_ns[phase_index] +|= elapsed *| @as(u64, executor.?.worker_count);
+        }
     } else {
         var scratch = base.SingleThreadArena.init(allocator);
         defer scratch.deinit();
@@ -249,7 +312,22 @@ pub fn run(
             context.completed = true;
             _ = scratch.reset(.retain_capacity);
         }
+        if (timing) |active| {
+            const elapsed = active.since(rewrite_started);
+            active.rewrite_ns[phase_index] +|= elapsed;
+            active.worker_ns[phase_index] +|= elapsed;
+            active.capacity_ns[phase_index] +|= elapsed;
+        }
     }
+    const commit_started: i96 = if (timing) |active| active.now() else 0;
+    defer if (timing) |active| {
+        active.commit_ns[phase_index] +|= active.since(commit_started);
+        for (contexts.items) |context| {
+            if (context.verify_only) continue;
+            active.visited[phase_index] += 1;
+            active.changed[phase_index] += @intFromBool(context.changed);
+        }
+    };
     if (!std.meta.eql(prefix, store.captureBodyPrefix()) or layout_count != layouts.layoutCount()) {
         invariant("LIR pass mutated frozen coordinator storage");
     }

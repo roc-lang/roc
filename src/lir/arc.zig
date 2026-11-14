@@ -77,6 +77,8 @@ pub const InsertOptions = struct {
     post_check_executor: ?*const TaskExecutor.Executor = null,
     /// Reset once on entry, then records accepted work and successful commits.
     metrics_out: ?*ParallelMetrics = null,
+    /// Receives step durations when detailed timing is enabled.
+    timing: ?*Timing = null,
     /// Base procedures planned and emitted per wave. A storage bound
     /// independent of worker count: identity reservation and commit order do
     /// not depend on it, since every base procedure is planned before any
@@ -87,6 +89,76 @@ pub const InsertOptions = struct {
 
 /// Exact work and worker callbacks for signature-dependent uniqueness solving.
 pub const UniquenessMetrics = arc_solve.UniquenessMetrics;
+
+/// Step durations of one ARC insertion, recorded only when a caller asks for
+/// detailed timing. Insertion's steps run on the coordinating thread, so the
+/// fields are plain; worker time is summed from per-task slots.
+pub const Timing = struct {
+    std_io: std.Io,
+    steps_ns: [step_count]u64 = @splat(0),
+
+    /// A step that detailed timing itemizes.
+    pub const Step = enum {
+        /// Which locals hold reference-counted values.
+        refcounted_locals,
+        /// Borrow, ownership-signature, and uniqueness solving.
+        solve,
+        /// Dismantle analysis.
+        dismantle,
+        /// Adopting dismantle's aliases and takes into the solution and
+        /// settling owned-only parameters.
+        signatures,
+        /// Elapsed time of source liveness preparation.
+        source_prep,
+        /// Source preparation callbacks, summed over workers.
+        source_prep_workers,
+        /// Uniqueness settled against committed takes, and procedure facts.
+        settle,
+        /// Elapsed time of emission planning, over every wave.
+        planning,
+        /// Planning callbacks, summed over workers.
+        planning_workers,
+        /// Interning the ownership variants planning requested.
+        variant_reservation,
+        /// Elapsed time of emission, over every wave.
+        emission,
+        /// Emission callbacks, summed over workers.
+        emission_workers,
+        /// Appending each emitted body's shard to the store, in order.
+        shard_append,
+        /// Certifying the inserted reference counts (debug builds).
+        certify,
+        /// The workers' capacity over the parallel waves: each wave's
+        /// elapsed time times the executor's worker count.
+        parallel_capacity,
+    };
+
+    /// The number of `Step` members.
+    pub const step_count = @typeInfo(Step).@"enum".field_names.len;
+
+    fn now(self: *const Timing) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    /// Add the time since `started` to `step`, returning the current time.
+    fn lap(self: *Timing, started: i96, step: Step) i96 {
+        const finished = self.now();
+        self.steps_ns[@backingInt(step)] +|= @intCast(@max(0, finished - started));
+        return finished;
+    }
+
+    fn add(self: *Timing, step: Step, ns: u64) void {
+        self.steps_ns[@backingInt(step)] +|= ns;
+    }
+};
+
+fn timingNow(timing: ?*Timing) i96 {
+    return if (timing) |active| active.now() else 0;
+}
+
+fn timingLap(timing: ?*Timing, started: i96, step: Timing.Step) i96 {
+    return if (timing) |active| active.lap(started, step) else 0;
+}
 
 /// Emission callback counts exclude inline execution; waves and reservations
 /// describe the common schedule. All analysis/emission counters reset together.
@@ -507,7 +579,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .layouts = layouts,
         .options = options,
     };
+    const timing = options.timing;
+    var step_started = timingNow(timing);
     const local_contains_refcounted = try arc_solve.computeLocalContainsRefcounted(store.allocator, store, layouts);
+    step_started = timingLap(timing, step_started, .refcounted_locals);
     defer store.allocator.free(local_contains_refcounted);
     inserter.local_contains_refcounted = local_contains_refcounted;
 
@@ -528,6 +603,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     );
     defer solution.deinit();
     inserter.solution = &solution;
+    step_started = timingLap(timing, step_started, .solve);
 
     var dismantle_metrics: arc_dismantle.TaskMetrics = .{};
     const dismantle_result = arc_dismantle.compute(store.allocator, store, layouts, local_contains_refcounted, &solution, .{
@@ -541,6 +617,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     var dismantles = try dismantle_result;
     defer dismantles.deinit();
     inserter.dismantles = &dismantles;
+    step_started = timingLap(timing, step_started, .dismantle);
     // Dismantle rewrote canonicalized reads into aliases of their
     // representatives after the solve; the borrow facts must describe them.
     try solution.adoptProjectionAliases(store.allocator, &dismantles.projection_aliases);
@@ -582,6 +659,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         if (mask != 0) solution.ownParams(proc, mask);
     }
 
+    step_started = timingLap(timing, step_started, .signatures);
     const base_proc_count = store.procSpecCount();
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
@@ -608,6 +686,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         source_start = end;
     }
     if (!std.meta.eql(source_prefix, store.captureBodyPrefix())) arcInvariant("ARC source preparation mutated coordinator storage");
+    step_started = timingLap(timing, step_started, .source_prep);
     var projection_decisions = try CompleteProjectionDecisions.init(store.allocator, store.cfStmtCount(), sources);
     defer projection_decisions.deinit(store.allocator);
     inserter.projection_decisions = &projection_decisions;
@@ -628,6 +707,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = planned }, options.consume_dead_boxes, uniqueness_options);
     }
     try recordProcedureFacts(store, &solution);
+    step_started = timingLap(timing, step_started, .settle);
 
     var variants = VariantTable{
         .map = std.AutoHashMap(VariantSelector, LIR.LirProcSpecId).init(store.allocator),
@@ -676,8 +756,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         if (count == 0) continue;
         if (options.metrics_out) |metrics| metrics.waves += 1;
         const planning_prefix = store.captureBodyPrefix();
+        step_started = timingNow(timing);
         try runArcTasks(EmissionOwner, owners[0..count], .planning, &inline_tasks, options);
         if (!std.meta.eql(planning_prefix, store.captureBodyPrefix())) arcInvariant("ARC planning mutated coordinator storage");
+        step_started = timingLap(timing, step_started, .planning);
         for (owners[0..count]) |*owner| {
             const requests = owner.inserter.variant_requests.items;
             const resolved = try owner.arena.?.allocator().alloc(LIR.LirProcSpecId, requests.len);
@@ -686,9 +768,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             owner.inserter.resolved_variants = resolved;
             if (options.metrics_out) |metrics| metrics.variants_reserved += variants.sigs.items.len - before;
         }
+        step_started = timingLap(timing, step_started, .variant_reservation);
         const prefix = store.captureBodyPrefix();
         try runArcTasks(EmissionOwner, owners[0..count], .emission, &inline_tasks, options);
         if (!std.meta.eql(prefix, store.captureBodyPrefix())) arcInvariant("ARC workers mutated coordinator storage");
+        step_started = timingLap(timing, step_started, .emission);
         for (owners[0..count]) |*owner| {
             const shard = &owner.shard.?;
             const body_shard = shard.captureBodyShard(prefix) catch |err| switch (err) {
@@ -705,7 +789,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
                 metrics.emission_tasks_committed += 1;
             };
         }
+        step_started = timingLap(timing, step_started, .shard_append);
     }
+    step_started = timingNow(timing);
+    defer _ = timingLap(timing, step_started, .certify);
 
     if (builtin.mode == .debug or @import("base").dev_diagnostics.isSet(.verify_arc)) {
         const all_sigs = try store.allocator.alloc(arc_sig.RcSig, store.procSpecCount());
@@ -810,13 +897,18 @@ fn runArcTasks(comptime Context: type, contexts: []Context, phase: ArcTaskPhase,
                 });
             }
         };
+        var timed: ?TaskExecutor.TimedTasks = if (options.timing) |active| try TaskExecutor.TimedTasks.init(inline_tasks.allocator, contexts.len, active.std_io) else null;
+        defer if (timed) |*measured| measured.deinit(inline_tasks.allocator);
+        const wave_started = timingNow(options.timing);
         var session = try executor.begin();
         var submitted: usize = 0;
         var received: usize = 0;
         var failed = false;
         while (received < submitted or (!failed and submitted < contexts.len)) {
             while (!failed and submitted < contexts.len and session.canSubmit()) {
-                session.submit(.{ .id = submitted, .context = &contexts[submitted], .run = Callback.run }) catch {
+                var task: TaskExecutor.Task = .{ .id = submitted, .context = &contexts[submitted], .run = Callback.run };
+                if (timed) |*measured| task = measured.wrap(submitted, task);
+                session.submit(task) catch {
                     failed = true;
                     break;
                 };
@@ -844,6 +936,14 @@ fn runArcTasks(comptime Context: type, contexts: []Context, phase: ArcTaskPhase,
             }
         }
         session.end();
+        if (options.timing) |active| {
+            active.add(switch (phase) {
+                .source => .source_prep_workers,
+                .planning => .planning_workers,
+                .emission => .emission_workers,
+            }, timed.?.totalNs(submitted));
+            active.add(.parallel_capacity, @as(u64, @intCast(@max(0, active.now() - wave_started))) *| @as(u64, executor.worker_count));
+        }
         if (failed) return error.OutOfMemory;
     } else {
         for (contexts) |*context| {

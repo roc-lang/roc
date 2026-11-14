@@ -63,7 +63,16 @@ pub const Unit = struct {
     /// For a wasm target: whether the platform reserves low memory, so the
     /// unit's code checks its stack bounds (`object_cache.KeyInput.wasm_stack_checks`).
     wasm_stack_checks: bool = false,
+    /// Under detailed timing, the time the caller spent keying the unit and
+    /// the time the unit waited for its imports, recorded with its steps.
+    key_ns: u64 = 0,
+    import_wait_ns: u64 = 0,
+    /// Under detailed timing, the time between the unit's imports being
+    /// known and a worker starting it.
+    queue_wait_ns: u64 = 0,
 };
+
+const PipelineTiming = lir.CheckedPipeline.Timing;
 
 /// The kind of unit image a unit compiled for a target carries.
 pub const ImageKind = enum {
@@ -369,12 +378,23 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
 
 /// File `entry` in the per-module Boxy object cache under `key`.
 pub fn store(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, entry: object_cache.Entry) Allocator.Error!void {
+    return storeTimed(gpa, cache_manager, key, entry, null);
+}
+
+/// `store`, attributing its encoding and writing to the unit steps of
+/// `timing` when it records detail.
+fn storeTimed(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, entry: object_cache.Entry, timing: ?*PipelineTiming) Allocator.Error!void {
     const manager = cache_manager orelse {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to store key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         return;
     };
+    const encode_started = PipelineTiming.startDetail(timing);
     const bytes = try object_cache.encode(gpa, entry);
     defer gpa.free(bytes);
+    PipelineTiming.finishUnitStep(timing, encode_started, .encode);
+    PipelineTiming.addCodegenCount(timing, .cache_entry_bytes, bytes.len);
+    const write_started = PipelineTiming.startDetail(timing);
+    defer PipelineTiming.finishUnitStep(timing, write_started, .cache_write);
     manager.storeFamilyBytes(.boxy_object, key.bytes, bytes, object_cache.scope, "boxy object");
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: stored object cache entry for key {s} ({d} bytes)\n", .{ &std.fmt.bytesToHex(key.bytes[0..8], .lower), bytes.len });
 }
@@ -414,8 +434,35 @@ fn dupeSymbols(gpa: Allocator, symbols: []const []const u8) Allocator.Error![]co
 /// Why a unit's object could not be built.
 pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError || static_data_exports.MaterializationError || error{NativeCompilationFailed};
 
-/// `unit`'s object, from the cache or built and filed there.
+/// `unit`'s object, from the cache or built and filed there. Under detailed
+/// timing, the unit's steps are measured on a timing of its own, folded
+/// into the caller's, and kept as the unit's record.
 pub fn restoreOrBuild(unit: Unit) BuildError!Built {
+    const parent = PipelineTiming.detailOf(unit.config.timing) orelse return restoreOrBuildUnit(unit);
+    var unit_timing = PipelineTiming.init(parent.std_io);
+    unit_timing.enableDetail();
+    var timed = unit;
+    timed.config.timing = &unit_timing;
+    const built = try restoreOrBuildUnit(timed);
+    const snapshot = unit_timing.snapshot();
+    parent.addSnapshot(snapshot);
+    var record = lir.CheckedPipeline.UnitRecord.init(unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name), built.restored);
+    record.steps_ns = snapshot.unit_steps_ns;
+    record.steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.key)] +|= unit.key_ns;
+    record.steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.import_wait)] +|= unit.import_wait_ns;
+    record.steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.queue_wait)] +|= unit.queue_wait_ns;
+    record.steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.lower)] +|= snapshot.boxy_lowering_ns;
+    record.steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.lir_passes)] +|= snapshot.lir_passes_ns;
+    record.steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.arc)] +|= snapshot.arc_ns;
+    record.steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.restore)] +|= snapshot.boxy_unit_restore_ns;
+    parent.addUnitRecord(record);
+    parent.unit_steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.key)].add(unit.key_ns);
+    parent.unit_steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.import_wait)].add(unit.import_wait_ns);
+    parent.unit_steps_ns[@backingInt(lir.CheckedPipeline.UnitStep.queue_wait)].add(unit.queue_wait_ns);
+    return built;
+}
+
+fn restoreOrBuildUnit(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
     var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
@@ -481,9 +528,12 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     defer cache_scope.end();
     // Compiler-only native units are consumed exclusively as images. Their
     // extraction pieces are needed while building, never while restoring.
+    const pieces_started = PipelineTiming.startDetail(unit.config.timing);
     const encoded = if (built.pieces != null and unit.config.boxy_function_unit == null) try backend.dev.UnitPieces.encode(gpa, built.pieces.?) else &.{};
     defer gpa.free(encoded);
-    try store(gpa, unit.cache_manager, unit.key, .{
+    PipelineTiming.finishUnitStep(unit.config.timing, pieces_started, .encode);
+    PipelineTiming.addCodegenCount(unit.config.timing, .pieces_bytes, encoded.len);
+    try storeTimed(gpa, unit.cache_manager, unit.key, .{
         .exports = built.exports,
         .exports_digest = built.exports_digest,
         .hosted_symbols = built.hosted_symbols,
@@ -493,13 +543,50 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         .image = if (built.image) |image| image.bytes else &.{},
         .expect_sites = built.expect_sites,
         .test_roots = built.test_roots,
-    });
+    }, unit.config.timing);
     if (unit.want_pieces or built.pieces == null) return built;
     var without_pieces = built;
     built.pieces.?.deinit();
     gpa.destroy(built.pieces.?);
     without_pieces.pieces = null;
     return without_pieces;
+}
+
+/// Fold a unit's detailed native code generation into `timing`.
+fn recordCodegen(timing: *PipelineTiming, snapshot: backend.ObjectFileCompiler.TimingSnapshot) void {
+    const Step = lir.CheckedPipeline.CodegenStep;
+    const pieces_ns = snapshot.finish_image_ns +| snapshot.catalog_ns +| snapshot.piece_extraction_ns +| snapshot.content_naming_ns +| snapshot.piece_data_ns;
+    const steps = [_]struct { Step, u64 }{
+        .{ .backend_setup, snapshot.backend_setup_ns },
+        .{ .procedure_setup, snapshot.native_setup_ns },
+        .{ .procedure_waves, snapshot.native_waves_ns },
+        .{ .procedure_worker_setup, snapshot.native_worker_setup_ns },
+        .{ .procedure_emit, snapshot.native_emit_ns },
+        .{ .procedure_extract, snapshot.native_extract_ns },
+        .{ .procedure_idle, snapshot.native_idle_ns },
+        .{ .procedure_commit, snapshot.native_commit_ns },
+        .{ .procedure_resolve, snapshot.native_resolve_ns },
+        .{ .entrypoints, snapshot.entrypoint_instructions_ns },
+        .{ .finish_image, snapshot.finish_image_ns },
+        .{ .catalog, snapshot.catalog_ns },
+        .{ .piece_extraction, snapshot.piece_extraction_ns },
+        .{ .content_naming, snapshot.content_naming_ns },
+        .{ .piece_data, snapshot.piece_data_ns },
+        // The symbol phase holds the pieces' extraction and the image's
+        // composition.
+        .{ .composition, snapshot.symbol_relocations_ns -| pieces_ns },
+        .{ .dwarf, snapshot.dwarf_ns },
+        .{ .object_encoding, snapshot.object_encoding_ns },
+        .{ .unit_image, snapshot.unit_image_ns },
+    };
+    for (steps) |step| timing.codegen_steps_ns[@backingInt(step[0])].add(step[1]);
+    PipelineTiming.addCodegenCount(timing, .procedures_emitted, snapshot.native_emission.procedures_emitted);
+    PipelineTiming.addCodegenCount(timing, .helpers_emitted, snapshot.native_emission.helpers_emitted);
+    PipelineTiming.addCodegenCount(timing, .code_bytes_emitted, snapshot.native_emission.code_bytes_emitted);
+    PipelineTiming.addCodegenCount(timing, .object_bytes, snapshot.object_bytes);
+    PipelineTiming.addCodegenCount(timing, .image_bytes, snapshot.image_bytes);
+    for (&timing.stmt_bytes, snapshot.stmt_histogram.bytes) |*counter, value| counter.add(value);
+    for (&timing.stmt_counts, snapshot.stmt_histogram.count) |*counter, value| counter.add(value);
 }
 
 /// Lower and compile `unit`.
@@ -539,11 +626,14 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     defer wrappers.deinit(gpa);
     if (trace_clock) |io| std.debug.print("boxy-work: lowered {s} ({d} procs, {d} ms)\n", .{ module_name, lowered.lir_result.store.procSpecCount(), @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms) }) else if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: lowered {s} ({d} procs)\n", .{ module_name, lowered.lir_result.store.procSpecCount() });
 
+    const static_data_started = PipelineTiming.startDetail(unit.config.timing);
     const static_data = try static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = views.items }, &lowered, unit.target, .{});
     defer static_data_exports.deinitStaticData(gpa, static_data);
+    PipelineTiming.finishUnitStep(unit.config.timing, static_data_started, .static_data);
 
     var codegen_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_codegen);
     defer codegen_scope.end();
+    const codegen_started = PipelineTiming.startDetail(unit.config.timing);
     if (imageKind(unit.target) == .wasm) {
         std.debug.assert(!unit.test_unit);
         const bytes = backend.wasm.UnitCompile.compileUnitImage(gpa, &lowered.lir_result.store, &lowered.lir_result.layouts, &.{}, static_data, .{
@@ -559,9 +649,12 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         };
         errdefer gpa.free(bytes);
         codegen_scope.end();
+        PipelineTiming.finishUnitStep(unit.config.timing, codegen_started, .codegen);
+        const records_started = PipelineTiming.startDetail(unit.config.timing);
         const records = try exportRecords(gpa, &lowered, unit.interfaces);
         defer gpa.free(records);
         const exports_digest = try object_cache.exportRecordsDigest(gpa, records);
+        PipelineTiming.finishUnitStep(unit.config.timing, records_started, .export_records);
         var hosted_arena = std.heap.ArenaAllocator.init(gpa);
         defer hosted_arena.deinit();
         const hosted_symbols = try dupeSymbols(gpa, try hostedSymbols(hosted_arena.allocator(), &lowered.lir_result.store));
@@ -577,8 +670,13 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         };
     }
     var object_compiler = backend.ObjectFileCompiler.init(gpa);
-    var backend_timing: ?backend.ObjectFileCompiler.Timing = if (trace_clock) |io| .init(io) else null;
-    if (backend_timing) |*timing| object_compiler.timing = timing;
+    const detail_timing = PipelineTiming.detailOf(unit.config.timing);
+    var backend_timing: ?backend.ObjectFileCompiler.Timing = if (trace_clock) |io| .init(io) else if (detail_timing) |timing| .init(timing.std_io) else null;
+    if (backend_timing) |*timing| {
+        timing.detail = detail_timing != null;
+        object_compiler.timing = timing;
+    }
+    defer if (detail_timing) |timing| recordCodegen(timing, backend_timing.?.snapshot());
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.link_unit = true;
     object_compiler.post_check_executor = unit.config.post_check_executor;
@@ -602,6 +700,8 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         },
     };
     errdefer pieces.deinit();
+    PipelineTiming.finishUnitStep(unit.config.timing, codegen_started, .codegen);
+    const image_started = PipelineTiming.startDetail(unit.config.timing);
     // The image goes into the unit's cache entry, which later fast dev links
     // read, and to this build's own link when it wants images rather than
     // pieces; a build with neither has no use for it.
@@ -617,6 +717,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         break :image .{ .bytes = bytes, .code_locations = code_locations, .owner = .owned };
     } else null;
     errdefer if (image) |owned| owned.deinit(gpa);
+    PipelineTiming.finishUnitStep(unit.config.timing, image_started, .image);
     codegen_scope.end();
     if (backend_timing) |timing| {
         const snapshot = timing.snapshot();
@@ -652,9 +753,11 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         break :metadata try lir.CheckedPipeline.BoxyFunctionMetadata.encodeMetadata(lowered.boxy_functions.?, &lowered.lir_result, compiled.items);
     } else &.{};
     errdefer gpa.free(function_metadata);
+    const records_started = PipelineTiming.startDetail(unit.config.timing);
     const records = try exportRecords(gpa, &lowered, unit.interfaces);
     defer gpa.free(records);
     const exports_digest = try object_cache.exportRecordsDigest(gpa, records);
+    PipelineTiming.finishUnitStep(unit.config.timing, records_started, .export_records);
     var hosted_arena = std.heap.ArenaAllocator.init(gpa);
     defer hosted_arena.deinit();
     const hosted = try hostedSymbols(hosted_arena.allocator(), &lowered.lir_result.store);

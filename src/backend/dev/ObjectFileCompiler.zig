@@ -175,11 +175,37 @@ pub const ObjectFileCompiler = struct {
         object_encoding_ns: u64 = 0,
         file_io_ns: u64 = 0,
         native_emission: NativeProcCompiler.Metrics = .{},
+        /// Detailed steps, recorded only when `Timing.detail` is set.
+        /// Native procedure emission (`NativeProcCompiler.Timing`).
+        native_setup_ns: u64 = 0,
+        native_waves_ns: u64 = 0,
+        native_idle_ns: u64 = 0,
+        native_worker_setup_ns: u64 = 0,
+        native_emit_ns: u64 = 0,
+        native_extract_ns: u64 = 0,
+        native_commit_ns: u64 = 0,
+        native_resolve_ns: u64 = 0,
+        stmt_histogram: LirCodeGenMod.StmtHistogram = .{},
+        /// Lifting a unit's code into pieces: finishing the image, the data
+        /// catalog, piece extraction, content naming, and the host-visible
+        /// data closure.
+        finish_image_ns: u64 = 0,
+        catalog_ns: u64 = 0,
+        piece_extraction_ns: u64 = 0,
+        content_naming_ns: u64 = 0,
+        piece_data_ns: u64 = 0,
+        /// Reading a unit's composed object back into its unit image.
+        unit_image_ns: u64 = 0,
+        /// Bytes of the composed objects and unit images built.
+        object_bytes: u64 = 0,
+        image_bytes: u64 = 0,
     };
 
     pub const Timing = struct {
         std_io: std.Io,
         snapshot_value: TimingSnapshot = .{},
+        /// Record the detailed steps as well as the phases.
+        detail: bool = false,
 
         const Phase = enum {
             backend_setup,
@@ -201,6 +227,44 @@ pub const ObjectFileCompiler = struct {
 
         fn start(self: *const Timing) i96 {
             return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+        }
+
+        /// A native emission timing when detail is recorded.
+        fn nativeTiming(timing: ?*Timing) ?NativeProcCompiler.Timing {
+            const active = timing orelse return null;
+            return if (active.detail) .{ .std_io = active.std_io } else null;
+        }
+
+        fn addNative(timing: ?*Timing, native: ?NativeProcCompiler.Timing) void {
+            const active = timing orelse return;
+            const measured = native orelse return;
+            const value = &active.snapshot_value;
+            value.native_setup_ns +|= measured.setup_ns;
+            value.native_waves_ns +|= measured.waves_ns;
+            value.native_idle_ns +|= measured.capacity_ns -| (measured.worker_setup_ns +| measured.emit_ns +| measured.extract_ns);
+            value.native_worker_setup_ns +|= measured.worker_setup_ns;
+            value.native_emit_ns +|= measured.emit_ns;
+            value.native_extract_ns +|= measured.extract_ns;
+            value.native_commit_ns +|= measured.commit_ns;
+            value.native_resolve_ns +|= measured.resolve_ns;
+            value.stmt_histogram.add(&measured.histogram);
+        }
+
+        /// The start of a detailed step: a clock reading, or zero when no
+        /// detail is recorded.
+        fn startDetail(timing: ?*Timing) i96 {
+            const active = timing orelse return 0;
+            return if (active.detail) active.start() else 0;
+        }
+
+        /// Add the time since `started_ns` to the detailed step `field` and
+        /// return the current time.
+        fn lapDetail(timing: ?*Timing, started_ns: i96, comptime field: []const u8) i96 {
+            const active = timing orelse return 0;
+            if (!active.detail) return 0;
+            const now = active.start();
+            @field(active.snapshot_value, field) +|= @intCast(@max(0, now - started_ns));
+            return now;
         }
 
         fn finish(self: *Timing, started_ns: i96, phase: Phase) void {
@@ -355,6 +419,11 @@ pub const ObjectFileCompiler = struct {
             .capture_code_locations = code_locations != null,
         });
         defer composed.deinit();
+        const image_started = Timing.startDetail(self.timing);
+        defer if (self.timing) |timing| if (timing.detail) {
+            _ = Timing.lapDetail(timing, image_started, "unit_image_ns");
+            timing.snapshot_value.object_bytes +|= composed.object_bytes.len;
+        };
         const image = UnitImage.build(self.allocator, &.{composed.object_bytes}, .{
             .keep_debug = true,
             // Code reached only through references the image cannot see
@@ -375,6 +444,9 @@ pub const ObjectFileCompiler = struct {
             out.* = composed.code_locations;
             composed.code_locations = &.{};
         }
+        if (self.timing) |timing| if (timing.detail) {
+            timing.snapshot_value.image_bytes +|= image.len;
+        };
         return image;
     }
 
@@ -534,14 +606,17 @@ fn compileWithCodeGen(
         demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};
+    var native_timing = ObjectFileCompiler.Timing.nativeTiming(timing);
     var retained = NativeProcCompiler.run(CodeGen, allocator, &codegen, demand.items, .{
         .target = target,
         .executor = executor,
         .reuse_same_program = reuse_same_program,
         .metrics_out = &native_metrics,
+        .timing = if (native_timing) |*native| native else null,
         .static_helpers = static_rc_helpers,
         .constant_exports = static_data_exports,
     }) catch return CompilationError.OutOfMemory;
+    ObjectFileCompiler.Timing.addNative(timing, native_timing);
     // Excerpt data remains borrowed by the destination until object encoding
     // and optional excerpt capture have finished.
     defer retained.deinit();
@@ -1299,13 +1374,16 @@ fn compilePiecesWithCodeGen(
         demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};
+    var native_timing = ObjectFileCompiler.Timing.nativeTiming(timing);
     var retained = NativeProcCompiler.run(CodeGen, allocator, &codegen, demand.items, .{
         .target = target,
         .executor = executor,
         .metrics_out = &native_metrics,
+        .timing = if (native_timing) |*native| native else null,
         .static_helpers = static_rc_helpers,
         .constant_exports = static_data_exports,
     }) catch return CompilationError.OutOfMemory;
+    ObjectFileCompiler.Timing.addNative(timing, native_timing);
     defer retained.deinit();
     if (timing) |timings| timings.snapshot_value.native_emission.add(native_metrics);
     if (timing) |timings| timings.finish(procedure_instructions_started_ns, .procedure_instructions);
@@ -1319,18 +1397,23 @@ fn compilePiecesWithCodeGen(
     codegen.generation_mode = .object_file;
     if (timing) |timings| timings.finish(entrypoint_instructions_started_ns, .entrypoint_instructions);
     const extraction_started_ns = if (timing) |timings| timings.start() else 0;
+    var detail_started = ObjectFileCompiler.Timing.startDetail(timing);
     codegen.finishImage() catch return CompilationError.OutOfMemory;
+    detail_started = ObjectFileCompiler.Timing.lapDetail(timing, detail_started, "finish_image_ns");
     var catalog = CodeExcerpt.PreparedData.init(allocator, static_strings.exports, static_data_exports, &.{}) catch return CompilationError.OutOfMemory;
     defer catalog.deinit();
+    detail_started = ObjectFileCompiler.Timing.lapDetail(timing, detail_started, "catalog_ns");
     var staged = CodeExcerpt.extractCataloged(CodeGen, allocator, &codegen, proc_specs, layout_store, &catalog) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,
         error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("unit piece extraction failed: {s}", .{@errorName(err)}),
     };
     defer staged.deinit();
+    detail_started = ObjectFileCompiler.Timing.lapDetail(timing, detail_started, "piece_extraction_ns");
     // The unit's constants under their content names, so pieces of
     // different units can meet in one program.
     var named = CodeExcerpt.combineDistinct(allocator, &.{&staged}) catch return CompilationError.OutOfMemory;
     errdefer named.deinit();
+    detail_started = ObjectFileCompiler.Timing.lapDetail(timing, detail_started, "content_naming_ns");
     var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
@@ -1370,6 +1453,7 @@ fn compilePiecesWithCodeGen(
             .identity = identity,
         };
     }
+    _ = ObjectFileCompiler.Timing.lapDetail(timing, detail_started, "piece_data_ns");
     if (timing) |timings| timings.finish(extraction_started_ns, .symbol_relocations);
     return .{
         .arena = arena,

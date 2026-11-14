@@ -46,6 +46,61 @@ pub const Metrics = struct {
     }
 };
 
+/// Step durations of one driver invocation, recorded only when a caller asks
+/// for detailed timing. Coordinator steps are elapsed times; worker steps
+/// are summed over lanes, each lane writing only its own slot.
+pub const Timing = struct {
+    std_io: std.Io,
+    /// Indexing the program's data and procedures before the first wave.
+    setup_ns: u64 = 0,
+    /// Elapsed time of the waves' callbacks.
+    waves_ns: u64 = 0,
+    /// The workers' capacity over the waves: each wave's elapsed time times
+    /// the executor's worker count, or its elapsed time when run inline.
+    capacity_ns: u64 = 0,
+    /// Appending each wave's fragments to the destination, in order.
+    commit_ns: u64 = 0,
+    /// Resolving the destination's symbolic references after the last wave.
+    resolve_ns: u64 = 0,
+    /// Worker code generator setup, summed over lanes.
+    worker_setup_ns: u64 = 0,
+    /// Stack planning and instruction emission, summed over lanes.
+    emit_ns: u64 = 0,
+    /// Fragment extraction, summed over lanes.
+    extract_ns: u64 = 0,
+    histogram: Emitter.StmtHistogram = .{},
+    lanes: []Lane = &.{},
+
+    /// One lane's own measures; lanes never share a cache line.
+    pub const Lane = struct {
+        setup_ns: u64 = 0,
+        emit_ns: u64 = 0,
+        extract_ns: u64 = 0,
+        histogram: Emitter.StmtHistogram = .{},
+        _padding: [std.atomic.cache_line]u8 = undefined,
+    };
+
+    fn now(self: *const Timing) i96 {
+        return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+    }
+
+    fn since(self: *const Timing, started: i96) u64 {
+        return @intCast(@max(0, self.now() - started));
+    }
+
+    /// Fold every lane's measures into the totals and release the lanes.
+    fn mergeLanes(self: *Timing, allocator: Allocator) void {
+        for (self.lanes) |*lane| {
+            self.worker_setup_ns +|= lane.setup_ns;
+            self.emit_ns +|= lane.emit_ns;
+            self.extract_ns +|= lane.extract_ns;
+            self.histogram.add(&lane.histogram);
+        }
+        allocator.free(self.lanes);
+        self.lanes = &.{};
+    }
+};
+
 /// Target, scheduling, and same-program reuse policy for native emission.
 pub const Options = struct {
     target: roc_target.RocTarget,
@@ -53,6 +108,9 @@ pub const Options = struct {
     /// Proof of the same transferred LIR/layout domain belongs to the caller.
     reuse_same_program: ?*const Retained = null,
     metrics_out: ?*Metrics = null,
+    /// Receives step durations and the statement histogram when detailed
+    /// timing is enabled.
+    timing: ?*Timing = null,
     static_helpers: []const layout.RcHelperKey = &.{},
     /// Object-file roots are immutable; execution callers leave mutable slots external.
     constant_exports: []const lir.Program.StaticDataExport = &.{},
@@ -131,10 +189,18 @@ fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, 
     return true;
 }
 
-fn Job(comptime CG: type) type {
+/// What every job of one driver invocation reads.
+fn Shared(comptime CG: type) type {
     return struct {
         source: *const CG,
         data: *const Excerpt.PreparedData,
+        timing: ?*Timing,
+    };
+}
+
+fn Job(comptime CG: type) type {
+    return struct {
+        shared: *const Shared(CG),
         proc: ?ProcId = null,
         helper: u64 = 0,
         fragment: ?Excerpt.Fragment = null,
@@ -156,7 +222,8 @@ fn Job(comptime CG: type) type {
         }
 
         fn compile(self: *@This(), worker: tasks.Worker) Excerpt.ExtractError!void {
-            const source = self.source;
+            const source = self.shared.source;
+            if (self.shared.timing) |timing| return self.compileTimed(worker, timing, &timing.lanes[worker.id]);
             var cg = try CG.initWithCapturePrefix(
                 worker.scratch,
                 source.store,
@@ -172,9 +239,38 @@ fn Job(comptime CG: type) type {
             cg.relocatable_expect_sites = source.relocatable_expect_sites;
             cg.borrowStaticDataSymbolsFrom(source);
             self.fragment = if (self.proc) |id|
-                try Excerpt.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.data)
+                try Excerpt.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.shared.data)
             else
-                try Excerpt.compileRcHelperFragmentPrepared(CG, worker.allocator, &cg, self.helper, source.store.getProcSpecs(), source.layout_store, self.data);
+                try Excerpt.compileRcHelperFragmentPrepared(CG, worker.allocator, &cg, self.helper, source.store.getProcSpecs(), source.layout_store, self.shared.data);
+        }
+
+        /// `compile`, attributing its time to setup, emission, and
+        /// extraction in `lane`, and its code to the lane's histogram.
+        fn compileTimed(self: *@This(), worker: tasks.Worker, timing: *const Timing, lane: *Timing.Lane) Excerpt.ExtractError!void {
+            const source = self.shared.source;
+            var started = timing.now();
+            var cg = try CG.initWithCapturePrefix(
+                worker.scratch,
+                source.store,
+                source.layout_store,
+                source.static_strings,
+                source.erased_capture_prefix,
+                source.cpu_level,
+            );
+            defer cg.deinit();
+            cg.borrowStackPlanIndexes(try laneStackPlanIndexes(worker));
+            cg.generation_mode = source.generation_mode;
+            cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
+            cg.relocatable_expect_sites = source.relocatable_expect_sites;
+            cg.borrowStaticDataSymbolsFrom(source);
+            cg.stmt_histogram = &lane.histogram;
+            lane.setup_ns +|= timing.since(started);
+            started = timing.now();
+            if (self.proc) |id| try cg.emitProcFragment(id) else try cg.emitRcHelperFragment(self.helper);
+            lane.emit_ns +|= timing.since(started);
+            started = timing.now();
+            self.fragment = try Excerpt.captureFragmentPrepared(CG, worker.allocator, &cg, source.store.getProcSpecs(), source.layout_store, self.shared.data);
+            lane.extract_ns +|= timing.since(started);
         }
     };
 }
@@ -238,6 +334,13 @@ fn account(metrics: *Metrics, fragment: *const Excerpt.Fragment, reused: bool, h
 /// On failure all accepted tasks drain; the partially appended destination must
 /// be discarded. Returned fragments own their data independently of destination.
 pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []const ProcId, options: Options) Allocator.Error!Retained {
+    const timing = options.timing;
+    if (timing) |active| {
+        active.lanes = try allocator.alloc(Timing.Lane, if (options.executor) |executor| @max(executor.lane_count, 1) else 1);
+        for (active.lanes) |*lane| lane.* = .{};
+    }
+    defer if (timing) |active| active.mergeLanes(allocator);
+    var step_started: i96 = if (timing) |active| active.now() else 0;
     var metrics: Metrics = .{};
     defer {
         if (options.metrics_out) |out| out.* = metrics;
@@ -287,6 +390,9 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         if (!entry.found_existing) try helper_queue.append(allocator, encoded);
     }
 
+    const shared: Shared(CG) = .{ .source = destination, .data = &data, .timing = timing };
+    if (timing) |active| active.setup_ns +|= active.since(step_started);
+
     var cursor: usize = 0;
     while (cursor < demand.len) {
         var storage: [wave_capacity]Job(CG) = undefined;
@@ -300,7 +406,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             demanded.set(@backingInt(id));
             if (destination.compiledProcSymbol(id) != null) continue;
             const spec = specs[@backingInt(id)];
-            storage[count] = .{ .source = destination, .data = &data, .proc = id };
+            storage[count] = .{ .shared = &shared, .proc = id };
             const job = &storage[count];
             count += 1;
             if (cached_procs.get(spec.identity)) |cached| {
@@ -312,7 +418,17 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 }
             }
         }
+        if (timing) |active| step_started = active.now();
         try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &sequential_scratch, &metrics);
+        if (timing) |active| {
+            const elapsed = active.since(step_started);
+            active.waves_ns +|= elapsed;
+            active.capacity_ns +|= elapsed *| @as(u64, if (options.executor) |executor| executor.worker_count else 1);
+            step_started = active.now();
+        }
+        defer if (timing) |active| {
+            active.commit_ns +|= active.since(step_started);
+        };
         for (storage[0..count]) |*job| {
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
@@ -338,7 +454,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         while (cursor < frontier and count < wave_capacity) : (cursor += 1) {
             const key = helper_queue.items[cursor];
             if (destination.compiledRcHelperOffset(key) != null) continue;
-            storage[count] = .{ .source = destination, .data = &data, .helper = key };
+            storage[count] = .{ .shared = &shared, .helper = key };
             const job = &storage[count];
             count += 1;
             if (cached_helpers.get(key)) |cached| {
@@ -348,7 +464,17 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 }
             }
         }
+        if (timing) |active| step_started = active.now();
         try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &sequential_scratch, &metrics);
+        if (timing) |active| {
+            const elapsed = active.since(step_started);
+            active.waves_ns +|= elapsed;
+            active.capacity_ns +|= elapsed *| @as(u64, if (options.executor) |executor| executor.worker_count else 1);
+            step_started = active.now();
+        }
+        defer if (timing) |active| {
+            active.commit_ns +|= active.since(step_started);
+        };
         for (storage[0..count]) |*job| {
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
@@ -363,7 +489,9 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             job.fragment = null;
         }
     }
+    if (timing) |active| step_started = active.now();
     destination.resolveAssembledSymbolicRefs() catch |err| return invariant(err);
+    if (timing) |active| active.resolve_ns +|= active.since(step_started);
     return retained;
 }
 
