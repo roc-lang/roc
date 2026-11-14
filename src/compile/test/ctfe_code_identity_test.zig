@@ -148,7 +148,7 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         if (std.mem.eql(u8, library.canonical_names.exportNameText(name), "used")) break template.template_id;
     } else return error.TestUnexpectedResult;
     const used_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), used_template);
-    const roots = library.root_requests.compile_time_requests;
+    const roots = library.root_requests.compile_time_requests.items();
     try std.testing.expect(roots.len != 0);
 
     const Case = struct {
@@ -175,14 +175,14 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         // fresh analysis slots. Preparation must not demand every visible
         // module's bodies; this unit emits only Library's workers.
         var lazy_library = library.*;
-        lazy_library.body_analyses = try check.BodyAnalyses.BodyAnalyses.create(allocator, io, library.moduleEnvConst(), library.checked_procedure_templates.promoted);
+        lazy_library.body_analyses = try check.BodyAnalyses.BodyAnalyses.create(allocator, io, library.moduleEnvConst(), library.checked_procedure_templates.promoted.items());
         defer lazy_library.body_analyses.?.destroy();
         const lazy_imports = try allocator.dupe(check.CheckedArtifact.ImportedModuleView, imports);
         defer allocator.free(lazy_imports);
         var initialized: usize = 0;
         defer for (lazy_imports[0..initialized]) |view| view.checked_bodies.analyses.destroy();
         for (lazy_imports) |*view| {
-            view.checked_bodies.analyses = try check.BodyAnalyses.BodyAnalyses.create(allocator, io, view.module_env, view.checked_procedure_templates.promoted);
+            view.checked_bodies.analyses = try check.BodyAnalyses.BodyAnalyses.create(allocator, io, view.module_env, view.checked_procedure_templates.promoted.items());
             initialized += 1;
         }
         try std.testing.expect(lazy_imports.len != 0);

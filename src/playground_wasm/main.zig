@@ -1769,7 +1769,7 @@ fn collectPlaygroundTestRootRequests(
     var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     errdefer roots.deinit(alloc);
 
-    for (artifact.root_requests.requests) |root| {
+    for (artifact.root_requests.requests.items()) |root| {
         if (root.kind != .test_expect) continue;
         try roots.append(alloc, root);
     }

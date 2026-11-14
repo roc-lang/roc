@@ -231,8 +231,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         const artifact = mod.semantic.checked_artifact orelse return error.ModuleRetrieval;
         type_table.clearVarMap();
 
-        try provides_entries.ensureUnusedCapacity(gpa, artifact.provided_exports.exports.len);
-        for (artifact.provided_exports.exports) |provided| {
+        try provides_entries.ensureUnusedCapacity(gpa, artifact.provided_exports.exports.items().len);
+        for (artifact.provided_exports.exports.items()) |provided| {
             const source_name, const ffi_symbol = switch (provided) {
                 .procedure => |procedure| .{ procedure.source_name, procedure.ffi_symbol },
                 .data => |data| .{ data.source_name, data.ffi_symbol },
@@ -433,7 +433,7 @@ fn compileGlueSpec(
     };
     errdefer gpa.free(relation_artifacts);
 
-    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests) catch {
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests.items()) catch {
         return error.OutOfMemory;
     };
     errdefer gpa.free(lir_roots);
@@ -912,7 +912,7 @@ fn hostedProcForDef(
     table: *const CheckedArtifact.HostedProcTable,
     def_idx: CIR.Def.Idx,
 ) ?CheckedArtifact.HostedProc {
-    for (table.procs) |proc| {
+    for (table.procs.items()) |proc| {
         if (proc.def_idx == def_idx) return proc;
     }
     return null;
@@ -933,7 +933,7 @@ fn collectHostedProcGlobalIndices(
     errdefer indices.deinit(allocator);
 
     if (platformArtifact(modules)) |platform| {
-        const bindings = platform.hosted_bindings.bindings;
+        const bindings = platform.hosted_bindings.bindings.items();
         try indices.ensureTotalCapacity(allocator, bindings.len);
         for (bindings, 0..) |binding, dispatch_index| {
             indices.appendAssumeCapacity(.{
@@ -962,7 +962,7 @@ fn collectHostedProcGlobalIndices(
     for (modules) |mod| {
         if (!(mod.is_platform_sibling or mod.is_platform_main)) continue;
         const artifact = mod.semantic.checked_artifact orelse continue;
-        for (artifact.hosted_procs.procs) |hosted| {
+        for (artifact.hosted_procs.procs.items()) |hosted| {
             try candidates.append(allocator, .{
                 .artifact_key = artifact.key,
                 .def_idx = hosted.def_idx,
@@ -4614,7 +4614,7 @@ fn collectModuleTypeInfo(
         try member_by_def.put(member_entry.value.def_idx, member_entry.key);
     }
 
-    for (artifact.top_level_values.entries) |entry| {
+    for (artifact.top_level_values.entries.items()) |entry| {
         const def_idx = entry.def;
 
         // A platform module's own hosted declaration is a plain top-level
@@ -4735,8 +4735,8 @@ test "issue 12760: boundary layout requirements survive memoization and callable
         if (mod.is_platform_main) platform = artifact;
     }
     const artifact = platform orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 1), artifact.provided_exports.exports.len);
-    const procedure = artifact.provided_exports.exports[0].procedure;
+    try std.testing.expectEqual(@as(usize, 1), artifact.provided_exports.exports.items().len);
+    const procedure = artifact.provided_exports.exports.items()[0].procedure;
     const signature = CheckedArtifact.checkedFunctionPayload(&artifact.checked_types, procedure.checked_type, "test provided procedure");
     try std.testing.expectEqual(@as(usize, 6), signature.args.len);
 

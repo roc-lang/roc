@@ -223,9 +223,8 @@ pub const NominalTypeKey = struct {
 
 /// Public `CanonicalNameStore` declaration.
 pub const CanonicalNameStore = struct {
-    /// Build-time allocator used for interner inserts. Not serialized; a
-    /// deserialized (frozen) store carries the load allocator only for the
-    /// build-only fields below.
+    /// Allocator for interner inserts and for copies of borrowed lists. Not
+    /// serialized; a loaded store carries the load allocator.
     allocator: Allocator,
     // Each name-kind is a relocatable, serial-id interner (transform C). Default
     // `.{}` is a valid empty interner that lazily initializes on first insert.
@@ -245,14 +244,12 @@ pub const CanonicalNameStore = struct {
     external_symbol_names: NameInterner = .{},
     /// Serial id -> structured proc-base key. Relocatable (POD elements).
     proc_bases: SafeList(ProcBaseKey) = .{},
-    /// Build-only dedup index for `internProcBase`. NOT serialized: a frozen
-    /// store is consumed by id via `procBase`, never re-interned.
-    proc_base_by_key: std.StringHashMap(ProcBaseKeyRef),
-    /// Build-only scratch buffer for proc-base key encoding. NOT serialized.
+    /// Dedup index over `proc_bases`, hashed by each key's encoding
+    /// (`internProcBase`). Stored with the store, so a loaded store interns
+    /// new proc bases against the ones it loaded.
+    proc_base_index: collections.HashedProbeTable = .{},
+    /// Scratch buffer for proc-base key encoding. NOT serialized.
     scratch_key: std.ArrayList(u8) = .empty,
-    /// True for a store reconstructed from a serialized buffer: its interners
-    /// and `proc_bases` point into buffer-owned memory and must not be freed.
-    serialized: bool = false,
     /// Query-only facade; its owner retains every allocation and must remain
     /// alive and unmodified until all borrowed readers have finished.
     borrowed_read_only: bool = false,
@@ -261,16 +258,14 @@ pub const CanonicalNameStore = struct {
     /// keeps each superseded backing alive here instead of moving or freeing it.
     superseded: ?*collections.SupersededBackings = null,
 
-    /// Build-only dedup/scratch fields excluded from serialization: empty on a
-    /// frozen store, so the mixin's `deserialize` resets them (`proc_base_by_key`
-    /// via `init(allocator)`, `scratch_key` to its default). Declared so a *data*
-    /// field accidentally omitted from `Serialized` is a compile error.
-    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key", "record_field_text_rank", "tag_text_rank", "borrowed_read_only", "superseded" };
+    /// Scratch and process-local fields excluded from serialization: empty on
+    /// a loaded store, so the mixin's `deserialize` resets them. Declared so a
+    /// *data* field accidentally omitted from `Serialized` is a compile error.
+    pub const serde_transient_fields = [_][]const u8{ "scratch_key", "record_field_text_rank", "tag_text_rank", "borrowed_read_only", "superseded" };
 
     pub fn init(allocator: Allocator) CanonicalNameStore {
         return .{
             .allocator = allocator,
-            .proc_base_by_key = std.StringHashMap(ProcBaseKeyRef).init(allocator),
             .scratch_key = .empty,
         };
     }
@@ -284,10 +279,8 @@ pub const CanonicalNameStore = struct {
             const destination = &@field(result, field);
             destination.* = try source.clone(allocator);
         }
-        for (self.proc_bases.items(), 0..) |key, index| {
-            const id = try result.internProcBase(key);
-            std.debug.assert(@backingInt(id) == index);
-        }
+        result.proc_bases = try self.proc_bases.clone(allocator);
+        result.proc_base_index = .{ .cells = try self.proc_base_index.cells.clone(allocator), .len = self.proc_base_index.len };
         return result;
     }
 
@@ -333,22 +326,18 @@ pub const CanonicalNameStore = struct {
         }
         if (self.record_field_text_rank) |cache| cache.destroy();
         if (self.tag_text_rank) |cache| cache.destroy();
-        if (!self.serialized) {
-            // Interners no-op their own free when frozen, but `proc_bases` is a
-            // plain SafeList with no frozen flag, so guard the whole owned set.
-            self.module_names.deinit(self.allocator);
-            self.module_identities.deinit(self.allocator);
-            self.type_names.deinit(self.allocator);
-            self.method_names.deinit(self.allocator);
-            self.record_field_labels.deinit(self.allocator);
-            self.tag_labels.deinit(self.allocator);
-            self.export_names.deinit(self.allocator);
-            self.external_symbol_names.deinit(self.allocator);
-            self.proc_bases.deinit(self.allocator);
-        }
-        // Build-only fields are always heap-owned (empty on a frozen store).
-        freeStringHashMapKeys(ProcBaseKeyRef, &self.proc_base_by_key, self.allocator);
-        self.proc_base_by_key.deinit();
+        // A loaded store's interners and `proc_bases` borrow the relocated
+        // buffer, and a borrowed list frees nothing.
+        self.module_names.deinit(self.allocator);
+        self.module_identities.deinit(self.allocator);
+        self.type_names.deinit(self.allocator);
+        self.method_names.deinit(self.allocator);
+        self.record_field_labels.deinit(self.allocator);
+        self.tag_labels.deinit(self.allocator);
+        self.export_names.deinit(self.allocator);
+        self.external_symbol_names.deinit(self.allocator);
+        self.proc_bases.deinit(self.allocator);
+        self.proc_base_index.deinit(self.allocator);
         self.scratch_key.deinit(self.allocator);
         self.* = CanonicalNameStore.init(self.allocator);
     }
@@ -451,12 +440,11 @@ pub const CanonicalNameStore = struct {
         var result = CanonicalNameStore.init(allocator);
         inline for (interner_fields) |field| @field(result, field) = @field(prefix, field).borrow();
         result.proc_bases = .fromBorrowedSlice(@constCast(prefix.proc_bases));
-        result.serialized = true;
         result.borrowed_read_only = true;
         return result;
     }
 
-    /// Relocatable serialized form (build-only dedup/scratch fields excluded).
+    /// Relocatable serialized form (scratch and process-local fields excluded).
     pub const Serialized = extern struct {
         module_names: NameInterner.Serialized,
         module_identities: NameInterner.Serialized,
@@ -467,6 +455,12 @@ pub const CanonicalNameStore = struct {
         export_names: NameInterner.Serialized,
         external_symbol_names: NameInterner.Serialized,
         proc_bases: SafeList(ProcBaseKey).Serialized,
+        proc_base_index: collections.HashedProbeTable.Serialized,
+
+        /// Every proc base is indexed. Constant time.
+        pub fn validateShape(self: *const Serialized) error{CorruptArtifact}!void {
+            if (self.proc_base_index.len != self.proc_bases.len) return error.CorruptArtifact;
+        }
 
         const Serde = artifact_serialize.SliceStoreSerde(CanonicalNameStore, @This());
         pub const serialize = Serde.serialize;
@@ -631,17 +625,27 @@ pub const CanonicalNameStore = struct {
         try appendOptionalNestedProcSiteKey(&self.scratch_key, key.nested_proc_site.get(), self.allocator);
         try appendOptionalMonoSpecializationKey(&self.scratch_key, key.owner_mono_specialization, self.allocator);
 
-        if (self.proc_base_by_key.get(self.scratch_key.items)) |existing| return existing;
+        const hash: u32 = @truncate(std.hash.Wyhash.hash(0, self.scratch_key.items));
+        if (self.proc_base_index.find(hash, ProcBaseContext{ .bases = self.proc_bases.items(), .key = key })) |existing| return @fromBackingInt(existing);
 
         const id: ProcBaseKeyRef = @fromBackingInt(@intCast(@as(u32, @intCast(self.proc_bases.items().len))));
-        const owned_key = try self.allocator.dupe(u8, self.scratch_key.items);
-        errdefer self.allocator.free(owned_key);
-
         if (self.superseded) |superseded| _ = try superseded.ensureUnusedSafeListCapacity(ProcBaseKey, &self.proc_bases, self.allocator, 1);
         _ = try self.proc_bases.append(self.allocator, key);
-        try self.proc_base_by_key.put(owned_key, id);
+        errdefer _ = self.proc_bases.pop();
+        try self.proc_base_index.insertNew(self.allocator, hash, @backingInt(id));
         return id;
     }
+
+    /// Compares a candidate proc-base key with an interned one. The key's
+    /// encoding covers every field, so field equality is encoding equality.
+    const ProcBaseContext = struct {
+        bases: []const ProcBaseKey,
+        key: ProcBaseKey,
+
+        pub fn eql(self: ProcBaseContext, entry: u32) bool {
+            return std.meta.eql(self.bases[entry], self.key);
+        }
+    };
 
     pub fn procBase(self: *const CanonicalNameStore, id: ProcBaseKeyRef) ProcBaseKey {
         return self.proc_bases.items()[@backingInt(id)];
@@ -973,11 +977,6 @@ fn appendProcedureTemplateRef(
     try scratch.append(allocator, '|');
 }
 
-fn freeStringHashMapKeys(comptime V: type, map: *std.StringHashMap(V), allocator: Allocator) void {
-    var keys = map.keyIterator();
-    while (keys.next()) |key| allocator.free(key.*);
-}
-
 test "canonical names read sharing borrows names and prepared ranks without allocation" {
     var names = CanonicalNameStore.init(std.testing.allocator);
     defer names.deinit();
@@ -1286,7 +1285,7 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
     {
         var borrowed = loaded.borrowReadOnly(gpa);
         defer borrowed.deinit();
-        try std.testing.expect(borrowed.serialized);
+        try std.testing.expect(borrowed.borrowed_read_only);
         try std.testing.expectEqualStrings("List", borrowed.typeNameText(t_list));
         try std.testing.expectEqual(@as(u32, 0), borrowed.recordFieldLabelTextRank(field));
     }
@@ -1311,6 +1310,18 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
     try std.testing.expectEqual(m, loaded_pb.module_name);
     try std.testing.expectEqual(@as(?ExportNameId, exp), loaded_pb.export_name.get());
     try std.testing.expectEqual(@as(u32, 7), loaded_pb.ordinal);
+
+    // The loaded store interns against its stored index: an existing proc
+    // base keeps its id and a new one is deduplicated from then on.
+    try std.testing.expectEqual(pb, try loaded.internProcBase(.{
+        .module_name = m,
+        .export_name = .some(exp),
+        .kind = .checked_source,
+        .ordinal = 7,
+    }));
+    const fresh = try loaded.internProcBase(.{ .module_name = m, .export_name = .some(exp), .kind = .checked_source, .ordinal = 8 });
+    try std.testing.expect(fresh != pb);
+    try std.testing.expectEqual(fresh, try loaded.internProcBase(.{ .module_name = m, .export_name = .some(exp), .kind = .checked_source, .ordinal = 8 }));
 }
 
 test "checked label text ranks preserve byte order and refresh after insertion" {

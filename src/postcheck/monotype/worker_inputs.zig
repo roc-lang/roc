@@ -82,7 +82,7 @@ pub const Snapshot = struct {
         program.types.freeze();
         program.names = self.names;
         program.names.allocator = allocator;
-        program.names.proc_base_by_key = std.StringHashMap(names.ProcBaseKeyRef).init(allocator);
+        program.names.proc_base_index = .{};
         inline for (.{ "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |field| {
             @field(program, field) = @TypeOf(@field(program, field)).fromOwnedSlice(@constCast(@field(self, field)));
         }
@@ -138,7 +138,6 @@ pub const ProgramInputs = struct {
             @field(view.names, field) = try @field(self, field).capture(allocator, &@field(source.names, field));
         }
         view.names.proc_bases = .fromBorrowedSlice(try self.proc_bases.capture(allocator, source.names.proc_bases.items()));
-        view.names.serialized = true;
         inline for (.{ "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |field| {
             @field(view, field) = try @field(self, field).capture(allocator, @field(source, field).unsafeRawItemsForView());
         }
