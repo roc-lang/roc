@@ -1409,6 +1409,8 @@ pub const BoxyObjectLowering = struct {
     /// Whether that link composes the units' pieces (rather than placing
     /// their unit images with a fast dev link), so the units decode them.
     link_reads_pieces: bool = false,
+    /// The unit entries the compiler carries in its binary.
+    embedded: boxy_unit.EmbeddedUnits = .none,
 };
 
 /// The module objects of a `.boxy` compilation, each restored from the
@@ -1501,7 +1503,7 @@ const BoxyObjects = struct {
             .function_cache = .{ .allocator = coordinator.gpa, .io = coordinator.roc_ctx.std_io },
             .lowering = unit_lowering,
             .manager = manager,
-            .digests = .{ .gpa = coordinator.gpa, .io = coordinator.roc_ctx.std_io, .names = .{} },
+            .digests = .{ .gpa = coordinator.gpa, .io = coordinator.roc_ctx.std_io, .names = .{}, .embedded = lowering.embedded },
             .interfaces = undefined,
             .owned_interfaces = if (lowering.interfaces == null) .init(coordinator.gpa, coordinator.roc_ctx.std_io) else null,
             .session = try coordinator.postCheckExecutor().begin(),
@@ -1794,6 +1796,7 @@ const BoxyObjects = struct {
             .cache_manager = self.manager,
             .key = undefined,
             .want_pieces = want_pieces,
+            .embedded = self.lowering.embedded,
         } };
     }
 
@@ -4749,7 +4752,8 @@ pub const Coordinator = struct {
                 if (mod.checkedArtifact()) |artifact| try artifacts.append(self.gpa, artifact);
             }
         }
-        return try boxy_interface.Digests.init(self.gpa, self.roc_ctx.std_io, artifacts.items);
+        const embedded: boxy_unit.EmbeddedUnits = if (self.boxy_object_lowering) |lowering| lowering.embedded else .none;
+        return try boxy_interface.Digests.init(self.gpa, self.roc_ctx.std_io, artifacts.items, embedded);
     }
 
     fn checkedModuleCacheKey(

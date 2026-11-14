@@ -23,6 +23,7 @@ const Artifact = CheckedArtifact.CheckedModuleArtifact;
 const ConstStore = check.ConstStore;
 const canonical = check.CanonicalNames;
 const ModuleNames = eval.CompileTimeFinalization.ModuleNames;
+const EmbeddedUnits = @import("boxy_embedded_units.zig").Units;
 
 const Key = [32]u8;
 const Digest = [32]u8;
@@ -41,6 +42,14 @@ pub const Digests = struct {
     /// `interfaceOf` and `objectInput` (`prepare`), which then add only
     /// the imports' digests.
     prepared: std.AutoHashMapUnmanaged(Key, Prepared) = .empty,
+    /// The object inputs of the modules whose digests the compiler carries
+    /// in its binary (`embedded`), which import nothing; their interfaces
+    /// are in `interfaces` from the moment they are added.
+    object_inputs: std.AutoHashMapUnmanaged(Key, Digest) = .empty,
+    /// The digests the compiler carries in its binary (design.md "Embedded
+    /// Units"): a module of the link whose checked artifact and link name
+    /// they were computed for takes them instead of hashing itself.
+    embedded: EmbeddedUnits = .none,
     /// Guards `interfaces`, `exports` and `prepared`, which the units of a
     /// link read and record from their lanes.
     mutex: Mutex = .init,
@@ -70,24 +79,44 @@ pub const Digests = struct {
     };
 
     /// The digests of `artifacts`, every module of the link.
-    pub fn init(gpa: Allocator, io: std.Io, artifacts: []const *const Artifact) Allocator.Error!Digests {
+    pub fn init(gpa: Allocator, io: std.Io, artifacts: []const *const Artifact, embedded: EmbeddedUnits) Allocator.Error!Digests {
         const views = try gpa.alloc(CheckedArtifact.ImportedModuleView, artifacts.len);
         defer gpa.free(views);
         for (artifacts, views) |artifact, *view| view.* = CheckedArtifact.importedView(artifact);
-        var digests: Digests = .{ .gpa = gpa, .io = io, .names = try ModuleNames.fromViews(gpa, views) };
+        var digests: Digests = .{ .gpa = gpa, .io = io, .names = try ModuleNames.fromViews(gpa, views), .embedded = embedded };
         errdefer digests.deinit();
         for (artifacts) |artifact| _ = try digests.add(artifact);
         return digests;
     }
 
-    /// Add `artifact` to the link; false when it is already there.
+    /// Add `artifact` to the link; false when it is already there. A module
+    /// whose digests the compiler carries for its checked artifact and its
+    /// name in this link takes them.
     pub fn add(self: *Digests, artifact: *const Artifact) Allocator.Error!bool {
-        self.link_mutex.lockUncancelable(self.io);
-        defer self.link_mutex.unlock(self.io);
-        const entry = try self.artifacts.getOrPut(self.gpa, artifact.key.bytes);
-        if (entry.found_existing) return false;
-        entry.value_ptr.* = artifact;
-        try self.module_names.put(self.gpa, artifact.key.bytes, self.names.of(CheckedArtifact.importedView(artifact)));
+        const name = name: {
+            self.link_mutex.lockUncancelable(self.io);
+            defer self.link_mutex.unlock(self.io);
+            const entry = try self.artifacts.getOrPut(self.gpa, artifact.key.bytes);
+            if (entry.found_existing) return false;
+            entry.value_ptr.* = artifact;
+            const name = self.names.of(CheckedArtifact.importedView(artifact));
+            try self.module_names.put(self.gpa, artifact.key.bytes, name);
+            break :name name;
+        };
+        const embedded = self.embedded.moduleDigests(artifact.key.bytes, name) orelse return true;
+        // The compiler's build embeds the digests of modules that import
+        // nothing, whose digests are therefore their own part alone.
+        std.debug.assert(artifact.direct_import_module_keys.items().len == 0);
+        if (base.dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
+            var prepared = try self.prepare(artifact);
+            if (!std.mem.eql(u8, &prepared.interface.finalResult(), &embedded.interface) or !std.mem.eql(u8, &prepared.object_input.finalResult(), &embedded.object_input)) {
+                base.invariant("the embedded digests of module {s} differ from hashing it: they miss an input", .{artifact.moduleEnvConst().module_name});
+            }
+        }
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        try self.interfaces.put(self.gpa, artifact.key.bytes, embedded.interface);
+        try self.object_inputs.put(self.gpa, artifact.key.bytes, embedded.object_input);
         return true;
     }
 
@@ -111,6 +140,7 @@ pub const Digests = struct {
         self.interfaces.deinit(self.gpa);
         self.exports.deinit(self.gpa);
         self.prepared.deinit(self.gpa);
+        self.object_inputs.deinit(self.gpa);
     }
 
     /// Hash the part of `artifact`'s digests that is a function of the
@@ -119,7 +149,7 @@ pub const Digests = struct {
     /// a link hash their own parts in parallel.
     pub fn ensurePrepared(self: *Digests, artifact: *const Artifact) Allocator.Error!void {
         self.mutex.lockUncancelable(self.io);
-        const known = self.prepared.contains(artifact.key.bytes);
+        const known = self.prepared.contains(artifact.key.bytes) or self.object_inputs.contains(artifact.key.bytes);
         self.mutex.unlock(self.io);
         if (known) return;
         const prepared = try self.prepare(artifact);
@@ -238,6 +268,7 @@ pub const Digests = struct {
     pub fn objectInput(self: *Digests, artifact: *const Artifact) Allocator.Error!Digest {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
+        if (self.object_inputs.get(artifact.key.bytes)) |embedded| return embedded;
         var hasher = (try self.preparedOf(artifact)).object_input;
         for (artifact.direct_import_module_keys.items()) |key| {
             const imported = self.artifactOf(key.bytes);

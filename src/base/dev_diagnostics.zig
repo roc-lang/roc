@@ -24,7 +24,8 @@ pub const Var = enum {
     /// which part an edit changed. Hashing the parts separately costs more
     /// than the digests themselves, so the work trace leaves it out.
     trace_boxy_digests,
-    /// Rebuild every restored Boxy object and compare it with the cached one.
+    /// Rebuild every restored or embedded Boxy object and compare it with the
+    /// cached or embedded one.
     verify_boxy_object_reuse,
     /// Separate coordinator request-resolution costs into exclusive phases.
     spec_resolution_profile,

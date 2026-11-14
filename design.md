@@ -16687,8 +16687,8 @@ and Per-Module Output is the invariant that makes it possible:
   never its importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
-  every restored object and compares the bytes, so a key that misses an input
-  fails instead of linking a stale object.
+  every restored or embedded object (Embedded Units) and compares the bytes,
+  so a key that misses an input fails instead of linking a stale object.
 - The TARGET is part of the object file's key because machine code is
   target-specific. If lowered data that is not object code is ever kept (a
   LIR image for the interpreter paths, for instance), it goes in a separate
@@ -16700,10 +16700,85 @@ and Per-Module Output is the invariant that makes it possible:
   and modules whose keys are known can be lowered independently and in
   parallel, since the inputs of each are its own and its imports' checked
   modules and nothing else.
+- An entry can come from the compiler's binary instead of the cache
+  (Embedded Units). That is the only other place a unit's entry comes from.
 
 Specialized builds keep no per-module object cache: their specializations are
 inherently cross-module, and they emit from the current checked modules
 ("Cache storage").
+
+#### Embedded Units
+
+The Builtin module's unit is the head of every import chain and the largest
+unit most programs have, and every input of its object is fixed when the
+compiler is built: it imports nothing, binds no hosted functions, and its
+link name digests its module name and checking interface. The compiler's
+build therefore builds it once and links the finished cache entry into the
+compiler (`compile.boxy_embedded_units`), so a compiler that embeds it never
+lowers or compiles it for that key, with a cold cache, a warm one, or
+`--no-cache`.
+
+Exactly one entry is embedded: the Builtin's ordinary unit for the target
+the compiler runs on at its default CPU level
+(`RocTarget.fromStdTarget` of the compiler's own target), at dev opt with
+inline expects compiled in, with no run image, no expect sites and no wasm
+stack checks, under the Builtin's stable link name. That is the unit
+compile-time evaluation links against (`lowering_policy.compileTimeObjectLowering`)
+and the unit a native dev `roc build` or `roc run`, and a `roc test` whose
+Builtin unit needs no expect sites (the Builtin has no expects), links,
+since all of them key it identically. A compiler target without a dev
+backend embeds nothing.
+
+Selection is by key, never by a description of the unit. The table records
+each entry's `KeyInput` (the Builtin's `objectInput`, the target and opt
+names, the policy bits). `boxy_unit.restoreOrBuild` keys each recorded input
+under the running compiler and serves the unit from the table when one
+equals the unit's key, before it looks in the cache. Every other key misses
+the table and takes the ordinary cache path unchanged: a `v1` CPU-level host
+(its target name differs), another target, another opt, a test unit with
+expect sites, the compiler-only function-value variant (`functionUnitKey`),
+and a link in which another module shares the Builtin's stable name, which
+names the Builtin by content.
+
+The compiler's output is not independent of how the compiler itself was
+built: a Debug compiler's dev backend emits runtime checks of box and
+string locals into the code it generates
+(`LirCodeGen.emitDebugAssertValidBoxLocal`, `emitDebugAssertValidStrLocal`),
+so its units differ from an optimized compiler's. This is why every cache
+key folds in the executable's compatibility identity
+(`build_options.compiler_compatibility_hash`: optimize mode, target, CPU
+features, code generation backend, sources). The entry must therefore be
+built by an executable with exactly the compiler's identity. The build tool
+(src/build/builtin_unit.zig) is the compiler's own lowering, ARC and backend
+modules compiled for the compiler's target in the compiler's optimize mode;
+it loads the baked checked Builtin exactly as the compiler does, prepares
+the unit exactly as `compile.coordinator.BoxyObjects` prepares it, and
+encodes the entry with `boxy_unit.buildEntry`, the encoder `restoreOrBuild`
+files entries with. The table records the tool's compatibility hash, and
+the compiler asserts it equals its own. A compiler built for a target the
+build machine cannot run (a cross-compiled compiler) embeds no entries. Any
+change to the compiler's sources, the Builtin, or the cache formats reruns
+the tool through the build graph, and an unchanged build reuses its table.
+The compiler's compilation waits for the table, so embedding puts the
+tool's compilation and run on the path to the compiler. A Debug compiler
+therefore embeds nothing unless built with `-Dembed-builtin-unit=true`, so
+iterating on the compiler does not pay for it; every other optimize mode
+embeds by default.
+
+The table also carries the Builtin's digests (`boxy_interface.Digests`):
+its interface digest and its object input, which, since it imports
+nothing, are its own part of its digests alone, recorded with its checked
+artifact key and its link name. `Digests.add` gives a module whose
+artifact key and link name equal a recorded pair those digests instead of
+hashing its public surface and stored values in every process; any other
+pair (another Builtin, or the Builtin named by content) hashes as usual.
+
+`zig build run-test-builtin-unit` builds the unit through `restoreOrBuild`
+into an empty cache and requires the filed entry to be byte-identical to
+the tool's table entry, the table to serve its key, and the embedded
+digests to be the ones hashing the Builtin gives; `ROC_VERIFY_BOXY_OBJECT_REUSE`
+rebuilds the embedded entry inside the compiler itself and compares it like
+a restored one, and hashes the Builtin to compare its embedded digests.
 
 #### Unit Pieces And Whole-Program Dead Code
 
