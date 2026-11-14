@@ -937,4 +937,850 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(11, 20)" },
     },
+    .{
+        .name = "copied method requirements (lss): closure over two receivers whose nested call's requirement is replaced",
+        .source_kind = .module,
+        .source =
+        \\func = |a, b| {
+        \\    add_ab = |x| a + b + x
+        \\    add_ab(10)
+        \\}
+        \\
+        \\main = func(1.U64, 2)
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
+        .name = "copied method requirements (boxy): closure over two receivers whose nested call's requirement is replaced",
+        .source_kind = .module,
+        .source =
+        \\func = |a, b| {
+        \\    add_ab = |x| a + b + x
+        \\    add_ab(10)
+        \\}
+        \\
+        \\main = func(1.U64, 2)
+        ,
+        .expected = .{ .inspect_str = "13" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested definition called twice through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> U64
+        \\    read = |s| s.n
+        \\}
+        \\
+        \\poly = |s, t| {
+        \\    helper = |x| s.read() + x
+        \\    (helper(t), helper(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = poly(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(7, 8)" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested definition called twice through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> U64
+        \\    read = |s| s.n
+        \\}
+        \\
+        \\poly = |s, t| {
+        \\    helper = |x| s.read() + x
+        \\    (helper(t), helper(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = poly(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(7, 8)" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested definition with ? called twice through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> Try(U64, [Other])
+        \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+        \\}
+        \\
+        \\poly = |s, t| {
+        \\    helper = |x| {
+        \\        m = s.read()?
+        \\        Ok(m + x)
+        \\    }
+        \\    (helper(t), helper(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = poly(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(Ok(7), Ok(8))" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested definition with ? called twice through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> Try(U64, [Other])
+        \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+        \\}
+        \\
+        \\poly = |s, t| {
+        \\    helper = |x| {
+        \\        m = s.read()?
+        \\        Ok(m + x)
+        \\    }
+        \\    (helper(t), helper(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = poly(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(Ok(7), Ok(8))" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): escaping nested definition keeps its method requirement",
+        .source_kind = .module,
+        .source =
+        \\W := [W].{
+        \\    wrap : W, x -> List(x)
+        \\    wrap = |_, x| [x, x]
+        \\}
+        \\
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    _x = List.len(helper(1.U8))
+        \\    helper
+        \\}
+        \\
+        \\main = List.len(a(W.W)(3.U8))
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "copied method requirements (boxy): escaping nested definition keeps its method requirement",
+        .source_kind = .module,
+        .source =
+        \\W := [W].{
+        \\    wrap : W, x -> List(x)
+        \\    wrap = |_, x| [x, x]
+        \\}
+        \\
+        \\a = |outer| {
+        \\    helper = |v| outer.wrap(v)
+        \\    _x = List.len(helper(1.U8))
+        \\    helper
+        \\}
+        \\
+        \\main = List.len(a(W.W)(3.U8))
+        ,
+        .expected = .{ .inspect_str = "2" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested definitions sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    helper = |v| outer.id(v)
+        \\    other = |w| helper(w)
+        \\    other(helper(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested definitions sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    helper = |v| outer.id(v)
+        \\    other = |w| helper(w)
+        \\    other(helper(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): helpers nested two deep sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.id(w)
+        \\        h2(v)
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "copied method requirements (boxy): helpers nested two deep sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| outer.id(w)
+        \\        h2(v)
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): helpers nested three deep, each used twice, sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| {
+        \\            h3 = |z| outer.id(z)
+        \\            h3(h3(w))
+        \\        }
+        \\        h2(h2(v))
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "copied method requirements (boxy): helpers nested three deep, each used twice, sharing an enclosing receiver's method",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |v| {
+        \\        h2 = |w| {
+        \\            h3 = |z| outer.id(z)
+        \\            h3(h3(w))
+        \\        }
+        \\        h2(h2(v))
+        \\    }
+        \\    h1(h1(x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "5" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): helpers nested two deep with ? through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> Try(U64, [Other])
+        \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+        \\}
+        \\
+        \\a = |s, t| {
+        \\    h1 = |v| {
+        \\        h2 = |x| {
+        \\            m = s.read()?
+        \\            Ok(m + x)
+        \\        }
+        \\        first = h2(v)?
+        \\        h2(first)
+        \\    }
+        \\    (h1(t), h1(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = a(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(Ok(12), Ok(13))" },
+    },
+    .{
+        .name = "copied method requirements (boxy): helpers nested two deep with ? through a method on the enclosing argument",
+        .source_kind = .module,
+        .source =
+        \\Src := { n : U64 }.{
+        \\    read : Src -> Try(U64, [Other])
+        \\    read = |s| if s.n > 5 Err(Other) else Ok(s.n)
+        \\}
+        \\
+        \\a = |s, t| {
+        \\    h1 = |v| {
+        \\        h2 = |x| {
+        \\            m = s.read()?
+        \\            Ok(m + x)
+        \\        }
+        \\        first = h2(v)?
+        \\        h2(first)
+        \\    }
+        \\    (h1(t), h1(t + 1))
+        \\}
+        \\
+        \\src : Src
+        \\src = { n: 5 }
+        \\
+        \\main = a(src, 2)
+        ,
+        .expected = .{ .inspect_str = "(Ok(12), Ok(13))" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested helper with its own generic parameter beside the captured receiver",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\P := [P].{
+        \\    pick : P, x -> U64
+        \\    pick = |_, _| 1
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |p, v| {
+        \\        h2 = |q, w| outer.id(w) + q.pick(w)
+        \\        h2(P.P, h2(p, v))
+        \\    }
+        \\    h1(P.P, h1(P.P, x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "9" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested helper with its own generic parameter beside the captured receiver",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\P := [P].{
+        \\    pick : P, x -> U64
+        \\    pick = |_, _| 1
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h1 = |p, v| {
+        \\        h2 = |q, w| outer.id(w) + q.pick(w)
+        \\        h2(P.P, h2(p, v))
+        \\    }
+        \\    h1(P.P, h1(P.P, x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "9" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        .name = "copied method requirements (lss): nested helper adding to its captured receiver's method result, used twice",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\P := [P].{
+        \\    pick : P, x -> U64
+        \\    pick = |_, _| 1
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h2 = |q, w| outer.id(w) + q.pick(w)
+        \\    h2(P.P, h2(P.P, x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        .name = "copied method requirements (boxy): nested helper adding to its captured receiver's method result, used twice",
+        .source_kind = .module,
+        .source =
+        \\I := [I].{
+        \\    id : I, x -> x
+        \\    id = |_, x| x
+        \\}
+        \\
+        \\P := [P].{
+        \\    pick : P, x -> U64
+        \\    pick = |_, _| 1
+        \\}
+        \\
+        \\a = |outer, x| {
+        \\    h2 = |q, w| outer.id(w) + q.pick(w)
+        \\    h2(P.P, h2(P.P, x))
+        \\}
+        \\
+        \\main = a(I.I, 5.U64)
+        ,
+        .expected = .{ .inspect_str = "7" },
+        .specialization_strategy = .boxy,
+        .skip = .{ .wasm = true },
+    },
+    .{
+        // Nothing pins the record's field kind: no annotation names the
+        // record and no field is read. The field's value is a method call on
+        // a list literal, whose generated iterator representation is selected
+        // for the field's value cell before the record commits the field to
+        // `required`.
+        .name = "record literal with an unpinned field kind holds an iterator a method call on a list literal produces",
+        .source_kind = .module,
+        .source =
+        \\count = |n| {
+        \\    held = ({ items: [1.U8, 2].iter() }, n)
+        \\    held.1
+        \\}
+        \\
+        \\main : U64
+        \\main = count(2)
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // The same record passed through a generic function, whose request
+        // keys on the record's type before the record is constructed.
+        .name = "record literal with an unpinned field kind and an iterator field passes through a generic function",
+        .source_kind = .module,
+        .source =
+        \\keep : a -> a
+        \\keep = |value| value
+        \\
+        \\count = |n| {
+        \\    held = (keep({ items: [1.U8, 2].iter().map(|item| item + 1) }), n)
+        \\    held.1
+        \\}
+        \\
+        \\main : U64
+        \\main = count(3)
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        // Two calls of one generic function with records of one shape: the
+        // second request's field kind is still undetermined when it joins the
+        // first request, whose record is already constructed.
+        .name = "two record literals with unpinned field kinds and iterator fields share one generic function request",
+        .source_kind = .module,
+        .source =
+        \\keep : a -> a
+        \\keep = |value| value
+        \\
+        \\count = |n| {
+        \\    first = (keep({ items: [1.U8, 2].iter() }), n)
+        \\    second = (keep({ items: [3.U8].iter() }), first.1 + 1)
+        \\    second.1
+        \\}
+        \\
+        \\main : U64
+        \\main = count(4)
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        // Records of one shape built from different iterator producers share
+        // one list element type.
+        .name = "list of record literals with unpinned field kinds holds iterators from different producers",
+        .source_kind = .module,
+        .source =
+        \\count = |n| {
+        \\    held = ([{ items: [1.U8, 2].iter() }, { items: [3.U8].iter().map(|item| item + 1) }], n)
+        \\    held.0.len() + held.1
+        \\}
+        \\
+        \\main : U64
+        \\main = count(5)
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        // Nothing produces the empty list's iterators, so the pattern binder
+        // is the ordinary public `Iter`, and the loop's iterable request keeps
+        // it from merging into the generated-private representation the other
+        // branch produces. The match joins a public view with a private
+        // selection.
+        .name = "match joins a public iterator pattern binder with a produced iterator",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    its : List(Iter(U8))
+        \\    its = []
+        \\    var $digits = seed
+        \\    for item in (match its { [first, ..] => first, _ => [9.U8].iter() }) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(1)
+        ,
+        .expected = .{ .inspect_str = "19" },
+    },
+    .{
+        // The same join with the produced iterator's branch first.
+        .name = "match joins a produced iterator with a public iterator pattern binder",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    its : List(Iter(U8))
+        \\    its = []
+        \\    var $digits = seed
+        \\    for item in (match its { [] => [9.U8].iter().map(|item| item - 1), [first, ..] => first }) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(2)
+        ,
+        .expected = .{ .inspect_str = "28" },
+    },
+    .{
+        .name = "Try default joins a public iterator payload with a produced iterator",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    held : Try(Iter(U8), Str)
+        \\    held = Err("none")
+        \\    var $digits = seed
+        \\    for item in (held ?? [7.U8, 8].iter()) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(3)
+        ,
+        .expected = .{ .inspect_str = "378" },
+    },
+    .{
+        // The inner match selects a private representation over its public
+        // branch, and the outer `if` joins that selection with another
+        // producer's.
+        .name = "nested join carries a public iterator branch into the outer selection",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    its : List(Iter(U8))
+        \\    its = []
+        \\    var $digits = seed
+        \\    for item in (if seed > 100 { [1.U8].iter() } else { match its { [first, ..] => first, _ => [9.U8].iter().map(|item| item - 3) } }) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(5)
+        ,
+        .expected = .{ .inspect_str = "56" },
+    },
+    .{
+        // The early return yields a public iterator and the body's final
+        // expression a generated-private one, which becomes the lambda's
+        // output witness; the return names that same result.
+        .name = "early return of a public iterator from a lambda whose body produces one",
+        .source_kind = .module,
+        .source =
+        \\digits = |seed| {
+        \\    its : List(Iter(U8))
+        \\    its = []
+        \\    pick = |held| {
+        \\        for it in held {
+        \\            return it
+        \\        }
+        \\        [9.U8].iter()
+        \\    }
+        \\    var $digits = seed
+        \\    for item in pick(its) {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\main : U64
+        \\main = digits(4)
+        ,
+        .expected = .{ .inspect_str = "49" },
+    },
+    .{
+        // `Box.box` is specialized at a function whose result is a produced
+        // iterator, so its parameter, a bare type variable, takes that
+        // function's public interface.
+        .name = "a boxed function returning a produced iterator is unboxed and called",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |n| {
+        \\    make = Box.unbox(Box.box(|| [1.U8, 2].iter().map(|item| item + 1)))
+        \\    digits(make()) + n
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "23" },
+    },
+    .{
+        // The loop's iterator is specialized at a list whose element is a
+        // function with a produced iterator for a result.
+        .name = "a list of functions returning produced iterators is walked and called",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |n| {
+        \\    makers = [|| [1.U8, 2].iter(), || [3.U8].iter().map(|item| item + 1)]
+        \\    var $total = 0.U64
+        \\    for make in makers {
+        \\        $total = $total * 100 + digits(make())
+        \\    }
+        \\    $total + n
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "1204" },
+    },
+    .{
+        // The identity's parameter is a bare type variable at each call, and
+        // the function sits one container below it.
+        .name = "functions returning iterators cross a generic procedure inside a record and a tag",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\id : a -> a
+        \\id = |x| x
+        \\
+        \\run = |n| {
+        \\    record = id({ make: || [1.U8, 2].iter(), count: 3.U64 })
+        \\    tagged = id(if n > 0 { Ok(|| [5.U8, 6].iter()) } else { Err(6.U64) })
+        \\    from_tag = match tagged {
+        \\        Ok(make) => digits(make())
+        \\        Err(code) => code
+        \\    }
+        \\    digits((record.make)()) * 1000 + record.count * 100 + from_tag
+        \\}
+        \\
+        \\main : U64
+        \\main = run(2)
+        ,
+        .expected = .{ .inspect_str = "12356" },
+    },
+    .{
+        // The produced iterator is below a record field and below a second
+        // function's result in the boxed function's type.
+        .name = "a boxed function returns a record and a function that hold produced iterators",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |n| {
+        \\    record = Box.unbox(Box.box(|| { it: [1.U8, 2].iter(), count: 3.U64 }))()
+        \\    nested = Box.unbox(Box.box(|| || [4.U8, 5].iter()))
+        \\    digits(record.it) * 1000 + record.count * 100 + digits(nested()()) + n
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "12345" },
+    },
+    .{
+        // Both branches are functions whose results are distinct produced
+        // iterators; one of them crossed a box.
+        .name = "an unboxed function returning a produced iterator joins a local one",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |n| {
+        \\    held = Box.unbox(Box.box(|| [1.U8, 2].iter()))
+        \\    make = if n > 1 { held } else { || [9.U8].iter().map(|item| item - 1) }
+        \\    digits(make())
+        \\}
+        \\
+        \\main : U64
+        \\main = run(2) * 10 + run(1)
+        ,
+        .expected = .{ .inspect_str = "128" },
+    },
+    .{
+        // The adapter's step matches the inner step result against a pattern
+        // whose public `Iter(item)` holds private evidence through `item`, so
+        // both sides of the relation hold some.
+        .name = "an adapter over an iterator of produced iterators",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |seed| {
+        \\    sums = [[1.U8, 2].iter(), [3.U8].iter()].iter().map(|it| digits(it))
+        \\    var $total = seed
+        \\    for sum in sums {
+        \\        $total = $total * 100 + sum
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "1203" },
+    },
+    .{
+        // The items are functions whose results are produced iterators.
+        .name = "adapters over an iterator of functions returning produced iterators",
+        .source_kind = .module,
+        .source =
+        \\digits : Iter(U8) -> U64
+        \\digits = |items| {
+        \\    var $digits = 0
+        \\    for item in items {
+        \\        $digits = $digits * 10 + item.to_u64()
+        \\    }
+        \\    $digits
+        \\}
+        \\
+        \\run = |seed| {
+        \\    made = [|| [1.U8, 2].iter(), || [3.U8].iter()].iter().map(|make| make())
+        \\    kept = [|| [4.U8, 5].iter(), || [6.U8].iter()].iter().keep_if(|make| digits(make()) > 10)
+        \\    var $total = seed
+        \\    for it in made {
+        \\        $total = $total * 100 + digits(it)
+        \\    }
+        \\    for make in kept {
+        \\        $total = $total * 100 + digits(make())
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\main : U64
+        \\main = run(0)
+        ,
+        .expected = .{ .inspect_str = "120345" },
+    },
 };

@@ -17263,9 +17263,13 @@ const DraftLiteralRejected = struct {
     site: Common.LiteralRejectionSite,
 };
 
+/// A lambda's result as its returns name it. The cell is the lambda's output
+/// witness, which is selected only once its body has lowered.
+const DraftReturnTargetId = enum(u32) { _ };
+
 const DraftReturn = struct {
     value: DraftExprId,
-    target: DraftTypeCell,
+    target: DraftReturnTargetId,
 };
 
 const DraftStaticDataCandidate = struct {
@@ -19478,6 +19482,8 @@ const BodyDraftStore = struct {
     /// graph aliases. It is independent of mutable interface root identity.
     nested_spec_families: std.AutoHashMap(DraftNestedFamilyAddress, void),
     exprs: std.ArrayList(DraftExpr),
+    /// Each lambda's result cell, indexed by `DraftReturnTargetId`.
+    return_targets: std.ArrayList(DraftTypeCell),
     pats: std.ArrayList(DraftPat),
     stmts: std.ArrayList(DraftStmt),
     locals: std.ArrayList(DraftLocal),
@@ -19659,6 +19665,7 @@ const BodyDraftStore = struct {
             .nested_spec_lookup = DraftNestedSpecLookup.init(allocator),
             .nested_spec_families = std.AutoHashMap(DraftNestedFamilyAddress, void).init(allocator),
             .exprs = .empty,
+            .return_targets = .empty,
             .pats = .empty,
             .stmts = .empty,
             .locals = .empty,
@@ -19907,6 +19914,7 @@ const BodyDraftStore = struct {
         self.stmts.deinit(self.allocator);
         self.pats.deinit(self.allocator);
         self.exprs.deinit(self.allocator);
+        self.return_targets.deinit(self.allocator);
         self.nested_defs.deinit(self.allocator);
         self.template_specs.deinit(self.allocator);
         for (self.sealed_template_specs.items) |spec| self.allocator.free(spec.subst);
@@ -20249,6 +20257,12 @@ const BodyDraftStore = struct {
         return id;
     }
 
+    fn addReturnTarget(self: *BodyDraftStore, cell: DraftTypeCell) Allocator.Error!DraftReturnTargetId {
+        const id: DraftReturnTargetId = @fromBackingInt(@intCast(@as(u32, @intCast(self.return_targets.items.len))));
+        try self.return_targets.append(self.allocator, cell);
+        return id;
+    }
+
     fn addStmt(self: *BodyDraftStore, stmt: DraftStmt) Allocator.Error!DraftStmtId {
         const id: DraftStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(self.stmts.items.len))));
         try self.stmts.append(self.allocator, stmt);
@@ -20587,21 +20601,12 @@ const BodyDraftStore = struct {
         }
         for (self.exprs.items) |*expr| {
             try expr.ty.sealInPlace(graph, sealer);
-            if (expr.data == .return_) {
-                var sealed_ret = expr.data.return_;
-                try sealed_ret.target.sealInPlace(graph, sealer);
-                expr.data = .{ .return_ = sealed_ret };
-            }
+        }
+        for (self.return_targets.items) |*target| {
+            try target.sealInPlace(graph, sealer);
         }
         for (self.pats.items) |*pat| {
             try pat.ty.sealInPlace(graph, sealer);
-        }
-        for (self.stmts.items) |*stmt| {
-            if (stmt.* == .return_) {
-                var sealed_ret = stmt.return_;
-                try sealed_ret.target.sealInPlace(graph, sealer);
-                stmt.* = .{ .return_ = sealed_ret };
-            }
         }
         for (self.declared_fields.items) |*field| {
             switch (field.*) {
@@ -20658,14 +20663,9 @@ const BodyDraftStore = struct {
         }
         for (self.locals.items) |local| local.ty.assertSealed();
         for (self.typed_locals.items) |local| local.ty.assertSealed();
-        for (self.exprs.items) |expr| {
-            expr.ty.assertSealed();
-            if (expr.data == .return_) expr.data.return_.target.assertSealed();
-        }
+        for (self.exprs.items) |expr| expr.ty.assertSealed();
+        for (self.return_targets.items) |target| target.assertSealed();
         for (self.pats.items) |pat| pat.ty.assertSealed();
-        for (self.stmts.items) |stmt| {
-            if (stmt == .return_) stmt.return_.target.assertSealed();
-        }
         for (self.declared_fields.items) |field| {
             switch (field) {
                 .padding => |padding| padding.assertSealed(),
@@ -21104,7 +21104,7 @@ const BodyDraftStore = struct {
         try program.stmt_regions.ensureUnusedCapacity(program.allocator, self.stmts.items.len);
         for (self.stmts.items, 0..) |stmt, index| {
             if (!ids.retained(.stmts, index)) continue;
-            program.stmts.appendAssumeCapacity(try BodyDraftStore.sealCoreStmt(ids, committed_types, stmt));
+            program.stmts.appendAssumeCapacity(try self.sealCoreStmt(ids, committed_types, stmt));
             program.stmt_locs.appendAssumeCapacity(ids.sourceLoc(self.stmt_locs.items[index]));
             program.stmt_regions.appendAssumeCapacity(self.stmt_regions.items[index]);
         }
@@ -21273,10 +21273,10 @@ const BodyDraftStore = struct {
         };
     }
 
-    fn sealCoreReturn(ids: FinalIdOffsets, committed_types: *CommittedGraphTypes, ret: DraftReturn) Allocator.Error!Ast.Return {
+    fn sealCoreReturn(self: *const BodyDraftStore, ids: FinalIdOffsets, committed_types: *CommittedGraphTypes, ret: DraftReturn) Allocator.Error!Ast.Return {
         return .{
             .value = ids.expr(ret.value),
-            .target = try ret.target.sealCommitted(committed_types),
+            .target = try self.return_targets.items[@backingInt(ret.target)].sealCommitted(committed_types),
         };
     }
 
@@ -21649,7 +21649,7 @@ const BodyDraftStore = struct {
                 .loop_params = ids.typedLocalSpan(jump.loop_params),
                 .loop_values = ids.exprSpan(jump.loop_values),
             } },
-            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, committed_types, ret) },
+            .return_ => |ret| .{ .return_ = try self.sealCoreReturn(ids, committed_types, ret) },
             .row_widen => |widen| .{ .row_widen = .{ .value = ids.expr(widen.value) } },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
             .checked_error => |literal| .{ .checked_error = ids.stringLiteral(literal) },
@@ -21667,7 +21667,7 @@ const BodyDraftStore = struct {
         };
     }
 
-    fn sealCoreStmt(ids: FinalIdOffsets, committed_types: *CommittedGraphTypes, stmt: DraftStmt) Allocator.Error!Ast.Stmt {
+    fn sealCoreStmt(self: *const BodyDraftStore, ids: FinalIdOffsets, committed_types: *CommittedGraphTypes, stmt: DraftStmt) Allocator.Error!Ast.Stmt {
         return switch (stmt) {
             .uninitialized => |pat| .{ .uninitialized = ids.pat(pat) },
             .let_ => |let_| .{ .let_ = .{
@@ -21679,7 +21679,7 @@ const BodyDraftStore = struct {
             .expr => |expr| .{ .expr = ids.expr(expr) },
             .expect => |expr| .{ .expect = ids.expr(expr) },
             .dbg => |expr| .{ .dbg = ids.expr(expr) },
-            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, committed_types, ret) },
+            .return_ => |ret| .{ .return_ = try self.sealCoreReturn(ids, committed_types, ret) },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
             .checked_error => |literal| .{ .checked_error = ids.stringLiteral(literal) },
         };
@@ -22096,7 +22096,10 @@ const BinderRestore = struct {
 
 const ActiveReturnTarget = struct {
     lambda: ExprSite,
+    /// The request a returned value lowers against.
     cell: DraftTypeCell,
+    /// The lambda's result, which every return of the lambda names.
+    output: DraftReturnTargetId,
 };
 
 const ActiveConstBindingId = enum(u32) { _ };
@@ -24178,11 +24181,13 @@ const BodyContext = struct {
 
     /// Materialize a local at its requested graph node. The request relation
     /// either joins the local and request representations, relates a
-    /// generated-private local to a distinct public interface, or leaves an
-    /// exact chain of producer-authored nominal backing edges between them.
-    /// Preserve the producer-owned local at an opaque interface boundary;
-    /// otherwise record every requested nominal layer explicitly in Monotype
-    /// IR.
+    /// generated-private local to a distinct public interface, proves the
+    /// local and the request one backed nominal instance whose classes each
+    /// keep their own representation witness, or leaves an exact chain of
+    /// producer-authored nominal backing edges between them. Preserve the
+    /// producer-owned local at an opaque interface boundary and at its own
+    /// witness; otherwise record every requested nominal layer explicitly in
+    /// Monotype IR.
     fn lowerLocalAtRequestedNode(
         self: *BodyContext,
         local: DraftLocalId,
@@ -24210,6 +24215,11 @@ const BodyContext = struct {
         while (true) {
             current = (try self.constructorRepresentationNode(current));
             if (self.graph.sameClass(source_representation_node, current)) break;
+            // Backed nominal instances keep distinct classes when each holds
+            // its own representation witness, so the relation records their
+            // identity beside the classes. The local is then the requested
+            // nominal's value at its own witness.
+            if (try self.graph.sameRelatedNamedInstance(source_representation_node, current)) break;
             if ((try self.graph.content(current)) != .named) {
                 Common.invariant("related local and request had no exact nominal backing path");
             }
@@ -27843,7 +27853,7 @@ const BodyContext = struct {
                         .default = .none,
                     };
                 }
-                const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.fieldSlot() });
                 const kind = try self.graph.newUndeterminedFieldKind();
                 self.graph.registerUndeterminedFieldKindCells(kind, slot_node, value_node);
                 const instantiated = InstantiatedFieldKind{
@@ -29982,10 +29992,10 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, checked_root, produced_root);
             // The private side is the runtime representation, matching the
             // selection every other site makes (field access, control-flow
-            // result selection, and the containment branch below). Typing the
-            // value at a public node against a private request is the state
-            // `includeControlFlowResult` reports as fatal, so the checked side
-            // is selected only when it is the private one.
+            // result selection, and the containment branch below). A public
+            // value under a private request is a public view of the selected
+            // representation, so the checked side is selected only when it is
+            // the private one.
             if (produced_private_root or try self.graph.containsGeneratedPrivate(produced_root)) {
                 return produced_node;
             }
@@ -30696,6 +30706,8 @@ const BodyContext = struct {
         lambda_id: ExprSite,
         checked_body: ExprSite,
         ret_cell: DraftTypeCell,
+        /// The result this lambda's returns name.
+        return_output: DraftReturnTargetId,
         saved_return_target: ?ActiveReturnTarget,
         saved_loc: base.SourceLoc,
         saved_region: base.Region,
@@ -30805,17 +30817,19 @@ const BodyContext = struct {
         const checked_body = lambda.body;
         const ret_cell = DraftTypeCell.fromGraphNode(fn_nodes.ret);
         if (arg_nodes.len != checked_args.len) Common.invariant("lambda arity differs from concrete function type");
+        const return_output = try self.draft.addReturnTarget(ret_cell);
         var lowering = LambdaLowering{
             .saved_propagation = saved_propagation,
             .lambda_id = lambda_id,
             .checked_body = ExprSite.read(checked_body),
             .ret_cell = ret_cell,
+            .return_output = return_output,
             .saved_return_target = self.current_return_target,
             .saved_loc = self.builder.current_loc,
             .saved_region = self.builder.current_region,
             .exhaustiveness_scope = undefined,
         };
-        self.current_return_target = .{ .lambda = lambda_id, .cell = ret_cell };
+        self.current_return_target = .{ .lambda = lambda_id, .cell = ret_cell, .output = return_output };
         errdefer self.current_return_target = lowering.saved_return_target;
         errdefer self.builder.current_loc = lowering.saved_loc;
         errdefer self.builder.current_region = lowering.saved_region;
@@ -30911,7 +30925,7 @@ const BodyContext = struct {
         else
             ret_cell;
         const body_ret_cell = lowering.body_ret_cell;
-        self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell };
+        self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell, .output = return_output };
         if (lowering.materialized_args.items.len != 0) {
             lowering.body = .{ .materialized = try self.materializedArgsRequest(
                 lowering.materialized_args.items,
@@ -30968,7 +30982,7 @@ const BodyContext = struct {
             },
             .materialized => child_body.?,
             .child => |child| if (child.return_boundary)
-                try self.addExprWithTypeCell(body_ret_cell, .{ .return_ = .{ .value = child_body.?, .target = body_ret_cell } })
+                try self.addExprWithTypeCell(body_ret_cell, .{ .return_ = .{ .value = child_body.?, .target = lowering.return_output } })
             else
                 child_body.?,
         };
@@ -31017,6 +31031,10 @@ const BodyContext = struct {
             break :blk ret_cell;
         };
         self.draft.exprs.items[@backingInt(body)].ty = produced_ret_cell;
+        // The body can select an output witness distinct from the request its
+        // returns lowered against. Every return of this lambda produces that
+        // one result.
+        self.draft.return_targets.items[@backingInt(lowering.return_output)] = produced_ret_cell;
 
         return .{
             .args = try self.draft.addTypedLocalSpan(lowering.args),
@@ -34385,7 +34403,7 @@ const BodyContext = struct {
         expr: ExprSite,
         lambda: ExprSite,
         context: checked.CheckedReturnContext,
-        target: DraftTypeCell = undefined,
+        target: DraftReturnTargetId = undefined,
     };
 
     fn stepReturn(self: *BodyContext, frame: *LowerFrame, task: *ReturnTask, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -34401,7 +34419,7 @@ const BodyContext = struct {
         if (task.lambda != target.lambda) {
             Common.invariant("checked return target disagreed with the active lambda specialization");
         }
-        task.target = target.cell;
+        task.target = target.output;
         // `?` contributes its source error row to the enclosing result;
         // it does not equate those rows. Keep the checked source type so
         // the explicit return boundary can convert it to the target.
@@ -56279,7 +56297,7 @@ const BodyContext = struct {
                 if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
                 break :blk switch (variable.origin) {
                     .checked_variable => true,
-                    .row_extension, .placeholder, .interface_parameter => false,
+                    .row_extension, .placeholder, .field_slot, .interface_parameter => false,
                 };
             },
             .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
@@ -63896,7 +63914,9 @@ const BodyContext = struct {
         } else {
             var lowered = input.?.exprValue();
             if (task.return_boundary) |ret_cell| {
-                lowered = try self.addExprWithTypeCell(ret_cell, .{ .return_ = .{ .value = lowered, .target = ret_cell } });
+                const target = self.current_return_target orelse
+                    Common.invariant("materialized lambda body crossed its return boundary without an active return target");
+                lowered = try self.addExprWithTypeCell(ret_cell, .{ .return_ = .{ .value = lowered, .target = target.output } });
                 task.return_boundary = null;
             }
             self.currentMaterializeFrame(materialize_run).continuation = lowered;
@@ -65082,19 +65102,20 @@ const BodyContext = struct {
         const value_node = try value_cell.toGraphNode(self.graph);
         try selectRequestRepresentation(self.graph, selected_node, value_node);
 
-        const selected_private = try self.graph.containsGeneratedPrivate(selected_node);
-        const value_private = try self.graph.containsGeneratedPrivate(value_node);
-        if (selected_private != value_private) {
-            if (!selected_private and value_private) {
-                // A finished private producer remains immutable and therefore
-                // cannot merge into the live public accumulator. Carry its
-                // exact cell forward, then retag earlier branches after the
-                // final representation has been selected.
-                selection.selected = value_cell;
-            } else {
-                Common.invariant("control-flow branch could not use its selected runtime representation");
-            }
+        if (!try self.graph.containsGeneratedPrivate(selected_node) and
+            try self.graph.containsGeneratedPrivate(value_node))
+        {
+            // A finished private producer remains immutable and therefore
+            // cannot merge into the live public accumulator. Carry its
+            // exact cell forward, then retag earlier branches after the
+            // final representation has been selected.
+            selection.selected = value_cell;
         }
+        // A branch that is still public under a private selection could not
+        // merge into it: one of the two reaches a finished Monotype, so the
+        // relation above validated the branch as a public view of the
+        // selected representation instead. It carries the selection like
+        // every other branch, and Lambda Solved joins the two representations.
         selection.has_value = true;
         self.draft.exprs.items[@backingInt(value)].ty = selection.selected;
     }
@@ -73041,7 +73062,11 @@ test "body draft commit relocates core type and name fields out of private store
         const destructs = try draft.addRecordDestructSpan(&.{.{ .name = field_name, .pattern = bind_pat }});
         _ = try draft.addPat(.{ .ty = list_cell, .data = .{ .record = destructs } });
         _ = try draft.addTypedLocalSpan(&.{.{ .local = local, .ty = list_cell }});
-        _ = try draft.addStmt(.{ .return_ = .{ .value = expr, .target = unit_cell } });
+        // The return names its lambda's result before that result is selected:
+        // the cell the slot holds at sealing is the one the return seals to.
+        const return_target = try draft.addReturnTarget(list_cell);
+        _ = try draft.addStmt(.{ .return_ = .{ .value = expr, .target = return_target } });
+        draft.return_targets.items[@backingInt(return_target)] = unit_cell;
         debug_symbol = symbol_gen.fresh();
         try draft.proc_debug_names.append(allocator, .{
             .symbol = debug_symbol,

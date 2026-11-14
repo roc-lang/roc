@@ -1499,8 +1499,14 @@ const Gen = struct {
             slot.* = if (index < worker.capture_types.len) try self.layoutOf(worker.capture_types[index]) else .opaque_ptr;
             if (slot.* != .zst) all_zero_sized = false;
         }
+        // The reuse argument holds this worker's own callable, whose closed
+        // capture record a packing of the same layout repacks.
+        const reuse: Builder.ReuseKind = if (capture_layouts.len == 0)
+            .none
+        else
+            .{ .static = try b.captureLayout(worker.capture_types, @intFromBool(has_table)) };
         // A capture record of zero-sized values has no storage to read.
-        var start = try b.beginErasedWorker(if (all_zero_sized) &.{} else capture_layouts);
+        var start = try b.beginErasedWorker(if (all_zero_sized) &.{} else capture_layouts, reuse);
         if (all_zero_sized and capture_layouts.len != 0) {
             b.allocator.free(start.captures);
             start.captures = try b.allocator.alloc(LocalId, capture_layouts.len);
@@ -1520,6 +1526,10 @@ const Gen = struct {
         const b = self.b;
         b.entry_hole = try b.newHole();
         const capture_ptr = try b.closedLocal(.opaque_ptr);
+        // The reuse argument holds this worker's own dynamic capture record,
+        // which owns the capture views `dynamicCaptures` reads, so it exists
+        // before them.
+        _ = try b.beginReuseArg(.dynamic);
         const start: Builder.ErasedStart = .{
             .entry = b.entry_hole,
             .body_start = undefined,
@@ -1556,14 +1566,8 @@ const Gen = struct {
         const b = self.b;
         defer b.allocator.free(frame.args);
         defer b.allocator.free(frame.start.captures);
-        var proc_args: std.ArrayList(LocalId) = .empty;
-        defer proc_args.deinit(b.allocator);
-        if (frame.record) |record| try proc_args.append(b.allocator, record);
-        try proc_args.append(b.allocator, frame.start.capture_ptr);
-        try b.finishProc(frame.start.entry, frame.body_start, proc_args.items, frame.ret_layout);
-        const proc = b.store.getProcSpecPtr(b.currentWorker().proc);
-        proc.erased_capture_arg = .of(frame.start.capture_ptr);
-        proc.abi = .erased_record;
+        const args: []const LocalId = if (frame.record) |*record| record[0..1] else &.{};
+        try b.finishErasedProc(frame.start.entry, frame.body_start, args, frame.ret_layout, frame.start.capture_ptr);
     }
 
     /// Bind a callback's trailing encoding and names captures.

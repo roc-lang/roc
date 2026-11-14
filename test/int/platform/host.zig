@@ -83,6 +83,9 @@ extern fn roc_test_simple_effectful(input: SimpleInput) callconv(.c) SimpleInput
 extern fn roc_test_three_floats_pure(input: ThreeFloats) callconv(.c) ThreeFloats;
 extern fn roc_test_three_floats_effectful(input: ThreeFloats) callconv(.c) ThreeFloats;
 extern fn roc_test_two_u32_args(first: u32, second: u32) callconv(.c) TwoU32;
+extern fn roc_counter_init(factor: i64) callconv(.c) Box;
+extern fn roc_counter_step(boxed_counter: Box, event: i64) callconv(.c) Box;
+extern fn roc_counter_total(boxed_counter: Box) callconv(.c) i64;
 
 // --- Symbol-ABI runtime exports
 var g_host_env = HostEnv{
@@ -414,12 +417,25 @@ fn platform_main() void {
         print("\x1b[31mFAILED\x1b[0m: two U32 args corrupted! Expected first=7, second=300\n", .{});
     }
 
+    // Test 13: the host holds a Box of platform state whose fields are
+    // functions (issue 12953). Each call consumes the Box it is given.
+    print("\n=== Test 13: Box(Counter(model)) holding functions round-trips ===\n", .{});
+    const counter = roc_counter_step(roc_counter_step(roc_counter_init(3), 10), 20);
+    const counter_total = roc_counter_total(counter);
+    print("Output: total={}\n", .{counter_total});
+    if (counter_total == 192) {
+        print("\x1b[32mSUCCESS\x1b[0m: boxed state functions ran after the round trip!\n", .{});
+        success_count += 1;
+    } else {
+        print("\x1b[31mFAILED\x1b[0m: expected total=192\n", .{});
+    }
+
     // Final summary
     print("\n=== FINAL RESULT ===\n", .{});
-    if (success_count == 12) {
+    if (success_count == 13) {
         print("\x1b[32mALL TESTS PASSED\x1b[0m: Box(model) and mixed args work correctly across host boundary!\n", .{});
     } else {
-        print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/12 tests passed\n", .{success_count});
+        print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/13 tests passed\n", .{success_count});
         std.process.exit(1);
     }
 }

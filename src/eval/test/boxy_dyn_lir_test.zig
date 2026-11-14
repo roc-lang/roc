@@ -142,6 +142,7 @@ const Builder = struct {
         join_points: []const LIR.JoinPoint = &.{},
         abi: LIR.ProcAbi = .roc,
         erased_capture_arg: ?LocalId = null,
+        erased_reuse_arg: ?LocalId = null,
         tail_group: ?LIR.TailGroupId = null,
         uses_pending_cell: bool = false,
     }) TestError!LirProcSpecId {
@@ -158,6 +159,7 @@ const Builder = struct {
             .dyn_result = .of(options.dyn_result),
             .abi = options.abi,
             .erased_capture_arg = .of(options.erased_capture_arg),
+            .erased_reuse_arg = .of(options.erased_reuse_arg),
             .tail_group = .of(options.tail_group),
             .uses_pending_cell = options.uses_pending_cell,
         }, .none);
@@ -1307,8 +1309,9 @@ fn buildDictionaryProgram(b: *Builder) TestError!LirProcSpecId {
     const args = try b.dynLocal(args_desc, .param);
     const x = try b.dynLocal(elem_desc, .view);
     const result = try b.dynLocal(elem_desc, .result);
-    const worker_body = try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x)))));
-    const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
+    const reuse = try b.local(try b.layouts.insertErasedCallable());
+    const worker_body = try b.decref(reuse, try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x))))));
+    const worker = try b.proc(&.{ args, capture, reuse }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture, .erased_reuse_arg = reuse });
 
     const record_layout = try b.layouts.putTuple(&.{b.layouts.getLayout(.i64)});
     const int_table = try b.local(.opaque_ptr);
@@ -1477,8 +1480,9 @@ fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: 
     const x = if (direct_entry) args else try b.dynLocal(elem_desc, .view);
     const result = try b.dynLocal(elem_desc, .result);
     const use_arg = if (direct_entry) try b.ret(x) else try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x)));
-    const worker_body = try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, use_arg));
-    const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
+    const reuse_arg = try b.local(try b.layouts.insertErasedCallable());
+    const worker_body = try b.decref(reuse_arg, try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, use_arg)));
+    const worker = try b.proc(&.{ args, capture, reuse_arg }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture, .erased_reuse_arg = reuse_arg });
 
     const desc = try b.local(.opaque_ptr);
     const desc_table = try b.local(.opaque_ptr);

@@ -96,6 +96,26 @@ pub const inline_list_slow_arms_test = TestSpec{
 /// the compiled binary's IO behavior, not build-time features.
 pub const io_spec_tests = [_]TestSpec{
     .{
+        .roc_file = "test/fx/callable_iterator_result_host_round_trip.roc",
+        .io_spec = "1>boxed function: 12 12|1>boxed unannotated function: 23 24|1>boxed function returning an adapter: 34 45|1>boxed function capturing an iterator: 12 6|1>boxed function taking an iterator: 23 7|1>boxed function consuming an iterator: 23 8|1>boxed function returning a record: 143 153|1>boxed function returning a tag: 12 7|1>boxed function returning a function: 12 12|1>boxed function returning nested iterators: 1203 0|1>boxed function returning a stream: 12 12|1>functions in a boxed record: 13 13|1>function in a boxed tag: 12 4|1>held function joins a local one: 12 9|1>held nominal function joins a local one: 12 9|1>boxed functions in a boxed list: 1204 0|1>local box: 12 52|1>unboxed function joins a local one: 12 8|1>two boxes join: 12 8|1>local box returning a chain: 39 39|1>local box returning a function: 12 12|1>local box taking an iterator: 23 34|1>local box returning a stream: 12 12|1>list of functions: 1204 0|1>list pattern of functions: 12 4|1>mapped list of functions: 1223 0|1>iterator of functions: 1203 0|1>function through a generic: 12 12|1>record of a function through a generic: 123 123|1>tuple of a function through a generic: 123 123|1>tag of a function through a generic: 12 5|1>nominal of a function through a generic: 12 12|1>function taking a function: 12 12|1>function default: 12 9|1>iterator of functions mapped to results: 1203 0|1>iterator of functions filtered: 12 0|1>iterator of functions folded: 1203 1203|1>iterator of iterators mapped: 1203 0|1>iterator of records mapped: 1203 0",
+        .description = "Functions and iterator items whose types hold produced iterators cross boxes, containers, generics, adapters and the host, then run",
+    },
+    .{
+        .roc_file = "test/fx/control_flow_iterator_join_host_round_trip.roc",
+        .io_spec = "1>match held first: 34 34 9 9|1>match produced first: 34 34 9 9|1>match as loop iterable: 34 34 9 9|1>match guard: 34 6 9 9|1>match tuple: 34 9 34 9|1>match try payload: 7 7 8 8|1>try default: 7 7 9 9|1>if held first: 34 9 34 9|1>if produced first: 34 9 34 9|1>nested held inside: 34 7 8 7|1>nested produced inside: 34 8 7 34|1>three tiers: 34 89 9 89|1>statement block branch: 34 6 9 9|1>adapter over join: 23 23 8 8|1>concat of joins: 734 78 98 98|1>join in list: 34 9 9 9|1>join in record: 341 92 92 92|1>reassigned in branch: 341 92 92 92|1>early return held: 34 34 9 9|1>early return produced: 34 9 7 9|1>early return two produced: 34 89 9 89|1>early return top level: 34 9 9 9|1>stream join: 12 9 34 9|1>nominal match: 12 9 12 9|1>nominal nested: 12 7 12 7|1>nominal early return: 12 9 12 9|1>nominal list items: 1209 0 1209 0|1>nominal across functions: 12 9 12 9",
+        .description = "Control-flow joins and early returns of a host-held public iterator, bare or inside a nominal, with a produced one iterate both sides",
+    },
+    .{
+        .roc_file = "test/fx/record_literal_iterator_field_host_round_trip.roc",
+        .io_spec = "1>list literal: 123|1>adapter chain: 34|1>bound record: 45|1>bound list: 67|1>through a function: 89|1>two fields: 12 tagged|1>nested: 34 2|1>tag payload: 56|1>list of records: 1204|1>stream: 78|1>custom: 123|1>long chain: 199|1>nested iterators: 1203",
+        .description = "Record literals with unpinned field kinds keep their iterator fields through a hosted Box(a) round trip",
+    },
+    .{
+        .roc_file = "test/fx/issue_12953_host_held_state.roc",
+        .io_spec = "1>a label long enough to live on the heap rather than inline: 35",
+        .description = "A boxed app state whose fields hold functions survives a host round trip (issue #12953)",
+    },
+    .{
         .roc_file = "test/fx/host_constant_boxed_sequence.roc",
         .io_spec = "1>[1, 2, 3]|1>[4, 5]|1>[93]|1>[93]",
         .description = "Constant boxed iterators and streams survive storage and host round trips (issue #12887)",
@@ -805,6 +825,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/issue_12438_input_list_overfree.roc",
         .io_spec = "0<aa|1>ok: True, len: 2, first: 97",
         .description = "Regression test for #12438: a list passed through cursor records into helper calls is not decremented more often than it is owned",
+    },
+    .{
+        .roc_file = "test/fx/issue_12945_field_names_iter_leak.roc",
+        .io_spec = "1>walked 9",
+        .description = "Regression test for #12945: iterating a derived record parser's field names releases or reuses each step's erased callable",
     },
     .{
         .roc_file = "test/fx/issue_12692_handle_shape.roc",

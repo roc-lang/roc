@@ -9227,6 +9227,98 @@ test "check type - polymorphic recursion at a context-free body-local type allow
     });
 }
 
+test "check type - recursion at an alias of the definition's own variable is accepted" {
+    // `Same(a)` is `a`, so the recursive use passes `a` along unchanged.
+    const source =
+        \\Same(x) : x
+        \\depth : a, U64 -> U64
+        \\depth = |x, n| {
+        \\    y : Same(a)
+        \\    y = x
+        \\    if n == 0 { 0 } else { 1 + depth(y, n - 1) }
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "depth", .expected = "a, U64 -> U64" },
+    });
+}
+
+test "check type - recursion at an alias whose backing ignores its argument is accepted" {
+    // `Phantom(a)` is `U64`, a closed type, so the recursion reaches one
+    // further instantiation and stays there.
+    const source =
+        \\Phantom(x) : U64
+        \\depth : a, U64 -> U64
+        \\depth = |x, n| {
+        \\    y : Phantom(a)
+        \\    y = 5
+        \\    _ignored = x
+        \\    if n == 0 { 0 } else { 1 + depth(y, n - 1) }
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "depth", .expected = "a, U64 -> U64" },
+    });
+}
+
+test "check type - recursion at an alias that drops another variable is accepted" {
+    // `First(a, b)` is `a`: `b` names no part of the type, so nothing flows
+    // from `b` into `a`.
+    const source =
+        \\First(x, y) : x
+        \\depth : a, b, U64 -> U64
+        \\depth = |x, y, n| {
+        \\    z : First(a, b)
+        \\    z = x
+        \\    if n == 0 { 0 } else { 1 + depth(z, y, n - 1) }
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "depth", .expected = "a, b, U64 -> U64" },
+    });
+}
+
+test "check type - polymorphic recursion at an alias whose backing grows is rejected" {
+    const source =
+        \\Wrap(x) : List(x)
+        \\depth : a, U64 -> U64
+        \\depth = |x, n| {
+        \\    y : Wrap(a)
+        \\    y = [x]
+        \\    if n == 0 { 0 } else { 1 + depth(y, n - 1) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - polymorphic recursion at a structure around an alias of the variable is rejected" {
+    const source =
+        \\Same(x) : x
+        \\depth : a, U64 -> U64
+        \\depth = |x, n| {
+        \\    y : List(Same(a))
+        \\    y = [x]
+        \\    if n == 0 { 0 } else { 1 + depth(y, n - 1) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - variables swapped through an alias are rejected" {
+    // `First(b, a)` is `b`, so the recursive use passes `y` as `a` and `x`
+    // as `b`.
+    const source =
+        \\First(x, y) : x
+        \\swap : a, b, U64 -> U64
+        \\swap = |x, y, n| {
+        \\    z : First(b, a)
+        \\    z = y
+        \\    if n == 0 { 0 } else { 1 + swap(z, x, n - 1) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
 test "check type - polymorphic recursion through a literal requirement is rejected" {
     // The recursive use instantiates `a` at `Poly(a)`, so the literal would
     // need conversions at `Poly(U8)`, `Poly(Poly(U8))`, and so on, as deep as
@@ -12485,6 +12577,19 @@ test "check type - principality - inferred enclosing weak receiver, two call sit
         \\    f = |g| weak.split_on(",").map(g)
         \\    lengths = f(|s| s.count_utf8_bytes())
         \\    selves = f(|s| s)
+        \\    (lengths, selves)
+        \\}
+        \\result = outer({})
+    ;
+    try checkTypesModuleDefs(source, principality_enclosing_defs);
+}
+
+test "check type - principality - inferred enclosing weak receiver, direct calls" {
+    const source =
+        \\outer = |_unit| {
+        \\    weak = "a,b,c"
+        \\    lengths = weak.split_on(",").map(|s| s.count_utf8_bytes())
+        \\    selves = weak.split_on(",").map(|s| s)
         \\    (lengths, selves)
         \\}
         \\result = outer({})

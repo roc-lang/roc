@@ -199,7 +199,7 @@ pub const PolymorphicRecursion = struct {
     region: base.Region,
 };
 
-/// Host-visible callable values must be directly boxed.
+/// Host-visible functions must be boxed, and `Iter` and `Stream` directly boxed.
 pub const HostedUnboxedFunction = struct {
     region: base.Region,
     path: ExtraStringIdx,

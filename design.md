@@ -5375,7 +5375,11 @@ quantified variables (the scheme-use pairs). Inside another generic
 definition those types are written over that definition's own variables, so
 the records are a graph over type variables: variable `u` flows into variable
 `v` when some use gave `v` a type that mentions `u`. The flow *grows* when
-that type is more than `u` itself. A body-local type's application lists its
+that type is more than `u` itself. A type is read as its runtime type, with
+aliases transparent (Type Alias Invariant): it mentions what its alias
+backings reach, never an alias's arguments as such, so given `Same(x) : x`
+and `Phantom(x) : U64`, a use at `Same(a)` is a use at `a` and one at
+`Phantom(a)` mentions nothing. A body-local type's application lists its
 context variables as trailing arguments (Body-Local Type Context), so a type
 mentions them like any other argument: a recursive use at a local type whose
 methods read the recursion's `a` grows exactly as a use at `Local(a)` would.
@@ -8658,6 +8662,16 @@ source identity and backing ownership. Main-class merges preserve recorded
 nominal identities, and subject lookup resolves the current main representative;
 retained codec subjects cannot observe stale identity entries after a redirect.
 
+A local lookup lowered at a request consumes the same identity. When the
+request relation proves the local and the request one nominal application whose
+classes each keep a representation witness, the local is that nominal's value
+at its own witness: it lowers as the local at its own type, with no nominal
+layer around it, and the consumer joins the two witnesses the way it joins any
+producer's result with its request. This arises when one body constructs a
+nominal that holds an iterator, reads a value of that nominal back from a
+host-held `Box`, and constructs another: the value read back then meets the new
+one in a list literal or in the branches of a join.
+
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
 or encode failures. Runtime failures are reserved for input/output conditions
@@ -9668,9 +9682,12 @@ dedicated `selectGeneratedPrivateRepresentation` capability before lowering
 the dispatch. The capability exists only during relation production, requires
 an explicitly directed public-to-private edge, and rejects every class that
 contains an imported finished Monotype. Ordinary graph unification rejects the
-same edge. This preserves producer selection for branch results without making
-public/private merging—or reopening a durable Monotype—available as a general
-unification behavior. If the requested public interface is already a finished
+same edge, and rejects binding an unresolved checked variable to a private
+class; the one unresolved cell it does bind is an undetermined record field's
+runtime slot, which holds no representation (Field Kinds). This preserves
+producer selection for branch results without making public/private
+merging—or reopening a durable Monotype—available as a general unification
+behavior. If the requested public interface is already a finished
 Monotype, the producer relates its distinct private result to that immutable
 interface without merging either class, and the enclosing procedure or
 compile-time wrapper carries the private result cell as its exact output
@@ -9704,6 +9721,36 @@ result is validated against the declared interface and carried to sealing.
 Representation selection never reconstructs branch evidence from finished
 output IR or reopens a durable Monotype.
 
+A branch can also yield a public value under a private selection. The selection
+capability rejects every class that contains a finished Monotype at any depth,
+so a public value whose type reaches one, or any public value once the
+selection itself reaches one, cannot merge into the selection. A `for` loop's
+iterable request reaches one, for example, so a `match` used as that iterable
+joins a pattern binder no producer made with a produced iterator this way. The
+selection stays private. The public branch relates to it through the same
+opaque interface relation that validates a private producer against a finished
+public request, and carries the selected cell like every other branch. The two
+types name one runtime value: every tier's backing has the public record's
+shape (Host Symbol ABI), and Lambda Solved joins a public iterator into a
+generated one by relating their backings, so the public value's step joins the
+selected representation's callable slot (Tier Unification And Callable Flow).
+Branch order does not matter: the public branch neither blocks nor weakens the
+selection whether it is lowered before or after the producers, and a nested
+join hands its own selection to the join around it. The selection never falls
+back to the public nominal because one branch is public, since that would
+discard the producer topology of every other branch.
+
+A lambda's early returns join its result the same way. Each returned value
+lowers against the lambda's request, and the final expression can select an
+output witness distinct from that request, which becomes the lambda's result. A
+return therefore names its lambda's result rather than a type cell of its own:
+`Return.target` is sealed from the one output cell the lambda settles when its
+body has lowered, so every return of a lambda and the lambda's result type are
+the same type by construction. Lambda Solved relates each returned value to
+that result, which joins a returned public value, or a returned producer's
+distinct representation, with the selected output exactly as it joins
+control-flow branches.
+
 A callee's completed result representation is immutable producer output even
 while the callee is still a live specialization in the caller's draft graph:
 every request with the same identity must seal to the same type. A caller
@@ -9727,6 +9774,39 @@ that references the child directly and relates matching structure through the
 producer-aware value relation. It never merges the child into the corresponding
 public slot or asks a later consumer to recover the child's runtime
 representation from the public container shape.
+
+A lambda is such a constructor for its result: a function type carries its
+result's representation, so a lambda that returns a produced iterator has a
+function type that holds generated-private evidence, at whatever depth of
+records, tags, tuples, lists, or further functions its result puts it. A generic
+procedure specialized at that function binds a parameter whose checked type is
+a bare type variable: `Box.box` and `Box.unbox`, the iterator a `for` loop
+walks a list of functions with, an identity a record of functions passes
+through. The parameter's fresh interface proof starts from that variable, so
+the opaque interface relation gives the variable the witness's public
+interface. It adopts each structural layer it meets (list, box, tuple, record,
+tag union, and function alike) with a fresh checked variable in every child
+slot, keeps descending wherever the child carries generated-private evidence,
+and unifies every other child, until a generated iterator supplies its public
+nominal. A function is one of those layers, not a boundary: its arguments and
+result relate like a tuple's items, the private function type stays the
+parameter's representation, and no public function type replaces it. A boxed
+function is an erased callable whose ABI is the function type it was erased
+from (Tier Unification And Callable Flow), so a call of the unboxed function
+lowers its result from that ABI at an explicit typed boundary, whichever view
+of the function the call site holds.
+
+The relation names its two sides public and private, and those roles belong to
+each pair it visits, not to the roots it started from. A public iterator whose
+item type is itself a produced iterator, or a record or function holding one,
+contains generated-private evidence through that item alone. An adapter's step
+matches the inner iterator's step result against a pattern typed at that public
+view, so both rows hold evidence, and within them the scrutinee's `rest` is the
+representation while the pattern's `rest` is its public view. At every pair the
+side whose root is a generated-private nominal is the representation, and two
+such roots are one representation and unify. A pair entered with the
+representation on the public side is therefore related with the roles
+exchanged, at any depth.
 
 `Iter.custom` marks its exact transition-function request with the capability
 to propagate constructor-carried representation evidence. That capability is
@@ -11953,17 +12033,38 @@ frame. Until its boundary, an unannotated function member's result row can
 still become the row of any expression that reached it through a recursive
 reference or a dispatch back-edge, and a deferred dispatch constraint
 waiting for an unchecked target still becomes that target's instantiated
-result. A contribution whose source row ends in such an open row (a member's
-result row, a waiting dispatch constraint's result row, or a destination
-already waiting on a fixpoint) is not related when its lambda composes: building the result
-on top of that row could make the result its own extension once the
-fixpoint closes (`helper = |_| { _a = Err(Bad)?  helper({}) }` would infer
-`E = [Bad, ..E]`). The contribution waits for the outermost fixpoint in which
-its source is open, and the destination's residual tail is kept at that
-fixpoint's rank so no frame nested inside it generalizes the tail first. A
+result. Likewise, a method call whose receiver is not resolved yet when the
+call is made (a lambda's parameter whose type arrives later through the
+lambda's expected type, a later use, or an annotated binding) still becomes
+its method's instantiated result once the receiver resolves and the dispatch
+settles. A contribution whose source row ends in such an open row (a member's
+result row, a waiting dispatch constraint's result row, a pending method
+call's result row, or a destination already waiting on a fixpoint) is not
+related when its lambda composes: building the result on top of that row
+could make the result its own extension once the fixpoint closes
+(`helper = |_| { _a = Err(Bad)?  helper({}) }` would infer `E = [Bad, ..E]`),
+or, for a pending method call, equate the method's errors with the result's
+errors other than the tags the lambda's other `?`s contribute, which the
+method may also raise
+(`run(|source| { m = source.read()?  k = check(m)?  Ok(k) })` with both
+failing with `Bad`). The contribution waits for the outermost fixpoint in which
+its source is open. The destination's residual tail and the whole source row
+are kept at that fixpoint's rank, so no frame nested inside it generalizes
+either first: that boundary relates the two, and a row a nested frame had
+quantified would reach the boundary only as its template, never as the row
+the frame's uses share. A pending method call's result row is created where
+the call is made, inside any frame nested in the receiver's, so this is what
+keeps `helper = |{}| { m = source.read()?  Ok(m) }` inside `run(|source| ...)`
+from generalizing the method's errors away from the result it contributes
+to. A
 member result reached before the member's own result is built may still be
 the structural union `Try`'s backing relates to; its error row is the `Err`
-payload.
+payload. A pending method call is open in the fixpoint of the frame where
+its receiver would generalize, until its dispatch settles. At that frame's
+boundary, a call whose receiver outlives the frame stays open in the
+enclosing fixpoint where the receiver would now generalize, so each call
+moves at most once per frame; a receiver generalized at the boundary takes
+its dispatch into the scheme, and the call's contributions relate there.
 
 At the fixpoint's boundary—after every member's pattern has been related to
 its right-hand side and every deferred dispatch constraint the frame owns
@@ -11976,13 +12077,19 @@ another, and every other contribution then relates exactly as its lambda
 classified it, visiting components after everything they reach. A source that
 already ends in its destination's residual tail and has no tag the
 destination lacks is already included. A destination generalized by a frame
-nested inside the fixpoint is live only through its residual tail, which
-receives the source. A contribution whose source ends in a row still open in
+nested inside the fixpoint is live only through the residual tail kept when
+the contribution reached the fixpoint, which receives the source by the same
+directed inclusion: the source's visible heads merge into that live row
+through a fresh spine sharing their payloads, then its residual tail, unless
+closed, becomes the row's. That row may have gained tags since, as when a use
+of the generalized function relates its result to an annotation, and a source
+tag it already lists is one tag rather than a repeated label. A contribution whose source ends in a row still open in
 an enclosing fixpoint moves to that fixpoint. Thus a self tail call adds
 nothing to its own result, mutually tail-calling functions share one error
 row, and a closure whose result includes its enclosing function's errors
 adds nothing to that function unless the function returns the closure's
-result. Pinned by `src/check/test/issue_11640_test.zig`.
+result. Pinned by `src/check/test/issue_11640_test.zig`; pending method
+calls by `src/check/test/issue_12951_test.zig`.
 
 The rule is confined to deferred returns carrying the explicit `try_suffix`
 return context emitted by canonicalization. Annotated returns reject incompatible
@@ -12694,7 +12801,7 @@ decided before the boundary. Relating parts there would let one value retype
 another, and relating the receiver's interpolations into one requirement
 would leave all but one interpolation's parts unchecked. Relating a part can
 make it reachable, so the boundary recollects the reachable set and revisits
-its pool until no interpolation is newly related (`relateBoundaryRequirements`).
+its pool until no interpolation is newly related (`relateBoundaryInterpolations`).
 In `var $o = ""` followed by `$o = "${Ok(n)}"` and `$o = "${n.to_str()}"`, with
 `$o` never escaping, only `Ok(n)` is rejected. Pinned by
 test/snapshots/static_dispatch/interpolation_defaulted_local_parts_unrelated.md
@@ -13290,10 +13397,16 @@ exact callable relation; a concrete, aliased, rigid, generalized, or erroneous
 receiver is not evidence of discharge. A creation relation whose generalized
 receiver is structurally reachable through the scheme root is represented
 durably by that receiver's own constraint list and no longer needs a duplicate
-side-table entry. A copied relation qualifies only when its explicit origin is
+side-table entry. A copied relation qualifies when its explicit origin is
 still an exact constraint on the same generalized receiver reachable through
 the enclosing scheme; the checked scheme-use substitution is then the durable
-link from the structural relation to that copy. A nested scheme whose root is
+link from the structural relation to that copy. It also qualifies when its own
+callable is an exact constraint on that receiver: a copy made on a fresh
+receiver that then unified with a variable the enclosing definition
+generalizes (a closure's call on the result of another closure's method
+call, both passed in one record), or a copy the boundary attached in place
+of its template (Evidence params), is itself the relation the scheme
+publishes, and every use of the scheme instantiates and checks it. A nested scheme whose root is
 absent from the enclosing boundary's output interface is out of scope; its
 recorded capture identity—the binding group whose checking captured it plus the
 capture rank—rather than a reachability guess about ownership, proves that the
@@ -13561,7 +13674,18 @@ deferred at lowering; the checked module and lowering are both complete):
   checked presence-variable identity. Instantiation gives that identity a
   dedicated field-kind cell plus distinct source-value and runtime-slot
   cells; row unification resolves the kind and relates value-to-value and
-  slot-to-slot. Construction consumes the resolved graph kind, never the
+  slot-to-slot. The runtime-slot cell is an explicit field-slot variable
+  (`InstVariableOrigin.field_slot`): it holds no representation until its
+  kind commits, so joining it to a class is a binding, never a merge of two
+  representations. A producer can select a generated-private representation
+  for the source-value cell before the kind commits (a method call on a list
+  literal, lowered as the field's value, does). Committing `required` then
+  makes the slot that private class, and a row unification relates the slot
+  to a matching field's already-private slot, both by ordinary unification.
+  The record ends up exactly as one whose kind was `required` from the
+  start, where one cell is both slot and value. A field slot that has joined
+  any other variable takes that variable's origin and its rules.
+  Construction consumes the resolved graph kind, never the
   generalized scheme or a reconstructed slot shape; when the construction
   itself is the first required-kind evidence, it explicitly relates that
   field's runtime-slot cell to its source-value cell at the same time.
@@ -14836,7 +14960,10 @@ Other solved-graph mutations:
   committed probe before the copy retires, so the use's copies of the
   callable's argument and result variables stay bound to the relation that
   every later use instantiates; a probe that cannot establish the pair keeps
-  the copy as an explicit requirement.
+  the copy as an explicit requirement. A copied requirement whose own
+  callable is attached to its interface-reachable receiver
+  (`requirementCallableIsAttached`) retires with no unification, being the
+  attached relation already.
 - `replayDispatchTarget`—mechanism: concrete dispatch replay (Pending
   Dispatch Requirements In Type Schemes, above). A root edge with a ground
   receiver and a final method without explicit requirements relates each
@@ -14888,7 +15015,24 @@ Other solved-graph mutations:
   committed probe)—policy: one requirement per method on a type about to be
   generalized, as declared in Static Dispatch At The Checked Boundary
   ("Evidence params"). Each same-name callable pair on a receiver still flex
-  at the boundary's rank is related through an ordinary committed probe; a
+  at the boundary's rank once literals have defaulted—attached to its
+  descriptor or copied by the boundary's uses of nested definitions, but never
+  a nested scheme's generalized template—is related through an ordinary
+  committed probe. `replaceNestedTemplatesAtBoundary` (`setVarContent` of the
+  receiver's constraint list) then replaces each non-escaping nested
+  template whose uses' copies are among the live requirements with that live
+  requirement, as declared in the same section; the template itself is not
+  unified there. `identifyReplacedTemplates` (committed probe, after
+  `rejectPolymorphicRecursion`) identifies each replaced template, and each
+  nested scheme's template between it and a live copy
+  (`appendTemplatesBetween`, from `nested_template_links`), with its
+  live requirement once no use can instantiate it; the relation always
+  establishes, which Debug builds assert. It then relates each requirement
+  an identified variable holds from the nested definition to the copy the
+  use's scheme-use record pairs it with
+  (`relateIdentifiedVariableRequirements`, committed probe, then
+  `setVarContent` of the variable's constraint list to hold the relation
+  once), repeating while a relation identifies further variables. A
   probe that cannot establish the pair, or that makes the related callable's
   type infinite, rolls back, reports the method conflict, poisons the
   receiver, and retires every definition the boundary generalizes. A relation
@@ -19649,12 +19793,71 @@ literal's conversion has one callable type for every literal of its kind, so
 those share one relation per literal kind from the start; relating them can
 neither fail nor bind anything else. A type has one method of each name, so
 when a receiver is still a type variable at its definition's generalization
-boundary, its requirements of one method become one requirement: the boundary
-relates their callables before it defaults literals and generalizes, and an
-inferred scheme never holds two requirements of one method on one type. A
-receiver that the boundary's literal defaulting decides is not about to be
-generalized, so its requirements are not related: each is discharged against
-the default on its own ("Builtin Str Interpolation Part Compatibility").
+boundary, its requirements of one method become one requirement: once the
+boundary has defaulted literals, and before it generalizes, it relates their
+callables, and an inferred scheme never holds two requirements of one method
+on one type, other than a template no use copied (below). Defaulting comes first because a
+receiver it settles, such as an unannotated `weak = "a,b,c"` inside the
+definition, is not a type variable at all: each requirement on it is
+discharged against its default type on its own, exactly as when it is
+annotated (`Str`), so an annotation never changes whether two uses of a
+method agree. Two interpolations assigned to one local that defaults to `Str`
+are therefore each discharged against `Str` on its own ("Builtin Str
+Interpolation Part Compatibility"). A receiver's requirements are every live relation on it the
+boundary's definitions own, not only those attached to its descriptor: a
+nested definition that calls the method on the receiver holds that
+requirement in its own scheme (Pending Dispatch Requirements In Type
+Schemes), and each use copies it detached from the receiver, so the copies
+and the definition's own calls are related alike. A use of
+`helper = |v| outer.wrap(v)` inside `|outer| ...` is therefore exactly a call
+of `outer.wrap` at the use: when `outer` resolves first, each use
+instantiates its method on its own, and when `outer` is still a type
+variable, `helper(helper(1.U8))` requires two `wrap` methods. The nested
+definition's own relation is attached to the receiver too, but its callable is
+that scheme's generalized template, which no boundary relation may change:
+relating it would turn the live variables of every later use into the
+template's (so the next use's instantiation reaches the previous use's
+copy), and an enclosing variable related to it would be generalized with it.
+It is never one of the related requirements. Once the live requirements of a
+method are one, the boundary replaces each template whose uses' copies are
+among them with that live requirement on the receiver, attaching the copy
+when no attached call carries it, so the receiver's where clause holds the
+method once and the copies retire into it after generalization without
+touching the template. The template remains its nested scheme's requirement
+while checking can still instantiate that scheme or read its uses' records.
+Once module checking has decided polymorphic recursion, nothing reads the
+template as a scheme any more, and each replaced template is identified with
+the live requirement that replaced it (`identifyReplacedTemplates`): the
+live requirement holds an instance of the template, so the identification
+always establishes, and every dispatch in the nested body then names the
+receiver's one published requirement, as evidence lookup by callable class
+requires. Nesting can be any depth. A definition between the receiver's
+boundary and the one that calls the method (`h1` around
+`h2 = |w| outer.id(w)`, inside `|outer| ...`) holds each of its uses' copies
+as a template of its own scheme, detached from the receiver, and its own
+uses copy that. The nested scheme is dropped when its definition leaves
+scope, so each use that copies such a requirement, leaving the receiver
+shared, records the requirement it copied with the creation template it
+descends from (`nested_template_links`). The boundary replaces a creation
+template when any live copy descends from it, and every template between the
+two (the one a live copy was copied from, the one that was copied from, and
+so on) is identified with the live requirement as well; one that only an
+unused definition copied is not among them. Identifying a template identifies
+the nested definition's variables its callable mentions with the ones a use
+gave them (the method's result, in `h2 = |q, w| outer.id(w) + q.pick(w)`).
+Such a variable then holds the nested definition's own requirements (`plus`)
+beside the use's copies of them, and it is one type variable with one method
+of each name: each is related to the copy the use's scheme-use record pairs
+it with and kept once, which can identify further variables, until none
+remain. A variable the nested definition quantified on its own (`q`) is
+identified with nothing and stays generic, and one a use gave a concrete type
+had each copy discharged against that type's method. A nested definition
+whose type escapes through the boundary's
+interface is part of what the boundary publishes, as is any definition
+between that holds a copy of its template, so the template stays on
+the receiver and its copies retire into it after generalization, as any
+published scheme's do. A template no use copied (a nested definition never
+used) stays too, as a requirement of its own beside the method's live one.
 Requirements that cannot be one are a type mismatch. That includes a relation
 that would make the method's type infinite, which no type can be (two uses of
 `row.i32()` whose results must be both `a` and `{ id: a }`); unification
@@ -23675,14 +23878,31 @@ When one ownership place is read repeatedly by ownership-complete struct-field
 or tag-payload reads along a single control-flow path, dismantle analysis
 chooses the earliest same-root, same-layout read that dominates each later read
 and rewrites those later reads as explicit local aliases before ARC solving.
-That rewrite is materialized only when the representative commits a dismantle
-plan, and a canonicalized read is classified by that same plan: under a
-committed representative it is an occurrence of the representative (a whole
-use when its target is emitted owned, a transparent alias when it stays
-borrowed), and otherwise it stays an ordinary field read of its root. Candidates are solved
-representatives first; a representative is a complete field read whose layout
-is a proper part of its root's layout, so the order is acyclic and each
-deferred read is settled exactly once.
+Representatives are struct or tag-union reads.
+That rewrite is materialized only when the representative holds a committed
+take: it lies on the access path of a committed projected container, or it is
+a struct representative that commits a dismantle plan of its own. A tag-union
+representative holds a take only through an access path, because a container
+keyed by a tag union belongs to the union root its payload view dismantles.
+A projected container's commit marks every read on its access path up to its
+root, following ownership-complete projections and borrowed same-value
+aliases, and marks each canonicalized read on that path through its
+representative. Marks always extend to the root, so a walk ends at the first
+marked read, and a recursive call-graph component that retracts its plans
+retracts these marks with them. A canonicalized read is classified by that
+same commitment: under a representative holding a take it is an occurrence of
+the representative (a whole use when its target is emitted owned, a
+transparent alias when it stays borrowed), and otherwise it stays an ordinary
+field read of its root.
+A deferred read is settled by the candidate its source resolves to, which is
+the root or any candidate between the root and a projected container below it.
+Candidates are therefore solved representatives first, and each projected
+container before the nearest candidate above it on its access path, which
+precedes the next candidate above it in turn. Both kinds of edge lead from a
+read to a candidate above it on its access path, so the order is acyclic and
+each deferred read is settled exactly once; debug builds check that no
+access-path mark lands on a representative a deferred read was already
+settled against.
 A root therefore never commits a take on a read that is emitted as an alias of
 a container already holding the root's unit.
 The borrow solve runs before dismantle, so the solution adopts each
@@ -23886,7 +24106,15 @@ borrowed onward from the read through a partial field or payload read, a
 borrowed low-level result, or a lent call result holds a different value
 than the field (the payload unboxed out of a boxed field is not the box), so
 consuming it only observes the field, exactly like any other mention of the
-forest. It takes the
+forest. So does consuming a member whose value reaches the operand through a
+binding that holds a unit of its own, such as the take binding of a projected
+container solved before this container: the operand consumes that binding's
+unit, which that container's own solve takes. Were the container above to
+claim the operand too, its claim would name a field its root no longer holds,
+and the argument would pass borrowed. With `held = { inner: { d, m }, n }`
+captured by a closure that passes `d` to a large `Dict` update the inliner
+declines, the borrowed base variant would then retain `d` and every insert
+would copy it. A use-point take candidate takes the
 field only where it is the last observation of that field on every path; an
 earlier one pays its ordinary retain at the operand, since the binding is
 read again afterwards. The take belongs at the operand, not at the read. A
@@ -23915,7 +24143,11 @@ lent from it). Every operand mention of any of those bindings other than a
 use-point take candidate is therefore a borrow observation of the field at
 that statement, so a take the mention could follow is rejected exactly like a
 borrowing read placed there. Binding an owned alias of one of them is such a
-mention, since the alias retains through it. An explicit outcome field
+mention, since the alias retains through it. A call or low-level result
+anchored as a borrow of the container itself, such as the list a callee lends
+back out of a record it was passed, reads stored units no field read names,
+so every operand mention of it, and of every binding borrowed onward from it,
+is a borrow observation of every field. An explicit outcome field
 receipt changes the matching edge state from taken back to available before
 that edge is walked. An explicit join-cell reinitialization starts a new
 definition after observing its value operand and clears that definition's
@@ -23926,12 +24158,55 @@ residual masks; the ARC join equations below normalize their exact
 differences. A read the flow never reaches keeps its field residual. A field that fails
 any rule simply stays residual—its reads keep their retains and its stored
 unit is released at the death point—and a container whose take set comes
-out empty keeps today's whole release exactly.
+out empty, and whose whole moves give nothing up, keeps today's whole release
+exactly.
 
-Emission changes in exactly two places. A take emits no retain at its read or
+A whole use can give fields up too. An owned direct-call position, or an owned
+same-value binding, that receives the container while the container is read
+again afterwards cannot move it: the receiver gets a retained unit of every
+field and the container keeps its own. A field of the container's unit that
+nothing observes after that statement is dead there, but left to the
+container's ordinary release it stays shared until the container's last read,
+and the receiver copies a list only it uses: `a2 = push_a(s, 3)` followed by a
+read of `s.b` appends to a copy of `s.a`. Each such statement is a whole-move
+site, and its mask is the container's fields with no later observation on any
+path: no field read, no mention of a borrowed read's forest or of a lent
+result, no other whole use. The mask comes from the same backward observation
+solution that demotes takes, so a site in a loop that does not re-run the
+container's definition observes itself and gives nothing up, and a field read
+again after the call stays shared, as it must. A container with no
+observation after the site is not retained for it and has no site. A read of
+the container's scalar bytes observes no stored unit, but it does keep the
+container read; such reads are observed under one spare mask bit, so a
+container read only for a number afterwards still gives up every stored
+field, and a container whose pieces fill the mask treats every site as read
+again. Sites are solved for struct containers, held views and projected
+containers alike. A tag union's payload view has none. A container nothing
+takes from commits a plan for its sites alone only when it holds its unit in
+every emission: a borrowed parameter would otherwise earn an owned variant
+whose one difference is where a retained unit is released. Aggregate and
+low-level operands reach this rule through the owned binding lowering gives
+them; a borrowed operand retained directly at such a position keeps its whole
+retain.
+
+Emission applies a site only where it actually retains: the container is in
+the path state with every field, the call does not replace the frame, no
+outcome receipt covers the position, and no other operand of the statement
+lends the same value, since the callee could release its unit of a field while
+that operand still reads it. Emission then pays the ordinary whole retain,
+releases the masked fields from the container's own unit before the receiver
+runs, and continues with the remaining fields as the container's residual.
+The RC statements are the ones the container's death would have emitted for
+those fields; only their position changes, from after the receiver to before
+it. The certifier needs no rule for it: a retained aggregate that dismantles
+one unit while an intact surplus unit is consumed whole is a form it already
+certifies.
+
+Emission changes in exactly three places. A take emits no retain at its read or
 operand: the value's unit is the container's stored unit for that field,
 moved rather than duplicated. A use-point operand whose path no longer holds
-the field retains instead. The container's release becomes its dismantling: at the
+the field retains instead. A whole-move site that retains releases its masked
+fields right after the retain. The container's release becomes its dismantling: at the
 point its whole-value `decref` would have been placed, emission instead reads
 each refcounted field that was not taken into a fresh temporary and releases
 that temporary, using the field layout's helper and the container's
@@ -24030,6 +24305,9 @@ or source names:
   unchanged
 - a whole move, whole release, call argument, aggregate insertion, or return
   requires `R(a) = F(a)`; it removes the aggregate resource exactly as before
+- a retained whole move at a committed whole-move site with mask `D` requires
+  `R(a) = F(a)`, gives the receiver a retained unit of every field, dismantles
+  `D` before the receiver runs, and leaves `R'(a) = F(a) - D`
 - dismantling a residual `S` emits one field read and release for every
   `f in S`, then leaves `R'(a) = empty`
 - rebinding a name first settles its exact residual state; it cannot silently
@@ -26740,7 +27018,9 @@ container, and a release that never drops them leaks every item.
 Generated glue must therefore give the host a named release for every type
 reachable from a hosted or provided signature whose release is more than a
 single count decrement, and must name that release at the hosted signature: the
-container's own `decref` is a primitive, not a release, and must say so.
+container's own `decref` is a primitive, not a release, and must say so. A
+type that holds an opaque heap target is the exception: the host cannot release
+it at all, so glue emits no release for it (see Host Symbol ABI).
 
 The compiler must not infer different ownership behavior from hosted function
 names, return types, or body absence. Hosted-argument ownership is an ABI rule,
@@ -27142,14 +27422,35 @@ producer metadata; only non-debug size builds remove target-feature metadata.
 
 ## Host Symbol ABI
 
-Every function value, `Iter`, and `Stream` visible to the host must be the
-immediate payload of its own `Box`. Boxing an enclosing record, tuple, list,
-tag, or user nominal does not satisfy this requirement. Aliases are transparent;
-nominal and opaque user types are checked through their declared backing with
-their actual parameters substituted. The rule applies equally to hosted and
-provided arguments and results. A procedure's own signature is not a function
-value. Boxed iterators and streams are opaque handles: their private step
-closures are implementation state, not further host-visible values.
+Every function value visible to the host must be inside a `Box`, and every
+`Iter` and `Stream` visible to the host must be the immediate payload of its
+own `Box`. A directly boxed function is a callable the host may invoke, so its
+arguments and result are host-visible values in turn. Any other `Box` payload
+is a value the host only holds: it may store the pointer and hand it back.
+Every function a `Box` holds is an erased callable (see Erased Callable
+Requirements), so the payload's bytes are fixed whatever functions it contains,
+at any depth and in any record, tuple, list, tag, or user nominal; those
+functions' signatures are not host-visible. This is what lets a platform keep
+an app's whole state, including the app's own functions, in one `Box(State)`
+between calls. Sequences take their handle representation only as an immediate
+`Box` payload, so a held payload still needs each `Iter` and `Stream` it
+contains directly boxed. Aliases are transparent; nominal and opaque user types
+are checked through their declared backing with their actual parameters
+substituted. The rule applies equally to hosted and provided arguments and
+results. A procedure's own signature is not a function value. Boxed iterators
+and streams are opaque handles: their private step closures are implementation
+state, not further host-visible values.
+
+The rule reads declared signatures. A type variable inside a declared `Box`
+(`store! : Box(a) => {}`) is a held payload whose type only the app names, so
+an app may instantiate it with a type that holds a sequence outside its own
+`Box`. Such a sequence keeps the representation tier its producer selected,
+and code that reads the payload back names the public type. The two agree on
+the stored bytes: every tier's backing has the public record's shape, with
+`rest` naming the tier's own type, and every callable a `Box` holds is erased,
+so a held sequence is its length hint and one erased step whichever tier
+produced it. The handle representation is the only other layout, and the
+`Box` payload's type alone selects it.
 
 Boxed sequences share the erased-callable ownership protocol. Their captures
 and private record view occupy one allocation; the view's step points back to
@@ -27215,6 +27516,16 @@ The compiled glue script retains its readonly data image alongside its code.
 Code-to-data and data-to-function relocations are resolved together, and both
 images outlive extraction of the returned files; returned static strings must
 not become dangling pointers when the entrypoint returns.
+
+Glue's type table gives every row a shape id, the id of the first row that
+describes the same host type. Two rows have the same shape id exactly when
+their reprs, committed layouts, and ownership plans agree at every depth, which
+glue decides by partition refinement over the table so that recursive types
+compare by what they contain. A Roc name is not a host type's identity: two
+instantiations of one generic nominal share a name and differ in layout, and
+one instantiation can occupy several rows. Generators emit one declaration per
+shape, give shapes that share a name distinct names derived from the shape id,
+and never emit the shared bare name, as a declaration or as an alias.
 
 Glue's type table describes values. A function value, wherever it appears
 (boxed, in a record or tag payload, or in a stored signature), is one
@@ -27412,6 +27723,26 @@ and may not change allocation headers. A descriptor word inside the opaque
 capture bytes of a compiler-created callable is capture content, not a change
 to the value shape.
 
+A value the host holds directly (a hosted or provided argument or result,
+provided data, and everything such a value holds by value in turn: record
+fields, tuple items, tag payloads, and nominal backings) must have a
+committed layout, so an unresolved type variable there is a glue error. A
+`Box` payload or `List` item is different: the host holds only a pointer to
+it. Glue therefore describes each such heap target on its own terms. A target
+with a committed layout gets its full typed description. A target without one
+is a single `RocUnknown` entry, whether it is a bare unresolved variable or an
+aggregate holding one by value at any depth, because one field of unknown size
+leaves the aggregate's size and every later field's offset unknown. Glue emits
+no partial description of such a target (no struct, no field list, no size),
+and the layout the compiler committed for its type with the variable sealed is
+not a fact about the value the application will supply. So `Box(Wrap(Model))`
+with `Wrap(m) := { model : m, n : U64 }` is the same opaque `RocBox` as
+`Box(Model)`, and `List(Wrap(Model))` is described exactly as `List(Model)`
+is. Each heap target is decided separately, so a variable behind a further
+indirection inside a payload (`Box({ boxed : Box(model), items : List(model)
+})`) leaves that payload a typed struct whose fields are the opaque box and
+list.
+
 When glue represents an unknown value as `RocUnknown` or `RocBox(RocUnknown)`,
 the host sees an opaque pointer-shaped value. The compiler must not expect the
 host to provide a payload descriptor for it. If a boxy wrapper needs a payload
@@ -27420,6 +27751,24 @@ explicit Roc-side checked data; otherwise the wrapper may only treat the box as
 opaque. Shallow retain/move/return/drop of an opaque box follows the existing
 host ABI contract. Recursive payload teardown or structural inspection requires
 an explicit `TypeDesc`.
+
+The host owns each opaque box and list it holds and cannot release it. Dropping
+the last reference to a Roc allocation tears its payload down and frees an
+allocation whose header size depends on the payload's alignment and on whether
+the payload is refcounted, and for an opaque target only compiled Roc code
+knows those. Glue's type table therefore gives every type a host release plan
+with three states: it holds no Roc reference, it holds references the host can
+release, or it holds a reference only Roc can release. A type is in the third
+state when it is a box or list over an opaque target, or when a box payload,
+list item, record field, or tag payload it owns is. The plan is computed over
+the type table and never read from the committed layout, which was selected
+with the application's variables sealed and so reports `Box(model)` as a box
+over nothing. Generated bindings give a type in the third state a retain and
+nothing else: no release, no release policy, no owning wrapper, and for a list
+no allocation, since a list's allocation header depends on whether its items
+are refcounted. The host hands such a value back to Roc; a platform whose host
+must drop one provides a Roc function that takes ownership of it, and compiled
+Roc performs the release.
 
 The declared type is part of that contract, not just the symbol string. A
 hosted function's extern boundary is emitted at the hosted declaration's own

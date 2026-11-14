@@ -3,12 +3,13 @@ platform ""
         [Model : model] for main : {
             init : {} -> model,
             update : model, I64 -> model,
+            read : model -> I64,
             render : model -> Simple(model)
         }
     }
     exposes [Simple]
     packages {}
-    provides { "roc_init": init_for_host, "roc_update": update_for_host, "roc_render": render_for_host, "roc_test_mixed_args": test_mixed_args_for_host, "roc_test_struct_arg": test_struct_arg_for_host, "roc_test_effectful_struct_arg": test_effectful_struct_arg_for_host!, "roc_test_simple_pure": test_simple_pure_for_host, "roc_test_simple_effectful": test_simple_effectful_for_host!, "roc_test_three_floats_pure": test_three_floats_pure_for_host, "roc_test_three_floats_effectful": test_three_floats_effectful_for_host!, "roc_test_two_u32_args": test_two_u32_args_for_host }
+    provides { "roc_init": init_for_host, "roc_update": update_for_host, "roc_render": render_for_host, "roc_test_mixed_args": test_mixed_args_for_host, "roc_test_struct_arg": test_struct_arg_for_host, "roc_test_effectful_struct_arg": test_effectful_struct_arg_for_host!, "roc_test_simple_pure": test_simple_pure_for_host, "roc_test_simple_effectful": test_simple_effectful_for_host!, "roc_test_three_floats_pure": test_three_floats_pure_for_host, "roc_test_three_floats_effectful": test_three_floats_effectful_for_host!, "roc_test_two_u32_args": test_two_u32_args_for_host, "roc_counter_init": counter_init_for_host, "roc_counter_step": counter_step_for_host, "roc_counter_total": counter_total_for_host }
     targets: {
         inputs_dir: "targets/",
         x64mac: { inputs: ["libhost.a", app] },
@@ -26,6 +27,7 @@ platform ""
     }
 
 import Simple
+import Counter
 
 # Explicit type annotations for host-facing functions
 # Note: Use uppercase Model here - it's a type alias introduced by the for-clause [Model : model]
@@ -51,6 +53,22 @@ render_for_host = |boxed_model| {
     render_fn = main.render
     render_fn(m)
 }
+
+# Issue 12953: the host holds a Box of platform state whose fields are
+# functions, including the app's own `update` and `read`, without each of them
+# being boxed. The host only stores the box and hands it back.
+counter_init_for_host : I64 -> Box(Counter(Model))
+counter_init_for_host = |factor| {
+    label = "a label long enough to need its own heap allocation"
+    scale = |event| event * factor + Str.count_utf8_bytes(label).to_i64_wrap()
+    Box.box(Counter.new((main.init)({}), main.update, main.read, scale))
+}
+
+counter_step_for_host : Box(Counter(Model)), I64 -> Box(Counter(Model))
+counter_step_for_host = |boxed, event| Box.box(Counter.step(Box.unbox(boxed), event))
+
+counter_total_for_host : Box(Counter(Model)) -> I64
+counter_total_for_host = |boxed| Counter.total(Box.unbox(boxed))
 
 # Test function for issue 8991: verify mixed-alignment arguments are received correctly
 # Takes Bool (1-byte alignment) and I64 (8-byte alignment) - these have different alignments
