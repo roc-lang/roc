@@ -2936,13 +2936,17 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
         .require_executable_output = true,
         .require_host_runnable_output = true,
         .suppress_build_status = true,
+        .run_output = .{ .argv0 = args.path, .app_args = args.app_args },
         .resolve_limits = args.resolve_limits,
         .synthetic_default_platform = false,
         .source_dir_override = null,
         .root_source_url = args.root_source_url,
     });
-
-    const term = try runCompiledExecutable(ctx, build_result.output_path, args.path, args.app_args);
+    // The build has released its state; the program it started before
+    // doing so may still be running.
+    if (dev_diagnostics.isSet(.trace_run_order)) std.debug.print("run-order: released the build's state\n", .{});
+    var child = build_result.child orelse unreachable; // a successful build given `run_output` starts the program
+    const term = try waitCompiledExecutable(ctx, &child, build_result.output_path);
 
     releaseScratchDir(ctx, temp_dir);
     cleanup_temp_dir = false;
@@ -2965,7 +2969,14 @@ fn runCompiledExecutable(
     app_args: []const []const u8,
 ) (CliError || error{OutOfMemory})!std.process.Child.Term {
     var child = try spawnExecutableWithArgv0(ctx, exe_path, argv0, app_args);
+    return waitCompiledExecutable(ctx, &child, exe_path);
+}
 
+fn waitCompiledExecutable(
+    ctx: *CliCtx,
+    child: *std.process.Child,
+    exe_path: []const u8,
+) CliError!std.process.Child.Term {
     return child.wait(ctx.io.std_io) catch |err| {
         return ctx.fail(.{ .child_process_wait_failed = .{
             .command = exe_path,
@@ -5354,6 +5365,9 @@ const CheckDiagnosticCounts = struct {
 const BuildResult = struct {
     output_path: []const u8,
     diagnostics: CheckDiagnosticCounts,
+    /// The published executable, started when the build was given
+    /// `run_output`; the caller waits for it.
+    child: ?std.process.Child = null,
 };
 
 fn checkedArtifactForBuild(
@@ -10263,7 +10277,17 @@ fn finishBuildCommand(
         renderSummaryHeaderLine(ctx.arena, ctx.io.stderr(), diag.errors, diag.warnings, args.synthetic_root_original_path orelse args.path, ctx.reportConfig(.stderr)) catch {};
         ctx.io.flush();
     }
-    return .{ .output_path = final_output_path, .diagnostics = diag };
+    // Every build path returns through here once its output is published and
+    // closed, while its state is still live. A build `roc` runs starts the
+    // program now, after the compiler's last write, so the program runs
+    // while the build's state is released (design.md "Runs Of A Built
+    // Executable").
+    const child: ?std.process.Child = if (args.run_output) |run| child: {
+        ctx.io.flush();
+        if (dev_diagnostics.isSet(.trace_run_order)) std.debug.print("run-order: starting the program\n", .{});
+        break :child try spawnExecutableWithArgv0(ctx, final_output_path, run.argv0, run.app_args);
+    } else null;
+    return .{ .output_path = final_output_path, .diagnostics = diag, .child = child };
 }
 
 /// Lowers a checked `roc build` program to LIR, reporting the post-check

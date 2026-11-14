@@ -52,7 +52,7 @@ const Fixture = struct {
         // a decref. Borrow inference cannot turn this into a no-op fixture.
         // Forty procedures over 32-wide waves give the two base waves these
         // tests' session and commit expectations are written against.
-        try arc.insert(&self.store, &self.layouts, .{
+        _ = try arc.insert(&self.store, &self.layouts, .{
             .roots = roots[0..count],
             .post_check_executor = runner,
             .metrics_out = metrics,
@@ -654,7 +654,7 @@ const OutcomeFixture = struct {
     }
 
     fn run(self: *OutcomeFixture, runner: ?*const executor.Executor, metrics: *arc.ParallelMetrics) arc.ResourceError!void {
-        try arc.insert(&self.fixture.store, &self.fixture.layouts, .{
+        _ = try arc.insert(&self.fixture.store, &self.fixture.layouts, .{
             .specialize = true,
             .post_check_executor = runner,
             .metrics_out = metrics,

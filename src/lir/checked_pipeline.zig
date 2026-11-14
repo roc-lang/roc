@@ -2329,7 +2329,7 @@ fn finishLoweredOutput(
             try arc_roots.append(allocator, proc);
         };
     }
-    try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
+    const arc_result = try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
         .specialize = target.specialize_arc_modes,
         .prove_uniqueness = target.prove_uniqueness,
@@ -2344,7 +2344,7 @@ fn finishLoweredOutput(
     arc_timing_scope.end();
 
     var tail_drive_scope = PassStepScope.begin(target.timing, .tail_drive);
-    try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items});
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items}, arc_result.deferred_erased_calls);
     tail_drive_scope.end();
 
     // Retain only procedures and data referenced after ARC.

@@ -23251,6 +23251,15 @@ pending work before treating its result slot as a value. The versioned pack
 format records the summary alongside the ownership ABI; an older entry without
 the result is incompatible, never assumed to return a completed value.
 
+ARC reports whether its insertion deferred any erased call
+(`Arc.InsertResult`): each emission records the fact for its own body, and the
+ordered shard append merges the records. No stage before ARC emits a deferred
+call. When ARC deferred none and no cache-supplied procedure's summary says it
+may leave a call pending, nothing can be pending after any statement, so the
+pass skips its walk and only commits `may_leave_pending` as false for every
+procedure. A Debug compiler walks anyway and asserts that it finds no deferred
+call and no procedure that may leave one.
+
 A call's result may be converted to another representation before it is
 returned, by statements after the call. The pass marks a direct call or a
 deferred call `returns_pending` when its value reaches the return through
@@ -28704,6 +28713,25 @@ stable to reload; they always run once, even where the shared-memory shim is
 available. Hot loading therefore applies only to apps with a real platform
 header. Windows uses explicit shared-memory handle inheritance for both the host
 shim child and the internal rebuild worker.
+
+## Runs Of A Built Executable
+
+A `roc` run that builds an executable and then executes it (any `--opt=size`
+or `--opt=speed` run, a run of a URL, a `--no-cache` dev run that does not
+watch, and a `.boxy` dev run of an app without a platform header) starts the
+program before the compiler releases the build's state. Every build path
+returns through one step (`finishBuildCommand`) once its output is published:
+the link has written the file, renamed it into place and closed every handle
+to it, and the build's cache entries are filed. Given `run_output`, that step
+flushes the compiler's output and starts the program, and the build's
+teardown (checked modules, stores, LIR, worker threads, scratch
+directories) then runs while the program does. The compiler writes nothing to
+stdout or stderr after the program starts, except developer diagnostics. The
+run waits for both: it finishes teardown, then waits for the program, and
+exits with the program's status exactly as when the two ran one after the
+other. Nothing the program reads is released by teardown: the executable
+lives in the run's own scratch directory, which is released only after the
+program exits. A build that fails starts nothing.
 
 ## Relationship To Cor LSS
 

@@ -570,8 +570,16 @@ const GroupLivenessIndex = struct {
     }
 };
 
-/// Public `insert` function.
-pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: InsertOptions) ResourceError!void {
+/// What an insertion reports about the bodies it emitted.
+pub const InsertResult = struct {
+    /// Whether any emitted body defers an erased call (design.md "Deferred
+    /// Erased Calls"). Each emission records it for its own body, and the
+    /// shard append merges those records, so this is exact.
+    deferred_erased_calls: bool,
+};
+
+/// Insert reference counting into every procedure body of `store`.
+pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: InsertOptions) ResourceError!InsertResult {
     @import("base").dev_diagnostics.countTestWork(.arc, 1);
     if (options.metrics_out) |metrics| metrics.* = .{};
     var inserter = Inserter{
@@ -727,6 +735,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // reservation and commit order are identical for inline and pooled runs.
     const owners = try store.allocator.alloc(EmissionOwner, options.emission_wave_size);
     defer store.allocator.free(owners);
+    var deferred_erased_calls = false;
     while (base_index < base_proc_count or variant_index < variants.queue.items.len) {
         var count: usize = 0;
         defer for (owners[0..count]) |*owner| owner.deinit();
@@ -785,6 +794,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             };
             store.setProcSpecBodyAndJoinPoints(owner.job.variant, appended.root, appended.relocation.joinPointSpan(prefix, owner.joins));
             store.getProcSpecPtr(owner.job.variant).frame_locals = appended.frame_locals;
+            if (owner.inserter.deferred_erased_call) deferred_erased_calls = true;
             if (options.post_check_executor != null) if (options.metrics_out) |metrics| {
                 metrics.emission_tasks_committed += 1;
             };
@@ -809,6 +819,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             .ret_conditions = solution.ret_conditions,
         }, options.roots);
     }
+    return .{ .deferred_erased_calls = deferred_erased_calls };
 }
 
 /// A demand-shaped procedure never consumes a value holding a hole: its
@@ -1943,6 +1954,8 @@ const Inserter = struct {
     /// currently being emitted; appended to its frame locals afterward. A
     /// lane buffer grown in `lane_allocator`.
     dismantle_temps: *std.ArrayList(LIR.LocalId) = undefined,
+    /// Whether the body being emitted defers an erased call.
+    deferred_erased_call: bool = false,
     /// Final plan requests and coordinator-resolved targets in the same order.
     variant_requests: std.ArrayList(VariantRequest) = .empty,
     resolved_variants: []const LIR.LirProcSpecId = &.{},
@@ -2474,6 +2487,7 @@ const Inserter = struct {
                     if (!step.replaces_frame and !assign.reuse_closure) {
                         next = try self.releaseLocalIfRc(assign.closure, .{ .stmt = at, .reason = .closure_after_call }, next);
                     }
+                    if (step.replaces_frame) self.deferred_erased_call = true;
                     break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
                         .target = assign_stmt.target,
                         .data = try self.store.addStmtRow(LIR.ErasedCallData, .{
@@ -2568,6 +2582,7 @@ const Inserter = struct {
             .dyn => |dyn_stmt| blk: {
                 const op = self.store.stmtRow(dyn_stmt.data);
                 if (step.replaces_frame) {
+                    self.deferred_erased_call = true;
                     var deferred = op;
                     deferred.call_erased.deferred = true;
                     break :blk try self.store.addCFStmt(.{ .dyn = .{
@@ -7962,7 +7977,7 @@ test "RC exported field-take convention owns conditional partial consumers" {
         const untouched = try f.assignList(empty, &.{}, try f.ret(empty));
         const proc = try f.addProc(&.{ pair, condition }, try f.switchStmt(condition, consuming, untouched, null), f.list_i64);
         f.store.getProcSpecPtr(proc).exported = exported;
-        try insert(&f.store, &f.layouts, .{ .specialize = false });
+        _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
 
         const borrowed: u64 = if (exported) 0 else 1;
         try testing.expectEqual(borrowed, f.store.getProcSpecImmediate(proc).rc_borrowed_params);
@@ -7987,7 +8002,7 @@ test "RC exported field-take convention preserves a borrowed result lender" {
     const field = try f.local(f.list_i64);
     const proc = try f.addProc(&.{pair}, try f.assignRefField(field, pair, 0, try f.ret(field)), f.list_i64);
     f.store.getProcSpecPtr(proc).exported = true;
-    try insert(&f.store, &f.layouts, .{ .specialize = false });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
     const emitted = f.store.getProcSpecImmediate(proc);
     try testing.expectEqual(@as(u64, 1), emitted.rc_borrowed_params);
     try testing.expect(emitted.rc_ret_borrowed);
@@ -8104,7 +8119,7 @@ test "RC list metadata alias survives source replacement without a unit" {
     const replace = try f.setLocal(old, replacement, .replace_existing, read);
     const copy = try f.assignRefLocal(snapshot, old, replace);
     const proc = try f.addProc(&.{ old, replacement }, copy, .u64);
-    try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
+    _ = try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
     try testing.expectEqual(@as(usize, 0), f.countRc(snapshot, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(old, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(replacement, .incref));
@@ -8134,7 +8149,7 @@ test "RC list metadata does not erase ownership of a redefined alias" {
     } }, .test_fixture);
     const copy = try f.assignRefLocal(value, source, rebind);
     const proc = try f.addProc(&.{ source, size }, copy, .u64);
-    try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
+    _ = try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
     try testing.expectEqual(@as(usize, 2), f.countRc(value, .decref));
 }
 
@@ -8519,7 +8534,7 @@ const ArcTest = struct {
     }
 
     fn run(self: *ArcTest) Allocator.Error!void {
-        try insert(&self.store, &self.layouts, .{});
+        _ = try insert(&self.store, &self.layouts, .{});
     }
 
     /// Follows linear `next` links from `start` and returns the first
@@ -10930,7 +10945,7 @@ test "RC specialization: fields taken from one dying record select the owned var
     _ = try f.addProc(&.{}, caller_body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     // Only the base proc retains each borrowed field; the owned variant the
     // caller selects takes both.
@@ -11011,7 +11026,7 @@ test "RC emission units: a call demands an owned variant only within its callee'
         f.store.getProcSpecPtr(caller).emission_unit = case.caller;
 
         const base_proc_count = f.store.procSpecCount();
-        try insert(&f.store, &f.layouts, .{ .specialize = true });
+        _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
         try testing.expectEqual(base_proc_count + case.variants, f.store.procSpecCount());
         // The base proc keeps its borrowed signature either way and retains
@@ -12624,7 +12639,7 @@ test "RC atomicity: confined values update counts single-threaded" {
     const body = try f.assignList(list, &.{}, pair_assign);
     _ = try f.addProc(&.{}, body, .i64);
 
-    try insert(&f.store, &f.layouts, .{ .thread_confined_rc = true });
+    _ = try insert(&f.store, &f.layouts, .{ .thread_confined_rc = true });
     // No proc is a root and nothing reaches a host boundary, so every count
     // update may use plain loads and stores.
     try f.expectRcAtomicity(list, .single_thread);
@@ -12663,7 +12678,7 @@ test "RC atomicity: root-returned values keep atomic counts" {
     const body = try f.assignList(list, &.{}, pair_assign);
     const proc = try f.addProc(&.{}, body, f.pair_list);
 
-    try insert(&f.store, &f.layouts, .{ .roots = &.{proc}, .thread_confined_rc = true });
+    _ = try insert(&f.store, &f.layouts, .{ .roots = &.{proc}, .thread_confined_rc = true });
     try f.expectRcAtomicity(list, .atomic);
 }
 
@@ -12698,7 +12713,7 @@ test "RC atomicity: bodyless callee arguments keep atomic counts" {
     const body = try f.assignList(list, &.{}, alias_assign);
     _ = try f.addProc(&.{}, body, .i64);
 
-    try insert(&f.store, &f.layouts, .{ .thread_confined_rc = true });
+    _ = try insert(&f.store, &f.layouts, .{ .thread_confined_rc = true });
     try f.expectRcAtomicity(list, .atomic);
 }
 
@@ -12819,7 +12834,7 @@ test "uniqueness: without proofs a mutation of a born-unique value keeps its run
         const proc = try f.addProc(&.{}, body, .i64);
 
         var metrics: ParallelMetrics = .{};
-        try insert(&f.store, &f.layouts, .{ .roots = &.{proc}, .prove_uniqueness = prove, .metrics_out = &metrics });
+        _ = try insert(&f.store, &f.layouts, .{ .roots = &.{proc}, .prove_uniqueness = prove, .metrics_out = &metrics });
         try testing.expectEqual(@as(u64, @intFromBool(prove)), f.uniqueArgsFor(appended));
         try testing.expectEqual(prove, metrics.uniqueness.settlements != 0);
     }
@@ -13112,7 +13127,7 @@ test "uniqueness: root callee result keeps the caller's check" {
     } }, .test_fixture);
     _ = try f.addProc(&.{}, call, .i64);
 
-    try insert(&f.store, &f.layouts, .{ .roots = &.{callee} });
+    _ = try insert(&f.store, &f.layouts, .{ .roots = &.{callee} });
     try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
 }
 
@@ -13144,7 +13159,7 @@ test "uniqueness: specialized variant elides the check on a unique dying argumen
     _ = try f.addProc(&.{}, caller_body, f.list_i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     // One unique-seeded variant exists; its op runs check-free while the
     // base proc keeps the runtime check.
@@ -13184,7 +13199,7 @@ test "uniqueness: specialized body clones do not poison local births" {
     _ = try f.addProc(&.{}, caller_body, f.list_i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, first));
@@ -13734,7 +13749,7 @@ test "uniqueness: a seeded parameter's alias is check-free in the specialized va
     _ = try f.addProc(&.{}, caller_body, f.list_i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, appended));
@@ -14711,7 +14726,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
         const caller_body = try f.assignList(list, &.{}, call);
         const caller = try f.addProc(&.{}, caller_body, f.list_i64);
 
-        try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
+        _ = try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
 
         // Follow the caller's call to the callee emission it actually runs.
         var cursor = f.store.getProcSpecImmediate(caller).body.get().?;
@@ -14935,7 +14950,7 @@ test "RC a consuming operand borrowed onward from a field read observes the fiel
     _ = try f.addProc(&.{}, caller_body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true, .consume_dead_boxes = false });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true, .consume_dead_boxes = false });
 
     // No variant is emitted: the consumer's owned variant is demanded only by
     // a dying pair, and the dispatcher's parameter has no take to activate.
@@ -15009,7 +15024,7 @@ test "RC borrow: read-only sublist keeps its parameter borrowed" {
         .next = use_slice,
     } }, .test_fixture);
     const proc = try f.addProc(&.{param}, try f.assignI64(range, 0, sublist), .i64);
-    try insert(&f.store, &f.layouts, .{ .specialize = false });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
     try testing.expectEqual(@as(u64, 1), f.store.getProcSpecImmediate(proc).rc_borrowed_params);
     try testing.expectEqual(LIR.LowLevel.list_sublist_borrowed, f.reachableLowLevelAssign(slice).op);
     try f.expectRc(param, 0, 0, 0);
@@ -15042,7 +15057,7 @@ test "RC borrow: returned sublist transfers a dying caller buffer" {
         .next = try f.ret(result),
     } }, .test_fixture);
     const caller = try f.addProc(&.{}, try f.assignList(list, &.{}, call), f.list_i64);
-    try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = false });
+    _ = try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = false });
     try testing.expectEqual(@as(u64, 0), f.store.getProcSpecImmediate(callee).rc_borrowed_params);
     try testing.expectEqual(LIR.LowLevel.list_sublist, f.reachableLowLevelAssign(slice).op);
     try f.expectRc(param, 0, 0, 0);
@@ -15271,7 +15286,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     const caller = try f.addProc(&.{}, caller_body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const outcome_variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
@@ -15391,7 +15406,7 @@ fn checkRestitutionReplaysOnlyAtRefiningSwitch(handback: u32) (Allocator.Error |
     _ = try f.addProc(&.{}, caller_body, .i64);
 
     // Insertion certifies every procedure it rewrites.
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 }
 
 test "RC outcome restitution replays a listed-variant handback only at the refining switch" {
@@ -15474,7 +15489,7 @@ test "RC outcome restitution moves an argument alias's source unit through a mat
         _ = try f.addProc(&.{}, caller_body, .i64);
 
         const base_proc_count = f.store.procSpecCount();
-        try insert(&f.store, &f.layouts, .{ .specialize = false });
+        _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
 
         var outcome_call = false;
         for (0..f.store.cfStmtCount()) |stmt_index| {
@@ -15612,7 +15627,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
         }
 
         const base_proc_count = f.store.procSpecCount();
-        try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
+        _ = try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = specialize });
         try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
         const caller_body = f.store.getCFStmt(f.store.getProcSpecImmediate(caller).body.get().?);
         try testing.expect(caller_body == .assign_call);
@@ -15729,7 +15744,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
     const rejected_caller = try f.addProc(&.{ rejected_first, rejected_choose, rejected_second }, rejected_body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try testing.expectEqual(@as(usize, 0), f.countRc(first_input, .incref));
@@ -15863,7 +15878,7 @@ test "RC outcome restitution keeps a field a callee passes to a hosted call insi
     f.store.getProcSpecPtr(caller).code_key = @splat(1);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{});
+    _ = try insert(&f.store, &f.layouts, .{});
 
     // The caller lends its record to the outcome variant without a retain.
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
@@ -15945,7 +15960,7 @@ test "RC outcome restitution retains a complete projection a callee passes to a 
     f.store.getProcSpecPtr(caller).code_key = @splat(1);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{});
+    _ = try insert(&f.store, &f.layouts, .{});
 
     // The caller lends its record to the outcome variant without a retain,
     // and that variant retains the projection for the hosted call. The base
@@ -15989,7 +16004,7 @@ test "RC outcome restitution leaves a complete projection's move to a caller tha
     f.store.getProcSpecPtr(caller).code_key = @splat(1);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{});
+    _ = try insert(&f.store, &f.layouts, .{});
 
     try testing.expectEqual(base_proc_count, f.store.procSpecCount());
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
@@ -16068,7 +16083,7 @@ test "RC outcome restitution keeps a parameter a callee could take fields from i
     const caller = try f.addProc(&.{}, caller_body, .i64);
     f.store.getProcSpecPtr(caller).code_key = @splat(1);
 
-    try insert(&f.store, &f.layouts, .{});
+    _ = try insert(&f.store, &f.layouts, .{});
 
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
     try testing.expectEqual(@as(usize, 0), f.countRc(record, .incref));
@@ -16254,7 +16269,7 @@ test "RC outcome restitution refuses transfer when success still uses the old in
     _ = try f.addProc(&.{}, caller_body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     // The success outcome consumed the argument, so using the old input on
     // that arm cannot be justified by failure-only restitution. The caller
@@ -16292,7 +16307,7 @@ test "RC unrefined outcome uses the unconditional base ownership schedule" {
     _ = try f.addProc(&.{}, body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count, f.store.procSpecCount());
     try testing.expectEqual(@as(usize, 1), f.countRc(input, .incref));
@@ -16381,7 +16396,7 @@ test "RC outcome restitution rejects duplicate and alias-equivalent argument pla
     _ = try f.addProc(&.{}, alias_body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count, f.store.procSpecCount());
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, first_changed));
@@ -16446,7 +16461,7 @@ test "RC outcome restitution intersects every outcome represented by the default
     _ = try f.addProc(&.{}, body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
@@ -16613,7 +16628,7 @@ test "RC outcome restitution follows an exact result through a terminal join" {
     _ = try f.addProc(&.{}, body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
@@ -16648,7 +16663,7 @@ test "RC specialization: borrowed final argument does not clone for release-only
     _ = try f.addProc(&.{}, body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     // Moving this argument into a variant would only relocate the release
     // from caller to callee. Keep the borrowed signature and avoid cloning
@@ -16713,7 +16728,7 @@ test "RC specialization: owned-only field take demands an owned variant" {
     _ = try f.addProc(&.{}, caller_body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     // The caller moves the dying pair into an owned variant. The base proc
     // retains the borrowed field once; the variant takes it without another
@@ -16782,7 +16797,7 @@ test "RC specialization: owned-only field takes from different parameters into o
     _ = try f.addProc(&.{}, caller_body, f.list_i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     // The caller moves both dying pairs into one owned variant. The base proc
     // retains the borrowed field in each arm; the variant takes it in each
@@ -17150,7 +17165,7 @@ test "RC a parameter whose owned variant takes every unit on every return is own
     const kept_caller = try f.addProc(&.{}, kept_body, f.list_i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count, f.store.procSpecCount());
     try testing.expectEqual(@as(u64, 0), f.store.getProcSpecImmediate(callee).rc_borrowed_params);
@@ -17249,7 +17264,7 @@ fn expectBorrowedReadTakesAtLastOperand(consumed_after: bool) (Allocator.Error |
     const caller = try f.addProc(&.{}, caller_body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     // No read or alias in the caller retains: the borrowed base procedure
     // retains the list it appends to, and the last operand takes the pair.
@@ -17356,7 +17371,7 @@ test "RC field take restores the exact aggregate field on checked failure withou
         const caller = try f.addProc(&.{}, caller_body, .i64);
 
         const base_proc_count = f.store.procSpecCount();
-        try insert(&f.store, &f.layouts, .{ .specialize = false });
+        _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
 
         // The exact outcome variant is mandatory in dev/no-inline mode. Both
         // field reads are moves, so neither manufactures a list unit.
@@ -17519,7 +17534,7 @@ test "RC specialization: caller body survives variant proc append" {
 
     const base_proc_count = f.store.procSpecCount();
     f.store.proc_specs.shrinkAndFree(f.allocator, f.store.procSpecCount());
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
@@ -17606,7 +17621,7 @@ test "RC specialization: a variant's frame excludes the source's base dismantle 
 
     const base_proc_count = f.store.procSpecCount();
     const producer_local_count = f.store.localCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
@@ -17701,7 +17716,7 @@ test "RC specialization: identical demand vectors share one variant" {
     _ = try f.addProc(&.{}, body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try f.expectRc(value_a, 0, 0, 0);
@@ -17738,7 +17753,7 @@ test "RC specialization: a variant carries its source's procedure shapes" {
     _ = try f.addProc(&.{}, body, .i64);
 
     const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
@@ -18227,7 +18242,7 @@ test "RC borrowed alias transfers its nearest owned carrier" {
     try testing.expect(!solution.isBorrowed(owned_alias));
     try testing.expect(solution.isBorrowed(borrowed_alias));
     try testing.expectEqual(owned_alias, solution.unitLocalOf(borrowed_alias));
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+    _ = try insert(&f.store, &f.layouts, .{ .specialize = true });
 }
 
 test "RC alias chain into a consuming call moves the unit through" {
@@ -18502,7 +18517,7 @@ const DynFixture = struct {
     }
 
     fn run(self: *DynFixture, roots: []const LIR.LirProcSpecId) ResourceError!void {
-        try insert(&self.f.store, &self.f.layouts, .{ .roots = roots });
+        _ = try insert(&self.f.store, &self.f.layouts, .{ .roots = roots });
     }
 
     /// Every RC statement on a dynamic local names the dynamic layout, and
@@ -18540,7 +18555,7 @@ test "ARC dynamic product takes independently stored fields and preserves aliase
         const append = try d.f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
         const read = try d.f.assignRefField(field, param, 0, append);
         const proc = try d.proc(&.{ record_desc, field_desc, param }, read, d.dynamic, if (keep_record) param else result);
-        try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
+        _ = try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
         try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
         // Whole decref is forbidden after taking a field; the untouched field
         // is separately projected and released. A kept record stays intact.
@@ -18595,7 +18610,7 @@ test "ARC erased argument products take fields and preserve prefix and scalar re
         const proc = try d.proc(&.{ table, param }, body, d.dynamic, if (keep_record) param else result);
         d.f.store.getProcSpecPtr(proc).abi = .erased_record;
         d.f.store.getProcSpecPtr(proc).erased_capture_arg = .of(table);
-        try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
+        _ = try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
         try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
         try d.f.expectRc(param, 0, 0, 0);
         try d.f.expectRc(prefix, 0, 0, 0);
@@ -18859,7 +18874,7 @@ test "ARC outcome capability excludes conventions that return no ownership units
             defer solution.deinit();
             try testing.expect(solution.availableOutcomeSpanOf(proc).isEmpty());
         }
-        try insert(&f.store, &f.layouts, .{ .specialize = false });
+        _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
     }
 }
 
