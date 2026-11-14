@@ -1,15 +1,12 @@
 //! Regression coverage for https://github.com/roc-lang/roc/issues/12988.
-//! An interpolation whose target is the builtin `Str` but whose
-//! `from_interpolation` dispatch checking rejected keeps that dispatch, so
-//! lowering crashes at it instead of concatenating its parts.
-//!
-//! Only the second interpolation's parts get a type mismatch report, which
-//! retires them. The first interpolation's dispatch is rejected without a
-//! report at its parts, so it reaches lowering with a `checked_error` plan.
+//! Both interpolations are assigned to a local whose type defaults to `Str`
+//! at the definition's generalization boundary. Each must be checked against
+//! `Str` on its own, so each rejected value is reported and its interpolation
+//! retired, and lowering never meets a rejected builtin `Str` interpolation.
 
 const harness = @import("lower_to_lir_harness.zig");
 
-test "issue 12988: rejected builtin Str interpolation lowers without a compiler crash" {
+test "issue 12988: interpolations assigned to a defaulted local are checked separately" {
     try harness.expectLowersToLirWithOptions(
         \\recite : List(Str) -> Str
         \\recite = |strings| {

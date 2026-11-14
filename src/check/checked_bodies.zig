@@ -9,6 +9,7 @@
 //! on first demand for the definition that contains it.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
@@ -803,17 +804,19 @@ pub const CheckedBodies = struct {
         };
     }
 
-    /// Whether an interpolation's target is concretely the builtin `Str` and
-    /// checking accepted its `from_interpolation` dispatch, so it concatenates
-    /// its parts directly. An open target can instantiate at a custom
-    /// `from_interpolation` type and keeps its dispatch. A rejected dispatch
-    /// also keeps it: its plan resolves to `checked_error`, which body
-    /// analysis marks divergent and lowering turns into a crash.
+    /// Whether an interpolation's target is concretely the builtin `Str`, so
+    /// it concatenates its parts directly. An open target can instantiate at
+    /// a custom `from_interpolation` type and keeps its dispatch. Checking
+    /// retires every interpolation whose builtin `Str` dispatch it rejects, so
+    /// one that reaches a checked body was accepted.
     pub fn interpolationIsBuiltinStr(self: CheckedBodies, id: ExprId) bool {
-        if (checked_artifact.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) != .str) return false;
-        const constraint_fn_var = self.store().getExpr(id).e_interpolation.constraint_fn_var orelse
-            invariant("a checked interpolation had no constraint function variable");
-        return !self.env.types.varStaticDispatchRejected(constraint_fn_var);
+        const is_str = checked_artifact.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) == .str;
+        if (builtin.mode == .debug and is_str) {
+            const constraint_fn_var = self.store().getExpr(id).e_interpolation.constraint_fn_var orelse
+                invariant("a checked interpolation had no constraint function variable");
+            if (self.env.types.varStaticDispatchRejected(constraint_fn_var)) invariant("a rejected builtin Str interpolation reached a checked body");
+        }
+        return is_str;
     }
 
     /// The tag a structural equality compares by discriminant alone: a
