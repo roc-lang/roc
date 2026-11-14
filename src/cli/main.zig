@@ -19221,22 +19221,10 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [38]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
-        .{ .name = "Persistent interface hits", .count = diagnostics.specialization.interface_persistent_hits },
-        .{ .name = "Persistent interface misses", .count = diagnostics.specialization.interface_persistent_misses },
-        .{ .name = "Persistent interface invalid", .count = diagnostics.specialization.interface_persistent_invalid },
-        .{ .name = "Persistent interface types", .count = diagnostics.specialization.interface_persistent_types },
-        .{ .name = "Persistent interface references", .count = diagnostics.specialization.interface_persistent_references },
-        .{ .name = "Persistent interface composite records", .count = diagnostics.specialization.interface_persistent_composite_records },
-        .{ .name = "Persistent interface default records", .count = diagnostics.specialization.interface_persistent_default_records },
-        .{ .name = "Persistent interface composite hits", .count = diagnostics.specialization.interface_persistent_composite_hits },
-        .{ .name = "Persistent interface default hits", .count = diagnostics.specialization.interface_persistent_default_hits },
-        .{ .name = "Persistent interface bytes", .count = diagnostics.specialization.interface_persistent_bytes },
-        .{ .name = "Persistent interface records", .count = diagnostics.specialization.interface_persistent_records },
-        .{ .name = "Persistent interface unrepresentable", .count = diagnostics.specialization.interface_persistent_unrepresentable },
         .{ .name = "Interface summary expansions", .count = diagnostics.specialization.interface_summary_expansions },
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
         .{ .name = "Type instantiation scopes", .count = body.instantiation_scopes_created },
@@ -19638,16 +19626,16 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 206), graph[27].count);
 
     const body = monotypeBodyCounters(diagnostics);
-    try std.testing.expectEqualStrings("Type instantiation scopes", body[15].name);
-    try std.testing.expectEqual(@as(u64, 303), body[15].count);
-    try std.testing.expectEqualStrings("Checked node cache hits", body[17].name);
-    try std.testing.expectEqual(@as(u64, 301), body[17].count);
-    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[24].name);
-    try std.testing.expectEqual(@as(u64, 304), body[24].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[25].name);
-    try std.testing.expectEqual(@as(u64, 305), body[25].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[34].name);
-    try std.testing.expectEqual(@as(u64, 302), body[34].count);
+    try std.testing.expectEqualStrings("Type instantiation scopes", body[3].name);
+    try std.testing.expectEqual(@as(u64, 303), body[3].count);
+    try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
+    try std.testing.expectEqual(@as(u64, 301), body[5].count);
+    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[12].name);
+    try std.testing.expectEqual(@as(u64, 304), body[12].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[13].name);
+    try std.testing.expectEqual(@as(u64, 305), body[13].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[22].name);
+    try std.testing.expectEqual(@as(u64, 302), body[22].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,
