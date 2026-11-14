@@ -37193,7 +37193,7 @@ test "exhaustiveness site lookups find the first site naming a node" {
     const sites = try gpa.alloc(CheckedExhaustivenessSite, 4);
     const policy: ExhaustivenessResolutionPolicy = .compile_time_only;
     const region = base.Region.from_raw_offsets(0, 1);
-    sites[0] = .{ .id = @fromBackingInt(0), .kind = .destructure, .region = region, .checked_pattern = .some(@fromBackingInt(9)), .policy = policy };
+    sites[0] = .{ .id = testIndexId(CheckedExhaustivenessSiteId, 0), .kind = .destructure, .region = region, .checked_pattern = .some(@fromBackingInt(9)), .policy = policy };
     sites[1] = .{ .id = @fromBackingInt(1), .kind = .match, .region = region, .checked_expr = .some(@fromBackingInt(5)), .policy = policy };
     sites[2] = .{ .id = @fromBackingInt(2), .kind = .destructure, .region = region, .checked_pattern = .some(@fromBackingInt(9)), .policy = policy };
     sites[3] = .{ .id = @fromBackingInt(3), .kind = .match, .region = region, .checked_expr = .some(@fromBackingInt(2)), .policy = policy };
@@ -37202,7 +37202,7 @@ test "exhaustiveness site lookups find the first site naming a node" {
         return err;
     };
     defer table.deinit(gpa);
-    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, @fromBackingInt(0)), table.lookupByDestructurePattern(@fromBackingInt(9)));
+    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, testIndexId(CheckedExhaustivenessSiteId, 0)), table.lookupByDestructurePattern(@fromBackingInt(9)));
     try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, @fromBackingInt(1)), table.lookupByMatchExpr(@fromBackingInt(5)));
     try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, @fromBackingInt(3)), table.lookupByMatchExpr(@fromBackingInt(2)));
     try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, null), table.lookupByMatchExpr(@fromBackingInt(9)));
