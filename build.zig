@@ -1831,14 +1831,14 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     // The same recursion on a platform that reserves the addresses below its
     // global_base: the stack sits above static data, so generated code checks
     // its bounds and traps at the check instead (#12554).
-    .{ .app = "stack_overflow_reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=speed", "--wasm-stack-size=16384" }, .output = "stack_overflow_reserved_low_memory_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
-    .{ .app = "stack_overflow_reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--wasm-stack-size=16384" }, .output = "stack_overflow_reserved_low_memory_dev_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
-    .{ .app = "stack_overflow_reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no", "--wasm-stack-size=16384" }, .output = "stack_overflow_reserved_low_memory_boxy_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
+    .{ .app = "stack_overflow_reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=speed", "--wasm-stack-size=16384" }, .output = "stack_overflow_reserved_low_memory_static_lib_app.wasm", .run_args = &.{ "--expect-stack-overflow-trap", "--assert-generation-zero" } },
+    .{ .app = "stack_overflow_reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--wasm-stack-size=16384" }, .output = "stack_overflow_reserved_low_memory_dev_static_lib_app.wasm", .run_args = &.{ "--expect-stack-overflow-trap", "--assert-generation-zero" } },
+    .{ .app = "stack_overflow_reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no", "--wasm-stack-size=16384" }, .output = "stack_overflow_reserved_low_memory_boxy_static_lib_app.wasm", .run_args = &.{ "--expect-stack-overflow-trap", "--assert-generation-zero" } },
     // Programs on that platform run as they do on any other.
-    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "reserved_low_memory_dev_static_lib_app.wasm", .run_args = &.{ "--expected", "20203" } },
-    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "reserved_low_memory_size_static_lib_app.wasm", .run_args = &.{ "--expected", "20203" } },
-    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "reserved_low_memory_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "20203" } },
-    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "reserved_low_memory_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "20203" } },
+    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "reserved_low_memory_dev_static_lib_app.wasm", .run_args = &.{ "--expected", "20203", "--assert-generation-zero" } },
+    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "reserved_low_memory_size_static_lib_app.wasm", .run_args = &.{ "--expected", "20203", "--assert-generation-zero" } },
+    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "reserved_low_memory_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "20203", "--assert-generation-zero" } },
+    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "reserved_low_memory_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "20203", "--assert-generation-zero" } },
     .{ .app = "issue_11529_top_level_boxed_function_static_lib_app.roc", .options = &.{ "--opt=dev", "--no-cache" }, .output = "issue_11529_top_level_boxed_function_static_lib_app.wasm", .run_args = &.{ "--expected", "x" } },
     // A 64 KiB record through ten match arms stays within the engine's
     // function limits under every strategy and level, with bulk copies and
@@ -3922,6 +3922,21 @@ pub fn build(b: *std.Build) void {
         run_dylib_test.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_test.step);
 
+        const build_dev_dylib_app = b.addRunArtifact(roc_exe);
+        build_dev_dylib_app.addArgs(&.{
+            "build",
+            "--opt=dev",
+            b.fmt("--target={s}", .{output_target.roc_name}),
+        });
+        build_dev_dylib_app.addFileArg(dylib_sources.path(b, "test/dylib/app.roc"));
+        const dev_dylib_output = build_dev_dylib_app.addPrefixedOutputFileArg("--output=", b.fmt("app-dev{s}", .{dylib_ext}));
+
+        const run_dev_dylib_test = b.addRunArtifact(dylib_loader_exe);
+        run_dev_dylib_test.step.dependOn(&install_dylib_loader.step);
+        run_dev_dylib_test.addFileArg(dev_dylib_output);
+        run_dev_dylib_test.step.dependOn(&build_dev_dylib_app.step);
+        run_test_dylib_step.dependOn(&run_dev_dylib_test.step);
+
         // Dead host code must be dead-code-eliminated while live host code
         // survives, checked by byte-scanning for marker data blobs (data works
         // on every object format, unlike symbol names—PE retains no internal
@@ -4127,6 +4142,14 @@ pub fn build(b: *std.Build) void {
             .step_suffix = "machine-code-shim",
             .description = "Run machine-code shim Zig tests",
             .compile = machine_code_shim_test,
+        });
+    }
+
+    if (main_exe_result.machine_code_shim_runtime_test) |runtime_test| {
+        test_suites.register(.{
+            .step_suffix = "machine-code-shim-runtime",
+            .description = "Run private machine-code shim arithmetic tests",
+            .compile = runtime_test,
         });
     }
 
@@ -5625,23 +5648,9 @@ fn addMachineCodeShimLib(
     machine_code_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
     machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
-    if (target.result.os.tag == .linux and
-        (target.result.cpu.arch == .x86 or target.result.cpu.arch.isArm()))
-    {
-        // Reuse the toolchain's arithmetic and AAPCS implementations without
-        // importing its public compiler-rt root (which exports every helper).
-        const private_rt = b.addWriteFiles();
-        const root = private_rt.addCopyFile(b.path("src/machine_code_shim/compiler_rt.zig"), "compiler_rt.zig");
-        for ([_][]const u8{
-            "int.zig",             "udivmod.zig",             "arm.zig",
-            "udivmodsi4_test.zig", "udivmoddi4_test.zig",     "udivmodti4_test.zig",
-            "divti3_test.zig",     "modti3_test.zig",         "float_from_int.zig",
-            "int_from_float.zig",  "float_from_int_test.zig", "int_from_float_test.zig",
-        }) |file| {
-            _ = private_rt.addCopyFile(std.Build.LazyPath.zig_lib.path(b, b.pathJoin(&.{ "compiler_rt", file })), b.pathJoin(&.{ "compiler_rt", file }));
-        }
+    if (target.result.os.tag == .linux or target.result.os.tag == .macos) {
         machine_code_shim_lib.root_module.addImport("private_compiler_rt", b.createModule(.{
-            .root_source_file = root,
+            .root_source_file = machineCodeShimPrivateRuntimeSource(b),
             .target = target,
             .optimize = .fast,
         }));
@@ -5657,6 +5666,26 @@ fn addMachineCodeShimLib(
     if (target.result.os.tag == .linux) machine_code_shim_lib.root_module.link_libc = false;
 
     return machine_code_shim_lib;
+}
+
+/// Construct the same private runtime sources for production shims and arithmetic
+/// tests. Test availability is independent of the production target's libcalls.
+fn machineCodeShimPrivateRuntimeSource(b: *std.Build) std.Build.LazyPath {
+    // Reuse unmodified toolchain integer/EABI/shift implementations. Only
+    // conversions need registration-free cores to close their Debug imports.
+    const private_rt = b.addWriteFiles();
+    const root = private_rt.addCopyFile(b.path("src/machine_code_shim/compiler_rt.zig"), "compiler_rt.zig");
+    _ = private_rt.addCopyFile(b.path("src/machine_code_shim/float_int_conversion.zig"), "float_int_conversion.zig");
+    for ([_][]const u8{
+        "shift.zig",           "shift_test.zig",
+        "int.zig",             "udivmod.zig",
+        "arm.zig",             "udivmodsi4_test.zig",
+        "udivmoddi4_test.zig", "udivmodti4_test.zig",
+        "divti3_test.zig",     "modti3_test.zig",
+    }) |file| {
+        _ = private_rt.addCopyFile(std.Build.LazyPath.zig_lib.path(b, b.pathJoin(&.{ "compiler_rt", file })), b.pathJoin(&.{ "compiler_rt", file }));
+    }
+    return root;
 }
 
 /// Link the checked archive against a platform that owns colliding compiler-rt
@@ -5706,6 +5735,7 @@ fn addMachineCodeShimLinkCheck(
 const MainExeResult = struct {
     exe: *Step.Compile,
     machine_code_shim_test: ?*Step.Compile,
+    machine_code_shim_runtime_test: ?*Step.Compile,
     machine_code_shim_archive_check: ?*Step,
     boundary_link_tests: [2]?*Step.Compile,
     machine_code_shim_archive_test: ?*Step.Compile,
@@ -6081,6 +6111,7 @@ fn addMainExe(
     const machine_code_shim_lib = addMachineCodeShimLib(b, roc_modules, target, optimize, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
 
     var machine_code_shim_test_for_registry: ?*Step.Compile = null;
+    var machine_code_shim_runtime_test: ?*Step.Compile = null;
     var machine_code_shim_archive_check_for_registry: ?*Step = null;
     var boundary_link_tests: [2]?*Step.Compile = .{ null, null };
     var machine_code_shim_archive_test_for_registry: ?*Step.Compile = null;
@@ -6121,6 +6152,22 @@ fn addMainExe(
         machine_code_shim_test.bundle_compiler_rt = true;
         add_tracy(b, roc_modules.build_options, machine_code_shim_test, b.graph.host, false, flag_enable_tracy);
         machine_code_shim_test_for_registry = machine_code_shim_test;
+        const runtime_test = b.addTest(.{
+            .name = "machine_code_shim_runtime",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/machine_code_shim/shift_test.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+        configureBackend(runtime_test, target);
+        runtime_test.root_module.addImport("private_compiler_rt", b.createModule(.{
+            .root_source_file = machineCodeShimPrivateRuntimeSource(b),
+            .target = target,
+            .optimize = optimize,
+        }));
+        machine_code_shim_runtime_test = runtime_test;
 
         const boundary_link_step = b.step("run-test-shim-boundary-link", "Link canonical host symbols through both real shim archives");
         for ([_]*Step.Compile{ machine_code_shim_lib, interpreter_shim_lib }, 0..) |shim_lib, index| {
@@ -6649,6 +6696,7 @@ fn addMainExe(
     return .{
         .exe = exe,
         .machine_code_shim_test = machine_code_shim_test_for_registry,
+        .machine_code_shim_runtime_test = machine_code_shim_runtime_test,
         .machine_code_shim_archive_check = machine_code_shim_archive_check_for_registry,
         .boundary_link_tests = boundary_link_tests,
         .machine_code_shim_archive_test = machine_code_shim_archive_test_for_registry,

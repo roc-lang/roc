@@ -47,6 +47,8 @@ fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) 
 // The app's entrypoint, exported under its provides symbol with its natural
 // C ABI: main_for_host! takes List(Str) and returns I32.
 extern fn roc_main(args: RocList) callconv(.c) i32;
+// Called before any entrypoint, so it returns 0 on every build.
+extern fn roc_hot_reload_generation() callconv(.c) u64;
 
 // OS-specific entry point handling
 comptime {
@@ -66,6 +68,10 @@ fn __main() callconv(.c) void {}
 // C compatible main for runtime
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     host_crash_handlers.installForCurrentThread();
+    if (roc_hot_reload_generation() != 0) {
+        std.debug.print("{s}", .{"HOST ERROR: roc_hot_reload_generation is not 0\n"});
+        return 1;
+    }
     const exit_code = platform_main(argc, argv) catch |err| {
         std.debug.print("{s}", .{"HOST ERROR: "});
         std.debug.print("{s}", .{@errorName(err)});
