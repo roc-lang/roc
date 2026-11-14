@@ -135,6 +135,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_10695_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10759_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10804_test.zig"));
+    std.testing.refAllDecls(@import("test/ambiguous_instantiation_use_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11444_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10824_test.zig"));
     std.testing.refAllDecls(@import("test/derived_codec_local_record_row_test.zig"));

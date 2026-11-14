@@ -1079,6 +1079,11 @@ hoist_retired_binder_walk: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// containing one is kept: the expression evaluates at runtime, in source
 /// order, and crashes where the rejected dispatch runs.
 rejected_instantiation_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+/// The callee expression of each call the erroneous-value sweep replaced with
+/// a runtime error. The call never applies its callee, so the requirements its
+/// callee's instantiation copied are never discharged by a call; an ambiguity
+/// verdict on one of them is void (`applyInstantiationAmbiguityVerdict`).
+runtime_error_call_callees: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
 /// Top-level-equivalent expressions checked in a guarded hoist position. A
 /// root whose expression is in this set is published as a guarded root.
 hoist_guarded_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
@@ -1942,6 +1947,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .hoist_retired_binders = .keyed,
     .hoist_retired_binder_walk = .scratch,
     .rejected_instantiation_exprs = .keyed,
+    .runtime_error_call_callees = .keyed,
     .hoist_guarded_exprs = .keyed,
     .selected_hoisted_roots = .keyed,
     .local_procedure_candidates = .settled,
@@ -18664,6 +18670,32 @@ fn applyAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
     try self.applyCreationAmbiguityVerdicts();
 }
 
+/// Reject, without a report, the requirements on an undetermined receiver when
+/// every active one was copied by a value use that is the callee of a call the
+/// erroneous-value sweep replaced with a runtime error
+/// (`runtime_error_call_callees`). That call never applies its callee, so the
+/// receiver is undetermined only because the rejected call never related it,
+/// and the rejection already owns its report. Each copy's owning use is
+/// explicit instantiation data (`use_instance_by_fn_var`, whose scheme-use
+/// record names the use's node).
+fn rejectRequirementsOfUnappliedCallees(self: *Self, constraints_range: StaticDispatchConstraint.SafeList.Range) Allocator.Error!bool {
+    if (self.runtime_error_call_callees.count() == 0) return false;
+    const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+    const scheme_uses = self.cir.scheme_uses.items();
+    var any_active = false;
+    for (constraints) |constraint| {
+        if (self.staticDispatchConstraintIsInactive(constraint)) continue;
+        any_active = true;
+        const use_idx = self.use_instance_by_fn_var.get(constraint.fn_var) orelse return false;
+        const record = scheme_uses[self.use_instances.items[use_idx].record];
+        if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.value_use)) return false;
+        if (!self.runtime_error_call_callees.contains(@fromBackingInt(record.node_idx))) return false;
+    }
+    if (!any_active) return false;
+    for (constraints) |constraint| try self.markStaticDispatchRejected(constraint);
+    return true;
+}
+
 /// Apply one `.instantiation` ambiguity verdict. The judgment already
 /// established the receiver is unpinnable (see `judgeAmbiguityCandidate`);
 /// everything else is re-derived here at the settled state, because the final
@@ -18674,6 +18706,8 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     const constraints_range = contentConstraintRange(resolved.desc.content) orelse return;
     if (constraints_range.len() == 0) return;
     if (self.reported_dispatch_vars.contains(resolved.var_)) return;
+
+    if (try self.rejectRequirementsOfUnappliedCallees(constraints_range)) return;
 
     // Re-run the origin-policy selection (see `selectAmbiguityConstraint` for
     // the decision table) so the reported constraint reflects the settled
@@ -18688,9 +18722,12 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     const body_forced = selection.body_forced;
     const where_dispatch_use = selection.where_dispatch_use;
 
-    // Locate the call site that left this receiver undetermined. Instantiated
-    // where-clause contracts carry exact dispatch-expression metadata, so
-    // they can report directly at that call. Ordinary hidden dispatches need
+    // Locate the call site that left this receiver undetermined. An
+    // instantiated where-clause contract that a dispatch in the scheme's body
+    // uses, or that its body provably requires, belongs to the use that
+    // instantiated it (design.md "Every Rejection Is Explicit Recovery"): the
+    // report and the runtime error go to that use, and the scheme's body,
+    // which every other use shares, stays intact. Ordinary hidden dispatches need
     // the structural scan: the receiver var is internal to the instantiated
     // callee type, so no expression's own type IS the receiver. Instead it
     // flows into one of a call's ARGUMENTS, whose type structurally CONTAINS
@@ -18706,24 +18743,13 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     var primary: ?Region = null;
     var secondary: ?Region = null;
     var runtime_error_inserted = false;
-    if (is_instantiated_where_clause and where_dispatch_use != null) {
-        const dispatch_use = where_dispatch_use.?;
-        primary = dispatch_use.region;
-        runtime_error_inserted = true;
-
-        if (self.cir.store.getExpr(dispatch_use.expr_idx) != .e_runtime_error) {
-            const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-                .region = dispatch_use.region,
-            } });
-            try self.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
-        }
-    } else if (body_forced) {
-        // A body-forced where-clause with no in-module dispatch use (the
-        // unpinned receiver lives only in the instantiating call's result
-        // type, e.g. the `Dict(x, y)` returned by `Dict.join_map(...)`). The
-        // candidate recorded the exact expression whose instantiation created
-        // the obligation, so report there and mark it a runtime error—codegen
-        // then emits a crash instead of reaching the ownerless dispatch.
+    if ((is_instantiated_where_clause and where_dispatch_use != null) or body_forced) {
+        // The candidate recorded the exact expression whose instantiation
+        // created the obligation (for a body-forced contract with no dispatch
+        // use, the unpinned receiver lives only in the instantiating call's
+        // result type, e.g. the `Dict(x, y)` returned by `Dict.join_map(...)`),
+        // so report there and mark it a runtime error—codegen then emits a
+        // crash instead of reaching the ownerless dispatch.
         if (verdict.instantiation_expr.get()) |inst_expr| {
             primary = self.cir.store.getExprRegion(inst_expr);
             runtime_error_inserted = true;
@@ -31028,6 +31054,11 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
                         break :blk;
                     },
+                    .erroneous_annotation => {
+                        try self.noteLocalLookupForLocalProcedures(lookup.pattern_idx);
+                        try self.markErroneousNameUse(expr_idx, expr_var);
+                        break :blk;
+                    },
                     .value => {},
                 }
             }
@@ -31375,6 +31406,8 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     try self.reportValuelessDeclarationUse(expr_var, expr_region);
                 } else if (reference == .non_effectful_hosted) {
                     try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
+                } else if (reference == .erroneous_annotation) {
+                    try self.markErroneousNameUse(expr_idx, expr_var);
                 } else {
                     try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
                     const ext_instantiated_var = try self.instantiateImportedBindingVar(
@@ -36281,9 +36314,12 @@ fn defReference(module_env: *const ModuleEnv, def: CIR.Def) DefReference {
     }
     if (tag == .expr_hosted_lambda) {
         const annotation_idx = def.annotation orelse return .value;
-        return if (hostedAnnotationIsEffectful(module_env, annotation_idx)) .value else .non_effectful_hosted;
+        if (!hostedAnnotationIsEffectful(module_env, annotation_idx)) return .non_effectful_hosted;
     }
-    return .value;
+    // An erroneous annotation declares no type, so a use relates nothing to
+    // it (design.md "Every Rejection Is Explicit Recovery").
+    const annotation_idx = def.annotation orelse return .value;
+    return if (module_env.store.getAnnotation(annotation_idx).erroneous) .erroneous_annotation else .value;
 }
 
 /// Whether a hosted declaration's annotation is an effectful function type.
@@ -38965,6 +39001,10 @@ fn checkResolvedAssociatedTarget(
             try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
             return;
         },
+        .erroneous_annotation => {
+            try self.markErroneousNameUse(expr_idx, expr_var);
+            return;
+        },
         .value => {},
     }
 
@@ -40561,7 +40601,11 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
 
     var iter = self.erroneous_value_exprs.keyIterator();
     while (iter.next()) |expr_idx| {
-        if (self.cir.store.getExpr(expr_idx.*) == .e_runtime_error) continue;
+        switch (self.cir.store.getExpr(expr_idx.*)) {
+            .e_runtime_error => continue,
+            .e_call => |call| try self.runtime_error_call_callees.put(self.gpa, call.func, {}),
+            else => {},
+        }
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(expr_idx.*),
         } });

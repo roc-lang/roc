@@ -1390,8 +1390,14 @@ checker recovery. The recovery rules:
   records this on the annotation itself (`CIR.Annotation.erroneous`) as soon as
   it generates the annotation's type, before any body or use is related to it,
   so the record is available in every module that can see the definition. The
-  definition's right-hand side becomes the runtime error, a method included,
-  and a static dispatch that selects a method with such an annotation is
+  definition's right-hand side becomes the runtime error, a method included.
+  Every use of the definition, in its own module or an importing one, by name
+  or as an associated item, is erroneous at the use (`defReference` classifies
+  it `.erroneous_annotation`; see the use rule below), so a call of it is
+  retired before it relates any argument: in `taken : List(Time) -> List(Time)`
+  called as `taken(w0)` with `w0 = []`, `w0` keeps its own `List(_)` type
+  rather than taking on the annotation's erroneous one. A static dispatch that
+  selects a method with such an annotation is
   rejected exactly as one selecting an annotation-only declaration is: its
   constraint callable is never related to the erroneous type, which would
   otherwise reach the instantiation that the dispatch belongs to while every
@@ -1556,8 +1562,9 @@ checker recovery. The recovery rules:
   variable the binding cannot quantify is checked without the annotation, and
   its right-hand side is erroneous (Value Bindings Generalize By Expression).
 - A use of a declaration that already reported its own rejection (a value
-  binding whose annotation is rejected, or a hosted declaration that is not an
-  effectful function), or of an erroneous name (one a rejected pattern or a
+  binding whose annotation is rejected, a definition whose annotation is
+  erroneous, or a hosted declaration that is not an effectful function), or of
+  an erroneous name (one a rejected pattern or a
   pattern matched against an erroneous value introduces), is erroneous at the
   use (`Check.markErroneousNameUse`): the use never relates to the
   declaration's type, so uses cannot disagree with one another, and the error
@@ -1631,12 +1638,36 @@ checker recovery. The recovery rules:
   `instantiated_literal_conversion_uses` for literal conversions (numeral,
   quote, and interpolation), each keyed by the copy's own callable var. A
   failure of the copy makes that use a runtime error and leaves the scheme's
-  body, which stays valid for every other use, intact.
+  body, which stays valid for every other use, intact. An ambiguity verdict on
+  a copied where-clause requirement whose receiver no relation determines is
+  such a failure too, even when a dispatch in the scheme's body uses the
+  requirement: the report and the runtime error go to the instantiating use
+  (`applyInstantiationAmbiguityVerdict`), never to that body dispatch, so in
+  `apply : p -> Str where [p.to_str : p -> Str]` a use `apply(crash "boom")`
+  that leaves `p` undetermined is the crash while `apply(5.U8)` elsewhere
+  still runs `apply`'s body.
 - Rejecting a static-dispatch constraint never writes `.err` into the
   receiver's solved class. A concrete receiver's class is shared with every
   expression and definition that mentions its type, so the rejection marks the
   constraint rejected and retires its owner, and the receiver keeps its type.
   An interpolation whose `Str` part demand fails keeps its `Str` result.
+- A call that is a runtime error never applies its callee, so the call relates
+  neither its arguments nor its result to the callee's instantiation. A
+  receiver of that instantiation's copied requirements can therefore be left
+  undetermined only by the call's own rejection, which already owns its
+  report: in `shown = apply(nope)` with
+  `apply : p -> Str where [p.to_str : p -> Str]`, nothing pins `p`. The
+  erroneous-value sweep records the callee of each call it replaces
+  (`runtime_error_call_callees`), and an ambiguity verdict whose every active
+  requirement was copied by such a callee's value use (`use_instance_by_fn_var`
+  names each copy's use, whose scheme-use record names its node) rejects
+  those requirements without a report and rewrites nothing
+  (`rejectRequirementsOfUnappliedCallees`). The callee itself is still
+  evaluated as a function value (Erroneous Call Operand Retirement). The sweep
+  runs before the verdicts and covers every call replaced while checking or
+  later, so the verdict sees one settled set; a call retired after it was
+  checked related its operands when it was checked, so its receivers are not
+  left undetermined by the retirement.
 
 A module that fails before checking, such as a dependent of a module whose
 source was rejected, has no CheckedModule. Checked-program finalization produces a
@@ -7901,6 +7932,11 @@ crashes at the rejected dispatch rather than restoring a compile-time failure
 that only a later read would surface. Nested function
 site collection walks a runtime error's `evaluated` operands like any other
 children, so a closure among them is a nested function like any other.
+Checked-artifact template reference collection
+(`CheckedTemplateRefCollector`) walks them the same way, so every value
+reference, dispatch plan, and nested-function construction among them gets
+its site evidence: a retired call's callee is evaluated, and Boxy builds a
+procedure value's dictionaries from that evidence when it lowers it.
 
 Retirement is atomic with dispatch introduction. A retired expression emits no
 constraint and no live plan; a required iterator recovery plan carries rejected
@@ -14678,6 +14714,18 @@ Other solved-graph mutations:
   rejection reads the explicit `CIR.Annotation.erroneous` record, which only an
   annotation that already produced a diagnostic carries, so no error-free
   program's typechecking or checked-module output changes.
+- `markErroneousNameUse` for a use of a definition whose annotation is
+  erroneous (`defReference`'s `.erroneous_annotation`; `markErroneous`)—
+  mechanism: diagnostic recovery after an already-reported error. It reads the
+  same explicit `CIR.Annotation.erroneous` record, so no error-free program's
+  typechecking or checked-module output changes.
+- `rejectRequirementsOfUnappliedCallees` (`markStaticDispatchFnRejected`)—
+  mechanism: diagnostic recovery after an already-reported error (Every
+  Rejection Is Explicit Recovery, above). It applies only to an ambiguity
+  verdict whose requirements were all copied by the callee of a call the
+  erroneous-value sweep replaced (`runtime_error_call_callees`), which an
+  error-free program never has, so no error-free program's typechecking or
+  checked-module output changes.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead
