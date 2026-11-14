@@ -12,16 +12,13 @@
 //! the compiler, which serves the unit from it whenever it computes the same
 //! key.
 //!
-//! This tool is the compiler's own modules compiled exactly as the compiler
-//! is: for the compiler's target, in the compiler's optimize mode, so it has
-//! the compiler's compatibility identity (`build_options.compiler_compatibility_hash`),
-//! which the table records. The compiler's output depends on that identity
-//! (a Debug compiler's dev backend emits runtime checks into the code it
-//! generates that an optimized compiler's does not), so no
-//! other executable could build the entry the compiler files. The build
-//! therefore runs it only for a compiler whose target this machine runs; any
-//! other compiler embeds no entries. A target without a dev backend gets an
-//! empty table.
+//! This tool is the compiler's own lowering, ARC and backend modules. What
+//! they emit does not depend on how they were compiled (design.md "Output
+//! Determinism"), so the build makes the table with a Debug build of the
+//! tool for the build machine, whatever the compiler's own target and
+//! optimize mode, and the table records the sources' identity
+//! (`build_options.compiler_artifact_hash`). A target without a dev backend
+//! gets an empty table.
 //!
 //! Usage:
 //!
@@ -29,11 +26,14 @@
 //!     builtin_unit --verify <table> <roc target name> <empty cache directory>
 //!
 //! `--verify` is the build's test that the table holds exactly what the
-//! compiler files for the same key: it keys and builds the Builtin's unit
-//! through `boxy_unit.restoreOrBuild`, the run-time path, into a cache of its
-//! own, and requires the filed entry to be byte-identical to the table's
-//! entry for that key, the table to serve that key, and the table's
-//! digests of the Builtin to be the ones hashing it gives.
+//! compiler files for the same key. The build runs it with the tool compiled
+//! as the compiler is (its target, its optimize mode), so it also checks
+//! that the Debug tool's entry is the one that compiler builds. It keys and
+//! builds the Builtin's unit through `boxy_unit.restoreOrBuild`, the run-time
+//! path, into a cache of its own, and requires the filed entry to be
+//! byte-identical to the table's entry for that key, the table to serve that
+//! key, and the table's digests of the Builtin to be the ones hashing it
+//! gives.
 
 const std = @import("std");
 const backend = @import("backend");
@@ -61,7 +61,7 @@ pub fn main(init: std.process.Init) MainError!void {
     if (args.len != 3) return error.ExpectedArguments;
     const target = try parseTarget(args[2]);
     const table = if (backend.dev.isa.isaOfOrNull(target) == null)
-        try embedded_units.encode(gpa, build_options.compiler_compatibility_hash, &.{}, &.{})
+        try embedded_units.encode(gpa, build_options.compiler_artifact_hash, &.{}, &.{})
     else
         try builtinUnitTable(gpa, io, target);
     defer gpa.free(table);
@@ -151,7 +151,7 @@ fn builtinUnitTable(gpa: std.mem.Allocator, io: std.Io, target: RocTarget) MainE
     const result = try boxy_unit.buildEntry(unit);
     defer result.built.deinit(gpa);
     defer gpa.free(result.bytes);
-    return try embedded_units.encode(gpa, build_options.compiler_compatibility_hash, &.{try builtin_unit.module()}, &.{.{ .input = input, .entry = result.bytes }});
+    return try embedded_units.encode(gpa, build_options.compiler_artifact_hash, &.{try builtin_unit.module()}, &.{.{ .input = input, .entry = result.bytes }});
 }
 
 /// Build the Builtin's unit for `target` through the run-time path into a

@@ -221,6 +221,15 @@ Caches are transparent: an uncached, cold-cache, and warm-cache build produce
 the same result. Thread scheduling, cache history, directory order, and file
 timestamps do not affect emitted code.
 
+Neither does the way the compiler itself was built. A Debug compiler and an
+optimized one, on any host, emit the same LIR, machine code, objects and
+images for the same input: a stage never emits a statement, an instruction or
+data because of the compiler's own optimize mode or safety checks. A compiler
+invariant is checked inside the compiler ("Debug Invariants"), never by code
+the compiler adds to the program it compiles. The build relies on this: a
+Debug host tool builds the Builtin unit an optimized compiler carries
+("Embedded Units"), and `zig build run-test-builtin-unit` compares the two.
+
 ### Representation Capacity
 
 Every count, index, position, offset, and value that grows with the size of
@@ -16740,30 +16749,27 @@ expect sites, the compiler-only function-value variant (`functionUnitKey`),
 and a link in which another module shares the Builtin's stable name, which
 names the Builtin by content.
 
-The compiler's output is not independent of how the compiler itself was
-built: a Debug compiler's dev backend emits runtime checks of box and
-string locals into the code it generates
-(`LirCodeGen.emitDebugAssertValidBoxLocal`, `emitDebugAssertValidStrLocal`),
-so its units differ from an optimized compiler's. This is why every cache
-key folds in the executable's compatibility identity
-(`build_options.compiler_compatibility_hash`: optimize mode, target, CPU
-features, code generation backend, sources). The entry must therefore be
-built by an executable with exactly the compiler's identity. The build tool
-(src/build/builtin_unit.zig) is the compiler's own lowering, ARC and backend
-modules compiled for the compiler's target in the compiler's optimize mode;
-it loads the baked checked Builtin exactly as the compiler does, prepares
-the unit exactly as `compile.coordinator.BoxyObjects` prepares it, and
-encodes the entry with `boxy_unit.buildEntry`, the encoder `restoreOrBuild`
-files entries with. The table records the tool's compatibility hash, and
-the compiler asserts it equals its own. A compiler built for a target the
-build machine cannot run (a cross-compiled compiler) embeds no entries. Any
-change to the compiler's sources, the Builtin, or the cache formats reruns
-the tool through the build graph, and an unchanged build reuses its table.
-The compiler's compilation waits for the table, so embedding puts the
-tool's compilation and run on the path to the compiler. A Debug compiler
-therefore embeds nothing unless built with `-Dembed-builtin-unit=true`, so
-iterating on the compiler does not pay for it; every other optimize mode
-embeds by default.
+The entry is built by a Debug host tool (src/build/builtin_unit.zig): the
+compiler's own lowering, ARC and backend modules, which load the baked
+checked Builtin exactly as the compiler does, prepare the unit exactly as
+`compile.coordinator.BoxyObjects` prepares it, and encode the entry with
+`boxy_unit.buildEntry`, the encoder `restoreOrBuild` files entries with.
+The tool need not be the compiler it builds for, because what the compiler
+emits does not depend on how the compiler was built ("Output Determinism"):
+a Debug tool on the build machine builds the entry an optimized compiler
+for any target would. So a cross-compiled compiler embeds its unit like any
+other, and the tool's compilation is a Debug one. A cache key does fold in
+the running compiler's own build
+(`build_options.compiler_compatibility_hash`), which is why the table
+records key inputs and not keys. The table records the tool's source
+identity (`build_options.compiler_artifact_hash`), and the compiler asserts
+it equals its own. Any change to the compiler's sources, the Builtin, or the
+cache formats reruns the tool through the build graph, and an unchanged
+build reuses its table. The compiler's compilation waits for the table, so
+embedding puts the tool's compilation and run (about a minute) on the path
+to the compiler. A Debug compiler therefore embeds nothing unless built
+with `-Dembed-builtin-unit=true`, so iterating on the compiler does not pay
+for it; every other optimize mode embeds by default.
 
 The table also carries the Builtin's digests (`boxy_interface.Digests`):
 its interface digest and its object input, which, since it imports
@@ -16774,9 +16780,13 @@ hashing its public surface and stored values in every process; any other
 pair (another Builtin, or the Builtin named by content) hashes as usual.
 
 `zig build run-test-builtin-unit` builds the unit through `restoreOrBuild`
-into an empty cache and requires the filed entry to be byte-identical to
-the tool's table entry, the table to serve its key, and the embedded
-digests to be the ones hashing the Builtin gives; `ROC_VERIFY_BOXY_OBJECT_REUSE`
+into an empty cache, with the tool compiled as the compiler is (its target,
+its optimize mode), and requires the filed entry to be byte-identical to
+the Debug tool's table entry, the table to serve its key, and the embedded
+digests to be the ones hashing the Builtin gives. MiniCI runs it in
+ReleaseSafe, so it compares a Debug build's unit with an optimized build's;
+a compiler for a target the build machine cannot run is not verified.
+`ROC_VERIFY_BOXY_OBJECT_REUSE`
 rebuilds the embedded entry inside the compiler itself and compares it like
 a restored one, and hashes the Builtin to compare its embedded digests.
 

@@ -5,20 +5,23 @@
 //! where `boxy_unit.restoreOrBuild` serves a unit whose key is one of the
 //! table's keys from it instead of the per-module cache.
 //!
-//! The entries are built by the compiler's own modules compiled exactly as
-//! the compiler is (same target, same optimize mode), so the builder has the
-//! compiler's compatibility identity, which the table records and `find`
-//! asserts: the compiler's output depends on that identity (its optimize
-//! mode changes the code it generates), and so does a cache key. The table
-//! records each entry's key input (`boxy_object_cache.KeyInput`), which
-//! `find` keys under the running compiler.
+//! The entries are built by the compiler's own modules in a Debug host
+//! tool. What the compiler emits is a function of its sources and its input,
+//! never of how the compiler itself was built (design.md "Output
+//! Determinism"), so the tool builds the entry any build of the same sources
+//! would. The table records the tool's source identity
+//! (`build_options.compiler_artifact_hash`), which `find` asserts is the
+//! running compiler's. A cache key does fold in the running compiler's build,
+//! so the table records each entry's key input
+//! (`boxy_object_cache.KeyInput`), which `find` keys under the running
+//! compiler.
 //!
 //! Layout, little-endian:
 //!
 //!     magic "RBXE", format version (u32),
-//!     compiler compatibility hash ([32]u8,
-//!     `build_options.compiler_compatibility_hash` of the executable that
-//!     built the entries),
+//!     compiler source identity ([32]u8,
+//!     `build_options.compiler_artifact_hash` of the executable that built
+//!     the entries),
 //!     module count (u32), then for each module whose digests the table
 //!     holds: its checked artifact key, its link name, its interface digest
 //!     and its object input (`boxy_interface.Digests`), [32]u8 each;
@@ -37,7 +40,7 @@ const object_cache = @import("boxy_object_cache.zig");
 const Allocator = std.mem.Allocator;
 
 /// The table format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 const magic = "RBXE";
 
@@ -102,9 +105,9 @@ pub const Units = struct {
         var reader: Reader = .{ .bytes = self.table };
         std.debug.assert(std.mem.eql(u8, reader.take(magic.len), magic));
         std.debug.assert(reader.word32() == format_version);
-        // The build makes the table with an executable of the compiler's
-        // own compatibility identity.
-        std.debug.assert(std.mem.eql(u8, reader.take(32), &build_options.compiler_compatibility_hash));
+        // The build makes the table from the sources this compiler was
+        // built from.
+        std.debug.assert(std.mem.eql(u8, reader.take(32), &build_options.compiler_artifact_hash));
         return reader;
     }
 };
@@ -139,14 +142,14 @@ pub const Unit = struct {
 };
 
 /// The table of `modules`' digests and `units`, built by an executable
-/// whose compatibility hash is `compiler_compatibility_hash`. The caller
-/// owns the result.
-pub fn encode(allocator: Allocator, compiler_compatibility_hash: [32]u8, modules: []const Module, units: []const Unit) Allocator.Error![]u8 {
+/// whose source identity is `compiler_artifact_hash`. The caller owns the
+/// result.
+pub fn encode(allocator: Allocator, compiler_artifact_hash: [32]u8, modules: []const Module, units: []const Unit) Allocator.Error![]u8 {
     var bytes: std.ArrayList(u8) = .empty;
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, magic);
     try appendInt(&bytes, allocator, u32, format_version);
-    try bytes.appendSlice(allocator, &compiler_compatibility_hash);
+    try bytes.appendSlice(allocator, &compiler_artifact_hash);
     try appendInt(&bytes, allocator, u32, @intCast(modules.len));
     for (modules) |module| {
         for ([_]*const [32]u8{ &module.artifact, &module.link_name, &module.digests.interface, &module.digests.object_input }) |digest| {
@@ -224,7 +227,7 @@ test "an embedded entry is found by its key under this compiler, and placed as a
     const first_entry = "first entry bytes";
     const second_entry = "second";
     const module: Module = .{ .artifact = @splat(1), .link_name = @splat(2), .digests = .{ .interface = @splat(3), .object_input = @splat(4) } };
-    const encoded = try encode(gpa, build_options.compiler_compatibility_hash, &.{module}, &.{
+    const encoded = try encode(gpa, build_options.compiler_artifact_hash, &.{module}, &.{
         .{ .input = input, .entry = first_entry },
         .{ .input = other, .entry = second_entry },
     });

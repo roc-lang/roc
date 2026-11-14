@@ -1164,24 +1164,69 @@ fn createAndRunBuiltinCompiler(
 /// the Builtin module's unit for the target `exe` runs on
 /// (src/build/builtin_unit.zig, design.md "Embedded Units").
 const EmbeddedBuiltinUnits = struct {
-    /// The tool that builds them: the compiler's own lowering, ARC and
-    /// backend modules, compiled for `exe`'s target in `exe`'s optimize
-    /// mode, so it is the same compiler, with the same compatibility
-    /// identity, as `exe`. The compiler's output depends on its optimize
-    /// mode, so no other tool would build the entry `exe` files. Null when
-    /// this machine cannot run code for `exe`'s target.
-    tool: ?*Step.Compile,
-    /// The table the tool builds, which `exe` carries when it embeds units.
-    table: ?std.Build.LazyPath,
+    /// The table `exe` carries when it embeds units, built by a Debug host
+    /// tool: what the compiler emits does not depend on how the compiler
+    /// itself was built, so the tool need not be `exe`.
+    table: std.Build.LazyPath,
+    /// The tool compiled as `exe` is (its target, its optimize mode), which
+    /// checks that the entry `exe` builds is the table's. Null when this
+    /// machine cannot run code for `exe`'s target.
+    verifier: ?*Step.Compile,
 };
 
-/// Link into `exe` the table of Boxy unit entries it carries: the table
-/// the tool builds when `embed` is set and this machine runs code for
-/// `exe`'s target, an empty table otherwise. The table is an object of its
-/// own; `exe`'s compilation waits for it, so embedding puts the tool's
-/// compilation and run on the path to `exe`. The build graph reruns the
-/// tool whenever the compiler's modules, the baked Builtin, or the compiler
-/// identity change, and reuses its table otherwise.
+/// The Builtin unit tool compiled for `target` in `optimize` mode: the
+/// compiler's own lowering, ARC and backend modules.
+fn addBuiltinUnitTool(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    write_compiled_builtins: *Step.WriteFile,
+    name: []const u8,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    tracy: ?[]const u8,
+) *Step.Compile {
+    const lowering_policy = b.createModule(.{
+        .root_source_file = b.path("src/cli/lowering_policy.zig"),
+        .imports = &.{
+            .{ .name = "base", .module = roc_modules.base },
+            .{ .name = "check", .module = roc_modules.check },
+            .{ .name = "lir", .module = roc_modules.lir },
+            .{ .name = "postcheck", .module = roc_modules.postcheck },
+            .{ .name = "backend", .module = roc_modules.backend },
+            .{ .name = "builtins", .module = roc_modules.builtins },
+            .{ .name = "compile", .module = roc_modules.compile },
+            .{ .name = "eval", .module = roc_modules.eval },
+            .{ .name = "roc_target", .module = roc_modules.roc_target },
+        },
+    });
+    const tool = b.addExecutable(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/builtin_unit.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "backend", .module = roc_modules.backend },
+                .{ .name = "compile", .module = roc_modules.compile },
+                .{ .name = "eval", .module = roc_modules.eval },
+                .{ .name = "roc_target", .module = roc_modules.roc_target },
+                .{ .name = "lowering_policy", .module = lowering_policy },
+            },
+        }),
+    });
+    configureBackend(tool, target);
+    add_tracy(b, roc_modules.build_options, tool, target, false, tracy);
+    tool.step.dependOn(&write_compiled_builtins.step);
+    return tool;
+}
+
+/// Link into `exe` the table of Boxy unit entries it carries: the table a
+/// Debug host tool builds when `embed` is set, an empty table otherwise. The
+/// table is an object of its own; `exe`'s compilation waits for it, so
+/// embedding puts the tool's compilation and run on the path to `exe`. The
+/// build graph reruns the tool whenever the compiler's modules, the baked
+/// Builtin, or the compiler identity change, and reuses its table otherwise.
 fn linkEmbeddedBuiltinUnits(
     b: *std.Build,
     roc_modules: modules.RocModules,
@@ -1192,6 +1237,17 @@ fn linkEmbeddedBuiltinUnits(
 ) EmbeddedBuiltinUnits {
     const target = exe.root_module.resolved_target.?;
     const optimize = exe.root_module.optimize orelse .debug;
+    const target_name = roc_target.RocTarget.fromStdTarget(target.result).toName();
+    // Kept Debug for the same reason the builtin compiler is: optimizing the
+    // compiler's modules a second time costs far more than a Debug run of
+    // them saves.
+    const host_target = hostToolTarget(b, .debug);
+    const table_tool = addBuiltinUnitTool(b, roc_modules, write_compiled_builtins, "builtin_unit", host_target, .debug, tracy);
+    const run = b.addRunArtifact(table_tool);
+    // A developer-diagnostic variable must not change what the build embeds.
+    run.clearEnvironment();
+    const table = run.addOutputFileArg("builtin_units.bin");
+    run.addArg(target_name);
     const host = b.graph.host.result;
     const runs_here = std.zig.system.getExternalExecutor(b.graph.io, &target.result, .{
         .host_cpu_arch = host.cpu.arch,
@@ -1199,50 +1255,13 @@ fn linkEmbeddedBuiltinUnits(
         .link_libc = true,
         .link_mode = if (target.result.abi.isMusl()) .static else .dynamic,
     }) == .native;
-    const units: EmbeddedBuiltinUnits = if (runs_here) units: {
-        const lowering_policy = b.createModule(.{
-            .root_source_file = b.path("src/cli/lowering_policy.zig"),
-            .imports = &.{
-                .{ .name = "base", .module = roc_modules.base },
-                .{ .name = "check", .module = roc_modules.check },
-                .{ .name = "lir", .module = roc_modules.lir },
-                .{ .name = "postcheck", .module = roc_modules.postcheck },
-                .{ .name = "backend", .module = roc_modules.backend },
-                .{ .name = "builtins", .module = roc_modules.builtins },
-                .{ .name = "compile", .module = roc_modules.compile },
-                .{ .name = "eval", .module = roc_modules.eval },
-                .{ .name = "roc_target", .module = roc_modules.roc_target },
-            },
-        });
-        const tool = b.addExecutable(.{
-            .name = "builtin_unit",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/build/builtin_unit.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-                .imports = &.{
-                    .{ .name = "backend", .module = roc_modules.backend },
-                    .{ .name = "compile", .module = roc_modules.compile },
-                    .{ .name = "eval", .module = roc_modules.eval },
-                    .{ .name = "roc_target", .module = roc_modules.roc_target },
-                    .{ .name = "lowering_policy", .module = lowering_policy },
-                },
-            }),
-        });
-        configureBackend(tool, target);
-        add_tracy(b, roc_modules.build_options, tool, target, false, tracy);
-        tool.step.dependOn(&write_compiled_builtins.step);
-        const run = b.addRunArtifact(tool);
-        // A developer-diagnostic variable must not change what the build embeds.
-        run.clearEnvironment();
-        const table = run.addOutputFileArg("builtin_units.bin");
-        run.addArg(roc_target.RocTarget.fromStdTarget(target.result).toName());
-        break :units .{ .tool = tool, .table = table };
-    } else .{ .tool = null, .table = null };
+    const units: EmbeddedBuiltinUnits = .{
+        .table = table,
+        .verifier = if (runs_here) addBuiltinUnitTool(b, roc_modules, write_compiled_builtins, "builtin_unit_verifier", target, optimize, tracy) else null,
+    };
     const files = b.addWriteFiles();
-    const source = if (embed and units.table != null) source: {
-        _ = files.addCopyFile(units.table.?, "builtin_units.bin");
+    const source = if (embed) source: {
+        _ = files.addCopyFile(units.table, "builtin_units.bin");
         // A read-only section of its own keeps the table, whose type is
         // sentinel-terminated, out of the linker's mergeable strings.
         const section = switch (target.result.ofmt) {
@@ -2790,11 +2809,11 @@ pub fn build(b: *std.Build) void {
         // same key (src/build/builtin_unit.zig, `--verify`).
         const units = linkEmbeddedBuiltinUnits(b, roc_modules, write_compiled_builtins, roc_exe, flag_enable_tracy, embed_builtin_unit orelse (optimize != .debug));
         const step = b.step("run-test-builtin-unit", "Check that the Builtin unit roc embeds is byte-identical to the one roc builds");
-        if (units.tool) |tool| {
-            const verify = b.addRunArtifact(tool);
+        if (units.verifier) |verifier| {
+            const verify = b.addRunArtifact(verifier);
             verify.clearEnvironment();
             verify.addArg("--verify");
-            verify.addFileArg(units.table.?);
+            verify.addFileArg(units.table);
             verify.addArg(roc_target.RocTarget.fromStdTarget(target.result).toName());
             _ = verify.addOutputDirectoryArg("cache");
             step.dependOn(&verify.step);

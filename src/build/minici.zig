@@ -302,7 +302,10 @@ const jobs = [_]Job{
     .{ .name = "run-test-cli-platforms-boxy", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
     .{ .name = "run-test-builtin-bake-reproducible" },
-    .{ .name = "run-test-builtin-unit" },
+    // Builds its own ReleaseSafe verifier: the table is built by a Debug
+    // tool, so an optimized verifier is what checks that the compiler emits
+    // the same unit however it was built.
+    .{ .name = "run-test-builtin-unit", .build_args = &.{"-Doptimize=ReleaseSafe"} },
     .{ .name = "run-test-downstream-package" },
     .{ .name = "run-test-wasm-static-lib" },
     .{ .name = "run-test-dylib" },
