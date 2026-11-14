@@ -1377,6 +1377,16 @@ method_name_mints: collections.DenseMap(MethodNameId, []const MethodNameId),
 scheme_mint_names: collections.DenseMapUnmanaged(Var, []const MethodNameId) = .empty,
 /// Shared method-name identity domain for the reachability walk.
 method_mint_names: canonical_names.CanonicalNameStore,
+/// Every method binding a dispatch lookup can select, in this module and in
+/// `methodBindingEnvs`, grouped by interned method name, built on first use.
+/// Each group lists this module's bindings first, then each other module's
+/// in `methodBindingEnvs` order, each in `method_defs` order. Method
+/// definitions are registered during canonicalization, so the bindings do
+/// not change while checking.
+method_name_bindings: std.ArrayListUnmanaged(MethodNameBinding) = .empty,
+/// Per interned method name, its group in `method_name_bindings`.
+method_name_binding_groups: collections.DenseMapUnmanaged(MethodNameId, MethodNameBindingGroup) = .empty,
+method_name_bindings_built: bool = false,
 /// Every other module whose method bindings a dispatch lookup can select,
 /// collected on first use.
 method_binding_envs: ?[]const *const ModuleEnv = null,
@@ -1388,6 +1398,23 @@ scratch_evidence_probe_params: std.ArrayListUnmanaged(dispatch_evidence.Evidence
 scratch_method_mint_params: std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam) = .empty,
 scratch_method_mint_requirements: std.ArrayListUnmanaged(dispatch_evidence.SchemeRequirement) = .empty,
 scratch_scheme_mint_names: std.ArrayListUnmanaged(MethodNameId) = .empty,
+/// Per final method-target scheme root and method name, whether
+/// `dispatchEdgeCanBeSameTargetAncestor` answers true, keyed by
+/// `sameTargetReachKey`. An answer is kept only when every name its walk read
+/// had a summary in `method_name_mints`: the walk then read nothing but
+/// `scheme_mint_names` and `method_name_mints` entries, which never change
+/// once present, so the same key always walks to the same answer.
+same_target_reach: std.AutoHashMapUnmanaged(u64, bool) = .empty,
+/// Scratch for `dispatchEdgeCanBeSameTargetAncestor`'s walk, which calls
+/// nothing that re-enters it.
+scratch_same_target_pending: std.ArrayListUnmanaged(MethodNameId) = .empty,
+scratch_same_target_visited: collections.DenseMapUnmanaged(MethodNameId, void) = .empty,
+/// Scratch for `dispatchStateRepeatsRowLabel`, which calls nothing that
+/// re-enters it.
+scratch_row_label_stack: std.ArrayListUnmanaged(Var) = .empty,
+scratch_row_label_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
+scratch_row_labels: std.ArrayListUnmanaged(Ident.Idx) = .empty,
+scratch_row_chain_seen: std.ArrayListUnmanaged(Var) = .empty,
 /// Component obligations of a structural comparison or hash, each linked to
 /// the constraint callable of the comparison or hash it serves. Evaluating
 /// that operation evaluates the component's dispatch. Kept apart from
@@ -2046,6 +2073,9 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .method_name_mints = .keyed,
     .scheme_mint_names = .keyed,
     .method_mint_names = .keyed,
+    .method_name_bindings = .keyed,
+    .method_name_binding_groups = .keyed,
+    .method_name_bindings_built = .keyed,
     .method_binding_envs = .keyed,
     .scratch_method_mint_evidence = .scratch,
     .scratch_evidence_probe = .scratch,
@@ -2053,6 +2083,13 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_method_mint_params = .scratch,
     .scratch_method_mint_requirements = .scratch,
     .scratch_scheme_mint_names = .scratch,
+    .same_target_reach = .keyed,
+    .scratch_same_target_pending = .scratch,
+    .scratch_same_target_visited = .scratch,
+    .scratch_row_label_stack = .scratch,
+    .scratch_row_label_seen = .scratch,
+    .scratch_row_labels = .scratch,
+    .scratch_row_chain_seen = .scratch,
     .component_derivations = .keyed,
     .component_derived_relations = .keyed,
     .component_derived_relation_set = .keyed,
@@ -48811,6 +48848,10 @@ fn normalizeDispatchStateRows(
     value: ?Var,
     env: *Env,
 ) Allocator.Error!void {
+    // Exact early exit: the walk below changes something only when the key
+    // writer reports a row repeating a label, and `dispatchStateRepeatsRowLabel`
+    // finds every row that it could report.
+    if (!try self.dispatchStateRepeatsRowLabel(dispatcher_var, constraint_fn_var)) return;
     self.canonical_key_writer.setReportDuplicateRows(true);
     defer self.canonical_key_writer.setReportDuplicateRows(false);
     for ([_]Var{ dispatcher_var, constraint_fn_var }) |root| {
@@ -48819,6 +48860,101 @@ fn normalizeDispatchStateRows(
             if (!try self.normalizeReportedDuplicateRow(value, env)) break;
         }
     }
+}
+
+/// Whether a dispatch state can hold a row the canonical key writer reports
+/// as repeating a label (`TypeWriter.takeDuplicateRow`) during
+/// `normalizeDispatchStateRows`'s walk. The writer reports a row it visits
+/// when two of the labels it gathers for it have equal text: the row's own
+/// labels and those of every row of the same kind its extension chain
+/// continues into, up to the first extension that is not such a row or that
+/// the chain already met. This walk follows every edge that walk follows
+/// (it never follows a type variable's constraints) and tests every row it
+/// reaches the same way, so it answers true whenever that walk would report
+/// a row.
+fn dispatchStateRepeatsRowLabel(self: *Self, dispatcher_var: Var, constraint_fn_var: Var) Allocator.Error!bool {
+    const stack = &self.scratch_row_label_stack;
+    const seen = &self.scratch_row_label_seen;
+    stack.clearRetainingCapacity();
+    seen.clearRetainingCapacity();
+    try stack.appendSlice(self.gpa, &.{ dispatcher_var, constraint_fn_var });
+    while (stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        if ((try seen.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex, .rigid, .err, .field_presence => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    if (try self.rowChainRepeatsLabel(resolved.var_, .record)) return true;
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.var_);
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    if (try self.rowChainRepeatsLabel(resolved.var_, .tag_union)) return true;
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+            },
+        }
+    }
+    return false;
+}
+
+/// Whether two labels the canonical key writer gathers for `row` have equal
+/// text: the row's own labels, then those of each row of the same kind its
+/// extension chain continues into, stopping at the first extension that is
+/// not such a row or that the chain already met (as the writer's row
+/// description does).
+fn rowChainRepeatsLabel(self: *Self, row: Var, comptime kind: enum { record, tag_union }) Allocator.Error!bool {
+    const labels = &self.scratch_row_labels;
+    const chain_seen = &self.scratch_row_chain_seen;
+    labels.clearRetainingCapacity();
+    chain_seen.clearRetainingCapacity();
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        if (std.mem.findScalar(Var, chain_seen.items, resolved.var_) != null) break;
+        try chain_seen.append(self.gpa, resolved.var_);
+        if (std.meta.activeTag(resolved.desc.content) != .structure) break;
+        switch (kind) {
+            .record => switch (resolved.desc.content.structure) {
+                .record => |record| {
+                    try labels.appendSlice(self.gpa, self.types.getRecordFieldsSlice(record.fields).items(.name));
+                    current = record.ext;
+                },
+                else => break,
+            },
+            .tag_union => switch (resolved.desc.content.structure) {
+                .tag_union => |tag_union| {
+                    try labels.appendSlice(self.gpa, self.types.getTagsSlice(tag_union.tags).items(.name));
+                    current = tag_union.ext;
+                },
+                else => break,
+            },
+        }
+    }
+    const idents = self.cir.getIdentStoreConst();
+    for (labels.items, 0..) |label, index| {
+        for (labels.items[index + 1 ..]) |other| {
+            if (idents.idxTextEql(label, other)) return true;
+        }
+    }
+    return false;
 }
 
 /// Canonical receiver+callable digest for one dispatch edge. Fresh
@@ -49014,21 +49150,39 @@ fn dispatchEdgeCanBeSameTargetAncestor(
     else
         try self.importedMethodScheme(method_lookup);
 
-    var pending: std.ArrayListUnmanaged(MethodNameId) = .empty;
-    defer pending.deinit(self.gpa);
-    var visited = collections.DenseMap(MethodNameId, void).init(self.gpa);
-    defer visited.deinit();
-
-    try pending.appendSlice(self.gpa, try self.targetSchemeMintNames(method_lookup, instantiated_scheme, predeclared_scheme_for_method));
+    const final = self.methodTargetSchemeIsFinal(method_lookup, predeclared_scheme_for_method);
+    const scheme_names = try self.targetSchemeMintNames(method_lookup, instantiated_scheme, predeclared_scheme_for_method);
     const target_name = try self.method_mint_names.internMethodIdent(self.cir.getIdentStoreConst(), constraint.fn_name);
-    while (pending.pop()) |name| {
-        if (name == target_name) return true;
-        const seen = try visited.getOrPut(name);
+    // Pure memoization: for a final scheme the answer is a function of the
+    // scheme's `scheme_mint_names` entry, the target name, and the
+    // `method_name_mints` entries the walk reads, none of which changes once
+    // present. It is kept only when every one of them was present
+    // (`same_target_reach`).
+    const reach_key = sameTargetReachKey(instantiated_scheme, target_name);
+    if (final) {
+        if (self.same_target_reach.get(reach_key)) |reaches| return reaches;
+    }
+
+    const pending = &self.scratch_same_target_pending;
+    const visited = &self.scratch_same_target_visited;
+    pending.clearRetainingCapacity();
+    visited.clearRetainingCapacity();
+    try pending.appendSlice(self.gpa, scheme_names);
+    const reaches = while (pending.pop()) |name| {
+        if (name == target_name) break true;
+        const seen = try visited.getOrPut(self.gpa, name);
         if (seen.found_existing) continue;
+        // A name with a binding whose scheme is not final yet keeps the key,
+        // and the answer is not kept.
         const mints = (try self.methodNameMints(name)) orelse return true;
         try pending.appendSlice(self.gpa, mints);
-    }
-    return false;
+    } else false;
+    if (final) try self.same_target_reach.put(self.gpa, reach_key, reaches);
+    return reaches;
+}
+
+fn sameTargetReachKey(scheme: Var, target_name: MethodNameId) u64 {
+    return (@as(u64, @backingInt(scheme)) << 32) | @backingInt(target_name);
 }
 
 /// The constraint names that instantiating any binding of `name`, in this
@@ -49047,38 +49201,33 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
     var seen = collections.DenseMap(MethodNameId, void).init(self.gpa);
     defer seen.deinit();
 
-    for (self.cir.method_defs.entries.items()) |entry| {
-        const method_name = try self.method_mint_names.internMethodIdent(self.cir.getIdentStoreConst(), entry.key.methodIdent());
-        if (method_name != name) continue;
-        const binding = entry.value;
-        const def = self.cir.store.getDef(binding.def_idx);
-        if (self.topLevelPattern(def.pattern)) |processing_def| {
-            if (processing_def.status != .processed or self.defInOnStackGroup(binding.def_idx)) return null;
-        }
-        try self.appendLocalSchemeMintNames(ModuleEnv.varFrom(binding.type_node_idx), &binding_names);
-    }
-
-    for (try self.methodBindingEnvs()) |env| {
-        for (env.method_defs.entries.items()) |entry| {
-            const method_name = try self.method_mint_names.internMethodIdent(env.getIdentStoreConst(), entry.key.methodIdent());
-            if (method_name != name) continue;
-            const binding = entry.value;
-            self.scratch_method_mint_requirements.clearRetainingCapacity();
-            for (env.bindingSchemeCodecRequirementsForNode(binding.type_node_idx)) |requirement| {
-                try self.scratch_method_mint_requirements.append(self.gpa, .{
-                    .receiver = @fromBackingInt(@intCast(requirement.receiver_var)),
-                    .constraint = env.types.getStaticDispatchConstraintAt(requirement.constraint_index),
-                    .requires_instantiation = false,
-                });
+    try self.buildMethodNameBindings();
+    const group = self.method_name_binding_groups.get(name) orelse MethodNameBindingGroup{ .start = 0, .len = 0 };
+    for (self.method_name_bindings.items[group.start..][0..group.len]) |entry| {
+        const binding = entry.binding;
+        const env = entry.env orelse {
+            const def = self.cir.store.getDef(binding.def_idx);
+            if (self.topLevelPattern(def.pattern)) |processing_def| {
+                if (processing_def.status != .processed or self.defInOnStackGroup(binding.def_idx)) return null;
             }
-            try self.appendSchemeMintNames(
-                env,
-                &env.types,
-                ModuleEnv.varFrom(binding.type_node_idx),
-                self.scratch_method_mint_requirements.items,
-                &binding_names,
-            );
+            try self.appendLocalSchemeMintNames(ModuleEnv.varFrom(binding.type_node_idx), &binding_names);
+            continue;
+        };
+        self.scratch_method_mint_requirements.clearRetainingCapacity();
+        for (env.bindingSchemeCodecRequirementsForNode(binding.type_node_idx)) |requirement| {
+            try self.scratch_method_mint_requirements.append(self.gpa, .{
+                .receiver = @fromBackingInt(@intCast(requirement.receiver_var)),
+                .constraint = env.types.getStaticDispatchConstraintAt(requirement.constraint_index),
+                .requires_instantiation = false,
+            });
         }
+        try self.appendSchemeMintNames(
+            env,
+            &env.types,
+            ModuleEnv.varFrom(binding.type_node_idx),
+            self.scratch_method_mint_requirements.items,
+            &binding_names,
+        );
     }
 
     for (binding_names.items) |binding_name| {
@@ -49089,6 +49238,56 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
     errdefer self.gpa.free(owned);
     try self.method_name_mints.put(name, owned);
     return owned;
+}
+
+/// A method binding a dispatch lookup can select, with its interned name.
+/// `env` is null for a binding of this module.
+const MethodNameBinding = struct {
+    name: MethodNameId,
+    env: ?*const ModuleEnv,
+    binding: ModuleEnv.MethodBinding,
+};
+
+const MethodNameBindingGroup = struct { start: u32, len: u32 };
+
+/// Build `method_name_bindings` and its groups once. Pure memoization of
+/// interning each binding's method name: the bindings are fixed while
+/// checking, and grouping keeps each group's bindings in the order a scan of
+/// every `method_defs` table meets them.
+fn buildMethodNameBindings(self: *Self) Allocator.Error!void {
+    if (self.method_name_bindings_built) return;
+    const bindings = &self.method_name_bindings;
+    for (self.cir.method_defs.entries.items()) |entry| {
+        try bindings.append(self.gpa, .{
+            .name = try self.method_mint_names.internMethodIdent(self.cir.getIdentStoreConst(), entry.key.methodIdent()),
+            .env = null,
+            .binding = entry.value,
+        });
+    }
+    for (try self.methodBindingEnvs()) |env| {
+        for (env.method_defs.entries.items()) |entry| {
+            try bindings.append(self.gpa, .{
+                .name = try self.method_mint_names.internMethodIdent(env.getIdentStoreConst(), entry.key.methodIdent()),
+                .env = env,
+                .binding = entry.value,
+            });
+        }
+    }
+    // A stable sort keeps each name's bindings in scan order.
+    std.sort.block(MethodNameBinding, bindings.items, {}, struct {
+        fn lessThan(_: void, a: MethodNameBinding, b: MethodNameBinding) bool {
+            return @backingInt(a.name) < @backingInt(b.name);
+        }
+    }.lessThan);
+    var start: usize = 0;
+    while (start < bindings.items.len) {
+        const name = bindings.items[start].name;
+        var end = start + 1;
+        while (end < bindings.items.len and bindings.items[end].name == name) end += 1;
+        try self.method_name_binding_groups.put(self.gpa, name, .{ .start = @intCast(start), .len = @intCast(end - start) });
+        start = end;
+    }
+    self.method_name_bindings_built = true;
 }
 
 /// The constraint names that instantiating a dispatch edge's target scheme
@@ -63518,5 +63717,92 @@ test "every checker frame stack and frame's own storage is checked for balance" 
     }) |field| {
         const discipline = state_inventory.get(field);
         try std.testing.expect(discipline == .frame_stack or discipline == .frame_partitioned);
+    }
+}
+
+test "a dispatch state repeats a row label exactly when the canonical key writer reports a row" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExprOpen("RowLabelRepeats", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    const idents = test_env.module_env;
+    const a = try idents.insertIdent(Ident.for_text("A"));
+    const b = try idents.insertIdent(Ident.for_text("B"));
+    const c = try idents.insertIdent(Ident.for_text("C"));
+
+    const Case = struct {
+        fn tagRow(s: *types_mod.Store, names: []const Ident.Idx, ext: Var) Allocator.Error!Var {
+            var tags: [4]types_mod.Tag = undefined;
+            for (names, 0..) |name, index| tags[index] = .{ .name = name, .args = try s.appendVars(&.{}) };
+            return s.freshFromContent(.{ .structure = .{ .tag_union = .{
+                .tags = try s.appendTags(tags[0..names.len]),
+                .ext = ext,
+            } } });
+        }
+        fn recordRow(s: *types_mod.Store, name: Ident.Idx, ext: Var) Allocator.Error!Var {
+            return s.freshFromContent(.{ .structure = .{ .record = .{
+                .fields = try s.appendRecordFields(&.{.{ .name = name, .presence = .required(try s.fresh()) }}),
+                .ext = ext,
+            } } });
+        }
+        fn callable(s: *types_mod.Store, arg: Var) Allocator.Error!Var {
+            return s.freshFromContent(.{ .structure = .{ .fn_pure = .{
+                .args = try s.appendVars(&.{arg}),
+                .ret = try s.fresh(),
+            } } });
+        }
+        fn writerReports(checker_: *Self, receiver: Var, fn_var: Var) Allocator.Error!bool {
+            checker_.canonical_key_writer.setReportDuplicateRows(true);
+            defer checker_.canonical_key_writer.setReportDuplicateRows(false);
+            var reported = false;
+            for ([_]Var{ receiver, fn_var }) |root| {
+                try checker_.canonical_key_writer.visitIgnoringConstraints(root);
+                if (checker_.canonical_key_writer.takeDuplicateRow() != null) reported = true;
+            }
+            return reported;
+        }
+        fn expectAgreement(checker_: *Self, receiver: Var, fn_var: Var, expected: bool) !void {
+            try std.testing.expectEqual(expected, try writerReports(checker_, receiver, fn_var));
+            try std.testing.expectEqual(expected, try checker_.dispatchStateRepeatsRowLabel(receiver, fn_var));
+        }
+    };
+    const empty_tags = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const empty_record = try store.freshFromContent(.{ .structure = .empty_record });
+
+    // `[A]` extended by `[A]`: neither part repeats a label alone.
+    {
+        const receiver = try Case.tagRow(store, &.{a}, try Case.tagRow(store, &.{a}, empty_tags));
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, receiver), true);
+    }
+    // `{ a }` extended by `{ a }`, reached only through the callable's argument tuple.
+    {
+        const receiver = try store.fresh();
+        const row = try Case.recordRow(store, a, try Case.recordRow(store, a, empty_record));
+        const tuple = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ row, receiver }) } } });
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, tuple), true);
+    }
+    // A repeating row reached only through a type variable's method
+    // requirement, which neither walk follows.
+    {
+        const row = try Case.tagRow(store, &.{a}, try Case.tagRow(store, &.{a}, empty_tags));
+        const method = try store.appendStaticDispatchConstraints(&.{.{
+            .fn_name = a,
+            .fn_var = try Case.callable(store, row),
+            .origin = .method_call,
+        }});
+        const receiver = try store.freshFromContent(.{ .flex = Flex.init().withConstraints(method) });
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, receiver), false);
+    }
+    // `[A, B]` extended by `[C]`: several labels, none repeated.
+    {
+        const receiver = try Case.tagRow(store, &.{ a, b }, try Case.tagRow(store, &.{c}, empty_tags));
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, receiver), false);
+    }
+    // `[A]` extended by a variable, beside a separate `[A]`: each row has one label.
+    {
+        const receiver = try Case.tagRow(store, &.{a}, try store.fresh());
+        const other = try Case.tagRow(store, &.{a}, empty_tags);
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, other), false);
     }
 }
