@@ -17183,13 +17183,13 @@ runtime. The coordinator's compilations take it from their command
 compile-time root and lowers no runtime program, so it names `.boxy`. The
 playground runs each expression as a `.boxy` runtime program on the LIR
 interpreter, as an `--opt=interpreter` program runs, and names `.boxy`. The
-snapshot tool's REPL programs and the eval harness's programs are published
-under `.lss`, the harness's default (`Inspected.ParseOptions.strategy`); a
-harness program lowered under `.boxy` reopens its modules for the Boxy
-representation of their function values. The snapshot tool's documentation
-snapshots name `.boxy`, as `roc docs` does. The Builtin bake names `.lss`
-and `complete_baked_module`, which adds the Boxy representation of every
-root holding a function value ("Stored Function Values").
+eval harness publishes each program under the strategy its runtime program
+is lowered under (`Inspected.ParseOptions.strategy`): `.lss` unless the
+program asks for `.boxy`, and `.lss` for the snapshot tool's REPL programs.
+The snapshot tool's documentation snapshots name `.boxy`, as `roc docs`
+does. The Builtin bake names `.lss` and
+`complete_baked_module`, which adds the Boxy representation of every root
+holding a function value ("Stored Function Values").
 
 The `.boxy` compile-time evaluator (`evaluateRootsBoxy`) orders the pending
 roots by the values they read,
