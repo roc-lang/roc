@@ -3824,7 +3824,7 @@ test "checked artifact method registry skips nominal associated values" {
     );
     defer registry.deinit(testing.allocator);
 
-    try testing.expectEqual(@as(usize, 0), registry.entries.len);
+    try testing.expectEqual(@as(usize, 0), registry.entries.items().len);
 }
 
 test "typed method definition entries expose finalized owner-method keys" {

@@ -1627,7 +1627,7 @@ fn appendHostedCacheEntriesFromView(
     if (checkedModuleKeySeen(seen_keys.items, view.key.bytes)) return;
     try seen_keys.append(allocator, view.key.bytes);
 
-    for (view.hosted_procs.procs) |proc| {
+    for (view.hosted_procs.procs.items()) |proc| {
         try entries.append(allocator, .{
             .module_key = view.key.bytes,
             .order_key = proc.orderKey(view.hosted_procs),
@@ -1671,7 +1671,7 @@ fn applyHostedBindings(
     entries: *std.ArrayList(HostedCacheEntry),
     binding_view: HostedBindingView,
 ) Allocator.Error!void {
-    const bindings = binding_view.table.bindings;
+    const bindings = binding_view.table.bindings.items();
 
     var declared_by_target = std.AutoHashMap(HostedTargetKey, usize).init(allocator);
     defer declared_by_target.deinit();
@@ -1783,7 +1783,7 @@ fn updatePlatformAppRelationIdentity(
     // identity hashed alongside this.
     updateHashBytes(hasher, "platform-app-relations-v2");
 
-    const relations = root_artifact.platform_requirement_relations.relations;
+    const relations = root_artifact.platform_requirement_relations.relations.items();
     updateHashU32(hasher, @intCast(relations.len));
     for (relations) |relation| {
         updateHashU32(hasher, @backingInt(relation.declaration));
@@ -1791,7 +1791,7 @@ fn updatePlatformAppRelationIdentity(
         updateHashU32(hasher, @backingInt(relation.value_kind));
     }
 
-    const bindings = root_artifact.platform_required_bindings.bindings;
+    const bindings = root_artifact.platform_required_bindings.bindings.items();
     updateHashU32(hasher, @intCast(bindings.len));
     for (bindings) |binding| {
         updateHashU32(hasher, @backingInt(binding.declaration));
@@ -1800,7 +1800,7 @@ fn updatePlatformAppRelationIdentity(
         updateHashU32(hasher, @backingInt(std.meta.activeTag(binding.value_use)));
     }
 
-    const checked_error_requires = root_artifact.platform_required_bindings.checked_error_requires;
+    const checked_error_requires = root_artifact.platform_required_bindings.checked_error_requires.items();
     updateHashU32(hasher, @intCast(checked_error_requires.len));
     for (checked_error_requires) |requires_idx| updateHashU32(hasher, requires_idx);
 }
@@ -6806,7 +6806,7 @@ fn lowerRunUnits(
     const cache_manager = build_env.cache_manager orelse base.invariant("roc run invariant violated: a run composed from unit images has no cache manager", .{});
     const root_key = try boxyObjectKey(ctx.gpa, &tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.?.platform), policy, target, library.?.paired_platforms, true);
 
-    const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
+    const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, root_artifact.root_requests.runtime_requests.items());
     defer ctx.gpa.free(selected_roots);
     const entrypoint_names = try ctx.arena.alloc([]const u8, selected_roots.len);
     for (selected_roots, entrypoint_names) |root, *name| name.* = try ctx.arena.dupe(u8, nativeEntrypointSymbolName(root_artifact, root));
@@ -10390,7 +10390,7 @@ fn buildBoxyLibraryObjects(
     defer units.deinit(ctx.gpa);
     try units.append(ctx.gpa, &build_env.builtin_modules.checked_artifact);
     for (test_modules orelse visible) |artifact| {
-        if (artifact.platform_type_inputs.requirements.len != 0) continue;
+        if (artifact.platform_type_inputs.requirements.items().len != 0) continue;
         try units.append(ctx.gpa, artifact);
     }
     // A module's body calls imports its root never sees, and a unit is keyed
@@ -10408,9 +10408,9 @@ fn buildBoxyLibraryObjects(
     var next_unit: usize = 0;
     while (next_unit < units.items.len) : (next_unit += 1) {
         const importer = units.items[next_unit];
-        for (importer.direct_import_module_keys) |key| {
+        for (importer.direct_import_module_keys.items()) |key| {
             const imported = digests.artifacts.get(key.bytes) orelse continue;
-            if (imported.platform_type_inputs.requirements.len != 0) continue;
+            if (imported.platform_type_inputs.requirements.items().len != 0) continue;
             if ((try seen_units.getOrPut(key.bytes)).found_existing) continue;
             try units.append(ctx.gpa, imported);
         }
@@ -10461,7 +10461,7 @@ fn buildBoxyLibraryObjects(
     }
     for (dependents) |*list| list.* = .empty;
     for (units.items, 0..) |artifact, index| {
-        for (artifact.direct_import_module_keys) |import_key| {
+        for (artifact.direct_import_module_keys.items()) |import_key| {
             const imported = index_by_key.get(import_key.bytes) orelse continue;
             remaining[index] += 1;
             try dependents[imported].append(ctx.gpa, @intCast(index));
@@ -10684,7 +10684,7 @@ fn buildBoxyLibraryObjects(
         try root_modules.append(ctx.arena, view.key.bytes);
     }
     for (visible) |artifact| {
-        if (artifact.platform_type_inputs.requirements.len == 0) continue;
+        if (artifact.platform_type_inputs.requirements.items().len == 0) continue;
         try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
         try root_modules.append(ctx.arena, artifact.key.bytes);
     }
@@ -10841,7 +10841,7 @@ fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, artif
 /// hosted section binds the hosted functions `artifact` declares to their
 /// host symbols. Null for a module declaring none.
 fn boxyUnitPlatform(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView) ?check.CheckedArtifact.ImportedModuleView {
-    if (artifact.hosted_procs.procs.len == 0) return null;
+    if (artifact.hosted_procs.procs.items().len == 0) return null;
     return platform;
 }
 
@@ -13155,7 +13155,7 @@ fn collectTestRootRequests(
     var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     errdefer roots.deinit(allocator);
 
-    for (artifact.root_requests.requests) |root| {
+    for (artifact.root_requests.requests.items()) |root| {
         if (root.kind != .test_expect or root.requires_pairing) continue;
         try roots.append(allocator, root);
     }
@@ -13197,7 +13197,7 @@ fn buildCliTestPlan(
         // the checker's diagnostic is its only report.
         var checking_results = std.ArrayList(CliTestResultItem).empty;
         defer checking_results.deinit(ctx.gpa);
-        for (artifact.compile_time_roots.roots) |root| {
+        for (artifact.compile_time_roots.roots.items()) |root| {
             if (root.kind != .expect or root.request_eligibility != .ineligible) continue;
             if (std.debug.runtime_safety) std.debug.assert(try artifact.bodies().exprContainsDiagnosticError(root.rootExpr()));
             try checking_results.append(ctx.gpa, .{
@@ -13209,7 +13209,7 @@ fn buildCliTestPlan(
         }
         // `roc test` pairs no platform with an app, so an expect that reads a
         // value the platform `requires` has nothing to read and cannot run.
-        for (artifact.root_requests.requests) |root| {
+        for (artifact.root_requests.requests.items()) |root| {
             if (root.kind != .test_expect or !root.requires_pairing) continue;
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
@@ -14072,8 +14072,8 @@ fn lowerCheckedSourceToLir(
     boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
-        .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
-        .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
+        .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests.items()),
+        .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests.items()),
         .test_plan => |plan| plan.requests,
     };
     defer switch (roots) {
@@ -15752,8 +15752,8 @@ fn prepareUnitImageTests(
     defer ctx.gpa.free(visible);
     var paired: std.ArrayList(*const Artifact) = .empty;
     defer paired.deinit(ctx.gpa);
-    if (unit_root.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, unit_root);
-    for (visible) |artifact| if (artifact.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, artifact);
+    if (unit_root.platform_type_inputs.requirements.items().len != 0) try paired.append(ctx.gpa, unit_root);
+    for (visible) |artifact| if (artifact.platform_type_inputs.requirements.items().len != 0) try paired.append(ctx.gpa, artifact);
     var test_modules: std.ArrayList(*const Artifact) = .empty;
     defer test_modules.deinit(ctx.gpa);
     // A root unit exists only to export the paired modules' wrappers. A
@@ -15763,7 +15763,7 @@ fn prepareUnitImageTests(
     var paired_roots = false;
     for (test_plan.modules) |planned| {
         if (planned.runCount() == 0) continue;
-        if (planned.artifact.platform_type_inputs.requirements.len != 0) {
+        if (planned.artifact.platform_type_inputs.requirements.items().len != 0) {
             const is_paired = for (paired.items) |artifact| {
                 if (artifact == planned.artifact) break true;
             } else false;
@@ -15775,7 +15775,7 @@ fn prepareUnitImageTests(
     }
     // The root unit calls into its modules' imports and the app.
     if (paired_roots) {
-        for (paired.items) |artifact| for (artifact.direct_import_module_keys) |key| {
+        for (paired.items) |artifact| for (artifact.direct_import_module_keys.items()) |key| {
             const imported = program.tables.digests.artifacts.get(key.bytes) orelse continue;
             try test_modules.append(ctx.gpa, imported);
         };
@@ -15834,7 +15834,7 @@ fn unitLoadOrder(gpa: Allocator, artifacts: []const *const check.CheckedArtifact
         try stack.append(gpa, .{ .index = @intCast(start), .next_import = 0 });
         while (stack.items.len != 0) {
             const frame = &stack.items[stack.items.len - 1];
-            const imports = artifacts[frame.index].direct_import_module_keys;
+            const imports = artifacts[frame.index].direct_import_module_keys.items();
             if (frame.next_import < imports.len) {
                 const key = imports[frame.next_import];
                 frame.next_import += 1;

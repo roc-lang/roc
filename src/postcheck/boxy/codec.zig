@@ -284,7 +284,7 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
     const state = &program.codec;
     const allocator = program.allocator;
     const table = program.module(module).view.static_dispatch_plans;
-    const derivation = table.generated_codec_derivations[@backingInt(id)];
+    const derivation = table.generated_codec_derivations.items()[@backingInt(id)];
     const kind: Kind = switch (derivation.kind) {
         .parser => .parser,
         .encoder => .encoder,
@@ -378,7 +378,7 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
     try pending.append(allocator, program.codec.families.items[family_index].root);
     try visited.put(allocator, program.codec.families.items[family_index].root, {});
     while (pending.pop()) |id| {
-        const derivation = table.generated_codec_derivations[@backingInt(id)];
+        const derivation = table.generated_codec_derivations.items()[@backingInt(id)];
         for (derivation.callsSlice(table)) |call| {
             const method = try methodName(program, names.methodNameText(call.method));
             const subject: ?TypeId = if (call.subject_ty.get()) |subject_ty|
@@ -893,12 +893,12 @@ const ImportClosure = struct {
 pub fn storedPieceHome(program: *Program, allocator: Allocator, store_module: ModuleIndex, piece: Piece) Allocator.Error!struct { ModuleIndex, u32 } {
     if (piece.family == no_family) return .{ store_module, no_family };
     const family = program.codec.families.items[piece.family];
-    const owner = program.module(family.module).view.static_dispatch_plans.generated_codec_derivations[@backingInt(family.root)];
+    const owner = program.module(family.module).view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(family.root)];
     var closure = ImportClosure{ .program = program, .allocator = allocator };
     defer closure.deinit();
     try closure.start(store_module);
     while (try closure.next()) |module| {
-        for (program.module(module).view.static_dispatch_plans.generated_codec_derivations, 0..) |derivation, index| {
+        for (program.module(module).view.static_dispatch_plans.generated_codec_derivations.items(), 0..) |derivation, index| {
             if (derivation.kind == owner.kind and std.mem.eql(u8, &derivation.content.bytes, &owner.content.bytes)) return .{ module, @intCast(index) };
         }
     }
@@ -908,7 +908,7 @@ pub fn storedPieceHome(program: *Program, allocator: Allocator, store_module: Mo
 fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) Allocator.Error!?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {
     _ = (try view.types().rootForKey(codec.dispatcher_key)) orelse return null;
     const callable_ty = (try view.types().rootForKey(codec.callable_key)) orelse return null;
-    for (view.view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
+    for (view.view.static_dispatch_plans.generated_codec_derivations.items(), 0..) |contract, index| {
         if (std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) return .{ .callable_ty = callable_ty, .id = @fromBackingInt(@intCast(index)) };
     }
     return null;
@@ -925,7 +925,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
         .dispatch_call, .type_dispatch_call => owner_view.bodies().dispatchPlan(@backingInt(expr)) orelse invariant("a stored generated codec runtime's dispatch has no plan"),
         .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),
     };
-    const plan = owner_view.view.static_dispatch_plans.plans[@backingInt(plan_id)];
+    const plan = owner_view.view.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
     // A dispatch on a constrained variable reaches its derivation through
     // the evidence the stored value's procedure was instantiated with.
     const derivation_module, const derivation = if (plan.generated_codec_derivation.get()) |id| .{ owner_view.index, id } else switch (plan.resolution) {
@@ -1369,7 +1369,7 @@ const Gen = struct {
                     .resolved => table.nestedEvidence(node),
                     .from_callable, .through_alias => invariant("a generated codec call's evidence is not resolved"),
                 };
-                const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                const subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
                 const instance = switch (node.instantiation) {
                     .alias => blk: {
                         if (b.module != self.fam().module) invariant("a generated codec piece is lowered outside its family's module");

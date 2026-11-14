@@ -3493,8 +3493,8 @@ pub const BuildEnv = struct {
         if (self.getPlatformSemanticData()) |platform| {
             if (platform.checked_artifact) |artifact| {
                 if (artifact.checking_context_identity.platform_app_relation != null or
-                    artifact.root_requests.requests.len > 0 or
-                    artifact.provided_exports.exports.len > 0)
+                    artifact.root_requests.requests.items().len > 0 or
+                    artifact.provided_exports.exports.items().len > 0)
                 {
                     return platform;
                 }
@@ -3520,7 +3520,7 @@ pub const BuildEnv = struct {
         var artifacts = std.ArrayList(*const check.CheckedArtifact.CheckedModuleArtifact).empty;
         errdefer artifacts.deinit(allocator);
         const builtin_artifact = &self.builtin_modules.checked_artifact;
-        for (root_artifact.lowering_visibility.module_ids) |key| {
+        for (root_artifact.lowering_visibility.module_ids.items()) |key| {
             if (checkedArtifactKeysEqual(key, root_artifact.key.digest())) continue;
             if (checkedArtifactKeysEqual(key, builtin_artifact.key.digest())) continue;
             const artifact = self.artifactByKey(key) orelse continue;
