@@ -12751,6 +12751,16 @@ the later finalization boundary is not their creator.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
+Every parked relation is validated or rejected before the module freezes its
+codec contracts, which a debug assertion in
+`Check.freezeBoundaryCodecDerivations` pins. Module finalization drains the
+parked relations before its settled default-materialization fixpoint
+(`checkInstantiatedStaticDispatchConstraints(.settled)`), and a default that
+fixpoint materializes can ground a receiver whose derived codec relation then
+parks. That fixpoint therefore validates whatever is parked before it judges
+another round, and propagates a validated relation's error-row growth to the
+widened uses of the value that holds the row, as the drain before it does.
+
 The instance's copy of each of the template's variables is that variable
 throughout the instance's derivation (`Check.final_codec_instance_copies`). A
 format method of a type declared in the definition's body can name the

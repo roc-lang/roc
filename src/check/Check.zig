@@ -19060,6 +19060,19 @@ fn checkInstantiatedStaticDispatchConstraints(
             // a suffix this settled loop will judge and validate next.
             try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, is_numeric_default_pass);
         }
+        if (default_phase == .settled and self.final_codec_dispatch_constraints.items.len != 0) {
+            // A materialized default can ground a receiver whose derived
+            // codec relation then parks for final validation. Every final
+            // validation pass has already run, so this phase validates it and
+            // judges whatever that validation grounds in another round. A
+            // validated relation can grow a value's error row with its
+            // format's tags, which every widened use of that value must see.
+            try self.checkFinalGeneratedCodecConstraints(env);
+            while (try self.propagateValueRowsToWidenedUses(env)) {
+                if (self.final_codec_dispatch_constraints.items.len != 0) try self.checkFinalGeneratedCodecConstraints(env);
+            }
+            continue;
+        }
         if (self.instantiation_dispatchers_checked == self.instantiation_dispatchers.items.len and
             (default_phase == .ordinary or
                 (materializations_checked == self.default_materializations.items.len and
@@ -58746,6 +58759,10 @@ fn recordGeneratedCodecDerivationSnapshot(
 /// have settled. No shape walk, method selection, or constraint replay occurs.
 fn freezeBoundaryCodecDerivations(self: *Self, env: *Env) Allocator.Error!void {
     std.debug.assert(!self.constraining_boundary_codecs);
+    // Every relation parked for final validation was validated or rejected
+    // before the module's contracts freeze; publication reads only their
+    // outcomes.
+    std.debug.assert(self.final_codec_dispatch_constraints.items.len == 0);
     for (self.boundary_codec_derivations.items) |derivation| {
         const roots = derivation.roots;
         try self.recordGeneratedCodecDerivationSnapshot(
