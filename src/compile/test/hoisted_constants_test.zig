@@ -2368,6 +2368,56 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
     try std.testing.expectEqual(@as(usize, 1), validating_extraction_roots);
 }
 
+test "a callable extraction root decides its destructure by evaluation" {
+    // The root evaluates the destructure, and runtime code reads the root's
+    // callable instead of running it, so the failure is found empirically.
+    const failing_extraction = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\to_u8_clamp = |limit| {
+        \\    match limit.to_u8_try() {
+        \\        Ok(limit_u8) => Ok(|v| if v < limit v.to_u8_wrap() else limit_u8)
+        \\        Err(_) => Err(LimitTooBig)
+        \\    }
+        \\}
+        \\
+        \\f = |runtime_value| {
+        \\    Ok(converter) = to_u8_clamp(0x1FF.U32)
+        \\    converter(runtime_value)
+        \\}
+        \\
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(f(List.len(args).to_u32_wrap())))
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true, .empirical = true }, failing_extraction);
+
+    // A destructure inside a function the root's callable holds runs wherever
+    // runtime code calls it, so it is decided statically.
+    const destructure_in_extracted_function = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\f = |runtime_value| {
+        \\    Ok(converter) = Ok(|v| {
+        \\        Ok(small) = if v > 10 Err(TooBig) else Ok(v)
+        \\        small
+        \\    })
+        \\    converter(runtime_value)
+        \\}
+        \\
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(f(List.len(args).to_u32_wrap())))
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true }, destructure_in_extracted_function);
+}
+
 test "a match on a constant with a guard selects a hoisted root" {
     const gpa = std.testing.allocator;
 
@@ -2706,6 +2756,7 @@ fn rootSourceMatches(
         .required_binding => |required_binding| required_binding == b.required_binding,
         .hoisted => |hoisted| hoisted.index == b.hoisted.index and hoisted.expr == b.hoisted.expr,
         .literal => |literal| std.meta.eql(literal, b.literal),
+        .literal_argument => |owner| owner == b.literal_argument,
     };
 }
 

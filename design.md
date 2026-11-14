@@ -6311,7 +6311,13 @@ lowering in its worker's workspace and never added to the checked module:
   (`RootSource.literal`, a `LiteralNode` naming a literal expression or a
   custom literal pattern; `CompileTimeRoot.literalNode`), it holds no
   expression, and lowering converts the literal's value through the
-  conversion plan keyed by the literal's node.
+  conversion plan keyed by the literal's node;
+- a literal argument root's body ("Literal Arguments"): the root's source is
+  the expression owning its edge (`RootSource.literal_argument`), which
+  locates the root for reports and which the root does not evaluate; it holds
+  no expression and no body nodes (`bodyParts` is empty), and lowering
+  converts its literal at the edge `CompileTimeRoot.literal_argument`
+  records.
 
 ### Forbidden Checked-Boundary Shapes
 
@@ -6618,6 +6624,23 @@ No candidate is recorded inside an ordinary top-level constant, because that
 enclosing root already evaluates and owns the destructure site. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
+
+Only a requested root is evaluated, so only a requested root replaces its source
+occurrence. A root that receives no request (its checked type is not concrete,
+for example) replaces nothing, and an exhaustiveness site it would have
+validated is classified as if no root had been recorded. A site that runtime
+code can reach is decided statically even when it was classified for empirical
+validation, because runtime code can arrive there with any value of its type.
+Empirical validation decides only the sites that compile-time evaluation alone
+reaches.
+
+A requested callable binding root replaces its source occurrence too: runtime
+code reads the root's completed callable instead of computing it, so the
+destructure it extracts from, and every site its expression evaluates, runs
+only during the root's evaluation. The exception is a site inside a function
+body within that expression. The callable can hold that function, and runtime
+code that calls it reaches the site with any argument, so such a site stays
+classified by its enclosing procedure template.
 
 Local binding dependencies likewise remain candidates until their enclosing
 expression is either selected or rejected. A selected maximal parent owns the
