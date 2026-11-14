@@ -22206,6 +22206,23 @@ from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
 
+A dynamic tag union's payload read (`dyn.tag_payload_addr`) of a tag with
+exactly one payload, into a local whose layout can hold refcounted data, is
+marked `whole` by Boxy lowering, which knows the tag's payload count from its
+checked type. On every path that reads it, that
+payload's refcounted contents are exactly the union's, so the read is an
+ownership alias of the union, as a `copy` is: it carries the union's one
+unit, ownership demands flow through it to the union, and a dying union's
+payload moves into a consumer without a retain. A `Dict`, `Set` or other
+single-tag nominal handed to a call that mutates its payload is therefore
+moved, not shared. A payload of a tag with several payloads is a component
+borrowed from the union. The union's unit has no enumerated shape, so field
+takes and complete projections never address it through a whole payload:
+a read of a whole payload's field is a borrow (dismantling needs a container
+whose unit has the shape its reads address), and the certifier, which binds
+the payload to the union's value, describes that value by the payload's
+shape on the path that read it.
+
 An erased argument product's recorded slot boundaries are authoritative for
 both the start and width of each field read. Its non-owning prefix and scalar
 fields may occupy zero slots; their standalone layouts cannot supply widths in
@@ -22330,8 +22347,14 @@ generates constraints per statement:
   constrains the result's lifetime to the join of the lifetimes of the
   arguments it may borrow from; an owned return is a fresh owned resource.
 - `assign_call_erased`: the erased-callable ABI is a pinned all-owned
-  `RcSig`: refcounted args owned, captures owned by the callee, result owned.
-  Inference does not flow modes through erased callable values.
+  `RcSig` for refcounted args and the result. Inference does not flow modes
+  through erased callable values. The closure is borrowed by the call unless
+  its unit dies there: then emission moves that unit into the callee through
+  the ABI's reuse channel (`reuse_closure`), and the callee reads its
+  captures out of the transferred allocation (see `erased_capture_load`
+  below). A call whose result holds exactly one erased-callable slot
+  (`result_reuse`) is solved as demanding the closure's unit, because the
+  callee can repack a transferred allocation as its result.
 - dictionary calls are erased calls and follow the erased-call rule above.
   A type table argument and the descriptors and dictionaries read from it are
   pointer-sized opaque values that own nothing. Method selection is already encoded in the dictionary;
@@ -22394,6 +22417,24 @@ generates constraints per statement:
   interpreter's value model explicitly selects the borrowing variant because
   it does not model transfer of an outer allocation independently from erased
   recursive payload ownership.
+  `erased_capture_load` is the same dead-lender read
+  (`LowLevel.deadLenderArg`). An erased procedure reads its capture record
+  from the capture pointer once, at entry, and names its reuse argument as
+  the load's owner: the allocation holding the capture bytes whenever the
+  caller transferred it. The neutral load consumes the owner, emission
+  selects `erased_capture_load_borrowed` while the owner stays live (a
+  repack of the allocation as the procedure's result), and an owned
+  selection is normalized into the borrowing copy, a capture-record `incref`
+  and a reuse-argument `decref`. A transferred unique closure therefore hands
+  its captures to the body with their counts unchanged; a borrowed call
+  passes a null reuse argument, whose `decref` does nothing, and the
+  `incref` gives the captures the body's own unit. Either way the record is
+  an owned container that the body reads, takes fields out of, and hands to
+  restituting calls exactly like a finite procedure's capture parameter, so
+  a captured list the body updates is updated in place even when the body
+  reads it again on a failure path. The owner operand keeps the allocation
+  live across the read of its capture bytes, so no release of the reuse
+  argument can precede it. Post-ARC LIR contains only the borrowing load.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
@@ -23487,6 +23528,10 @@ work and must be added to the equations, not patched in emission.
 Dead `Box` lenders are the explicit exception already modeled by the
 consuming/borrowing `Box.unbox` operation pair; they do not extend a borrow
 through the mutation merely because control flow separates unbox and re-box.
+Dead closures are the same exception for captured values: an erased call
+moves a dying closure's unit into the callee, and the callee's capture load
+is the consuming/borrowing `erased_capture_load` pair, so a closure called
+once and dropped hands its captures to the body unshared.
 
 ### Field Takes From Dying Aggregates
 
@@ -24944,8 +24989,20 @@ place only when uniqueness permits) or decrefs it. This remains true for a
 runtime tag variant that does not contain a callable. A shared allocation takes
 the fresh allocation path and decrefs the transferred reference; uniqueness
 affects only whether allocation can be avoided, never the ownership contract.
-Capture bytes needed to construct the result are snapshotted before an in-place
-overwrite.
+The procedure's one read of the capture bytes is an `erased_capture_load` at
+entry that names the reuse argument as its owner ("Constraints Per Statement
+Form"), so a repack or release of the transferred allocation follows it.
+
+ARC, not lowering, decides each call's transfer: an erased call transfers its
+closure's unit exactly when that unit dies at the call (the callee consumes
+it: the dying closure's captures reach the body unshared, and a single-slot
+result can repack the allocation), and otherwise borrows the closure and
+passes null, with no refcount statement. Lowering records the call's
+ownership source on every erased call and marks a call whose result holds
+exactly one erased-callable slot (`result_reuse`), which ARC solves as
+demanding the closure's unit. A deferred `.lss` call keeps a retained
+closure reference for whoever drives it and never transfers; a deferred
+`.boxy` call transfers when the closure dies there.
 
 The packed arguments are one fixed-arity struct whose fields remain in source
 parameter order and use each runtime representation's natural alignment. The
@@ -24970,8 +25027,8 @@ preserve and remap the marker. Debug LIR certification verifies that every
 erased-callable proc's hidden capture and reuse arguments, the reuse argument's
 layout, and the ownership marker remain structurally consistent.
 
-An owned erased call records both the callable local used to load the function
-and capture pointers and the local whose ownership unit is transferred. Those
+Every erased call records both the callable local used to load the function
+and capture pointers and the local whose ownership unit a transfer moves. Those
 locals must denote the same erased-callable allocation. The ownership local may
 be an outer nominal or zero-discriminant tag wrapper only when the emitted
 `assign_ref` chain proves exact pointer representation at every edge. Debug LIR
@@ -24986,16 +25043,17 @@ LIR lowerer records each emitted `assign_ref` target's provenance from it, and
 the resolution in `lir/erased_owner.zig` follows it. A LIR transform that
 rewrites the definitions on such a chain, as join scalarization does when it
 turns field reads into aliases, re-resolves the reuse sources of the procedures
-it changes with that resolution. Boxy lowering marks an erased call owned
-(`DynOp.call_erased.reuse_closure`, with the closure as its reuse source,
-resolved to the allocation's root after lowering) when the call's result type
-holds exactly one erased-callable slot (`types.Converter.erasedResultSlots`:
-a function type is a slot, a record's or tuple's slots add up, a tag union's
-are its largest variant's, a list of callables holds any number, a box holds
-its payload's, a nominal its backing's, and a type variable holds none). ARC
-moves the closure's unit into the call when the closure dies there and
-retains one for it otherwise; a deferred owned call's pending record carries
-the unit to the driver (Deferred Erased Calls).
+it changes with that resolution. Both lowerings record the closure as every
+erased call's reuse source, resolved to the allocation's root after lowering,
+and mark `result_reuse` when the call's result type holds exactly one
+erased-callable slot (`.boxy`: `types.Converter.erasedResultSlots`: a function
+type is a slot, a record's or tuple's slots add up, a tag union's are its
+largest variant's, a list of callables holds any number, a box holds its
+payload's, a nominal its backing's, and a type variable holds none). ARC sets
+`reuse_closure` when the closure dies at the call; a deferred `.boxy`
+transferring call's pending record carries the unit to the driver (Deferred
+Erased Calls). Every erased-ABI procedure, codec workers included, declares
+its reuse argument, so every transferred unit is consumed.
 
 A `.boxy` dynamic closure's capture record carries its allocation's capture
 capacity (Function Values), so the same-size class rule above widens for

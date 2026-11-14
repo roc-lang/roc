@@ -1853,6 +1853,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                             .arg_plan = s.arg_plan,
                             .reuse_closure = s.reuse_closure,
                             .reuse_source = try self.mapMaybeLocal(s.reuse_source),
+                            .result_reuse = s.result_reuse,
                         }),
                         .next = inline_stmt.next,
                     } };
