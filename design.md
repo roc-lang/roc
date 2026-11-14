@@ -13277,7 +13277,7 @@ an unannotated value of an enclosing scope (`weak = "a,b,c"` with
 `f = |g| weak.split_on(",").map(g)`) can settle after a use copied it. Its
 target instance then refines the scheme's type, which can let more of the
 scheme's relations settle, and each target instance those select adds its
-variables to the scheme (`map`'s result element above). The use's copies
+variables to the scheme (`map`'s result item above). The use's copies
 settle separately, on their own instances of the same method schemes, and
 the use's substitution does not yet name the new variables. When a stored
 requirement retires as settled after its scheme was copied, its callable is
