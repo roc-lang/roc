@@ -2264,6 +2264,18 @@ zeroed work table is free in the file however large. A relocation would
 write a non-zero address into such bytes at link time, so anything relocated
 stays byte-backed, as does every root, whose slot addresses it.
 
+A wasm object gives every static-data node its own segment
+(`WasmModule.addStaticDataExports`), named `.rodata.<symbol>` for byte-backed
+nodes and `.bss.<symbol>` for zero-fill ones. Static data is immutable, so
+every byte-backed node is read-only data. The names do two jobs. A distinct name per node
+keeps each node its own input segment through the relocatable composition
+link, which joins input segments that share a name, so the final link's
+`--gc-sections` still drops each node nothing references. The standard
+prefix lets the final `wasm-ld` merge the surviving nodes into its one
+`.rodata` (and `.bss`) output segment, so the module carries a few active
+segments rather than one per constant, each of which would cost a segment
+header and a separate copy at instantiation.
+
 The guard pass also marks each guard's crash statement as the failure path of a
 read of its slot's value (`CrashExtra.failed_value`), naming the producer. Failed
 root completion records, per producer, the original evaluated failure's source

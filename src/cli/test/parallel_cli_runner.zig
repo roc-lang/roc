@@ -716,6 +716,7 @@ const CustomCase = enum {
     issue_12741_wasm_generic_tail_calls_size,
     issue_12741_wasm_generic_tail_calls_speed,
     issue_12848_wasm_shared_helper_emitted_once_size,
+    issue_13029_wasm_size_static_data_segments_merged,
     boxy_recursive_method_dispatch_wasm_dev,
     boxy_recursive_method_dispatch_wasm_size,
     boxy_padded_records_wasm_dev,
@@ -4889,6 +4890,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_size } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12848: a helper with many callers is emitted once on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12848_wasm_shared_helper_emitted_once_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 13029: static data is a few merged segments on wasm32 and unused constants are dropped (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_13029_wasm_size_static_data_segments_merged } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_speed } },
     .{ .id = 0, .suite = .subcommands, .name = "Boxy composes the dictionaries of a method whose scheme requires itself on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .boxy_recursive_method_dispatch_wasm_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "Boxy composes the dictionaries of a method whose scheme requires itself on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .boxy_recursive_method_dispatch_wasm_size } },
@@ -6561,6 +6563,7 @@ fn runCustomCase(
         .issue_12741_wasm_generic_tail_calls_dev => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .issue_12741_wasm_generic_tail_calls_size => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_12848_wasm_shared_helper_emitted_once_size => customIssue12848WasmSharedHelperEmittedOnce(io, allocator, &env, &timer, timeout_ms),
+        .issue_13029_wasm_size_static_data_segments_merged => customIssue13029WasmSizeStaticDataSegmentsMerged(io, allocator, &env, &timer, timeout_ms),
         .issue_12741_wasm_generic_tail_calls_speed => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
         .boxy_recursive_method_dispatch_wasm_dev => customBoxyRecursiveMethodDispatchWasm(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .boxy_recursive_method_dispatch_wasm_size => customBoxyRecursiveMethodDispatchWasm(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
@@ -13428,6 +13431,20 @@ fn customIssue10733WasmBoxyDevSealedObject(
     return null;
 }
 
+/// The payload of the first section with id `wanted`, or null when the
+/// module has none.
+fn wasmSectionPayload(bytes: []const u8, wanted: u8) (std.Io.Reader.TakeLeb128Error || error{InvalidWasmHeader})!?[]const u8 {
+    var module = std.Io.Reader.fixed(bytes);
+    if (!std.mem.eql(u8, try module.take(8), "\x00asm\x01\x00\x00\x00")) return error.InvalidWasmHeader;
+    while (module.bufferedLen() != 0) {
+        const section_id = try module.takeByte();
+        const section_size = try module.takeLeb128(u32);
+        const payload = try module.take(section_size);
+        if (section_id == wanted) return payload;
+    }
+    return null;
+}
+
 /// Runtime symbol names can occur in the embedded LIR's data section; only
 /// entries in the wasm export section cross the platform boundary.
 fn wasmHasExport(bytes: []const u8, wanted: []const u8) (std.Io.Reader.TakeLeb128Error || error{InvalidWasmHeader})!bool {
@@ -14316,6 +14333,69 @@ fn customIssue12848WasmSharedHelperEmittedOnce(
     }
     if (copies[1] > copies[0]) {
         return customFailure(allocator, timer, "--opt=size emitted {d} copies of the helper for sixteen callers but {d} for one caller: the helper must be emitted once and called", .{ copies[1], copies[0] });
+    }
+    return null;
+}
+
+/// Under `--opt=size` on wasm32, every static-data constant reaches the
+/// final link as its own `.rodata.<symbol>` segment. The link drops the ones
+/// nothing references and merges the rest into one standard output segment,
+/// so the module's data section holds a few active segments rather than one
+/// per constant. The fixture's six label strings would each be a segment of
+/// their own, so the section holds fewer segments than that. The fixture's
+/// marker constant is named only by a branch the optimizer proves dead, so
+/// its bytes must be absent from the module.
+/// https://github.com/roc-lang/roc/issues/13029
+fn customIssue13029WasmSizeStaticDataSegmentsMerged(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const label_constants = 6;
+    const unused_marker = "UNREACHABLE-STATIC-CONSTANT-MARKER";
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "static-data.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", output_arg },
+        .roc_file = "test/wasm/issue_13029_static_data_segments_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the static data wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "static data wasm execution failed: {}", .{err});
+    // The host's input is 21 bytes long, so the program picks label 3.
+    const expected = "the fourth label is too long to be stored inline";
+    if (!std.mem.eql(u8, result, expected)) {
+        return customFailure(allocator, timer, "static data wasm returned \"{s}\", expected \"{s}\"", .{ result, expected });
+    }
+
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ output_path, err });
+    defer allocator.free(wasm_bytes);
+    const data = wasmSectionPayload(wasm_bytes, 11) catch |err|
+        return customFailure(allocator, timer, "failed to read the static data module's sections: {}", .{err});
+    const section = data orelse return customFailure(allocator, timer, "the static data module has no data section", .{});
+    var reader = std.Io.Reader.fixed(section);
+    const segment_count = reader.takeLeb128(u32) catch |err|
+        return customFailure(allocator, timer, "failed to read the data segment count: {}", .{err});
+    if (segment_count >= label_constants) {
+        return customFailure(allocator, timer, "the data section holds {d} segments, expected fewer than the fixture's {d} label constants: static data constants were not merged into standard output segments", .{ segment_count, label_constants });
+    }
+    if (std.mem.find(u8, wasm_bytes, unused_marker) != null) {
+        return customFailure(allocator, timer, "the module holds a static constant nothing references: the link kept it", .{});
     }
     return null;
 }
