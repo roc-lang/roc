@@ -24615,6 +24615,20 @@ Shared metadata locals are needed only for merged definitions, and tracked
 edges retain their existing hot path. Debug validation checks that every planned
 definition emitted its metadata.
 
+A loop whose list parameter is also a procedure argument (the loop plain TCE
+makes of a tail-recursive procedure, whose join parameters are the
+procedure's own arguments) is entered by jumps that write nothing, since the
+argument already holds the incoming list. Promotion gives each such entry
+jump the same entry write as any outside list: the argument's unit is
+acquired through `list_map_prepare_reuse`, measured, and written back into
+the parameter beside its metadata, so the head never reads metadata the
+entry did not compute. The loop qualifies only when every back edge writes
+the parameter, because TCE omits identity writes and an unwritten back edge
+passes the head's list along through a use control-flow use ordering does
+not see; when no statement before the loop writes the parameter or feeds a
+chain edge from a carrier; and when no statement is reachable both before
+the loop and inside it.
+
 Versioning (a head that dispatches on the ownership flags to a unique-only
 copy of the loop body) is applied only to leaf loops: promoted loops whose
 body contains neither another promoted loop nor a procedure call. It exists
