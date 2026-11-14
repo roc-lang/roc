@@ -24048,13 +24048,19 @@ ownership-complete payload view, which carries the union's whole unit. It is
 held when that payload reaches a consuming operand (the closure read out of a
 record of closures, whose captures are unwrapped and passed to the closure
 body), or when it dismantles through that payload view (the held tag-union
-view rule below). Its definition copies only the
+view rule below). A discriminant read of a tag-union view observes none of
+the container's slots, so a take of the union's slot can run before the
+view's definition. The definition of either kind of view copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
-view's residual shell, numbered in the view's own layout. A view whose shell
-names every refcounted slot of its layout carries nothing but that
-representation, so it is readable after the container has given every slot
-away. This is what lets
+view's residual shell, numbered in the view's own layout, where a tag-union
+view's one slot is slot 0. A view whose shell names every refcounted slot of
+its layout carries nothing but that representation, so it is readable after
+the container has given every slot away: a struct view for its scalar fields
+and the views nested in it, a tag-union view only for its discriminant, which
+sits in the copied inline bytes. So `when model.page is` still reads the
+page's tag after `model.page` itself left the dying `model` by a take into
+the next model. This is what lets
 `{ cursor, builder: { nodes, children }, node }` returned from one call
 hand `builder.nodes` to the next append without a retain: the builder is
 read as a view each time the source names it, and each list leaves the dying
@@ -24241,7 +24247,10 @@ its committed refcounted slots. A field read that holds no unit and has claimed
 nothing of its own is a view of its parent struct's slots, so a claim through
 it is a claim of the parent's slots offset by its first slot, and a read
 through it of a slot already claimed is a read after a take unless the view's
-residual shell names that slot. Path states keep the first word inline and share sparse
+residual shell names that slot. A tag union read the same way is a view of
+its parent's one slot: a payload read through it after that slot was claimed
+is a read after a take, and a residual shell naming its slot leaves it
+readable only for its discriminant. Path states keep the first word inline and share sparse
 persistent words for higher indices; forks and outcome-restitution receipts retain
 exact prior sets. Join comparison and memo hashing use field-set contents rather
 than snapshot addresses. A container's unit is spent only when its claims equal

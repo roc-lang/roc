@@ -4770,12 +4770,12 @@ pub fn compute(
         try result.projection_aliases.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
     }
     // Publish the views of committed containers. A tag union's container is
-    // keyed by the union, whose payload view numbers the slots.
+    // keyed by the union, whose payload view numbers the slots. A struct view
+    // and a tag union view alike copy their container's representation, and
+    // a tag union view read only for its discriminant may copy a slot its
+    // container already gave away, so either can need a representation shell.
     for (analysis.state, 0..) |state, local_index| {
         if (state != .view) continue;
-        // A tag union view holds its slot or reads it; it has no
-        // representation shell to write.
-        if (layouts.getLayout(store.getLocal(@fromBackingInt(@intCast(@as(u32, @intCast(local_index))))).layout_idx).tag != .struct_) continue;
         const root_index = analysis.alias_root.get(local_index);
         const key: LIR.LocalId = @fromBackingInt(analysis.view_root.items[root_index].get() orelse root_index);
         if (!result.containers.contains(key) and !result.owned_only_containers.contains(key)) continue;
