@@ -12824,7 +12824,7 @@ decided before the boundary. Relating parts there would let one value retype
 another, and relating the receiver's interpolations into one requirement
 would leave all but one interpolation's parts unchecked. Relating a part can
 make it reachable, so the boundary recollects the reachable set and revisits
-its pool until no interpolation is newly related (`relateBoundaryInterpolations`).
+its pool until no interpolation is newly related (`relateBoundaryRequirements`).
 In `var $o = ""` followed by `$o = "${Ok(n)}"` and `$o = "${n.to_str()}"`, with
 `$o` never escaping, only `Ok(n)` is rejected. Pinned by
 test/snapshots/static_dispatch/interpolation_defaulted_local_parts_unrelated.md
@@ -15038,7 +15038,8 @@ Other solved-graph mutations:
   committed probe)—policy: one requirement per method on a type about to be
   generalized, as declared in Static Dispatch At The Checked Boundary
   ("Evidence params"). Each same-name callable pair on a receiver still flex
-  at the boundary's rank once literals have defaulted—attached to its
+  at the boundary's rank that the boundary's literal defaulting does not
+  decide, related before defaulting—attached to its
   descriptor or copied by the boundary's uses of nested definitions, but never
   a nested scheme's generalized template—is related through an ordinary
   committed probe. `replaceNestedTemplatesAtBoundary` (`setVarContent` of the
@@ -19817,16 +19818,22 @@ those share one relation per literal kind from the start; relating them can
 neither fail nor bind anything else. A type has one method of each name, so
 when a receiver is still a type variable at its definition's generalization
 boundary, its requirements of one method become one requirement: once the
-boundary has defaulted literals, and before it generalizes, it relates their
-callables, and an inferred scheme never holds two requirements of one method
-on one type, other than a template no use copied (below). Defaulting comes first because a
-receiver it settles, such as an unannotated `weak = "a,b,c"` inside the
-definition, is not a type variable at all: each requirement on it is
-discharged against its default type on its own, exactly as when it is
-annotated (`Str`), so an annotation never changes whether two uses of a
-method agree. Two interpolations assigned to one local that defaults to `Str`
-are therefore each discharged against `Str` on its own ("Builtin Str
-Interpolation Part Compatibility"). A receiver's requirements are every live relation on it the
+boundary has captured its uses' copies, and before it defaults literals and
+generalizes, it relates their callables, and an inferred scheme never holds
+two requirements of one method on one type, other than a template no use
+copied (below). A receiver that the boundary's literal defaulting decides,
+such as an unannotated `weak = "a,b,c"` inside the definition, is not about
+to be generalized, so its requirements are not related: each is discharged
+against its default type on its own, exactly as when it is annotated (`Str`),
+so an annotation never changes whether two uses of a method agree. Two
+interpolations assigned to one local that defaults to `Str` are therefore
+each discharged against `Str` on its own ("Builtin Str Interpolation Part
+Compatibility"). Every other undecided type a requirement mentions is decided
+by the relation, never defaulted on its own before it: in `|x| x + n` and
+`|x| x + 1` related by `==`, with `n : U64`, the literal `1` is the argument
+of a `plus` requirement on `x` beside `x + n`'s, so relating them makes it
+`U64`. Defaulting it first would commit it to `Dec` and turn two uses of one
+method into a mismatch the program does not have. A receiver's requirements are every live relation on it the
 boundary's definitions own, not only those attached to its descriptor: a
 nested definition that calls the method on the receiver holds that
 requirement in its own scheme (Pending Dispatch Requirements In Type

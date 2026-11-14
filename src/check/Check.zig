@@ -44263,8 +44263,12 @@ const NestedTemplateLink = struct {
 /// pool that holds two. Requirements stay separate while the definition is
 /// checked, so each is discharged against the type its receiver resolves to;
 /// only a receiver that is still a type variable here becomes one requirement.
-/// Literal defaulting has already run, so every receiver it settled had each
-/// of its requirements discharged on its own. A receiver's requirements
+/// The relation runs before literal defaulting, and a receiver that
+/// defaulting decides is skipped (`boundaryDefaultsReceiver`): it is not
+/// about to be generalized, so each of its requirements is discharged against
+/// its default on its own. Every other undecided type a requirement mentions,
+/// such as the literal `1` in `x + 1` where `x` also has `x + n`, is decided
+/// by the relation rather than defaulted on its own. A receiver's requirements
 /// include the copies the boundary's uses of nested definitions made of their
 /// schemes' requirements on it, exactly as if each use had called the method
 /// itself. A nested scheme's own relation, attached to the receiver, is that
@@ -44272,7 +44276,7 @@ const NestedTemplateLink = struct {
 /// every later use's live variables the template's.
 /// Relating two callables can bring other receivers' requirements together,
 /// so the pool is revisited until a pass relates nothing.
-fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!bool {
+fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRoot, defaulting: BoundaryDefaulting, env: *Env) Allocator.Error!bool {
     const rank = env.rank();
     var snapshot: std.ArrayListUnmanaged(SameMethodRequirement) = .empty;
     defer snapshot.deinit(self.gpa);
@@ -44299,6 +44303,7 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
                 .rigid, .alias, .structure, .field_presence, .err => continue,
             };
             if (flex.constraints.len() <= 1 and copies.items.len == 0) continue;
+            if (self.boundaryDefaultsReceiver(defaulting, resolved, rank)) continue;
             if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
 
             // Relating appends merged constraint ranges to the store, so the
@@ -45881,8 +45886,8 @@ const BoundaryDefaulting = enum { none, gated };
 /// receiver of this rank that no root's interface reaches defaults here, and
 /// each of its requirements is then discharged against the default's method
 /// on its own (design.md "Builtin Str Interpolation Part Compatibility").
-/// Relating its interpolations' parts first would let one use retype
-/// another.
+/// Relating its same-method requirements or its interpolations' parts first
+/// would let one use retype another.
 fn boundaryDefaultsReceiver(self: *Self, defaulting: BoundaryDefaulting, resolved: types_mod.ResolvedVarDesc, rank: Rank) bool {
     return switch (defaulting) {
         .none => false,
@@ -45930,22 +45935,27 @@ fn collectBoundaryReachableVars(self: *Self, roots: []const BoundaryRoot) std.me
     }
 }
 
-/// Relate each undecided interpolation's parts this boundary generalizes to
-/// its item type, before defaulting and generalization read the pool. A
-/// receiver that defaulting decides is left to its default
-/// (`boundaryDefaultsReceiver`). Relating a part to its item type can make the
-/// part reachable, so the protection set is recollected and the pool revisited
-/// until a pass relates no new interpolation. Same-method requirements are
-/// related after defaulting (`quiesceSchemeRequirementsAtBoundary`), when every
-/// receiver defaulting decides has had each requirement discharged on its own.
-fn relateBoundaryInterpolations(self: *Self, roots: []const BoundaryRoot, env: *Env) std.mem.Allocator.Error!void {
+/// Relate the requirements this boundary generalizes: each receiver's
+/// same-method requirements, then each undecided interpolation's parts to its
+/// item type, after capture has moved its uses' copies into the roots' schemes
+/// and before defaulting and generalization read the pool. A receiver that
+/// defaulting decides is left to its default (`boundaryDefaultsReceiver`).
+/// Every other undecided type, such as a literal argument of a requirement on
+/// a receiver that is still a type variable, is decided by the relation, not
+/// defaulted on its own first. Relating a part to its item type can make the
+/// part reachable, so the protection set is recollected and the pool
+/// revisited until a pass relates no new interpolation. Returns whether any
+/// same-method requirements were related.
+fn relateBoundaryRequirements(self: *Self, roots: []const BoundaryRoot, env: *Env) std.mem.Allocator.Error!bool {
     const defaulting: BoundaryDefaulting = if (self.boundaryHasLiteralCandidate(env)) .gated else .none;
     var related_interpolations: std.AutoHashMapUnmanaged(Var, void) = .empty;
     defer related_interpolations.deinit(self.gpa);
+    var related_methods = false;
     while (true) {
         if (defaulting == .gated) try self.collectBoundaryReachableVars(roots);
-        if (!try self.relateUndischargedInterpolationParts(defaulting, &related_interpolations, env)) return;
-        if (defaulting == .none) return;
+        if (try self.relateSameMethodRequirementsAtBoundary(roots, defaulting, env)) related_methods = true;
+        if (!try self.relateUndischargedInterpolationParts(defaulting, &related_interpolations, env)) return related_methods;
+        if (defaulting == .none) return related_methods;
     }
 }
 
@@ -45962,14 +45972,17 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     var boundary_codecs = std.ArrayList(FinalCodecDispatchConstraint).empty;
     defer boundary_codecs.deinit(self.gpa);
 
-    try self.relateBoundaryInterpolations(roots, env);
-
     try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
 
     // Generalization publishes a complete scheme: its root type plus every
     // unresolved method relation the definition owns. Capture those relations
     // even when this boundary has no literal candidates of its own.
     try self.captureSchemeDispatchRequirements(roots, env, &boundary_codecs);
+
+    if (try self.relateBoundaryRequirements(roots, env)) {
+        try self.checkStaticDispatchConstraints(env, false);
+        try self.checkAllConstraints(env);
+    }
 
     // The candidate universe is the var pool entry this generalize call will
     // promote. (The global open-literal worklist is NOT usable here: a sub-def
@@ -46020,13 +46033,6 @@ fn quiesceSchemeRequirementsAtBoundary(
     env: *Env,
     boundary_codecs: *std.ArrayList(FinalCodecDispatchConstraint),
 ) std.mem.Allocator.Error!void {
-    // Literal defaulting has settled every receiver that is not about to be
-    // generalized, so each requirement on those was discharged on its own;
-    // a receiver still a type variable here holds one method of each name.
-    if (try self.relateSameMethodRequirementsAtBoundary(roots, env)) {
-        try self.checkStaticDispatchConstraints(env, false);
-        try self.checkAllConstraints(env);
-    }
     while (true) {
         if (boundary_codecs.items.len != 0) {
             const previous = self.constraining_boundary_codecs;

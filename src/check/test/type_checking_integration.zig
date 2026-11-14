@@ -2763,6 +2763,44 @@ test "check type - direct lambda equality - no is_eq" {
     try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
 }
 
+test "check type - lambda equality - a numeral argument is decided by relating its plus requirements" {
+    // `x + n` and `x + 1` are two `plus` requirements on one `x`, whose
+    // relation makes the literal `1` a `U64` rather than defaulting it first.
+    var test_env = try TestEnv.init("Test",
+        \\f = |args| {
+        \\    n = List.len(args)
+        \\    {
+        \\        dbg "lhs"
+        \\        |x| x + n
+        \\    } == {
+        \\        dbg "rhs"
+        \\        |x| x + 1
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Type Does Not Support Equality"});
+}
+
+test "check type - lambda equality - plus requirements at two types are a method conflict" {
+    var test_env = try TestEnv.init("Test",
+        \\f = |args| {
+        \\    n = List.len(args)
+        \\    {
+        \\        dbg "lhs"
+        \\        |x| x + n
+        \\    } == {
+        \\        dbg "rhs"
+        \\        |x| x + "s"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{ "Type Does Not Support Equality", "Type Mismatch" });
+}
+
 // anonymous type inequality (desugars to is_eq().not()) //
 
 test "check type - (a == b) desugars to a.is_eq(b) with unified args" {
