@@ -26741,6 +26741,8 @@ fn publishCheckedExhaustivenessSites(
     const obligations = bodies.env.exhaustiveness_obligations.items();
     const sites = try allocator.alloc(CheckedExhaustivenessSite, obligations.len);
     errdefer allocator.free(sites);
+    var requested_roots = try requestedCompileTimeRoots(allocator, compile_time_roots, root_requests);
+    defer requested_roots.deinit(allocator);
 
     for (obligations, sites, 0..) |obligation, *site, index| {
         const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
@@ -26781,7 +26783,7 @@ fn publishCheckedExhaustivenessSites(
             .destructure_pattern => |source_pattern| .{ .pattern = source_pattern },
         };
         const owner_template = try exhaustivenessOwnerTemplateForSource(allocator, bodies, owner_artifact, templates, needle);
-        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, needle);
+        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, &requested_roots, needle);
         const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
             .{ .compile_time_replaced_by_root = root.id }
         else if (owner_template) |template_ref|
@@ -26833,15 +26835,25 @@ const CheckedBodyNeedle = union(enum) {
     pattern: CIR.Pattern.Idx,
 };
 
+/// Which nested function bodies a checked body search enters.
+const FunctionBodySearch = enum {
+    /// Nested lambdas' arguments and bodies are searched.
+    enter,
+    /// Nested lambdas' arguments and bodies are not searched: they run
+    /// wherever their function is called, not where the lambda stands.
+    skip,
+};
+
 /// Whether `needle` occurs within the checked expression tree rooted at
-/// `root`. Nested lambdas' bodies are searched; promoted procedures' bodies
-/// are their own templates'. Nodes wait on an explicit stack, so body
-/// nesting never becomes native call depth.
+/// `root`. `function_bodies` selects whether nested lambdas' bodies are
+/// searched; promoted procedures' bodies are their own templates'. Nodes wait
+/// on an explicit stack, so body nesting never becomes native call depth.
 fn checkedExprContains(
     allocator: Allocator,
     bodies: CheckedBodies,
     root: CIR.Expr.Idx,
     needle: CheckedBodyNeedle,
+    function_bodies: FunctionBodySearch,
 ) Allocator.Error!bool {
     const Node = union(enum) {
         expr: CIR.Expr.Idx,
@@ -26892,9 +26904,12 @@ fn checkedExprContains(
                 .tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .expr = arg }),
                 .nominal => |nominal| try pending.append(allocator, .{ .expr = nominal.backing_expr }),
                 .closure => |closure| try pending.append(allocator, .{ .expr = closure.lambda }),
-                .lambda => |lambda| {
-                    if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
-                    try pending.append(allocator, .{ .expr = lambda.body });
+                .lambda => |lambda| switch (function_bodies) {
+                    .enter => {
+                        if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
+                        try pending.append(allocator, .{ .expr = lambda.body });
+                    },
+                    .skip => {},
                 },
                 .binop => |binop| {
                     try pending.append(allocator, .{ .expr = binop.lhs });
@@ -26923,7 +26938,10 @@ fn checkedExprContains(
                     try pending.append(allocator, .{ .expr = for_.body });
                 },
                 .run_low_level => |run| for (run.args) |arg| try pending.append(allocator, .{ .expr = arg }),
-                .hosted_lambda => |hosted| if (patterns) for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
+                .hosted_lambda => |hosted| switch (function_bodies) {
+                    .enter => if (patterns) for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
+                    .skip => {},
+                },
                 .numeral,
                 .str_segment,
                 .bytes_literal,
@@ -27027,7 +27045,7 @@ fn exhaustivenessOwnerTemplateForSource(
             .checked_body => |root| root,
             .intrinsic_wrapper, .entry_wrapper, .unimplemented => continue,
         };
-        if (try checkedExprContains(allocator, bodies, root, needle)) return .{
+        if (try checkedExprContains(allocator, bodies, root, needle, .enter)) return .{
             .artifact = owner_artifact,
             .proc_base = template.proc_base,
             .template = template.template_id,
@@ -27036,14 +27054,37 @@ fn exhaustivenessOwnerTemplateForSource(
     return null;
 }
 
+/// The compile-time roots a root request evaluates, by root id.
+fn requestedCompileTimeRoots(
+    allocator: Allocator,
+    compile_time_roots: *const CompileTimeRootTable,
+    root_requests: *const RootRequestTable,
+) Allocator.Error!std.DynamicBitSetUnmanaged {
+    var requested = try std.DynamicBitSetUnmanaged.initEmpty(allocator, compile_time_roots.roots.items().len);
+    for (root_requests.requests.items()) |request| {
+        if (request.abi != .compile_time) continue;
+        const root = request.compile_time_root.get() orelse continue;
+        requested.set(@backingInt(root));
+    }
+    return requested;
+}
+
 fn exhaustivenessReplacingRootForSource(
     allocator: Allocator,
     bodies: CheckedBodies,
     compile_time_roots: *const CompileTimeRootTable,
+    requested_roots: *const std.DynamicBitSetUnmanaged,
     needle: CheckedBodyNeedle,
 ) Allocator.Error!?CompileTimeRoot {
     for (compile_time_roots.roots.items()) |root| {
-        if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
+        const function_bodies: FunctionBodySearch = switch (compileTimeRootSourceReplacement(root.kind)) {
+            .none => continue,
+            .whole_expression => .enter,
+            .outside_function_bodies => .skip,
+        };
+        // Only a requested root is ever evaluated. A root with no request
+        // replaces nothing: its source occurrence runs where it stands.
+        if (!requested_roots.isSet(@backingInt(root.id))) continue;
         // A literal conversion converts literal data and contains no site.
         if (root.literalConversionKind() != null) continue;
         if (root.hoisted_body) |body| switch (body) {
@@ -27060,19 +27101,32 @@ fn exhaustivenessReplacingRootForSource(
                 // itself. The exact-pattern check above owns the former;
                 // sites contained by the base expression belong to the
                 // latter.
-                if (try checkedExprContains(allocator, bodies, base_expr, needle)) return root;
+                if (try checkedExprContains(allocator, bodies, base_expr, needle, function_bodies)) return root;
                 continue;
             },
             // A rejected destructure binder's root crashes and contains no site.
             .pattern_error => continue,
             .expr, .valueless_binding => {},
         };
-        if (try checkedExprContains(allocator, bodies, root.rootExpr(), needle)) return root;
+        if (try checkedExprContains(allocator, bodies, root.rootExpr(), needle, function_bodies)) return root;
     }
     return null;
 }
 
-fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
+/// Which source occurrences within a requested root's expression run only
+/// during that root's evaluation, so that the root replaces them.
+const SourceReplacement = enum {
+    /// The root replaces no source occurrence.
+    none,
+    /// Every occurrence within the root's expression.
+    whole_expression,
+    /// Every occurrence within the root's expression except those inside a
+    /// function body. The root's value is a callable, and the function
+    /// bodies it holds run wherever runtime code calls it.
+    outside_function_bodies,
+};
+
+fn compileTimeRootSourceReplacement(kind: CompileTimeRootKind) SourceReplacement {
     return switch (kind) {
         .constant,
         .hoisted_constant,
@@ -27080,11 +27134,12 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
         .numeral_conversion,
         .quote_conversion,
         .repl_expr,
-        => true,
-        .callable_binding,
-        .expect,
-        .literal_argument,
-        => false,
+        => .whole_expression,
+        .callable_binding => .outside_function_bodies,
+        .expect => .none,
+        // A literal argument root has no body expression: it converts
+        // literal data and contains no source occurrence.
+        .literal_argument => .none,
     };
 }
 
