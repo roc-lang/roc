@@ -7557,10 +7557,12 @@ const Inserter = struct {
             return LIR.RcHelper.fromConcrete(.{ .op = op, .layout_idx = local_layout });
         }
         const helper = self.rcHelperForLayout(op, local_layout);
-        if (self.layouts.rcHelperPlan(helper) == .noop) {
-            if (comptime builtin.mode == .debug and builtin.target.os.tag == .freestanding) {
+        // Resolving the helper's plan only checks an invariant, so release
+        // builds skip it.
+        if (builtin.mode == .debug and self.layouts.rcHelperPlan(helper) == .noop) {
+            if (comptime builtin.target.os.tag == .freestanding) {
                 invariant("{s}", .{"ARC attempted to emit a noop RC helper for a refcounted local"});
-            } else if (comptime builtin.mode == .debug) {
+            } else {
                 var buffer: std.Io.Writer.Allocating = .init(self.store.allocator);
                 defer buffer.deinit();
                 debug_print.writeProc(self.store.allocator, self.store, self.layouts, self.current_proc, &buffer.writer) catch {};
@@ -7582,7 +7584,6 @@ const Inserter = struct {
                     if (self.current_rewrite_stmt) |stmt_id| self.store.getCFStmt(stmt_id) else null,
                 });
             }
-            unreachable; // ARC requests RC helpers only for refcounted locals, whose helper plan is never noop
         }
         return LIR.RcHelper.fromConcrete(helper);
     }

@@ -5241,9 +5241,9 @@ pub fn settleUniquenessWithOptions(
     const arena = memory.allocator();
     const proc_count = store.procSpecCount();
     const structure = solution.uniqueness_structure orelse solveInvariant("uniqueness settlement ran on a solution without its structure");
-    if (structure.store != store or structure.stmt_count != store.cfStmtCount() or
+    if (builtin.mode == .debug and (structure.store != store or structure.stmt_count != store.cfStmtCount() or
         structure.local_count != store.localCount() or structure.proc_count != proc_count or
-        !sameResourceTable(structure.rc_local, rc_local))
+        !sameResourceTable(structure.rc_local, rc_local)))
     {
         solveInvariant("uniqueness settlement reused a structure built for a different store");
     }
