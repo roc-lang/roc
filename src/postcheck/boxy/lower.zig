@@ -827,7 +827,7 @@ pub const Program = struct {
         const view = self.module(module_index);
         const bodies = view.bodies();
         try bodies.demandIndex();
-        for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
+        for (view.view.checked_procedure_templates.dispatch_scopes.items(), 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
             switch (bodies.exprData(scope.checked_expr)) {
@@ -835,7 +835,7 @@ pub const Program = struct {
                 .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
-        for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
+        for (view.view.nested_proc_sites.sites.items(), 0..) |site, site_index| {
             const site_expr = site.checked_expr.get() orelse continue;
             try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
             // A closure's site is also its lambda's, which names its worker.
@@ -849,7 +849,7 @@ pub const Program = struct {
         }
         // A method of a type declared in a function body is a local
         // procedure its dispatches call, each at its own instantiation.
-        for (view.view.method_registry.entries) |entry| {
+        for (view.view.method_registry.entries.items()) |entry| {
             const target = entry.target orelse continue;
             switch (target.kind) {
                 .local_proc => |local| {
@@ -870,7 +870,7 @@ pub const Program = struct {
         }
         // A local procedure's uses all reach it through its binding, so its
         // own scheme's arguments are passed per call.
-        for (view.view.resolved_value_refs.records) |record| {
+        for (view.view.resolved_value_refs.records.items()) |record| {
             const local = switch (record.ref) {
                 .local_proc => |local| local,
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
@@ -884,9 +884,9 @@ pub const Program = struct {
         }
         self.body_indexed[module_slot] = true;
         base.dev_diagnostics.countTestWork(.boxy_body_index_prepared_modules, 1);
-        base.dev_diagnostics.countTestWork(.boxy_body_index_rows, view.view.checked_procedure_templates.dispatch_scopes.len +
-            view.view.nested_proc_sites.sites.len + bodies.recordOmittedDefaults().len +
-            view.view.method_registry.entries.len + view.view.resolved_value_refs.records.len);
+        base.dev_diagnostics.countTestWork(.boxy_body_index_rows, view.view.checked_procedure_templates.dispatch_scopes.items().len +
+            view.view.nested_proc_sites.sites.items().len + bodies.recordOmittedDefaults().len +
+            view.view.method_registry.entries.items().len + view.view.resolved_value_refs.records.items().len);
     }
 
     pub fn localScope(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!?checked.DispatchScopeId {
@@ -934,7 +934,7 @@ pub const Program = struct {
             .module => |unit| unit,
         };
         if (index == self.modules.views.items[0].index) return true;
-        return unit.root and self.module(index).view.platform_type_inputs.requirements.len != 0;
+        return unit.root and self.module(index).view.platform_type_inputs.requirements.items().len != 0;
     }
 
     /// The content identity of a module's worker (design.md "Per-Module
@@ -1100,9 +1100,17 @@ pub const Program = struct {
                 if (record.declared.get()) |declared| {
                     hasher.update(&[_]u8{1});
                     try self.hashTypes(&hasher, store.span(declared.padding));
-                    const slots = store.declaredSlots(declared);
-                    hashWord(&hasher, @intCast(slots.len));
-                    for (slots) |slot| hashWord(&hasher, slot);
+                    // The entries identify the order; the slots derived
+                    // from them can coincide for different entries.
+                    const entries = store.declaredEntries(declared);
+                    hashWord(&hasher, @intCast(entries.len));
+                    for (entries) |entry| {
+                        hasher.update(&[_]u8{@backingInt(std.meta.activeTag(entry))});
+                        switch (entry) {
+                            .named => |name| hashLengthPrefixed(&hasher, store.nameText(name)),
+                            .padding => |ordinal| hashWord(&hasher, ordinal),
+                        }
+                    }
                 } else hasher.update(&[_]u8{0});
             },
             .tuple => |items| try self.hashTypes(&hasher, store.span(items)),
@@ -1397,8 +1405,8 @@ pub const Program = struct {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
-        const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
+        const template = view.view.checked_procedure_templates.templates.items()[@backingInt(template_id)];
+        const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool.items(), template.scheme_vars);
         // A sealed variable (design.md "Sealed Result Rows"), which checking
         // records (`CheckedProcedureTemplate.sealed_slots`), is no hidden
         // input: it seals to the empty row wherever the body mentions it, and
@@ -1506,7 +1514,7 @@ pub const Program = struct {
         const slot = (try self.listItemSlot(generic_id)) orelse invariant("an integer list worker was requested for a template with no list item variable");
         const generic = self.worker(generic_id).*;
         const view = self.module(module_index);
-        const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
+        const template = view.view.checked_procedure_templates.templates.items()[@backingInt(template_id)];
         const bound = try self.arena.allocator().alloc(TypeId, generic.scheme_vars.len);
         for (bound, 0..) |*entry, index| entry.* = try self.store.variable(@intCast(index));
         bound[slot] = try self.store.primitive(item.primitive());
@@ -1565,7 +1573,7 @@ pub const Program = struct {
     fn computeListItemSlot(self: *Program, key: TemplateKey, target: Worker) Allocator.Error!?u32 {
         const view = self.module(key.module);
         if (view.view.module_env.module_role != .builtin) return null;
-        const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+        const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
         if (template.provided_low_level != null) return null;
         switch (template.body) {
             .checked_body => {},
@@ -1590,7 +1598,7 @@ pub const Program = struct {
             var methods: std.AutoHashMapUnmanaged(TemplateKey, void) = .empty;
             errdefer methods.deinit(self.allocator);
             const builtin = self.builtinModule();
-            for (builtin.view.method_registry.entries) |entry| {
+            for (builtin.view.method_registry.entries.items()) |entry| {
                 switch (entry.key.owner) {
                     .builtin => |owner| if (owner != .list) continue,
                     .nominal => continue,
@@ -1999,6 +2007,26 @@ pub const Program = struct {
         return try self.store.intern(.{ .function = .{ .args = &.{}, .ret = try self.store.emptyRecord(), .effectful = false } });
     }
 
+    /// Sorts `fields` by label, given that `fields[0..own]` and
+    /// `fields[own..]` are each sorted already.
+    fn mergeSortedFields(allocator: Allocator, store: *const types.Store, fields: []types.Field, own: usize) Allocator.Error!void {
+        if (own == 0 or own == fields.len) return;
+        if (store.nameLessThan(fields[own - 1].name, fields[own].name)) return;
+        const first = try allocator.dupe(types.Field, fields[0..own]);
+        defer allocator.free(first);
+        var left: usize = 0;
+        var right: usize = own;
+        for (fields) |*out| {
+            if (right == fields.len or (left < first.len and store.nameLessThan(first[left].name, fields[right].name))) {
+                out.* = first[left];
+                left += 1;
+            } else {
+                out.* = fields[right];
+                right += 1;
+            }
+        }
+    }
+
     fn rewriteType(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId) Allocator.Error!TypeId {
         var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
         defer done.deinit(allocator);
@@ -2073,17 +2101,23 @@ pub const Program = struct {
                         }
                     }
                     var ext: ?TypeId = if (record.ext.get()) |ext| done.get(ext).? else null;
+                    // The row's own fields stay sorted by label under
+                    // substitution, and so do the remainder's, so a
+                    // remainder that substituted to a record merges in.
                     if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
                         .empty_record => ext = null,
                         .record => |ext_record| {
+                            const own = fields.items.len;
                             try fields.appendSlice(allocator, self.store.fieldSpan(ext_record.fields));
+                            try mergeSortedFields(allocator, &self.store, fields.items, own);
                             ext = ext_record.ext.get();
                         },
                         .variable => {},
                         .primitive, .tuple, .tag_union, .list, .box, .nominal, .function => invariant("a record row's remainder substituted to a non-record type"),
                     };
-                    // A declared order's slots index its row, which no
-                    // substitution of its closed remainder extends.
+                    // A padded record's store derives its slots from its
+                    // entries, so the fields a remainder brings get slots
+                    // just as they would had the row been closed already.
                     if (record.declared.get()) |declared| {
                         const padding = try allocator.alloc(TypeId, declared.padding.len);
                         defer allocator.free(padding);
@@ -2091,16 +2125,10 @@ pub const Program = struct {
                         break :blk try self.store.intern(.{ .record = .{
                             .fields = fields.items,
                             .ext = ext,
-                            .declared = .{ .padding = padding, .slots = self.store.declaredSlots(declared) },
+                            .declared = .{ .padding = padding, .entries = self.store.declaredEntries(declared) },
                         } });
                     }
                     if (fields.items.len == 0 and ext == null) break :blk try self.store.emptyRecord();
-                    const store = &self.store;
-                    std.mem.sort(types.Field, fields.items, store, struct {
-                        fn lessThan(s: *types.Store, a: types.Field, b: types.Field) bool {
-                            return s.nameLessThan(a.name, b.name);
-                        }
-                    }.lessThan);
                     break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
                 },
                 .tag_union => |tag_union| blk: {
@@ -2333,7 +2361,7 @@ pub const Program = struct {
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
-        const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+        const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.templates.items()[@backingInt(key.template)].evidence_params);
         const env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = bound };
         for (target_worker.dictionary_params, requirements) |param_index, *requirement| {
             const param = params[param_index];
@@ -2489,7 +2517,7 @@ pub const Program = struct {
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
-        const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+        const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool.items(), templates.templates.items()[@backingInt(key.template)].evidence_params);
         const params = try self.allocator.alloc(static_dispatch.EvidenceParamRecord, target_worker.dictionary_params.len);
         defer self.allocator.free(params);
         for (target_worker.dictionary_params, params) |param_index, *param| param.* = all_params[param_index];
@@ -2740,8 +2768,8 @@ pub const Program = struct {
     /// procedure refers to, is a top-level procedure and takes none either.
     pub fn runtimeCaptures(self: *Program, view: *const types.ModuleView, site_index: anytype) Allocator.Error![]const checked.CheckedCapture {
         const table = view.view.nested_proc_sites;
-        const span = table.sites[site_index].runtime_captures;
-        const listed = table.runtime_captures[span.start..][0..span.len];
+        const span = table.sites.items()[site_index].runtime_captures;
+        const listed = table.runtime_captures.items()[span.start..][0..span.len];
         const bodies = view.bodies();
         try bodies.demandIndex();
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
@@ -2954,7 +2982,10 @@ pub const Program = struct {
             try self.worker_ids.put(self.allocator, key, id);
             return id;
         }
-        const id = try self.addErasedWorkerWithIdentity(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, identity);
+        // The entry is its target module's own, emitted with the target, so
+        // it shares that module's emission unit and its call demands the
+        // target's ownership variants as any call inside the module does.
+        const id = try self.addErasedWorkerWithIdentity(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, identity, LIR.EmissionUnit.module(@backingInt(target_worker.module)));
         // The entry runs in its target's scopes, whose descriptors,
         // dictionaries, and literal arguments it captures.
         const entry = self.worker(id);
@@ -3038,15 +3069,15 @@ pub const Program = struct {
             .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .codec, .convert, .callable_eval_entry => try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{}),
             .template, .lambda, .default, .method_entry, .root, .static_data => invariant("a worker a module's object defines is no generated erased worker"),
         };
-        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, identity);
+        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, identity, .isolated);
     }
 
-    fn addErasedWorkerWithIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, identity: LIR.ProcIdentity) Allocator.Error!WorkerId {
+    fn addErasedWorkerWithIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, identity: LIR.ProcIdentity, emission_unit: LIR.EmissionUnit) Allocator.Error!WorkerId {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = identity,
-            .emission_unit = .isolated,
+            .emission_unit = emission_unit,
             .args = .empty(),
             .ret_layout = .zst,
             .abi = .erased_record,
@@ -3076,7 +3107,7 @@ pub const Program = struct {
         return switch (binding) {
             .top_level => |top| blk: {
                 const owner = self.moduleByKey(top.artifact);
-                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(top.binding)].body };
+                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items()[@backingInt(top.binding)].body };
             },
             .imported => |imported| blk: {
                 const owner = self.moduleByKey(imported.artifact);
@@ -3086,7 +3117,7 @@ pub const Program = struct {
             },
             .platform_required => |required| blk: {
                 const owner = self.moduleByKey(required.artifact);
-                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(required.procedure_binding)].body };
+                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items()[@backingInt(required.procedure_binding)].body };
             },
             .hosted => |hosted| .{ .module = self.moduleByIdx(hosted.module_idx).index, .body = .{ .direct_template = .{ .proc_value = hosted.proc, .template = .{ .checked = hosted.template } } } },
         };
@@ -3547,7 +3578,7 @@ fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerI
     const module_name = view.nameStore().moduleNameText(view.view.module_identity.module_name);
     const label: PerfNameLabel = switch (worker.key) {
         .template => |key| blk: {
-            const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+            const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
             const name_store = view.nameStore();
             const suffix: []const u8 = switch (key.binding) {
                 .generic => "",
@@ -3691,7 +3722,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         for (view.view.callable_eval_templates.templates) |template| {
             try program.callable_eval_by_pattern.put(allocator, .{ .module = view.index, .pattern = template.pattern }, template.id);
         }
-        for (view.view.entry_wrappers.wrappers.items) |wrapper| {
+        for (view.view.entry_wrappers.wrappers.items()) |wrapper| {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
         }
     }
@@ -3814,7 +3845,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 },
                 .template => |key| blk: {
                     const view = program.module(key.module);
-                    const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+                    const template = view.view.checked_procedure_templates.templates.items()[@backingInt(key.template)];
                     const names = view.nameStore();
                     const export_name = names.procBase(template.proc_base).export_name.get() orelse break :blk switch (key.binding) {
                         .generic => "boxy.template",
@@ -3857,13 +3888,13 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         // Checked procedure aliases forward directly to their targets. They
         // have no evaluated value, so their evaluator wrappers are not part
         // of the module's runtime interface.
-        const forwarded_roots = try program.allocator.alloc(bool, view.view.compile_time_roots.roots.len);
+        const forwarded_roots = try program.allocator.alloc(bool, view.view.compile_time_roots.roots.items().len);
         defer program.allocator.free(forwarded_roots);
         @memset(forwarded_roots, false);
         for (view.view.callable_eval_templates.templates) |callable| {
             if (callable.forwarded_lookup.get() != null) forwarded_roots[@backingInt(callable.root)] = true;
         }
-        for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
+        for (view.view.checked_procedure_templates.templates.items(), 0..) |template, index| {
             if (!unitEmitsTemplate(view, template, forwarded_roots)) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
@@ -3876,7 +3907,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
                 for (std.enums.values(ListIntItem)) |item| _ = try program.listIntTemplateWorker(view.index, @fromBackingInt(@intCast(index)), item);
             }
         }
-        for (view.view.method_registry.entries) |entry| {
+        for (view.view.method_registry.entries.items()) |entry| {
             const target = entry.target orelse continue;
             const template = switch (target.kind) {
                 .procedure => |procedure| procedure.template,
@@ -3975,7 +4006,7 @@ fn initHosted(program: *Program) Allocator.Error!void {
     var platform: ?*const types.ModuleView = null;
     for (program.modules.views.items) |*view| {
         if (view.view.module_identity.kind == .platform) platform = view;
-        for (view.view.hosted_procs.procs) |proc| {
+        for (view.view.hosted_procs.procs.items()) |proc| {
             const owner = program.moduleByKey(.{ .bytes = proc.template.artifact.bytes });
             const key: TemplateKey = .{ .module = owner.index, .template = proc.template.template };
             try program.hosted.put(allocator, key, .{
@@ -3987,7 +4018,7 @@ fn initHosted(program: *Program) Allocator.Error!void {
         }
     }
     if (platform) |view| {
-        for (view.view.hosted_bindings.bindings, 0..) |binding, index| {
+        for (view.view.hosted_bindings.bindings.items(), 0..) |binding, index| {
             const target = switch (program.input.unit) {
                 .program => program.moduleByKey(binding.target_checked_module),
                 // A unit binds the hosted functions of the modules it lowers;
@@ -4021,15 +4052,15 @@ fn initHosted(program: *Program) Allocator.Error!void {
 /// the app provides for its requirements.
 fn solvePlatformIdentities(program: *Program) Allocator.Error!void {
     const platform = for (program.modules.views.items) |*view| {
-        if (view.view.platform_type_inputs.requirements.len != 0) break view;
+        if (view.view.platform_type_inputs.requirements.items().len != 0) break view;
     } else return;
     for (program.modules.views.items) |*app| {
         const table = app.view.platform_requirement_solutions;
-        for (table.solutions) |solution| {
-            if (solution.requires_idx >= platform.view.platform_type_inputs.requirements.len) invariant("an app solves a requirement its platform does not declare");
-            const requirement = platform.view.platform_type_inputs.requirements[solution.requires_idx];
-            const formals = platform.view.platform_type_inputs.identities[requirement.identities.start..][0..requirement.identities.len];
-            const solved = table.identity_solutions[solution.identity_start..][0..solution.identity_len];
+        for (table.solutions.items()) |solution| {
+            if (solution.requires_idx >= platform.view.platform_type_inputs.requirements.items().len) invariant("an app solves a requirement its platform does not declare");
+            const requirement = platform.view.platform_type_inputs.requirements.items()[solution.requires_idx];
+            const formals = platform.view.platform_type_inputs.identities.items()[requirement.identities.start..][0..requirement.identities.len];
+            const solved = table.identity_solutions.items()[solution.identity_start..][0..solution.identity_len];
             if (formals.len != solved.len) invariant("an app's requirement solution differs from its requirement's identity variables");
             for (formals, solved) |formal, app_ty| {
                 const ty = try program.converter().convert(app.index, app_ty, .{ .module = app.index, .vars = &.{}, .bound = &.{} });
@@ -4045,7 +4076,7 @@ fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source
     // A root whose target takes no hidden arguments is the target itself.
     const direct: ?checked_names.ProcedureTemplateRef = if (request.procedure_template) |template|
         template
-    else if (request.procedure_binding) |binding| switch (program.module(source_module).view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
+    else if (request.procedure_binding) |binding| switch (program.module(source_module).view.top_level_procedure_bindings.bindings.items()[@backingInt(binding)].body) {
         .direct_template => |direct| Program.directTemplate(direct.template),
         // A rejected binding's root is a wrapper that crashes.
         .callable_eval_template, .checked_error => null,

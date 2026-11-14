@@ -10,10 +10,14 @@
 //! A declared source version pin also carries the normalized human version
 //! used to validate it; a hit checks that input before accepting the env.
 //!
-//! So they are encoded explicitly here, field by field in little-endian order,
-//! and decoded the same way. Nothing is recovered, re-derived, or re-parsed on
-//! a hit: what the parse task hands the coordinator on a hit is read straight
-//! out of these bytes.
+//! The record is laid out to be used where it sits: a `Serialized` header of
+//! `SafeList.Serialized` lists of fixed-size extern records (diagnostics,
+//! local imports, external imports) plus one byte list every stored name
+//! points into, written with a `CompactWriter`. Reading it is a pointer cast
+//! (`View.init`) followed by bounds checks; nothing is recovered, re-derived, or
+//! re-parsed on a hit. Every stored offset, length and enum value is checked
+//! against the record before it is used, because a corrupt record is a cache
+//! miss, never a compilation failure.
 //!
 //! Location-dependent import normalization is deliberately *not* stored. An
 //! import's package-root-relative module name depends on the importing module's
@@ -24,15 +28,20 @@
 //! package root on a hit exactly as it does on a miss.
 
 const std = @import("std");
-const Sha256 = @import("base").Sha256;
+const base = @import("base");
+const collections = @import("collections");
 const parse = @import("parse");
 
+const Allocator = std.mem.Allocator;
+const CompactWriter = collections.CompactWriter;
+const SafeList = collections.SafeList;
+const Sha256 = base.Sha256;
 const AST = parse.AST;
 const DeclIndex = AST.DeclIndex;
 
-/// Version of the encoding below. Folded into the cache entry's version hash,
+/// Version of the layout below. Folded into the cache entry's version hash,
 /// so a format change invalidates every stored entry.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 /// A readable source pin was checked against this version. Null means the
 /// caller did not report a recognized release/nightly version, which skips
@@ -96,167 +105,178 @@ pub const ParseStageRecord = struct {
     pin_validation: ?PinValidation = null,
 };
 
-/// A decoded entry is only as trustworthy as its bytes; a corrupt body is a
+/// A stored record is only as trustworthy as its bytes; a corrupt body is a
 /// cache miss, never a compilation failure.
 pub const DecodeError = error{CorruptParseStageRecord};
 
-/// Number of bytes `encode` writes for `record`.
-pub fn encodedLen(record: ParseStageRecord) usize {
-    var len: usize = 4 + record.diagnostics.len * diagnostic_encoded_len;
-    len += 4;
-    for (record.local_imports) |local_import| {
-        len += local_import_header_len + local_import.import_name.len;
-    }
-    len += 4;
-    for (record.external_imports) |name| {
-        len += 4 + name.len;
-    }
-    len += 4;
-    if (record.pin_validation) |stamp| {
-        if (stamp.compiler_version) |version| len += 4 + version.len;
-    }
-    return len;
-}
+/// A byte range in a record's `names` list.
+pub const StoredName = extern struct {
+    start: u32,
+    len: u32,
+};
 
-/// Encode `record` into `dest`, which must be exactly `encodedLen` bytes.
-pub fn encode(record: ParseStageRecord, dest: []u8) void {
-    std.debug.assert(dest.len == encodedLen(record));
+/// One resolved parse-stage diagnostic.
+pub const StoredDiagnostic = extern struct {
+    stage: u16,
+    tag: u16,
+    token_tag: u16,
+    _padding: u16 = 0,
+    region_start: u32,
+    region_end: u32,
+};
 
-    var offset: usize = 0;
-    offset = writeU32(dest, offset, @intCast(record.diagnostics.len));
-    for (record.diagnostics) |diagnostic| {
-        offset = writeU16(dest, offset, @backingInt(diagnostic.stage));
-        offset = writeU16(dest, offset, diagnostic.tag);
-        offset = writeU16(dest, offset, diagnostic.token_tag);
-        offset = writeU16(dest, offset, 0);
-        offset = writeU32(dest, offset, diagnostic.region.start.offset);
-        offset = writeU32(dest, offset, diagnostic.region.end.offset);
-    }
+/// One parser-recorded local import.
+pub const StoredLocalImport = extern struct {
+    name: StoredName,
+    base: u16,
+    parent_count: u16,
+};
 
-    offset = writeU32(dest, offset, @intCast(record.local_imports.len));
-    for (record.local_imports) |local_import| {
-        offset = writeU16(dest, offset, @backingInt(local_import.base));
-        offset = writeU16(dest, offset, local_import.parent_count);
-        offset = writeU32(dest, offset, @intCast(local_import.import_name.len));
-        @memcpy(dest[offset..][0..local_import.import_name.len], local_import.import_name);
-        offset += local_import.import_name.len;
-    }
+/// Whether the source declared a version pin, and whether the pin was checked
+/// against a recognized compiler version.
+pub const PinState = enum(u32) { unpinned = 0, pinned_unrecognized = 1, pinned = 2 };
 
-    offset = writeU32(dest, offset, @intCast(record.external_imports.len));
-    for (record.external_imports) |name| {
-        offset = writeU32(dest, offset, @intCast(name.len));
-        @memcpy(dest[offset..][0..name.len], name);
-        offset += name.len;
-    }
+/// The record's header. Its lists are relative to the start of the record.
+pub const Serialized = extern struct {
+    diagnostics: SafeList(StoredDiagnostic).Serialized,
+    local_imports: SafeList(StoredLocalImport).Serialized,
+    external_imports: SafeList(StoredName).Serialized,
+    names: SafeList(u8).Serialized,
+    pin_version: StoredName,
+    pin_state: u32,
+    _padding: u32 = 0,
+};
 
-    if (record.pin_validation) |stamp| {
-        if (stamp.compiler_version) |version| {
-            offset = writeU32(dest, offset, 2);
-            offset = writeU32(dest, offset, @intCast(version.len));
-            @memcpy(dest[offset..][0..version.len], version);
-            offset += version.len;
-        } else {
-            offset = writeU32(dest, offset, 1);
-        }
-    } else {
-        offset = writeU32(dest, offset, 0);
-    }
+/// Builds a record's byte list of names.
+pub const NameTable = struct {
+    bytes: SafeList(u8) = .{},
 
-    std.debug.assert(offset == dest.len);
-}
-
-/// Sequential reader over an encoded record. Every read is bounds-checked
-/// against the buffer, and the byte slices it returns borrow from that buffer.
-pub const Reader = struct {
-    bytes: []const u8,
-    offset: usize = 0,
-
-    pub fn init(bytes: []const u8) Reader {
-        return .{ .bytes = bytes };
-    }
-
-    /// Read one count field.
-    pub fn readCount(self: *Reader) DecodeError!u32 {
-        return self.readU32();
-    }
-
-    /// Read one resolved parse-stage diagnostic.
-    pub fn readDiagnostic(self: *Reader) DecodeError!AST.ResolvedDiagnostic {
-        const stage_raw = try self.readU16();
-        const tag = try self.readU16();
-        const token_tag = try self.readU16();
-        _ = try self.readU16();
-        const start = try self.readU32();
-        const end = try self.readU32();
-
-        const stage = enumFromIntChecked(AST.ResolvedDiagnostic.Stage, stage_raw) orelse
-            return DecodeError.CorruptParseStageRecord;
-        try validateDiagnosticTags(stage, tag, token_tag);
-
-        return .{
-            .stage = stage,
-            .tag = tag,
-            .token_tag = token_tag,
-            .region = .{ .start = .{ .offset = start }, .end = .{ .offset = end } },
-        };
-    }
-
-    /// Read one parser-recorded local import. Its name borrows from the buffer.
-    pub fn readLocalImport(self: *Reader) DecodeError!LocalImport {
-        const base_raw = try self.readU16();
-        const parent_count = try self.readU16();
-        const name = try self.readSlice(try self.readU32());
-        const base = enumFromIntChecked(DeclIndex.Import.LocalBase, base_raw) orelse
-            return DecodeError.CorruptParseStageRecord;
-        return .{
-            .import_name = name,
-            .base = base,
-            .parent_count = parent_count,
-        };
-    }
-
-    /// Read one package-qualified import name. It borrows from the buffer.
-    pub fn readExternalImport(self: *Reader) DecodeError![]const u8 {
-        return self.readSlice(try self.readU32());
-    }
-
-    pub fn readPinValidation(self: *Reader) DecodeError!?PinValidation {
-        return switch (try self.readU32()) {
-            0 => null,
-            1 => .{ .compiler_version = null },
-            2 => .{ .compiler_version = try self.readSlice(try self.readU32()) },
-            else => DecodeError.CorruptParseStageRecord,
-        };
-    }
-
-    /// Whether every encoded byte has been consumed. A record with trailing
-    /// bytes is rejected the same way a truncated one is.
-    pub fn atEnd(self: *const Reader) bool {
-        return self.offset == self.bytes.len;
-    }
-
-    fn readU16(self: *Reader) DecodeError!u16 {
-        const slice = try self.readSlice(2);
-        return std.mem.readInt(u16, slice[0..2], .little);
-    }
-
-    fn readU32(self: *Reader) DecodeError!u32 {
-        const slice = try self.readSlice(4);
-        return std.mem.readInt(u32, slice[0..4], .little);
-    }
-
-    fn readSlice(self: *Reader, len: u32) DecodeError![]const u8 {
-        const end = std.math.add(usize, self.offset, len) catch
-            return DecodeError.CorruptParseStageRecord;
-        if (end > self.bytes.len) return DecodeError.CorruptParseStageRecord;
-        const slice = self.bytes[self.offset..end];
-        self.offset = end;
-        return slice;
+    /// Append `text` and return its range.
+    pub fn add(self: *NameTable, gpa: Allocator, text: []const u8) Allocator.Error!StoredName {
+        const start = std.math.cast(u32, self.bytes.len()) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, text.len) orelse return error.OutOfMemory;
+        _ = try self.bytes.appendSlice(gpa, text);
+        return .{ .start = start, .len = len };
     }
 };
 
-const diagnostic_encoded_len: usize = 2 + 2 + 2 + 2 + 4 + 4;
-const local_import_header_len: usize = 2 + 2 + 4;
+/// Append `record` to `writer` as a `Serialized` header followed by its lists.
+/// `gpa` must outlive the writer: the lists stay referenced until it is
+/// written out.
+pub fn write(record: ParseStageRecord, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
+    const header = try writer.appendAlloc(gpa, Serialized);
+
+    var names = NameTable{};
+    var diagnostics = try SafeList(StoredDiagnostic).initCapacity(gpa, record.diagnostics.len);
+    for (record.diagnostics) |diagnostic| _ = diagnostics.appendAssumeCapacity(.{
+        .stage = @backingInt(diagnostic.stage),
+        .tag = diagnostic.tag,
+        .token_tag = diagnostic.token_tag,
+        .region_start = diagnostic.region.start.offset,
+        .region_end = diagnostic.region.end.offset,
+    });
+    var local_imports = try SafeList(StoredLocalImport).initCapacity(gpa, record.local_imports.len);
+    for (record.local_imports) |local_import| _ = local_imports.appendAssumeCapacity(.{
+        .name = try names.add(gpa, local_import.import_name),
+        .base = @backingInt(local_import.base),
+        .parent_count = local_import.parent_count,
+    });
+    var external_imports = try SafeList(StoredName).initCapacity(gpa, record.external_imports.len);
+    for (record.external_imports) |name| _ = external_imports.appendAssumeCapacity(try names.add(gpa, name));
+
+    var pin_state: PinState = .unpinned;
+    var pin_version: StoredName = .{ .start = 0, .len = 0 };
+    if (record.pin_validation) |stamp| {
+        if (stamp.compiler_version) |version| {
+            pin_state = .pinned;
+            pin_version = try names.add(gpa, version);
+        } else {
+            pin_state = .pinned_unrecognized;
+        }
+    }
+
+    try header.diagnostics.serialize(&diagnostics, gpa, writer);
+    try header.local_imports.serialize(&local_imports, gpa, writer);
+    try header.external_imports.serialize(&external_imports, gpa, writer);
+    try header.names.serialize(&names.bytes, gpa, writer);
+    header.pin_version = pin_version;
+    header.pin_state = @backingInt(pin_state);
+    header._padding = 0;
+}
+
+/// A validated stored record, read where it sits.
+pub const View = struct {
+    diagnostics: []const StoredDiagnostic,
+    local_imports: []const StoredLocalImport,
+    external_imports: []const StoredName,
+    names: []const u8,
+    pin_validation: ?PinValidation,
+
+    /// View the record at the start of `bytes`, which must be aligned to
+    /// `CompactWriter.SERIALIZATION_ALIGNMENT`. The lists are checked to lie
+    /// inside `bytes`; each element is checked as it is read.
+    pub fn init(bytes: []const u8) DecodeError!View {
+        if (bytes.len < @sizeOf(Serialized)) return error.CorruptParseStageRecord;
+        if (@intFromPtr(bytes.ptr) % CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits() != 0) return error.CorruptParseStageRecord;
+        const header: *const Serialized = @ptrCast(@alignCast(bytes.ptr));
+        header.diagnostics.validateRelocations(bytes.len) catch return error.CorruptParseStageRecord;
+        header.local_imports.validateRelocations(bytes.len) catch return error.CorruptParseStageRecord;
+        header.external_imports.validateRelocations(bytes.len) catch return error.CorruptParseStageRecord;
+        header.names.validateRelocations(bytes.len) catch return error.CorruptParseStageRecord;
+        const base_addr = @intFromPtr(bytes.ptr);
+        var view = View{
+            .diagnostics = header.diagnostics.deserializeInto(base_addr).items(),
+            .local_imports = header.local_imports.deserializeInto(base_addr).items(),
+            .external_imports = header.external_imports.deserializeInto(base_addr).items(),
+            .names = header.names.deserializeInto(base_addr).items(),
+            .pin_validation = null,
+        };
+        const pin_state = enumFromIntChecked(PinState, header.pin_state) orelse return error.CorruptParseStageRecord;
+        view.pin_validation = switch (pin_state) {
+            .unpinned => null,
+            .pinned_unrecognized => .{ .compiler_version = null },
+            .pinned => .{ .compiler_version = try view.name(header.pin_version) },
+        };
+        return view;
+    }
+
+    /// The text of a stored name.
+    pub fn name(self: View, stored: StoredName) DecodeError![]const u8 {
+        const end = @as(u64, stored.start) + stored.len;
+        if (end > self.names.len) return error.CorruptParseStageRecord;
+        return self.names[stored.start..][0..stored.len];
+    }
+
+    /// The `index`th diagnostic, with its stage and tags checked.
+    pub fn diagnostic(self: View, index: usize) DecodeError!AST.ResolvedDiagnostic {
+        const stored = self.diagnostics[index];
+        const stage = enumFromIntChecked(AST.ResolvedDiagnostic.Stage, stored.stage) orelse
+            return error.CorruptParseStageRecord;
+        try validateDiagnosticTags(stage, stored.tag, stored.token_tag);
+        return .{
+            .stage = stage,
+            .tag = stored.tag,
+            .token_tag = stored.token_tag,
+            .region = .{ .start = .{ .offset = stored.region_start }, .end = .{ .offset = stored.region_end } },
+        };
+    }
+
+    /// The `index`th local import. Its name borrows from the record.
+    pub fn localImport(self: View, index: usize) DecodeError!LocalImport {
+        const stored = self.local_imports[index];
+        return .{
+            .import_name = try self.name(stored.name),
+            .base = enumFromIntChecked(DeclIndex.Import.LocalBase, stored.base) orelse
+                return error.CorruptParseStageRecord,
+            .parent_count = stored.parent_count,
+        };
+    }
+
+    /// The `index`th package-qualified import name. It borrows from the record.
+    pub fn externalImport(self: View, index: usize) DecodeError![]const u8 {
+        return self.name(self.external_imports[index]);
+    }
+};
 
 fn validateDiagnosticTags(
     stage: AST.ResolvedDiagnostic.Stage,
@@ -275,21 +295,22 @@ fn validateDiagnosticTags(
 
 /// Convert a stored integer into `E` only when it names one of `E`'s values, so
 /// a corrupt entry is rejected instead of producing an out-of-range enum.
-fn enumFromIntChecked(comptime E: type, value: u16) ?E {
+pub fn enumFromIntChecked(comptime E: type, value: anytype) ?E {
     inline for (@typeInfo(E).@"enum".field_names, @typeInfo(E).@"enum".field_values) |field_name, field_value| {
         if (value == field_value) return @field(E, field_name);
     }
     return null;
 }
 
-fn writeU16(dest: []u8, offset: usize, value: u16) usize {
-    std.mem.writeInt(u16, dest[offset..][0..2], value, .little);
-    return offset + 2;
-}
-
-fn writeU32(dest: []u8, offset: usize, value: u32) usize {
-    std.mem.writeInt(u32, dest[offset..][0..4], value, .little);
-    return offset + 4;
+/// Write `record` into a fresh aligned buffer, for tests.
+fn writeToBuffer(gpa: Allocator, record: ParseStageRecord) (Allocator.Error || error{BufferTooSmall})![]align(16) u8 {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var writer = CompactWriter.init();
+    try write(record, arena.allocator(), &writer);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    _ = try writer.writeToBuffer(buffer);
+    return buffer;
 }
 
 test "parse-stage record round-trips every field" {
@@ -322,14 +343,13 @@ test "parse-stage record round-trips every field" {
         .pin_validation = .{ .compiler_version = "nightly-2026-10-05-abcdef0" },
     };
 
-    const bytes = try gpa.alloc(u8, encodedLen(record));
+    const bytes = try writeToBuffer(gpa, record);
     defer gpa.free(bytes);
-    encode(record, bytes);
+    const view = try View.init(bytes);
 
-    var reader = Reader.init(bytes);
-    try std.testing.expectEqual(@as(u32, diagnostics.len), try reader.readCount());
-    for (diagnostics) |expected| {
-        const actual = try reader.readDiagnostic();
+    try std.testing.expectEqual(diagnostics.len, view.diagnostics.len);
+    for (diagnostics, 0..) |expected, i| {
+        const actual = try view.diagnostic(i);
         try std.testing.expectEqual(expected.stage, actual.stage);
         try std.testing.expectEqual(expected.tag, actual.tag);
         try std.testing.expectEqual(expected.token_tag, actual.token_tag);
@@ -337,23 +357,31 @@ test "parse-stage record round-trips every field" {
         try std.testing.expectEqual(expected.region.end.offset, actual.region.end.offset);
     }
 
-    try std.testing.expectEqual(@as(u32, local_imports.len), try reader.readCount());
-    for (local_imports) |expected| {
-        const actual = try reader.readLocalImport();
+    try std.testing.expectEqual(local_imports.len, view.local_imports.len);
+    for (local_imports, 0..) |expected, i| {
+        const actual = try view.localImport(i);
         try std.testing.expectEqualStrings(expected.import_name, actual.import_name);
         try std.testing.expectEqual(expected.base, actual.base);
         try std.testing.expectEqual(expected.parent_count, actual.parent_count);
     }
 
-    try std.testing.expectEqual(@as(u32, external_imports.len), try reader.readCount());
-    for (external_imports) |expected| {
-        try std.testing.expectEqualStrings(expected, try reader.readExternalImport());
+    try std.testing.expectEqual(external_imports.len, view.external_imports.len);
+    for (external_imports, 0..) |expected, i| {
+        try std.testing.expectEqualStrings(expected, try view.externalImport(i));
     }
 
-    const stamp = (try reader.readPinValidation()).?;
-    try std.testing.expectEqualStrings(record.pin_validation.?.compiler_version.?, stamp.compiler_version.?);
+    try std.testing.expectEqualStrings(record.pin_validation.?.compiler_version.?, view.pin_validation.?.compiler_version.?);
+}
 
-    try std.testing.expect(reader.atEnd());
+test "parse-stage record round-trips an unpinned and an unrecognized pin" {
+    const gpa = std.testing.allocator;
+    for ([_]?PinValidation{ null, .{ .compiler_version = null } }) |pin| {
+        const bytes = try writeToBuffer(gpa, .{ .diagnostics = &.{}, .local_imports = &.{}, .external_imports = &.{}, .pin_validation = pin });
+        defer gpa.free(bytes);
+        const view = try View.init(bytes);
+        try std.testing.expectEqual(pin == null, view.pin_validation == null);
+        if (view.pin_validation) |stamp| try std.testing.expectEqual(@as(?[]const u8, null), stamp.compiler_version);
+    }
 }
 
 test "parse-stage record rejects truncated and corrupt bytes" {
@@ -374,43 +402,34 @@ test "parse-stage record rejects truncated and corrupt bytes" {
         .external_imports = &.{},
     };
 
-    const bytes = try gpa.alloc(u8, encodedLen(record));
+    const bytes = try writeToBuffer(gpa, record);
     defer gpa.free(bytes);
-    encode(record, bytes);
 
-    // A truncated body cannot be read to the end.
+    // A truncated body's lists reach past its end.
+    try std.testing.expectError(error.CorruptParseStageRecord, View.init(bytes[0 .. bytes.len - 1]));
+    try std.testing.expectError(error.CorruptParseStageRecord, View.init(bytes[0 .. @sizeOf(Serialized) - 1]));
+
+    const header: *Serialized = @ptrCast(bytes.ptr);
+
+    // A name that reaches past the names list is rejected, not trusted.
     {
-        var reader = Reader.init(bytes[0 .. bytes.len - 1]);
-        try std.testing.expectEqual(@as(u32, 1), try reader.readCount());
-        _ = try reader.readDiagnostic();
-        try std.testing.expectEqual(@as(u32, 1), try reader.readCount());
-        _ = try reader.readLocalImport();
-        try std.testing.expectEqual(@as(u32, 0), try reader.readCount());
-        try std.testing.expectError(DecodeError.CorruptParseStageRecord, reader.readPinValidation());
-    }
-
-    // A length that reaches past the buffer is rejected, not trusted.
-    {
-        const corrupted = try gpa.dupe(u8, bytes);
-        defer gpa.free(corrupted);
-        const name_len_offset = 4 + diagnostic_encoded_len + 4 + 2 + 2;
-        std.mem.writeInt(u32, corrupted[name_len_offset..][0..4], std.math.maxInt(u32), .little);
-
-        var reader = Reader.init(corrupted);
-        _ = try reader.readCount();
-        _ = try reader.readDiagnostic();
-        _ = try reader.readCount();
-        try std.testing.expectError(DecodeError.CorruptParseStageRecord, reader.readLocalImport());
+        const view = try View.init(bytes);
+        const stored: *StoredLocalImport = @constCast(&view.local_imports[0]);
+        const saved = stored.name;
+        stored.name.len = std.math.maxInt(u32);
+        try std.testing.expectError(error.CorruptParseStageRecord, view.localImport(0));
+        stored.name = saved;
     }
 
     // An out-of-range enum value is rejected rather than cast blindly.
     {
-        const corrupted = try gpa.dupe(u8, bytes);
-        defer gpa.free(corrupted);
-        std.mem.writeInt(u16, corrupted[4..][0..2], 99, .little);
-
-        var reader = Reader.init(corrupted);
-        _ = try reader.readCount();
-        try std.testing.expectError(DecodeError.CorruptParseStageRecord, reader.readDiagnostic());
+        const view = try View.init(bytes);
+        const stored: *StoredDiagnostic = @constCast(&view.diagnostics[0]);
+        stored.stage = 99;
+        try std.testing.expectError(error.CorruptParseStageRecord, view.diagnostic(0));
     }
+
+    // An unknown pin state is rejected.
+    header.pin_state = 7;
+    try std.testing.expectError(error.CorruptParseStageRecord, View.init(bytes));
 }

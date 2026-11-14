@@ -402,6 +402,60 @@ test "unify - a tag repeated along one row's chain relates its payloads" {
     }
 }
 
+/// Whether the first occurrence of `name` along `row`'s chain is pattern-only.
+fn rowTagPatternOnly(env: *TestEnv, row: Var, name: []const u8) std.mem.Allocator.Error!bool {
+    const ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text(name));
+    const store = &env.module_env.types;
+    var current = row;
+    while (true) {
+        const tag_union = store.resolveVar(current).desc.content.structure.tag_union;
+        const tags = store.getTagsSlice(tag_union.tags);
+        for (tags.items(.name), tags.items(.pattern_only)) |tag_name, pattern_only| {
+            if (tag_name.eql(ident)) return pattern_only;
+        }
+        current = tag_union.ext;
+    }
+}
+
+test "unify - a shared tag is pattern-only only when both rows' tags are" {
+    for ([_][2]bool{ .{ true, true }, .{ true, false }, .{ false, true }, .{ false, false } }) |marks| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const store = &env.module_env.types;
+        var shared_a = try env.mkTag("Shared", &.{});
+        shared_a.pattern_only = marks[0];
+        var shared_b = try env.mkTag("Shared", &.{});
+        shared_b.pattern_only = marks[1];
+        var only_a = try env.mkTag("OnlyA", &.{});
+        only_a.pattern_only = true;
+        const only_b = try env.mkTag("OnlyB", &.{});
+        const a = try store.freshFromContent((try env.mkTagUnionOpen(&.{ shared_a, only_a })).content);
+        const b = try store.freshFromContent((try env.mkTagUnionOpen(&.{ shared_b, only_b })).content);
+        try std.testing.expectEqual(.unified, try env.unify(a, b));
+        try std.testing.expectEqual(marks[0] and marks[1], try rowTagPatternOnly(&env, a, "Shared"));
+        // A tag only one row holds keeps its own mark.
+        try std.testing.expect(try rowTagPatternOnly(&env, a, "OnlyA"));
+        try std.testing.expect(!try rowTagPatternOnly(&env, a, "OnlyB"));
+    }
+}
+
+test "unify - a tag repeated along one row's chain is pattern-only only when every occurrence is" {
+    for ([_][2]bool{ .{ true, true }, .{ true, false }, .{ false, true } }) |marks| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const store = &env.module_env.types;
+        var inner_tag = try env.mkTag("Oops", &.{});
+        inner_tag.pattern_only = marks[1];
+        var outer_tag = try env.mkTag("Oops", &.{});
+        outer_tag.pattern_only = marks[0];
+        const inner = try store.freshFromContent((try env.mkTagUnionOpen(&.{inner_tag})).content);
+        const row = try store.freshFromContent((try env.mkTagUnion(&.{outer_tag}, inner)).content);
+        const other = try store.freshFromContent((try env.mkTagUnionOpen(&.{try env.mkTag("Other", &.{})})).content);
+        try std.testing.expectEqual(.unified, try env.unify(row, other));
+        try std.testing.expectEqual(marks[0] and marks[1], try rowTagPatternOnly(&env, row, "Oops"));
+    }
+}
+
 test "unify - a field repeated along one row's chain relates its value and kind" {
     for ([_]enum { related, conflicting, kind }{ .related, .conflicting, .kind }) |case| {
         var env = try TestEnv.init(std.testing.allocator);
@@ -1138,7 +1192,7 @@ test "unify - issue 11024 - empty nominal row absorption respects field kinds an
                     try std.testing.expect(store.resolveVar(empty).desc.content.structure == .nominal_type);
                     try std.testing.expect(store.resolveVar(backing).desc.content.structure == .record);
                 }
-                const omissions = env.scratch.absorbed_record_defaults.items.items;
+                const omissions = env.scratch.absorbed_record_defaults.items();
                 try std.testing.expectEqual(@as(usize, if (accepts and kind == .defaulted) 1 else 0), omissions.len);
                 if (omissions.len != 0) {
                     try std.testing.expectEqual(empty, omissions[0].record_var);
@@ -2222,7 +2276,7 @@ test "unify - closed tag union extends open" {
     // check that fresh vars are correct
 
     try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
-    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items.items[0]);
+    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items()[0]);
 }
 
 // unification - recursion //
@@ -2675,7 +2729,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.items.items[0];
+    const deferred = env.scratch.deferred_constraints.items()[0];
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(structure_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -2710,7 +2764,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
 
     // Check that constraint was captured (note: vars might be swapped due to merge order)
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.items.items[0];
+    const deferred = env.scratch.deferred_constraints.items()[0];
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(flex_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -2763,7 +2817,7 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
     const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items()[0].constraints);
 }
 
 test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
@@ -2794,7 +2848,7 @@ test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
     try std.testing.expect(resolved.desc.content == .rigid);
     try std.testing.expectEqual(types_mod.StaticDispatchConstraint.SafeList.Range.empty(), resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items()[0].constraints);
 }
 
 test "unify order - resulting type is order-independent for recursive types" {
@@ -2864,7 +2918,7 @@ test "unify order - deferred constraint origin var depends on operand order" {
             const result = if (flex_first) try env.unify(flex, rigid) else try env.unify(rigid, flex);
             try std.testing.expectEqual(.unified, result);
             try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
-            const origin = env.scratch.deferred_constraints.items.items[0].var_;
+            const origin = env.scratch.deferred_constraints.items()[0].var_;
             return @backingInt(ts.resolveVar(origin).var_);
         }
     };

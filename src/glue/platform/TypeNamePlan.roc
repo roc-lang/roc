@@ -20,11 +20,11 @@ TypeNamePlan := { table : TypeTable }.{
 		from_list = |entries| PreferredNames.{ entries }
 
 		lookup : PreferredNames, U64 -> { found : Bool, name : Str }
-		lookup = |preferred_names, type_id| {
+		lookup = |names, type_id| {
 			var $found = Bool.False
 			var $name = ""
 
-			for entry in preferred_names.entries {
+			for entry in names.entries {
 				if !$found and entry.type_id == type_id {
 					$found = Bool.True
 					$name = entry.name

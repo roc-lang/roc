@@ -55,7 +55,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expect(used > @sizeOf(lir.LirImage.Header));
     try testing.expect(compiled.lowered.view.root_procs.len > 0);
     try testing.expect(compiled.lowered.view.store.getProcSpecs().len > 0);
-    try testing.expect(compiled.lowered.view.layouts.layouts.items.items.len > 0);
+    try testing.expect(compiled.lowered.view.layouts.layouts.items().len > 0);
 
     const header = compiled.lowered.image_header;
     var child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used, compiled.lowered.view.target_usize);
@@ -64,7 +64,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expectEqual(lir.LirImage.FORMAT_VERSION, header.format_version);
     try testing.expectEqual(compiled.lowered.view.root_procs.len, child_view.root_procs.len);
     try testing.expectEqual(compiled.lowered.view.store.getProcSpecs().len, child_view.store.getProcSpecs().len);
-    try testing.expectEqual(compiled.lowered.view.layouts.layouts.items.items.len, child_view.layouts.layouts.items.items.len);
+    try testing.expectEqual(compiled.lowered.view.layouts.layouts.items().len, child_view.layouts.layouts.items().len);
 }
 
 fn expectPublishedImportArtifactCount(compiled: *const test_helpers.CompiledTargetProgram, expected: usize) SharedMemorySystemTestError!void {

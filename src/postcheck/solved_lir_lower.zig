@@ -15120,8 +15120,10 @@ const Lowerer = struct {
         /// from its explicit declared-order channel. Each named entry maps to the
         /// matching backing field, keeping `.index` = the field's lexicographic
         /// position so name-resolution (which indexes the lexicographic backing
-        /// row) and the layout offset map stay consistent. Inconsistent checked
-        /// metadata is a compiler invariant failure.
+        /// row) and the layout offset map stay consistent. The backing fields no
+        /// entry names, which a row extension supplies, follow the entries in
+        /// label order. Inconsistent checked metadata is a compiler invariant
+        /// failure.
         fn declaredOrderFieldsFrame(
             self: *LayoutGraphBuilder,
             declared_order: Type.Span,
@@ -15138,11 +15140,14 @@ const Lowerer = struct {
                 const entry = GuardedList.at(entries, entry_index);
                 if (entry == .named) named_count += 1;
             }
-            if (named_count != backing_fields.len) {
-                return Common.invariant("declared-order nominal layout did not cover its backing fields");
+            if (named_count > backing_fields.len) {
+                return Common.invariant("declared-order nominal layout named more fields than its backing has");
             }
+            const named = try self.lowerer.allocator.alloc(bool, backing_fields.len);
+            defer self.lowerer.allocator.free(named);
+            @memset(named, false);
 
-            var frame = try self.fieldsFrame(entries.len);
+            var frame = try self.fieldsFrame(entries.len + backing_fields.len - named_count);
             errdefer frame.deinit(self.lowerer.allocator);
             const fields = frame.kind.fields;
             // Padding spacers carry an index past every named field so they never
@@ -15159,6 +15164,8 @@ const Lowerer = struct {
                                 break idx;
                             }
                         } else return Common.invariant("declared-order nominal field was absent from its backing record");
+                        if (named[idx]) return Common.invariant("declared-order nominal named one field twice");
+                        named[idx] = true;
                         fields.items[i] = .{ .index = @intCast(idx), .child = undefined };
                     },
                     .padding => |ty| {
@@ -15168,6 +15175,13 @@ const Lowerer = struct {
                         fields.items[i] = .{ .index = pad_index, .child = undefined, .is_padding = true };
                     },
                 }
+            }
+            var next = entries.len;
+            for (named, 0..) |is_named, idx| {
+                if (is_named) continue;
+                fields.tys[next] = GuardedList.at(backing_fields, idx).ty;
+                fields.items[next] = .{ .index = @intCast(idx), .child = undefined };
+                next += 1;
             }
             return frame;
         }

@@ -276,13 +276,6 @@ pub const Store = struct {
         return result;
     }
 
-    /// Enable inserts on a deserialized store by copying its interner data into
-    /// growable allocations owned by the provided allocator.
-    pub fn enableRuntimeInserts(self: *Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
-        try self.enableTextRanks(gpa);
-        try self.interner.enableRuntimeInserts(gpa);
-    }
-
     /// Give an owned view of frozen names reusable rank scratch without copying
     /// or modifying its backing bytes. The ranks themselves are still lazy.
     pub fn enableTextRanks(self: *Store, gpa: Allocator) Allocator.Error!void {
@@ -914,8 +907,8 @@ test "identifier ranks are transient across serialization" {
     try std.testing.expect(loaded.idxTextLessThan(b, a));
     try std.testing.expect(loaded.text_rank == null);
 
-    // An owning frozen-module view can share one lazy rank generation across
-    // independent key builders, without reopening the interner for insertion.
+    // A loaded module can share one lazy rank generation across independent
+    // key builders without copying the interner's borrowed columns.
     try loaded.enableTextRanks(gpa);
     const shared = try loaded.textRanks(&scratch);
     const cache = loaded.text_rank.?;
@@ -923,5 +916,5 @@ test "identifier ranks are transient across serialization" {
     try std.testing.expectEqual(cache, loaded.text_rank.?);
     try std.testing.expectEqual(shared.ptr, (try loaded.textRanks(&scratch)).ptr);
     try std.testing.expect(loaded.idxTextRank(b) < loaded.idxTextRank(a));
-    try std.testing.expect(!loaded.interner.supports_inserts);
+    try std.testing.expectEqual(@as(u32, 0), loaded.interner.bytes.capacity);
 }

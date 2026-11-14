@@ -272,7 +272,7 @@ pub const LiteralDemand = struct {
         defer pending.deinit(allocator);
         try pending.appendSlice(allocator, evidence);
         while (pending.pop()) |entry| {
-            try pending.appendSlice(allocator, plans.evidence_refs[entry.callable_contracts.start..][0..entry.callable_contracts.len]);
+            try pending.appendSlice(allocator, plans.evidence_refs.items()[entry.callable_contracts.start..][0..entry.callable_contracts.len]);
             switch (entry.resolution) {
                 .direct => |node_id| {
                     const node = plans.evidenceNode(node_id);
@@ -513,8 +513,8 @@ const Builder = struct {
         const view = self.views.get(template.artifact.bytes) orelse return Flags.all;
         const table = view.checked_procedure_templates;
         const raw = @backingInt(template.template);
-        if (raw >= table.templates.items.len) return Flags.all;
-        return requirementFlagsOf(view, table.templates.items[raw]);
+        if (raw >= table.templates.items().len) return Flags.all;
+        return requirementFlagsOf(view, table.templates.items()[raw]);
     }
 
     fn addTemplateTarget(self: *Builder, from: NodeId, target: ?TemplateOrUnbounded) Allocator.Error!void {
@@ -530,8 +530,8 @@ const Builder = struct {
         try self.addTypeEdge(node, view, template.checked_fn_root);
 
         const refs = view.resolved_value_refs;
-        for (refs.template_refs[template.resolved_value_refs.start..][0..template.resolved_value_refs.len]) |ref_id| {
-            const record = refs.records[@backingInt(ref_id)];
+        for (refs.template_refs.items()[template.resolved_value_refs.start..][0..template.resolved_value_refs.len]) |ref_id| {
+            const record = refs.records.items()[@backingInt(ref_id)];
             try self.addTypeEdge(node, view, record.checked_ty);
             switch (record.ref) {
                 .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.addProcedureUse(node, use),
@@ -552,8 +552,8 @@ const Builder = struct {
         }
 
         const plans = view.static_dispatch_plans;
-        for (plans.template_refs[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len]) |plan_id| {
-            const plan = plans.plans[@backingInt(plan_id)];
+        for (plans.template_refs.items()[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len]) |plan_id| {
+            const plan = plans.plans.items()[@backingInt(plan_id)];
             try self.addTypeEdge(node, view, plan.callable_ty);
             try self.addTypeEdge(node, view, plan.dispatcher_ty);
             self.markOwn(node, self.literalFlags(view, plan_id, plan));
@@ -595,7 +595,7 @@ const Builder = struct {
         evidence: static_dispatch.CheckedEvidence,
         pending: *std.ArrayList(static_dispatch.EvidenceNodeId),
     ) Allocator.Error!void {
-        for (plans.evidence_refs[evidence.callable_contracts.start..][0..evidence.callable_contracts.len]) |contract| {
+        for (plans.evidence_refs.items()[evidence.callable_contracts.start..][0..evidence.callable_contracts.len]) |contract| {
             try self.addCheckedEvidence(from, plans, contract, pending);
         }
         switch (evidence.resolution) {
@@ -700,10 +700,10 @@ const Builder = struct {
     /// their own schemes.
     fn addConvertedLiterals(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
         const table = view.checked_procedure_templates;
-        for (table.templates.items) |*template| {
+        for (table.templates.items()) |*template| {
             for (table.templateLiteralRequirements(template)) |requirement| try self.addConvertedLiteral(view, requirement);
         }
-        for (table.dispatch_scopes) |*scope| {
+        for (table.dispatch_scopes.items()) |*scope| {
             for (table.scopeLiteralRequirements(scope)) |requirement| try self.addConvertedLiteral(view, requirement);
         }
     }
@@ -716,16 +716,16 @@ const Builder = struct {
     /// Record every method name dispatch can select by type in this module.
     fn addImplicitMethods(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
         const names = view.canonical_names;
-        for (view.checked_procedure_templates.evidence_params_pool) |param| {
+        for (view.checked_procedure_templates.evidence_params_pool.items()) |param| {
             try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
         }
         const plans = view.static_dispatch_plans;
-        for (plans.plans) |plan| switch (plan.resolution) {
+        for (plans.plans.items()) |plan| switch (plan.resolution) {
             .evidence_dependent, .structural => try self.implicit_methods.put(self.allocator, names.methodNameText(plan.method), {}),
             .direct_pending, .direct_closed, .direct_parametric, .checked_error, .@"unreachable" => {},
         };
-        for (plans.generated_codec_calls) |call| try self.implicit_methods.put(self.allocator, names.methodNameText(call.method), {});
-        for (plans.iterator_for_plans) |plan| {
+        for (plans.generated_codec_calls.items()) |call| try self.implicit_methods.put(self.allocator, names.methodNameText(call.method), {});
+        for (plans.iterator_for_plans.items()) |plan| {
             try self.implicit_methods.put(self.allocator, names.methodNameText(plan.iter.method), {});
             try self.implicit_methods.put(self.allocator, names.methodNameText(plan.next.method), {});
         }
@@ -736,7 +736,7 @@ const Builder = struct {
     /// explicit call reaches its method through its own plan.
     fn addMethods(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
         const names = view.canonical_names;
-        for (view.method_registry.entries) |entry| {
+        for (view.method_registry.entries.items()) |entry| {
             const target = entry.target orelse continue;
             const implicit = self.implicit_methods.contains(names.methodNameText(entry.key.method));
             const owner: NodeId = switch (entry.key.owner) {
@@ -826,7 +826,7 @@ pub fn compute(
     // Every template has its node before any edge names one.
     var views = builder.views.valueIterator();
     while (views.next()) |view| {
-        for (0..view.checked_procedure_templates.templates.items.len) |index| {
+        for (0..view.checked_procedure_templates.templates.items().len) |index| {
             const node = try builder.addNode(.{});
             try demand.templates.put(allocator, .{ .module = view.key.bytes, .template = @intCast(index) }, node);
         }
@@ -839,7 +839,7 @@ pub fn compute(
     while (views.next()) |view| try builder.addMethods(view.*);
     views = builder.views.valueIterator();
     while (views.next()) |view| {
-        for (view.checked_procedure_templates.templates.items, 0..) |template, index| {
+        for (view.checked_procedure_templates.templates.items(), 0..) |template, index| {
             const node = demand.templates.get(.{ .module = view.key.bytes, .template = @intCast(index) }).?;
             try builder.addTemplate(view.*, node, template);
             const requirement = requirementFlagsOf(view.*, template);
@@ -951,7 +951,7 @@ fn rootFlags(
         const evidence_view = modules.moduleByKey(evidence.checked_module) orelse
             Common.invariant("discovery root evidence named a checked module outside its lowering set");
         const plans = evidence_view.static_dispatch_plans;
-        evidence_flags = try demand.checkedEvidenceFlags(allocator, plans, plans.evidence_refs[evidence.span.start..][0..evidence.span.len]);
+        evidence_flags = try demand.checkedEvidenceFlags(allocator, plans, plans.evidence_refs.items()[evidence.span.start..][0..evidence.span.len]);
     }
     if (traceEnabled()) std.debug.print("ctfe-demand root-flags template={b:0>8} type={b:0>8} evidence={b:0>8}\n", .{
         @as(u8, @bitCast(template_flags)),

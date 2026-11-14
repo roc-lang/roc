@@ -362,22 +362,34 @@ pub const Constants = struct {
     /// 181: type stores list the names of their optional and defaulted fields
     ///      once, and anonymous structure nothing visible can lift or widen is
     ///      shared by every use instead of copied per use.
-    /// 182: a serialized module env records the BLAKE3 digest of its source,
+    /// 183: module envs store their string-literal dedup table, the import
+    ///      store's lookup table and the type store's written flags.
+    /// 184: combines the independent 179 and 183 entry changes.
+    /// 185: combines the independent 181 and 184 entry changes.
+    /// 186: combines the independently merged 183 and 185 entry layouts.
+    /// 187: CIR external nominal construction and pattern nodes record which
+    ///      index space their module refers to, and a reserved-module-name
+    ///      diagnostic node is added.
+    /// 188: a serialized module env records the BLAKE3 digest of its source,
     ///      and module identities, cache keys and file-dependency content
     ///      hashes are computed from source digests; a flex variable records
-    ///      whether it is a deferred literal's type.
-    /// 183: an alias's source-argument count is held in the type store's vars
-    ///      pool, in the slot just before the alias's vars.
-    /// 184: a type descriptor's rank is 16 bits.
-    /// 185: a type descriptor is stored as one word of kind, flags and rank
-    ///      and a payload of five words.
-    /// 186: a type store interns the identities of its nominal types and
-    ///      aliases, and their descriptors name an identity row.
-    /// 187: every vars range of a type store has its length in the pool slot
-    ///      just before it, and a stored descriptor keeps only a range's start.
-    /// 188: a flex's literal marker is stored in its descriptor's word, and a
-    ///      stored descriptor's payload is three words.
-    pub const CACHE_VERSION = 188;
+    ///      whether it is a deferred literal's type. Includes the 187 changes.
+    /// 189: checked artifacts store their type, scheme, blob and proc-base
+    ///      interning tables; combines with the independent 187 entry change.
+    /// 190: type tags record whether they are in their row only because `match`
+    ///      branch patterns asked for them.
+    /// 191: includes both the 188 changes (source digests, deferred-literal
+    ///      flex variables) and the 190 changes (pattern-only type tags).
+    /// 191: combines the independent 189 and 190 entry changes.
+    /// 192: combines the two independent 191 entries, so it includes the 188,
+    ///      189 and 190 changes.
+    /// 193: a type descriptor is stored as a 16-byte row: one word of kind,
+    ///      flags, a flex's literal marker and a 16-bit rank, and a payload of
+    ///      three words. A type store interns the identities of its nominal
+    ///      types and aliases, which their descriptors name by row, and every
+    ///      vars range has its length in the pool slot just before it, so a
+    ///      stored descriptor keeps only a range's start.
+    pub const CACHE_VERSION = 193;
 };
 
 /// Configuration for the Roc cache system.

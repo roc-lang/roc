@@ -82,6 +82,7 @@ pub const Problem = union(enum) {
     static_dispatch: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
+    alias_names_no_nominal_type: AliasNamesNoNominalType,
     recursive_alias: RecursiveAlias,
     not_a_where_alias: NotAWhereAlias,
     where_alias_in_type_position: WhereAliasInTypePosition,
@@ -280,11 +281,14 @@ pub const UnsupportedGeneratedMethod = struct {
     region: base.Region,
 };
 
-/// A statically named associated item was absent after transparent aliases
-/// were resolved to their terminal type.
+/// A statically named associated constant or function was absent after
+/// transparent aliases were resolved to their terminal type.
 pub const AssociatedItemNotFound = struct {
     type_name: Ident.Idx,
     item_name: Ident.Idx,
+    /// Whether the name was called, which makes it a function rather than a
+    /// constant.
+    called: bool,
     region: base.Region,
 };
 
@@ -839,11 +843,22 @@ pub const RedundantPattern = struct {
     part: MatchBranchPart,
 };
 
-/// Problem data for an unmatchable pattern (pattern on uninhabited type)
+/// Problem data for a match pattern that no value can ever match
 pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     branch_index: u32,
     part: MatchBranchPart,
+    reason: Reason = .uninhabited,
+
+    /// Why no value can match the pattern.
+    pub const Reason = union(enum) {
+        /// The pattern matches a type that has no possible values.
+        uninhabited,
+        /// The pattern needs this tag, which the matched value's type holds
+        /// only because `match` patterns asked for it: nothing in the module
+        /// produces it (design.md "Pattern-Only Tags").
+        tag_never_produced: Ident.Idx,
+    };
 };
 
 /// A name bound by one `|` alternative of a match branch but not by another,
@@ -1091,12 +1106,21 @@ pub const CannotAccessOpaqueNominal = struct {
 
 /// Compiler bug: a nominal type variable doesn't resolve to a nominal_type structure.
 /// This should never happen because:
-/// 1. The canonicalizer only creates nominal patterns/expressions for s_nominal_decl statements
+/// 1. The canonicalizer only creates nominal patterns/expressions for
+///    s_nominal_decl and s_alias_decl statements, and an alias that names no
+///    nominal type is reported as `alias_names_no_nominal_type`
 /// 2. generateNominalDecl always sets the decl_var to a nominal_type structure
 /// 3. instantiateVar and copyVar preserve the nominal_type structure
 pub const NominalTypeResolutionFailed = struct {
     var_: Var,
     nominal_type_decl_var: Var,
+};
+
+/// Error when a nominal construction or pattern names an alias whose type is
+/// not a nominal type, so there is no nominal type to construct or match.
+pub const AliasNamesNoNominalType = struct {
+    var_: Var,
+    alias_name: Ident.Idx,
 };
 
 // type declaration errors //

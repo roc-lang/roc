@@ -180,7 +180,7 @@ NO CHANGE
 								(if-branch
 									(e-method-eq (negated "false")
 										(lhs
-											(e-dispatch-call (method "rem_by") (constraint-fn-var 311)
+											(e-dispatch-call (method "rem_by") (constraint-fn-var 305)
 												(receiver
 													(e-lookup-local
 														(p-assign (ident "n"))))
@@ -195,7 +195,7 @@ NO CHANGE
 												(p-assign (ident "n"))))
 										(s-reassign
 											(p-var-assign (ident "evenCount_"))
-											(e-dispatch-call (method "plus") (constraint-fn-var 317)
+											(e-dispatch-call (method "plus") (constraint-fn-var 311)
 												(receiver
 													(e-lookup-local
 														(p-var-assign (ident "evenCount_"))))
@@ -206,7 +206,7 @@ NO CHANGE
 								(e-block
 									(e-empty_record)))))
 					(e-empty_record)))
-			(e-dispatch-call (method "times") (constraint-fn-var 322)
+			(e-dispatch-call (method "times") (constraint-fn-var 316)
 				(receiver
 					(e-lookup-local
 						(p-var-assign (ident "lastEven_"))))

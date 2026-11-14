@@ -9,8 +9,8 @@ Padded := {
     _ : U32,
     a : U32,
 }.{
-    new : U32, U32 -> Padded
-    new = |z, a| { z, a }
+    make : U32, U32 -> Padded
+    make = |z, a| { z, a }
 
     ## Hosted: the host reads `z` and `a` from the passed-in record at their
     ## expected byte offsets and returns "<z*100 + a>" as a string, so any layout

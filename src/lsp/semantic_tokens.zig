@@ -484,7 +484,7 @@ const CheckedClassifier = struct {
             .e_lookup_associated => |lookup| self.setLastIdent(region, lookup.item_ident, self.exprClass(expr_idx)),
             .e_lookup_associated_resolved => |lookup| self.setLastIdent(region, lookup.source_ident, self.exprClass(expr_idx)),
             .e_lookup_required => |lookup| {
-                const required = self.module_env.requires_types.items.items[@backingInt(lookup.requires_idx)];
+                const required = self.module_env.requires_types.items()[@backingInt(lookup.requires_idx)];
                 self.setIdent(region, required.ident, self.exprClass(expr_idx));
             },
             .e_tag => |tag| self.setIdent(region, tag.name, .enum_member),

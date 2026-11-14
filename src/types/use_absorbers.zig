@@ -146,7 +146,7 @@ pub const UseAbsorbers = struct {
         idents: *const Ident.Store,
         include_opaque: bool,
     ) Allocator.Error!void {
-        for (store.nominal_decls.items.items) |decl| {
+        for (store.nominal_decls.items()) |decl| {
             if (!decl.isValid()) {
                 self.addInvalidDecl();
                 continue;
@@ -157,7 +157,7 @@ pub const UseAbsorbers = struct {
         // A checked module's store lists the name of every optional or
         // defaulted field its records hold (`Store.widening_names`), filled
         // when checking sealed it.
-        for (store.widening_names.items.items) |hash| try self.widening_fields.put(gpa, hash, {});
+        for (store.widening_names.items()) |hash| try self.widening_fields.put(gpa, hash, {});
     }
 
     fn addBacking(self: *UseAbsorbers, gpa: Allocator, store: *const Store, idents: *const Ident.Store, backing: Var) Allocator.Error!void {

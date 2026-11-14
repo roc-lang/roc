@@ -255,7 +255,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
 
     const host = &session.completed.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
-    const helper_roots = helper.root_requests.compile_time_requests;
+    const helper_roots = helper.root_requests.compile_time_requests.items();
     try std.testing.expectEqual(@as(usize, 3), helper_roots.len);
     // The value the program reads is materialized and frozen; the other root
     // is complete but stays in its module's store. Transcoding rejects a read
@@ -340,7 +340,7 @@ test "one evaluated root has one completed-value slot however many places read i
     const session = &coord.program_session.?;
     const stages = &session.completed.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
-    const helper_roots = helper.root_requests.compile_time_requests;
+    const helper_roots = helper.root_requests.compile_time_requests.items();
     try std.testing.expectEqual(@as(usize, 4), helper_roots.len);
     const value_roots = [_]CheckedArtifact.RootRequest{ try rootWithOrder(helper_roots, 1), try rootWithOrder(helper_roots, 2), try rootWithOrder(helper_roots, 3) };
 
@@ -546,7 +546,7 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     const app = coord.appRootCheckedArtifact();
     var expects = std.ArrayList(CheckedArtifact.RootRequest).empty;
     defer expects.deinit(allocator);
-    for (app.root_requests.requests) |request| {
+    for (app.root_requests.requests.items()) |request| {
         if (request.kind == .test_expect) try expects.append(allocator, request);
     }
     try std.testing.expectEqual(@as(usize, 2), expects.items.len);

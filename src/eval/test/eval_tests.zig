@@ -7280,16 +7280,30 @@ const core_tests = [_]TestCase{
         \\    u128 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
         \\    i128 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
         \\    (
-        \\        u8(U8.highest, 2), u8(3, 2),
+        \\        u8(U8.highest, 2), u8(3.U8, 2),
         \\        i8(I8.highest, 2), i8(I8.lowest, 1), i8(I8.lowest, -1),
-        \\        u64(U64.highest, 2), u64(3, 2),
+        \\        u64(U64.highest, 2), u64(3.U64, 2),
         \\        i64(I64.highest, 2), i64(I64.lowest, 1), i64(I64.lowest, -1),
-        \\        u128(U128.highest, 2), u128(3, 2),
+        \\        u128(U128.highest, 2), u128(3.U128, 2),
         \\        i128(I128.highest, 2), i128(I128.lowest, 1), i128(I128.lowest, -1),
         \\    )
         \\}
         ,
         .expected = .{ .inspect_str = "((True, False, True), (False, False, False), (True, False, True), (False, True, False), (True, False, True), (True, False, True), (False, False, False), (True, False, True), (False, True, False), (True, False, True), (True, False, True), (False, False, False), (True, False, True), (False, True, False), (True, False, True))" },
+    },
+    .{
+        // A number literal passed to a generalized function whose only use of
+        // it is a method call has no type to convert at, which is reported.
+        // The rejected call is a checked runtime error, so the program still
+        // lowers and crashes when it reaches the call.
+        .name = "inspect: method call on an undetermined number literal reports a problem and crashes at runtime",
+        .source =
+        \\{
+        \\    overflows = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
+        \\    (overflows(U8.highest, 2), overflows(3, 2))
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
     },
     .{
         .name = "inspect: integer saturating arithmetic covers every width and direction",

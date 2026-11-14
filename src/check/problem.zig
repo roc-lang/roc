@@ -87,6 +87,7 @@ pub const RedundantOpenTagUnion = types.RedundantOpenTagUnion;
 // Nominal type errors
 pub const CannotAccessOpaqueNominal = types.CannotAccessOpaqueNominal;
 pub const NominalTypeResolutionFailed = types.NominalTypeResolutionFailed;
+pub const AliasNamesNoNominalType = types.AliasNamesNoNominalType;
 pub const InvalidNominalDeclRecursion = types.InvalidNominalDeclRecursion;
 
 // Platform errors

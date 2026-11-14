@@ -61,6 +61,11 @@ TYPE MISMATCH - effectful_callback_through_pure_join_map.md:8:8:8:40
 			(annotation-end)
 			(line-break)
 			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This function is effectful, but a pure function is expected.")
+			(line-break)
+			(line-break)
 			(reflow "This use needs that because of this code in the definition it uses:")
 			(line-break)
 			(source-region (file "effectful_callback_through_pure_join_map.md") (start 1 50) (end 1 81) (annotation error) (line-text "apply = |lines, functions| lines.join_map(|line| functions.join_map(|f| f(line)))")))))
@@ -153,7 +158,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "lines"))
 				(p-assign (ident "functions")))
-			(e-dispatch-call (method "join_map") (constraint-fn-var 280)
+			(e-dispatch-call (method "join_map") (constraint-fn-var 274)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "lines"))))
@@ -164,7 +169,7 @@ NO CHANGE
 						(e-lambda
 							(args
 								(p-assign (ident "line")))
-							(e-dispatch-call (method "join_map") (constraint-fn-var 278)
+							(e-dispatch-call (method "join_map") (constraint-fn-var 272)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "functions"))))
@@ -175,7 +180,7 @@ NO CHANGE
 										(e-lambda
 											(args
 												(p-assign (ident "f")))
-											(e-call (constraint-fn-var 277)
+											(e-call (constraint-fn-var 271)
 												(e-lookup-local
 													(p-assign (ident "f")))
 												(e-lookup-local
@@ -204,7 +209,7 @@ NO CHANGE
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "Str") (builtin))))))
 	(s-expect
-		(e-call (constraint-fn-var 349)
+		(e-call (constraint-fn-var 343)
 			(e-lookup-external
 				(builtin))
 			(e-runtime-error (tag "erroneous_value_expr"))

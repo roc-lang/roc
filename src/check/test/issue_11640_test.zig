@@ -144,7 +144,7 @@ test "issue 11640 - ? return then a tail method call whose target is checked at 
         \\prepare! : Str => Try(Stmt, [SqliteErr(Str)])
         \\prepare! = |path| host_prepare!(path).map_ok(|stmt| Stmt.{ host: stmt })
         \\
-        \\query_many! = |path, rows| {
+        \\query_path! = |path, rows| {
         \\    stmt = prepare!(path)?
         \\    stmt.query_many!(rows)
         \\}
@@ -176,7 +176,7 @@ test "issue 11640 - ? return then a tail method call whose target is checked at 
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("query_many!", "Str, (U64 -> (U64 -> Try(a, err))) => Try(List(a), [SqliteErr(Str), ..err])");
+    try test_env.assertDefType("query_path!", "Str, (U64 -> (U64 -> Try(a, err))) => Try(List(a), [SqliteErr(Str), ..err])");
 }
 
 test "issue 11640 - an infinite type reaching an enclosing function's parameter is reported" {

@@ -49,7 +49,7 @@ TYPE MISMATCH - mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_1
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "U64")
+			(text "List(U64)")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -66,20 +66,8 @@ TYPE MISMATCH - mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_1
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Str")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Convert it to a")
-			(reflow " ")
-			(annotated code "Str")
-			(reflow " ")
-			(reflow "with")
-			(reflow " ")
-			(annotated code ".to_str()")
-			(reflow "."))))
+			(text "List(Str)")
+			(annotation-end))))
 ~~~
 # TOKENS
 ~~~zig
@@ -281,7 +269,7 @@ run = |num| {
 									(e-num (value "0"))))
 							(e-tag (name "Ok")
 								(args
-									(e-call (constraint-fn-var 404)
+									(e-call (constraint-fn-var 398)
 										(e-lookup-external
 											(builtin))
 										(e-lookup-local
@@ -289,14 +277,14 @@ run = |num| {
 										(e-string
 											(e-literal (string ""))))))))
 					(if-else
-						(e-call (constraint-fn-var 415)
+						(e-call (constraint-fn-var 409)
 							(e-lookup-local
 								(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_11605.Client.second")))
 							(e-lookup-local
 								(p-assign (ident "client")))
 							(e-lookup-local
 								(p-assign (ident "items")))
-							(e-dispatch-call (method "minus") (constraint-fn-var 413)
+							(e-dispatch-call (method "minus") (constraint-fn-var 407)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "n"))))
@@ -322,7 +310,7 @@ run = |num| {
 				(p-assign (ident "client"))
 				(p-assign (ident "items"))
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 434)
+			(e-call (constraint-fn-var 428)
 				(e-lookup-local
 					(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_11605.Client.first")))
 				(e-lookup-local

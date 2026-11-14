@@ -1,6 +1,6 @@
 Effect(msg) := [Call(Str, List(U8), Box((List(U8) -> Box(msg))))].{
     call : Str, List(U8), (List(U8) -> msg) -> Effect(msg)
-    call = |id, args, on_reply| Call(id, args, Box.box(|reply| Box.box(on_reply(reply))))
+    call = |id, args, on_reply| Call(id, args, Box.box(|reply_bytes| Box.box(on_reply(reply_bytes))))
 
     reply : List(U8) -> Try(List(U8), [FeatureFailed(Str)])
     reply = |bytes|

@@ -197,19 +197,19 @@ const Walker = struct {
         }
         const visited = try walkStamps(allocator, modules, struct {
             fn count(module: checked.ImportedModuleView) usize {
-                return module.checked_procedure_templates.templates.items.len;
+                return module.checked_procedure_templates.templates.items().len;
             }
         }.count);
         errdefer freeStamps(allocator, visited);
         const visited_nodes = try walkStamps(allocator, modules, struct {
             fn count(module: checked.ImportedModuleView) usize {
-                return module.static_dispatch_plans.evidence_nodes.len;
+                return module.static_dispatch_plans.evidence_nodes.items().len;
             }
         }.count);
         errdefer freeStamps(allocator, visited_nodes);
         const visited_derivations = try walkStamps(allocator, modules, struct {
             fn count(module: checked.ImportedModuleView) usize {
-                return module.static_dispatch_plans.generated_codec_derivations.len;
+                return module.static_dispatch_plans.generated_codec_derivations.items().len;
             }
         }.count);
         errdefer freeStamps(allocator, visited_derivations);
@@ -316,11 +316,11 @@ const Walker = struct {
         const template = module.checked_procedure_templates.get(key.template);
         const refs = template.resolved_value_refs;
         const end = refs.start + refs.len;
-        if (end > module.resolved_value_refs.template_refs.len) base.invariant("compile-time finalization invariant violated: a template's value reference span is outside its checked table", .{});
-        for (module.resolved_value_refs.template_refs[refs.start..end]) |ref_id| {
+        if (end > module.resolved_value_refs.template_refs.items().len) base.invariant("compile-time finalization invariant violated: a template's value reference span is outside its checked table", .{});
+        for (module.resolved_value_refs.template_refs.items()[refs.start..end]) |ref_id| {
             const raw = @backingInt(ref_id);
-            if (raw >= module.resolved_value_refs.records.len) base.invariant("compile-time finalization invariant violated: a value reference id is outside its checked table", .{});
-            const record = module.resolved_value_refs.records[raw];
+            if (raw >= module.resolved_value_refs.records.items().len) base.invariant("compile-time finalization invariant violated: a value reference id is outside its checked table", .{});
+            const record = module.resolved_value_refs.records.items()[raw];
             try self.walkRef(record.ref);
             if (module.static_dispatch_plans.siteEvidence(record.expr)) |evidence| {
                 try self.walkEntries(key.module, evidence);
@@ -329,9 +329,9 @@ const Walker = struct {
         }
         const plans = module.static_dispatch_plans;
         const plan_span = template.static_dispatch_plans;
-        if (plan_span.start + plan_span.len > plans.template_refs.len) base.invariant("compile-time finalization invariant violated: a template's dispatch plan span is outside its checked table", .{});
-        for (plans.template_refs[plan_span.start..][0..plan_span.len]) |plan_id| {
-            const plan = plans.plans[@backingInt(plan_id)];
+        if (plan_span.start + plan_span.len > plans.template_refs.items().len) base.invariant("compile-time finalization invariant violated: a template's dispatch plan span is outside its checked table", .{});
+        for (plans.template_refs.items()[plan_span.start..][0..plan_span.len]) |plan_id| {
+            const plan = plans.plans.items()[@backingInt(plan_id)];
             switch (plan.resolution) {
                 .direct_closed, .direct_parametric => |direct| try self.nodes.append(self.allocator, direct.evidence),
                 .structural => if (plan.generated_codec_derivation.get()) |id| try self.derivations.append(self.allocator, id),
@@ -365,7 +365,7 @@ const Walker = struct {
                 const stamps_of = self.visited_derivations[module];
                 if (stamps_of[@backingInt(id)] == self.evidence_visit) continue;
                 stamps_of[@backingInt(id)] = self.evidence_visit;
-                const derivation = plans.generated_codec_derivations[@backingInt(id)];
+                const derivation = plans.generated_codec_derivations.items()[@backingInt(id)];
                 for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
                     .callable => |node| try self.nodes.append(self.allocator, node),
                     .structural => |nested| try self.derivations.append(self.allocator, nested),
@@ -397,7 +397,7 @@ const Walker = struct {
         for (evidence) |entry| {
             try self.walkResolution(entry.resolution);
             const contracts = entry.callable_contracts;
-            for (plans.evidence_refs[contracts.start..][0..contracts.len]) |contract| try self.walkResolution(contract.resolution);
+            for (plans.evidence_refs.items()[contracts.start..][0..contracts.len]) |contract| try self.walkResolution(contract.resolution);
         }
     }
 
@@ -422,7 +422,7 @@ const Walker = struct {
             },
             .use => |expr| {
                 const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse return;
-                try self.walkRef(artifact.resolved_value_refs.records[@backingInt(ref_id)].ref);
+                try self.walkRef(artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref);
             },
         }
     }
@@ -646,13 +646,13 @@ test "Boxy selection retains imported representation readiness and shares cyclic
     views[0] = checked.importedView(consumer);
     for (parsed.import_artifacts, views[1..]) |*artifact, *view| view.* = checked.importedView(artifact);
     var has_lss_only_value = false;
-    for (views[1..]) |view| for (view.compile_time_roots.roots) |root| {
+    for (views[1..]) |view| for (view.compile_time_roots.roots.items()) |root| {
         if (!root.needsEvaluation(.lss) and root.needsEvaluation(.boxy)) has_lss_only_value = true;
     };
     try std.testing.expect(has_lss_only_value);
-    try std.testing.expectEqual(@as(usize, 3), consumer.root_requests.compile_time_requests.len);
+    try std.testing.expectEqual(@as(usize, 3), consumer.root_requests.compile_time_requests.items().len);
     var roots: [3]Root = undefined;
-    for (&roots, consumer.root_requests.compile_time_requests) |*root, request| {
+    for (&roots, consumer.root_requests.compile_time_requests.items()) |*root, request| {
         root.* = .{ .module = 0, .root = request.compile_time_root.get().?, .request = request };
     }
     var graph = try buildForBoxySelection(allocator, &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = views[1..] }, &roots);
@@ -727,8 +727,8 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         // imports in order; `Holder` is the program's only import.
         try std.testing.expectEqual(@as(usize, 2), parsed.import_artifacts.len);
         const holder = &parsed.import_artifacts[1];
-        try std.testing.expectEqual(@as(usize, 1), consumer.root_requests.compile_time_requests.len);
-        const request = consumer.root_requests.compile_time_requests[0];
+        try std.testing.expectEqual(@as(usize, 1), consumer.root_requests.compile_time_requests.items().len);
+        const request = consumer.root_requests.compile_time_requests.items()[0];
         // A nominal can be supplied by the ownership anchor, a platform
         // relation, or an ordinary import. None needs a pending CTFE root.
         const root: Root = .{ .module = 0, .root = request.compile_time_root.get().?, .request = request };
@@ -750,7 +750,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
     var roots = std.ArrayList(Root).empty;
     defer roots.deinit(allocator);
     for (modules.items, 0..) |module, index| {
-        for (module.root_requests.compile_time_requests) |request| {
+        for (module.root_requests.compile_time_requests.items()) |request| {
             try roots.append(allocator, .{ .module = @intCast(index), .root = request.compile_time_root.get().?, .request = request });
         }
     }
@@ -762,7 +762,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
     evidence_probe.visit = 1;
     var probed_evidence = false;
     evidence: for (modules.items, 0..) |module, module_index| {
-        for (module.static_dispatch_plans.evidence_nodes, 0..) |node, node_index| {
+        for (module.static_dispatch_plans.evidence_nodes.items(), 0..) |node, node_index| {
             if (node.target.kind != .procedure or evidence_probe.moduleOf(node.target.kind.procedure.template.artifact) == null) continue;
             const id: static_dispatch.EvidenceNodeId = @fromBackingInt(@intCast(node_index));
             evidence_probe.evidence_visit = 1;

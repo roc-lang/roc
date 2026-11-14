@@ -115,7 +115,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
             const def_node = env.store.nodes.get(def_node_idx);
             const def_data_idx = def_node.getPayload().def.def_data_idx;
 
-            env.store.def_data.items.items[def_data_idx].expr = @backingInt(expr_idx);
+            env.store.def_data.items()[def_data_idx].expr = @backingInt(expr_idx);
 
             try env.store.addScratchDef(def_idx);
         }

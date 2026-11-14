@@ -2458,7 +2458,7 @@ pub const BuildEnv = struct {
             try self.remapSyntheticRootDocumentElement(
                 &report.document,
                 element,
-                original_line_starts.items.items,
+                original_line_starts.items(),
             );
         }
     }
@@ -2674,7 +2674,7 @@ pub const BuildEnv = struct {
         source_dir: []const u8,
         env: *const ModuleEnv,
     ) Allocator.Error!void {
-        for (env.file_dependencies.items.items) |dep| {
+        for (env.file_dependencies.items()) |dep| {
             const relative_path = env.fileDependencyRelativePath(dep);
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
             defer self.gpa.free(full_path);
@@ -2757,7 +2757,7 @@ pub const BuildEnv = struct {
             while (coordinator_packages.next()) |pkg| {
                 for (pkg.*.modules.items) |*mod| {
                     try Owned.append(allocator, &inputs, mod.path, mod.source_file_state.?);
-                    if (mod.moduleEnv()) |env| for (env.file_dependencies.items.items) |dep| {
+                    if (mod.moduleEnv()) |env| for (env.file_dependencies.items()) |dep| {
                         const path = try std.fs.path.resolve(allocator, &.{ mod.canonicalSourceDir(), env.fileDependencyRelativePath(dep) });
                         defer allocator.free(path);
                         const state: watch_inputs.State = switch (dep.state) {
@@ -3290,6 +3290,27 @@ pub const BuildEnv = struct {
         return public_modules.toOwnedSlice(allocator);
     }
 
+    /// Every checked module of the root package, public or not.
+    pub fn getRootPackageModuleEnvs(self: *BuildEnv, allocator: Allocator) Allocator.Error![]*const ModuleEnv {
+        const root_name = self.discovered_pkg_name orelse {
+            base.invariant("build env invariant violated: root package modules requested before dependency discovery", .{});
+        };
+        const coord = self.coordinator orelse {
+            base.invariant("build env invariant violated: root package modules requested before coordinator initialization", .{});
+        };
+        const root_coord_pkg = coord.packages.get(root_name) orelse {
+            base.invariant("build env invariant violated: root coordinator package is unavailable", .{});
+        };
+
+        var envs = std.ArrayList(*const ModuleEnv).empty;
+        errdefer envs.deinit(allocator);
+        for (root_coord_pkg.modules.items) |*module_state| {
+            const checked = module_state.checkedModule() orelse continue;
+            try envs.append(allocator, checked.env);
+        }
+        return envs.toOwnedSlice(allocator);
+    }
+
     /// Return the compiled modules that belong in generated documentation.
     /// Package roots use their public modules. Platform roots additionally use
     /// their root module when the header exposes root-owned names. Callers
@@ -3472,8 +3493,8 @@ pub const BuildEnv = struct {
         if (self.getPlatformSemanticData()) |platform| {
             if (platform.checked_artifact) |artifact| {
                 if (artifact.checking_context_identity.platform_app_relation != null or
-                    artifact.root_requests.requests.len > 0 or
-                    artifact.provided_exports.exports.len > 0)
+                    artifact.root_requests.requests.items().len > 0 or
+                    artifact.provided_exports.exports.items().len > 0)
                 {
                     return platform;
                 }
@@ -3499,7 +3520,7 @@ pub const BuildEnv = struct {
         var artifacts = std.ArrayList(*const check.CheckedArtifact.CheckedModuleArtifact).empty;
         errdefer artifacts.deinit(allocator);
         const builtin_artifact = &self.builtin_modules.checked_artifact;
-        for (root_artifact.lowering_visibility.module_ids) |key| {
+        for (root_artifact.lowering_visibility.module_ids.items()) |key| {
             if (checkedArtifactKeysEqual(key, root_artifact.key.digest())) continue;
             if (checkedArtifactKeysEqual(key, builtin_artifact.key.digest())) continue;
             const artifact = self.artifactByKey(key) orelse continue;
@@ -3676,7 +3697,7 @@ pub const BuildEnv = struct {
                         );
                         const region_info = base.RegionInfo.position(
                             original_source,
-                            line_starts.items.items,
+                            line_starts.items(),
                             mapped_region.start.offset,
                             mapped_region.end.offset,
                         ) catch |err| base.invariant(
@@ -3690,7 +3711,7 @@ pub const BuildEnv = struct {
                             .warning_highlight,
                             owned_path,
                             original_source,
-                            line_starts.items.items,
+                            line_starts.items(),
                         );
                         return;
                     }

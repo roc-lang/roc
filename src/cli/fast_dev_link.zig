@@ -224,6 +224,7 @@ pub const HostJob = struct {
         };
         const host_bytes = host_start orelse {
             link_output.unmapReadOnly(mapping);
+            manager.rejectEntry(.checked, .prelinked_host, self.key, host_scope, artifact.stamp(), "it is not a prelinked host record", .{});
             artifact.deinit();
             self.outcome = .miss;
             return;

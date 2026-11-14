@@ -2347,12 +2347,12 @@ test "override scopes are interned by content and restricted to a type's reach" 
     defer declarations.deinit(allocator);
     var declaration_ids: [2]checked.CheckedNominalDeclarationId = undefined;
     for (&declaration_ids) |*id| {
-        id.* = @fromBackingInt(@intCast(declarations.nominal_declarations.items.len));
+        id.* = @fromBackingInt(@intCast(declarations.nominal_declarations.items().len));
         // These opaque nominals are compared by identity only. No backing,
         // declaration root, source statement, or name metadata is inspected.
         var declaration: checked.CheckedNominalDeclaration = undefined;
         declaration.id = id.*;
-        try declarations.nominal_declarations.append(allocator, declaration);
+        _ = try declarations.nominal_declarations.append(allocator, declaration);
     }
     const module: types.ModuleIndex = @fromBackingInt(@intCast(fixture.modules.views.items.len));
     // Scope traversal never opens a backing for these has_backing=false nodes.

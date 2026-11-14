@@ -111,8 +111,8 @@ pub const TypeAnno = union(enum) {
                     },
                     .external => |external| {
                         const module_idx_int = @backingInt(external.module_idx);
-                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
-                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        std.debug.assert(module_idx_int < ir.imports.imports.items().len);
+                        const string_lit_idx = ir.imports.imports.items()[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
                         // Special case: Builtin module is an implementation detail, print as (builtin)
                         if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
@@ -124,8 +124,8 @@ pub const TypeAnno = union(enum) {
                     },
                     .pending => |pending| {
                         const module_idx_int = @backingInt(pending.module_idx);
-                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
-                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        std.debug.assert(module_idx_int < ir.imports.imports.items().len);
+                        const string_lit_idx = ir.imports.imports.items()[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
                         try tree.pushStringPair("pending-module", module_name);
                     },
@@ -174,8 +174,8 @@ pub const TypeAnno = union(enum) {
                     },
                     .external => |external| {
                         const module_idx_int = @backingInt(external.module_idx);
-                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
-                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        std.debug.assert(module_idx_int < ir.imports.imports.items().len);
+                        const string_lit_idx = ir.imports.imports.items()[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
                         // Special case: Builtin module is an implementation detail, print as (builtin)
                         if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
@@ -187,8 +187,8 @@ pub const TypeAnno = union(enum) {
                     },
                     .pending => |pending| {
                         const module_idx_int = @backingInt(pending.module_idx);
-                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
-                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        std.debug.assert(module_idx_int < ir.imports.imports.items().len);
+                        const string_lit_idx = ir.imports.imports.items()[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
                         try tree.pushStringPair("pending-module", module_name);
                     },
