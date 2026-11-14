@@ -12161,7 +12161,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // list_release_excess_capacity(list) -> list with capacity = length
         .list_release_excess_capacity => {
-            try self.generateLLListReleaseExcessCapacity(args, ll.ret_layout);
+            try self.generateLLListReleaseExcessCapacity(args, ll.ret_layout, ll.unique_args);
         },
         // list_sublist(list, {len: U64, start: U64}) -> list
         .list_sublist, .list_sublist_borrowed => {
@@ -18318,44 +18318,35 @@ fn emitListSliceInto(self: *Self, result_local: u32, list_local: u32, start_loca
     try self.emitStoreOp(.i32, list_capacity_offset);
 }
 
-/// Generate list_release_excess_capacity: shrink list to exact length
-fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+/// Generate list_release_excess_capacity, which consumes the list: the
+/// `listReleaseExcessCapacity` builtin keeps a unique list whose capacity is
+/// its length, gives the empty list for an empty one, and otherwise copies
+/// the items into an allocation of exactly their count and releases the
+/// list.
+fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReleaseExcessCapacity.builtin_list_abi", ret_layout);
-    const elem_size = list_abi.elem_size;
 
     // A zero-width list holds no allocation, so releasing its excess only
     // brings its capacity down to its length.
-    if (elem_size == 0) {
+    if (list_abi.elem_size == 0) {
         const zst_list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
         try self.emitZstListWithLen(try self.emitListLenLocal(zst_list_ptr));
         return;
     }
 
-    const elem_align = list_abi.elem_align;
-
-    // Generate list arg
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-    // Load list fields
-    const old_data = try self.emitLoadAtToNewLocal(list_ptr, .i32, list_bytes_offset);
-
-    const old_len = try self.emitLoadAtToNewLocal(list_ptr, .i32, list_len_offset);
-
-    // Allocate new_len * elem_size bytes
-    const total_size = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    try self.emitI32Const(@intCast(elem_size));
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    try self.emitLocalSet(total_size);
-
-    try self.emitHeapAllocWithRefcount(total_size, elem_align, list_abi.elements_refcounted);
-    const new_data = try self.emitSetNewLocal(.i32);
-
-    // Copy old data
-    const zero5 = try self.emitI32ConstToNewLocal(0);
-    try self.emitMemCopyLoop(new_data, zero5, old_data, total_size);
-
-    try self.buildRocListWithCap(new_data, old_len, old_len);
+    self.requireBuiltinCalls("list_release_excess_capacity");
+    const fields = try self.loadRocListFields(list_ptr);
+    const callbacks = try self.listElementCallbacks(list_abi);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
+    try self.emitFpOffset(result_offset);
+    try self.emitRocListFields(fields);
+    try self.emitI32Const(@intCast(list_abi.elem_align));
+    try self.emitI32Const(@intCast(list_abi.elem_size));
+    try self.emitListElementCallbackArgs(callbacks);
+    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+    try self.emitBuiltinCall(.list_release_excess_capacity);
+    try self.emitFpOffset(result_offset);
 }
 
 const ListElementPairLayout = struct {

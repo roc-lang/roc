@@ -25471,6 +25471,9 @@ items have no bytes to slice, so their sublist is the window length alone.
 are `list_sublist` over the first `count` items and over the items from
 `len -| count`, as every backend computes those windows for `listSublist`,
 and the Wasm backend lowers them exactly as it lowers `list_sublist`.
+`list_release_excess_capacity` is not inline: it calls
+`listReleaseExcessCapacity`, since the allocation and copy it may make cost
+far more than the call.
 
 ## Wasm Function Limits
 
