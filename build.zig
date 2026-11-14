@@ -2279,6 +2279,7 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
     const compiler_version_module = compiler_version_options.createModule();
+    roc_modules.base.addImport("compiler_version", compiler_version_module);
     roc_modules.lsp.addImport("compiler_version", compiler_version_module);
     roc_modules.build_options.addImport("compiler_identity", compiler_identity);
     const unit_test_runner = UnitTestRunner{
@@ -4220,8 +4221,8 @@ pub fn build(b: *std.Build) void {
 
     for (module_tests_result.tests) |module_test| {
         // Standalone module tests have fresh roots, so display-version imports
-        // must be declared separately from the production LSP module.
-        if (std.mem.eql(u8, module_test.test_step.name, "lsp")) {
+        // must be declared separately from the production modules.
+        if (std.mem.eql(u8, module_test.test_step.name, "base") or std.mem.eql(u8, module_test.test_step.name, "lsp")) {
             module_test.test_step.root_module.addImport("compiler_version", compiler_version_module);
         }
 
