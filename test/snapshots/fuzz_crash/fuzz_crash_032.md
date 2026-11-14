@@ -26,8 +26,8 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:1:14:1:17
 UNDECLARED TYPE - fuzz_crash_032.md:1:21:1:24
 UNDECLARED TYPE - fuzz_crash_032.md:4:25:4:30
 UNDECLARED TYPE - fuzz_crash_032.md:8:3:8:4
-MISSING METHOD - fuzz_crash_032.md:7:10:7:30
 TYPE MISMATCH - fuzz_crash_032.md:7:10:7:30
+MISSING METHOD - fuzz_crash_032.md:7:10:7:30
 # PROBLEMS
 ~~~clojure
 (reports
@@ -214,30 +214,6 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:30
 			(source-region (file "fuzz_crash_032.md") (start 8 3) (end 8 4) (annotation error) (line-text "  B.Blue => LocalStatus.Pending"))))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 7 10) (end 7 30))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "minus")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
-		(document
-			(source-region (file "fuzz_crash_032.md") (start 7 10) (end 7 30) (annotation error) (line-text "Green => LocalStatus-Complete"))
-			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "minus")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[LocalStatus]")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
 		(title "Type Mismatch")
 		(region (start 7 10) (end 7 30))
 		(headline
@@ -265,7 +241,7 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[LocalStatus]")
+			(text "[LocalStatus, ..a] where [a.minus : a, [Complete, ..] -> a]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -294,7 +270,31 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:30
 			(line-break)
 			(reflow "To learn about tags, see")
 			(reflow " ")
-			(link "https://www.roc-lang.org/tutorial#tags"))))
+			(link "https://www.roc-lang.org/tutorial#tags")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 7 10) (end 7 30))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "minus")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "fuzz_crash_032.md") (start 7 10) (end 7 30) (annotation error) (line-text "Green => LocalStatus-Complete"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "minus")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[LocalStatus]")
+			(annotation-end))))
 ~~~
 # TOKENS
 ~~~zig
