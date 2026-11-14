@@ -2301,6 +2301,26 @@ const Certifier = struct {
             (value.product != .none and value.dyn.?.storage != .view);
     }
 
+    /// Whether a value of this layout can be a representation shell: a struct,
+    /// or a tag union, whose tag sits in its inline bytes.
+    fn isShellLayout(self: *const Certifier, layout_idx: layout_mod.Idx) bool {
+        return switch (self.layouts.getLayout(layout_idx).tag) {
+            .struct_, .tag_union => true,
+            .scalar,
+            .box,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .closure,
+            .erased_callable,
+            .zst,
+            .hole,
+            .ptr,
+            .dynamic,
+            => false,
+        };
+    }
+
     fn isInlineAggregateRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
         return self.isInlineProductRepresentation(local) or
             self.layouts.getLayout(self.store.getLocal(local).layout_idx).tag == .tag_union;
@@ -2409,12 +2429,28 @@ const Certifier = struct {
     /// no unit and has claimed nothing of its own is a view of its parent's
     /// slots; claims through it are claims of the parent's slots. A stamped
     /// take instead claims its whole field as a unit of its own.
-    fn viewParent(self: *Certifier, state: *const State, value: ValueId) ?struct { parent: ValueId, first: u32 } {
+    fn viewParent(self: *Certifier, state: *const State, value: ValueId) ?ViewLink {
+        return self.readViewParent(state, value, .struct_);
+    }
+
+    /// The parent an unstamped tag union field read that holds no unit and
+    /// has claimed nothing of its own copies its one slot from, and that
+    /// slot there. Reading the union's payload reads that slot, so a payload
+    /// read through the union checks the slot against the parent's claims.
+    fn unionViewParent(self: *Certifier, state: *const State, value: ValueId) ?ViewLink {
+        return self.readViewParent(state, value, .tag_union);
+    }
+
+    /// A unit-less view read out of a struct's slots, and where its slots
+    /// start in that struct.
+    const ViewLink = struct { parent: ValueId, first: u32 };
+
+    fn readViewParent(self: *Certifier, state: *const State, value: ValueId, comptime view_tag: layout_mod.LayoutTag) ?ViewLink {
         if (state.balanceOf(value) != 0 or state.conditionalConditionOf(value) != null) return null;
         if (!state.claimsOf(value).isEmpty()) return null;
         const info = self.values.items[value];
         if (info.payload_source == no_value or info.payload_projection.kind != .field or info.payload_taken) return null;
-        if (self.layouts.getLayout(self.store.getLocal(info.origin).layout_idx).tag != .struct_) return null;
+        if (self.layouts.getLayout(self.store.getLocal(info.origin).layout_idx).tag != view_tag) return null;
         const parent = arc_dismantle.ProductFields.of(self.store, self.layouts, self.values.items[info.payload_source].origin) orelse return null;
         return .{
             .parent = info.payload_source,
@@ -5993,8 +6029,8 @@ const Certifier = struct {
         return self.bindPayloadReadWithShell(state, target, source, projection, take_kind, tag_discriminant, self.store.getU32Span(LIR.U32Span.empty()));
     }
 
-    /// `shell` names the target's ownership slots a struct view no longer
-    /// holds; see `validateResidualShellFields`.
+    /// `shell` names the target's ownership slots a struct or tag union view
+    /// no longer holds; see `validateResidualShellFields`.
     fn bindPayloadReadWithShell(
         self: *Certifier,
         state: *State,
@@ -6011,10 +6047,12 @@ const Certifier = struct {
             _ = try self.requireAggregateRepresentation(state, source);
             return;
         }
-        // A struct view whose residual shell names every refcounted slot of
-        // its layout holds no unit: it copies only its container's inline
+        // A view whose residual shell names every refcounted slot of its
+        // layout holds no unit: it copies only its container's inline
         // representation, which stays readable after every stored unit has
-        // left (design.md "Residual Shells").
+        // left. A tag union shell is readable only for its discriminant:
+        // `requireFieldUntaken` reads through it as a view of the slot it
+        // copied (design.md "Field Takes From Dying Aggregates").
         if (shell.len != 0 and try self.shellCoversLayout(self.store.getLocal(target).layout_idx, shell)) {
             std.debug.assert(take_kind == .none);
             const representation = try self.requireAggregateRepresentation(state, source);
@@ -6093,7 +6131,7 @@ const Certifier = struct {
             .count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
         } else .{ .first = 0, .count = 1 };
         var steps: usize = 0;
-        while (self.viewParent(state, container)) |view| {
+        while (self.viewParent(state, container) orelse self.unionViewParent(state, container)) |view| {
             steps += 1;
             if (steps > self.values.items.len) return self.fail("struct view chain contained a cycle", .{});
             range.first += view.first;
@@ -6154,13 +6192,13 @@ const Certifier = struct {
         const source = switch (assign.op.kind) {
             .local => assign.op.source,
             .field => {
-                // A struct view's shell names refcounted slots of its own
-                // layout; the read itself checks them against the claims of
-                // the container it views.
+                // A view's shell names refcounted slots of its own layout (a
+                // tag union's one slot is slot 0); the read itself checks
+                // them against the claims of the container it views.
                 if (absent_fields.len == 0) return;
                 const target_layout = self.store.getLocal(assign.target).layout_idx;
-                if (!self.isRc(assign.target) or self.layouts.getLayout(target_layout).tag != .struct_) {
-                    return self.fail("residual-shell field metadata attached to a non-struct field read", .{});
+                if (!self.isRc(assign.target) or !self.isShellLayout(target_layout)) {
+                    return self.fail("residual-shell field metadata attached to a field read that is no struct or tag union", .{});
                 }
                 const required = try self.requiredClaimsForLayout(target_layout) orelse ClaimSet{};
                 for (0..absent_fields.len) |index| {
@@ -6191,9 +6229,19 @@ const Certifier = struct {
         const target_layout = self.store.getLocal(assign.target).layout_idx;
         const source_layout = self.store.getLocal(source).layout_idx;
         const source_layout_value = self.layouts.getLayout(source_layout);
-        if (!self.isRc(source) or !self.isRc(assign.target) or target_layout != source_layout or source_layout_value.tag != .struct_) {
+        if (!self.isRc(source) or !self.isRc(assign.target) or target_layout != source_layout or !self.isShellLayout(source_layout)) {
             if (absent_fields.len != 0) {
-                return self.fail("residual-shell field metadata attached to a non-struct or layout-changing alias", .{});
+                return self.fail("residual-shell field metadata attached to a layout-changing alias or one that is no struct or tag union", .{});
+            }
+            return;
+        }
+        if (source_layout_value.tag == .tag_union) {
+            // An alias of a tag union view whose slot its container gave
+            // away names that one slot. The alias shares the view's value,
+            // which the view's own read already checked.
+            if (absent_fields.len == 0) return;
+            if (absent_fields.len != 1 or GuardedList.at(absent_fields, 0) != 0) {
+                return self.fail("residual-shell metadata of a tag union alias names other than its one slot", .{});
             }
             return;
         }
@@ -9987,6 +10035,72 @@ test "certify flags a view of a dismantled record that leaves its taken slot unn
     try buildScalarReadThroughSpentView(&f, &.{});
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
+}
+
+/// `outer = { 0: [Z, P({ Str, Str })], 1: Str }` as a parameter whose union
+/// is taken and released, then read again as a tag union (marked with
+/// `union_shell`) for its discriminant, and, when `read_payload`, for its
+/// payload too, before field 1 is taken and released.
+fn buildUnionReadAfterTake(f: *CertifyTest, union_shell: []const u32, read_payload: bool) Allocator.Error!void {
+    const union_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+    const outer_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = union_layout },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer = try f.local(outer_layout);
+    const taken_union = try f.local(union_layout);
+    const other = try f.local(.str);
+    const view = try f.local(union_layout);
+    const discriminant = try f.local(.u32);
+    const payload = try f.local(f.pair_str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_other = try f.decrefStmt(other, .str, result_assign);
+    const take_other = try takeFieldStmt(f, other, outer, 1, release_other);
+    const after_discriminant = if (read_payload) try tagPayloadStructReadStmt(f, payload, view, 1, take_other) else take_other;
+    const read_discriminant = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = discriminant,
+        .op = .discriminant(view),
+        .next = after_discriminant,
+    } }, .test_fixture);
+    const read_view = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .field(outer, 0),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(union_shell),
+        }),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const release_union = try f.decrefStmt(taken_union, union_layout, read_view);
+    const body = try takeFieldStmt(f, taken_union, outer, 0, release_union);
+    _ = try f.addProc(&.{outer}, body, .i64);
+}
+
+test "certify accepts a discriminant read of a taken tag union whose shell names its slot" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildUnionReadAfterTake(&f, &.{0}, false);
+    try f.certify();
+}
+
+test "certify flags a tag union read after its slot was taken without naming it absent" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildUnionReadAfterTake(&f, &.{}, false);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "after the field's stored unit was taken") != null);
+}
+
+test "certify flags a payload read through a tag union shell" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildUnionReadAfterTake(&f, &.{0}, true);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "after the field's stored unit was taken") != null);
 }
 
 test "certify flags a double take of one field" {
