@@ -2718,6 +2718,11 @@ pub const ProgramBuilder = struct {
         try self.roots.append(self.allocator, root);
     }
 
+    /// The content identity of every literal root's definition.
+    pub fn literalRootIdentities(self: *const ProgramBuilder) std.AutoHashMapUnmanaged(names.TypeDigest, Common.LiteralRootId).KeyIterator {
+        return self.literal_root_by_identity.keyIterator();
+    }
+
     pub fn addLiteralRoot(self: *ProgramBuilder, root: LiteralRoot) std.mem.Allocator.Error!Common.LiteralRootId {
         const id: Common.LiteralRootId = @fromBackingInt(@intCast(@as(u32, @intCast(self.literal_roots.len()))));
         try self.literal_roots.append(self.allocator, root);

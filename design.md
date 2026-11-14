@@ -2398,7 +2398,10 @@ app's procedure, a method dispatch selects by type, a stored function value,
 a target derived from a function's type), a custom interpolation, or a
 conversion root no evaluation requests. A specialization that converts a
 literal at the closed type of a stored `literal_argument` root restores that
-root's value instead of registering a literal root. Specializing the rest of
+root's value instead of registering a literal root, and one that converts a
+literal at the closed type of a validate-only `literal_argument` root (every
+interpolation's among them) converts it in place, since that root's
+evaluation already reports its outcome. Specializing the rest of
 the runtime program, or lowering any of it for execution, is runtime work,
 and compile-time evaluation without an LSS runtime consumer to continue its
 program does none of it. Its program roots are *discovery roots*,
@@ -11519,21 +11522,23 @@ Otherwise two unrelated unions that both receive a value of one narrower type
 would be joined through it by type identity rather than by flow, and one tag
 label standing in both with two payload types would then be unified.
 
-Which rows a join can change is found before solving
-(`findRowJoinedTypes`). A row changes only where unification relates two
-types instantiated from DIFFERENT Monotypes; relating two instances of one
-Monotype unites rows that are already equal. An analysis solve relates every
-body exactly as the real solve does, but with one clone per callable-free
-Monotype, and records both Monotypes of every such pair. Sharing a clone only
-adds relations, so the analysis relates every pair the real solve does. The
-recorded row-bearing Monotypes, every Monotype structurally equal to one
-(equal equality digests), and every Monotype containing one are row-joined;
-the analysis's solution is then discarded and the real solve shares every
-other callable-free Monotype. A declared nominal row that no value is ever
-joined into, such as a large parse tree's, is thus one node for the whole
-program instead of a copy of its whole row per occurrence. Debug builds
-assert that a shared row-bearing clone never meets a different Monotype in
-unification.
+Which rows a join can change is found by solving (`solveProgram`). A row
+changes only where unification relates two types instantiated from DIFFERENT
+Monotypes; relating two instances of one Monotype unites rows that are
+already equal. The sharing solve relates every body with one clone per
+callable-free Monotype, and records both Monotypes of every such pair.
+Sharing a clone only adds relations, so the sharing solve relates every pair
+that a solve sharing fewer clones does. When it records no row-bearing
+Monotype, no row was joined, every clone it shared is one no join can change,
+and its solution is the program's: a program without row joins solves its
+bodies once. Otherwise the recorded row-bearing Monotypes, every Monotype
+structurally equal to one (equal equality digests), and every Monotype
+containing one are row-joined (`closeRowJoinedTypes`); the sharing solve's
+solution is discarded and the bodies are solved again, sharing every other
+callable-free Monotype. A declared nominal row that no value is ever joined
+into, such as a large parse tree's, is thus one node for the whole program
+instead of a copy of its whole row per occurrence. Debug builds assert that a
+shared row-bearing clone never meets a different Monotype in unification.
 
 A fresh callable-free cyclic leaf may join an existing instance without
 expansion only after an exact clone proof. That proof reads the immutable
@@ -15990,7 +15995,12 @@ strategy).
   program's modules by literal (`LiteralArgumentRootIndex`), and a
   specialization converting a literal whose node's type is closed restores
   the value of the root whose type's Monotype is that type
-  (`restoredLiteralArgument`) instead of registering a literal root. A debug
+  (`restoredLiteralArgument`) instead of registering a literal root. A
+  specialization converting a literal at the type of a validate-only root,
+  which stores no value, converts the literal in place, as a runtime program
+  does where it needs the value, and registers no literal root either
+  (`literalArgumentRootValidates`): the root's evaluation, which every
+  compilation runs, reports its outcome. A debug
   compiler asserts that every root for the literal at that type stored the
   same value. A root whose conversion failed reported the failure in its
   module and stores it; the specialization restores it as a failure already
@@ -20500,7 +20510,11 @@ leaf joins the class without materializing. A Monotype that reaches a cycle, or
 that is uninhabited, keeps the ordinary relation. Leaves that survive solving
 were never unified: their callable slots all close empty and their
 forced-dynamic marks depend only on their Monotype, so finalization gives every
-untouched leaf of one Monotype one shared clone. A clone-invariant Monotype
+untouched leaf of one Monotype one shared clone. An expression or pattern that
+no function body reaches is never typed by solving, and the store holds many
+of them (the rows a rewritten body no longer uses). Each gets the type its
+Monotype's untouched leaf finalizes to, so all of them of one Monotype share
+one leaf rather than each minting a variable. A clone-invariant Monotype
 that solving expanded in the shared leaf context already has its one var, and
 finalization reuses it rather than minting a second: a named type whose
 arguments were read lazily and whose backing is cloned only at finalization
@@ -20517,7 +20531,9 @@ Compatibility traversal scratch belongs to one solver invocation. Deterministic
 work counters distinguish compatibility queries and structural pairs from lazy
 expansion, unification, member merging and final ordering. The developer-only
 `ROC_LAMBDA_SOLVE_STATS` diagnostic reports one record per invocation, including
-its required roots and functions;
+its required roots and functions and how many times it solved its bodies
+(`body_solves`, two when a row join made it solve them again; the other
+counters count the solve it kept);
 pre-evaluation solving and normalization from stored values remain separate
 invocations. No diagnostic state or solved compatibility proofs cross those
 boundaries.
@@ -26630,7 +26646,11 @@ that found them all in the cache specializes it
 every conversion their own code uses. That specialization demands no
 compile-time root; it registers the runtime program's literal roots again and
 evaluates them, and their outcomes, which the first evaluation already
-reported, report nowhere. A literal root is not stored by any compilation, so
+reported, report nowhere. Every literal root it registers is therefore one the
+first evaluation registered, which is what specializing the program roots as
+discovery roots guarantees; debug builds verify it by comparing the content
+identities of the two specializations' literal roots (`LiteralRootCheck`). A
+literal root is not stored by any compilation, so
 both kinds of compilation read literal roots' completed values from the stages
 that evaluated them, the same way. A compilation with neither specializes
 once, with its program roots in full, and its runtime consumer continues that

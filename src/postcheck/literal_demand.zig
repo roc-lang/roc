@@ -890,8 +890,9 @@ pub fn compute(
 /// The flags an instantiation of `template` that checking records no edge
 /// for contributes: such an instantiation converts each of the template's
 /// literal requirements in the specialization, so each contributes its
-/// dependent kind, and an interpolation, which a specialization always
-/// hoists, is strict.
+/// dependent kind, and an interpolation, which a specialization hoists at
+/// any type no validate-only `literal_argument` root converts it at, is
+/// strict.
 fn requirementFlagsOf(view: checked.ImportedModuleView, template: checked.CheckedProcedureTemplate) Flags {
     var flags: Flags = .{};
     for (view.checked_procedure_templates.templateLiteralRequirements(&template)) |requirement| {
