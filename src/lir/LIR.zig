@@ -1819,7 +1819,7 @@ pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
 /// introduces a shape into a body it rewrites sets that shape's flag itself.
 /// Debug builds verify the superset property by also running each pass on
 /// the procedures its shapes excluded.
-pub const ProcShapes = packed struct(u16) {
+pub const ProcShapes = packed struct(u32) {
     /// A direct call to the procedure itself, in any position.
     self_call: bool = false,
     /// A loop: a join reached again by a back edge, whether lowered from a
@@ -1858,9 +1858,13 @@ pub const ProcShapes = packed struct(u16) {
     checked_division: bool = false,
     /// A local assigned a string literal.
     str_literal: bool = false,
+    /// An owned erased call naming its ownership source (`reuse_source`),
+    /// which `.boxy` resolves to the allocation's root after lowering.
+    erased_reuse_call: bool = false,
+    _unused: u15 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
-        return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
+        return @bitCast(@as(u32, @bitCast(self)) | @as(u32, @bitCast(other)));
     }
 };
 

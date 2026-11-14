@@ -79,7 +79,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v72: the string literal store carries its dedup table, combined with
 ///      the v69-v71 changes.
 /// v73: procedure debug names are a column parallel to procedure specs.
-pub const FORMAT_VERSION: u32 = 73;
+/// v74: procedure shapes are 32 bits and record owned erased calls.
+pub const FORMAT_VERSION: u32 = 74;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

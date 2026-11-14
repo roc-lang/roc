@@ -13,6 +13,8 @@
 //! re-resolves its calls' reuse sources with it.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -119,40 +121,48 @@ fn refcountedOwner(store: *const LirStore, layouts: *const layout_mod.Store, loc
     return if (layouts.layoutContainsRefcounted(layouts.getLayout(store.getLocal(local).layout_idx))) local else null;
 }
 
-/// Set every owned erased call's reuse source in `proc_id`'s body to the
-/// ownership unit its closure resolves to.
-pub fn resolveProcReuseSources(
+/// Storage `resolveProcReuseSources` keeps across procedures.
+pub const Scratch = struct {
     allocator: Allocator,
+    owners: Owners,
+    calls: std.ArrayList(LIR.CFStmtId) = .empty,
+    walks: BodyClone.AnalysisScratch,
+
+    pub fn init(allocator: Allocator) Scratch {
+        return .{
+            .allocator = allocator,
+            .owners = Owners.init(allocator),
+            .walks = BodyClone.AnalysisScratch.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Scratch) void {
+        self.walks.deinit();
+        self.calls.deinit(self.allocator);
+        self.owners.deinit();
+    }
+};
+
+/// Set every owned erased call's reuse source in `proc_id`'s body to the
+/// ownership unit its closure resolves to. Only a body whose shapes record
+/// an owned erased call (`erased_reuse_call`) holds one.
+pub fn resolveProcReuseSources(
+    scratch: *Scratch,
     store: *LirStore,
     layouts: *const layout_mod.Store,
     proc_id: LIR.LirProcSpecId,
 ) Allocator.Error!void {
     const proc = store.getProcSpecImmediate(proc_id);
     const body = proc.body.get() orelse return;
-
-    var owners = Owners.init(allocator);
-    defer owners.deinit();
-    const args = store.getLocalSpan(proc.args);
-    for (0..GuardedList.borrowLen(args)) |arg_index| {
-        try owners.noteDefinition(GuardedList.at(args, arg_index), null);
+    const has_calls = proc.shapes.erased_reuse_call;
+    if (!has_calls and builtin.mode != .debug) return;
+    try collectOwnedCalls(scratch, store, layouts, proc.args, body);
+    if (!has_calls) {
+        if (scratch.calls.items.len != 0) base.invariant("{s}", .{"a procedure whose shapes exclude owned erased calls contains one"});
+        return;
     }
-
-    var calls = std.ArrayList(LIR.CFStmtId).empty;
-    defer calls.deinit(allocator);
-    var stmts = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
-    defer stmts.deinit();
-    while (try stmts.next()) |current| {
-        const stmt = store.getCFStmtImmediate(current);
-        try owners.noteStmt(store, layouts, stmt.*);
-        switch (stmt.*) {
-            .assign_call_erased => |call| if (store.stmtRow(call.data).reuse_source != null) try calls.append(allocator, current),
-            .dyn => |dyn_stmt| {
-                const op = store.stmtRow(dyn_stmt.data);
-                if (op == .call_erased and op.call_erased.reuse_source != null) try calls.append(allocator, current);
-            },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
-        }
-    }
+    const calls = &scratch.calls;
+    const owners = &scratch.owners;
 
     for (calls.items) |call_id| {
         switch (store.getCFStmtPtr(call_id).*) {
@@ -167,6 +177,37 @@ pub fn resolveProcReuseSources(
                 dyn_stmt.data = try store.addStmtRow(LIR.DynOp, op);
             },
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable, // only erased calls were collected above
+        }
+    }
+}
+
+/// Record `body`'s erased-allocation producer relation in `scratch.owners`
+/// and its owned erased calls in `scratch.calls`.
+fn collectOwnedCalls(
+    scratch: *Scratch,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    params: LIR.LocalSpan,
+    body: LIR.CFStmtId,
+) Allocator.Error!void {
+    scratch.owners.clear();
+    scratch.calls.clearRetainingCapacity();
+    const args = store.getLocalSpan(params);
+    for (0..GuardedList.borrowLen(args)) |arg_index| {
+        try scratch.owners.noteDefinition(GuardedList.at(args, arg_index), null);
+    }
+    var stmts = try BodyClone.ReachableStmts.initWithScratch(store, body, &scratch.walks);
+    defer stmts.deinit();
+    while (try stmts.next()) |current| {
+        const stmt = store.getCFStmtImmediate(current);
+        try scratch.owners.noteStmt(store, layouts, stmt.*);
+        switch (stmt.*) {
+            .assign_call_erased => |call| if (store.stmtRow(call.data).reuse_source != null) try scratch.calls.append(scratch.allocator, current),
+            .dyn => |dyn_stmt| {
+                const op = store.stmtRow(dyn_stmt.data);
+                if (op == .call_erased and op.call_erased.reuse_source != null) try scratch.calls.append(scratch.allocator, current);
+            },
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
         }
     }
 }

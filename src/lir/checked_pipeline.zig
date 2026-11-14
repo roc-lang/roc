@@ -1827,9 +1827,11 @@ fn finishLoweredOutput(
     // "Destination-Passing Results and Allocation Reuse").
     if (target.specialization_strategy != .lss) {
         const store = &lowered.lir_result.store;
+        var scratch = ErasedOwner.Scratch.init(allocator);
+        defer scratch.deinit();
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
-            try ErasedOwner.resolveProcReuseSources(allocator, store, &lowered.lir_result.layouts, proc_id);
+            try ErasedOwner.resolveProcReuseSources(&scratch, store, &lowered.lir_result.layouts, proc_id);
         }
     }
     // Branch expectations are read off the lowered switches before any
