@@ -6615,6 +6615,15 @@ enclosing root already evaluates and owns the destructure site. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
 
+Only a requested root is evaluated, so only a requested root replaces its source
+occurrence. A root that receives no request (its checked type is not concrete,
+for example) replaces nothing, and an exhaustiveness site it would have
+validated is classified as if no root had been recorded. A site that runtime
+code can reach is decided statically even when it was classified for empirical
+validation, because runtime code can arrive there with any value of its type.
+Empirical validation decides only the sites that compile-time evaluation alone
+reaches.
+
 Local binding dependencies likewise remain candidates until their enclosing
 expression is either selected or rejected. A selected maximal parent owns the
 computation and its transient binders, including callable-typed binders that

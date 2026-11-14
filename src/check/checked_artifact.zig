@@ -26890,7 +26890,7 @@ fn exhaustivenessReplacingRootForSource(
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
         // Only a requested root is ever evaluated. A root with no request
         // replaces nothing: its source occurrence runs where it stands.
-        if (!compileTimeRootHasRootRequest(root_requests.requests, root)) continue;
+        if (!compileTimeRootHasRootRequest(root_requests.requests.items(), root)) continue;
         // A literal conversion converts literal data and contains no site.
         if (root.literalConversionKind() != null) continue;
         if (root.hoisted_body) |body| switch (body) {
