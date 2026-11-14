@@ -196,6 +196,13 @@ pub const CheckArgs = struct {
     specialization_strategy: ?SpecializationStrategy = null, // accepted so one command line serves every command; checking ignores it
 };
 
+/// How a build that `roc` runs starts its published executable: the
+/// `argv[0]` the program sees and the arguments after it.
+pub const RunOutput = struct {
+    argv0: []const u8,
+    app_args: []const []const u8,
+};
+
 /// Arguments for `roc build`
 pub const BuildArgs = struct {
     path: []const u8 = default_roc_file, // the path to the roc file to be built
@@ -217,6 +224,7 @@ pub const BuildArgs = struct {
     require_executable_output: bool = false, // reject static/shared library targets
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
     suppress_build_status: bool = false, // suppress "Built..." output (used by `roc` execution)
+    run_output: ?RunOutput = null, // internal: start the published executable before releasing the build's state (used by `roc` execution)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     synthetic_output_basename: ?[]const u8 = null, // internal: default output name when the source was a shorthand/URL, not a path
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
@@ -833,6 +841,7 @@ const commands = [_]Command{
             "require_executable_output",
             "require_host_runnable_output",
             "suppress_build_status",
+            "run_output",
             "synthetic_output_basename",
             "root_source_url",
             "synthetic_default_platform",

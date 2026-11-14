@@ -28714,6 +28714,25 @@ available. Hot loading therefore applies only to apps with a real platform
 header. Windows uses explicit shared-memory handle inheritance for both the host
 shim child and the internal rebuild worker.
 
+## Runs Of A Built Executable
+
+A `roc` run that builds an executable and then executes it (any `--opt=size`
+or `--opt=speed` run, a run of a URL, a `--no-cache` dev run that does not
+watch, and a `.boxy` dev run of an app without a platform header) starts the
+program before the compiler releases the build's state. Every build path
+returns through one step (`finishBuildCommand`) once its output is published:
+the link has written the file, renamed it into place and closed every handle
+to it, and the build's cache entries are filed. Given `run_output`, that step
+flushes the compiler's output and starts the program, and the build's
+teardown (checked modules, stores, LIR, worker threads, scratch
+directories) then runs while the program does. The compiler writes nothing to
+stdout or stderr after the program starts, except developer diagnostics. The
+run waits for both: it finishes teardown, then waits for the program, and
+exits with the program's status exactly as when the two ran one after the
+other. Nothing the program reads is released by teardown: the executable
+lives in the run's own scratch directory, which is released only after the
+program exits. A build that fails starts nothing.
+
 ## Relationship To Cor LSS
 
 The `.lss` runtime lowering strategy mirrors Cor's LSS experiment after
