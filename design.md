@@ -9765,6 +9765,16 @@ results remain request-owned nodes while their checked result cells stay fresh
 public interfaces. This keeps an adapter's input and output identities distinct
 even when the source signature uses one public `Iter` type variable for both.
 
+An opaque interface relation replays the checker's per-use lift (Anonymous
+Structure Is Copied Per Use) just as ordinary instantiation does through the
+named type's backing. A template whose checked root holds an anonymous record
+or tag union, such as an unannotated method built from `Ok(...)` and
+`Err(...)` literals, can meet a request whose same position holds the nominal
+the use lifted it into. When that nominal carries generated-private evidence,
+the public structure relates to the nominal's structural backing through the
+opaque relation, so every generated-private node stays distinct from its
+public counterpart, and the public class then takes the request's nominal.
+
 Match lowering likewise relates each checked pattern interface to the exact
 scrutinee node without merging a generated-private root into that public
 interface. Once all pattern relations have settled, record-field/tag-payload

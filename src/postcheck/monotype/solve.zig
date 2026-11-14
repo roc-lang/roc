@@ -5974,6 +5974,18 @@ pub const InstGraph = struct {
             try self.unifyAtRowWidth(public_node, private_node, pair.row_width);
             return;
         }
+        if (private_content == .named and contentLiftsIntoNamed(public_content)) {
+            try self.relateLiftedPublicStructure(
+                public_node,
+                public_content,
+                private_node,
+                private_content.named,
+                private_contains_generated,
+                pair.row_width,
+                pending,
+            );
+            return;
+        }
 
         switch (public_content) {
             .redirect, .leaf => unreachable, // public_content is rootContent of a find root, which expands a leaf
@@ -6068,6 +6080,53 @@ pub const InstGraph = struct {
         if (!private_contains_generated) {
             try self.union_(public_node, private_node);
         }
+    }
+
+    /// Whether checked structure of this content can be lifted into a named
+    /// type through that type's backing, as `unifyThroughBacking` does.
+    fn contentLiftsIntoNamed(node_content: InstNode) bool {
+        return switch (node_content) {
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => true,
+            .redirect, .leaf, .unresolved, .named, .hole => false,
+        };
+    }
+
+    /// A use that relates an anonymous structure to a nominal lifts the
+    /// structure into the nominal (design.md "Anonymous Structure Is Copied
+    /// Per Use"), so a template's checked root can hold a structure where the
+    /// request derived from the same use holds the nominal. Ordinary
+    /// instantiation replays that lift through `unifyThroughBacking`. When the
+    /// request's nominal carries generated-private evidence, the lift relates
+    /// the public structure to the nominal's backing through this opaque
+    /// relation, so no generated-private node merges with its public
+    /// counterpart, and the public class becomes the request's nominal.
+    fn relateLiftedPublicStructure(
+        self: *InstGraph,
+        public_node: NodeId,
+        public_content: InstNode,
+        private_node: NodeId,
+        private_named: *const InstNamed,
+        private_contains_generated: bool,
+        row_width: RowWidthRelation,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
+        if (!private_contains_generated) {
+            try self.unifyAtRowWidth(public_node, private_node, row_width);
+            return;
+        }
+        const declared = private_named.backing.get() orelse
+            Common.invariant("opaque interface relation lifted structure into a named type without backing");
+        const backing = try self.structuralBackingNode(declared.node, private_named);
+        if (backing.recursive) {
+            Common.invariant("opaque interface relation lifted structure into a named type whose backing is itself");
+        }
+        if (private_named.kind == .alias) {
+            try self.relateOpaqueChild(public_node, backing.node, row_width, pending);
+            return;
+        }
+        const moved = try self.newNode(public_content);
+        try self.union_(private_node, public_node);
+        try self.relateOpaqueChild(moved, backing.node, row_width, pending);
     }
 
     /// Relate row-polymorphic structure of `kind` without merging a row that
