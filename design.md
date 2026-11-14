@@ -2084,7 +2084,9 @@ CIR kinds (as the checked body reader presents them) and checked types:
   value);
 - a string literal whose quote dispatches to no `from_quote`, made of literal
   segments only, whose checked type is the builtin `Str`;
-- an empty list, an empty record, or a tag with no payload;
+- an empty list, a tag with no payload, or an empty record whose checked
+  type is the empty record (at a record type of optional fields it builds
+  each field's presence slot);
 - a list, tuple, or tag application whose every part is in value form;
 - a record construction with no update base and no unset field, whose
   checked type is a closed record of exactly its fields, every one

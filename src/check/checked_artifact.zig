@@ -24733,7 +24733,8 @@ pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Ex
         // root's own coercion belongs to the site that reads the root.
         if (id != root and bodies.rowCoercion(id) != null) return false;
         const raw = @backingInt(id);
-        switch (bodies.exprData(id)) {
+        const data = valueFormCandidate(bodies, id) orelse return false;
+        switch (data) {
             .numeral => {
                 if (bodies.numeralPlan(raw) != null or bodies.literalConversionRoot(raw) != null) return false;
                 const builtin_type = checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) orelse return false;
@@ -24750,9 +24751,15 @@ pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Ex
             .str => |segments| {
                 if (bodies.quoteIsCustom(raw)) return false;
                 if (checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) != .str) return false;
-                for (segments) |segment| if (bodies.exprData(segment) != .str_segment) return false;
+                for (segments) |segment| {
+                    const segment_data = valueFormCandidate(bodies, segment) orelse return false;
+                    if (segment_data != .str_segment) return false;
+                }
             },
-            .empty_list, .empty_record, .zero_argument_tag => {},
+            .empty_list, .zero_argument_tag => {},
+            // An empty literal at a record type of optional fields builds
+            // each field's slot as missing.
+            .empty_record => if (!recordTypeIsClosedAndRequired(bodies.types, bodies.exprType(id), 0)) return false,
             .list => |items| try stack.appendSlice(allocator, items),
             .tuple => |items| try stack.appendSlice(allocator, items),
             .tag => |tag| try stack.appendSlice(allocator, tag.args),
@@ -24774,6 +24781,21 @@ pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Ex
         }
     }
     return true;
+}
+
+/// The checked body reader's view of `id` when its CIR kind can be part of
+/// a value-form expression: a literal or a construction, not retired. Null
+/// for every other kind, which the reader is not asked about here: an
+/// expression of any kind can sit in a root, and some kinds (an associated
+/// lookup or method call not yet resolved) reach the reader only once
+/// publication resolves them.
+fn valueFormCandidate(bodies: CheckedBodies, id: CIR.Expr.Idx) ?checked_bodies_mod.ExprData {
+    switch (bodies.env.store.getExpr(id)) {
+        .e_num, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_list, .e_tuple, .e_tag, .e_record, .e_nominal, .e_nominal_external => {},
+        .e_frac_f32, .e_frac_f64, .e_num_from_numeral, .e_typed_num_from_numeral, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_match, .e_if, .e_call, .e_block, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
+    }
+    if (bodies.exprIsRetired(id)) return null;
+    return bodies.exprData(id);
 }
 
 /// The numeric type a value-form numeral converts to: a builtin scalar

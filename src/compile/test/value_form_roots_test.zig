@@ -186,8 +186,9 @@ const corpus =
     \\}
 ;
 
-/// Literals at custom types, interpolation, a record update, calls,
-/// operators and lookups: none is in value form.
+/// Literals at custom types, interpolation, a record update, records at a
+/// type with optional fields, calls, operators and lookups: none is in value
+/// form.
 const near_misses =
     \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
     \\import pf.Echo
@@ -216,6 +217,10 @@ const near_misses =
     \\negated = -(1.I64)
     \\lookup = value_form
     \\list_with_lookup = [base_record]
+    \\no_options : { size ?: U8 }
+    \\no_options = {}
+    \\some_options : { size ?: U8, name : Str }
+    \\some_options = { size: 3, name: "x" }
     \\
     \\main! = |_args| {
     \\    Echo.line!(Str.inspect(custom_numeral))
@@ -360,7 +365,7 @@ fn graphDigest(store: *const ConstStore.ConstStore, node: ConstStore.ConstNodeId
 
 /// Require the two stored types to be one type: each is cloned into a fresh
 /// table with one shared name store, so equal types clone to equal tables.
-fn expectSameType(left: *const Artifact, left_type: ConstStore.ConstTypeId, right: *const Artifact, right_type: ConstStore.ConstTypeId) !void {
+fn expectSameType(left: *const Artifact, left_type: ConstStore.ConstTypeId, right: *const Artifact, right_type: ConstStore.ConstTypeId) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
     const allocator = std.testing.allocator;
     var names = check.CanonicalNames.CanonicalNameStore.init(allocator);
     defer names.deinit();
@@ -380,7 +385,24 @@ fn expectSameType(left: *const Artifact, left_type: ConstStore.ConstTypeId, righ
     try std.testing.expectEqualDeep(left_store.declared_field_pool.items(), right_store.declared_field_pool.items());
 }
 
-fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) !void {
+const WriterMatchesEvaluatorError = CheckAppError || error{
+    TestExpectedEqual,
+    UnexpectedUserErrors,
+    NoTopLevelValue,
+    NotAConstant,
+    NoHoistedConst,
+    NotAStoredKind,
+    NotStored,
+    CorpusConstantNotValueForm,
+    WrongKind,
+    RootNotCompleted,
+    ValueDiffers,
+    SharingDiffers,
+    TooFewHoistedValueFormRoots,
+    TooFewRootsCompletedDirectly,
+};
+
+fn expectWriterMatchesEvaluator(strategy: base.SpecializationStrategy) WriterMatchesEvaluatorError!void {
     const allocator = std.testing.allocator;
     var evaluated = try checkApp(allocator, corpus, strategy, .evaluate);
     defer evaluated.deinit();
@@ -455,7 +477,7 @@ test "the checked-value writer stores each value-form root as an lss compilation
     try expectWriterMatchesEvaluator(.lss);
 }
 
-test "a literal at a custom type, interpolation, an update, a call, an operator, or a lookup is evaluated" {
+test "a literal at a custom type, interpolation, an update, an optional field, a call, an operator, or a lookup is evaluated" {
     if (is_freestanding) return error.SkipZigTest;
     var checked = try checkApp(std.testing.allocator, near_misses, .boxy, .write);
     defer checked.deinit();
@@ -470,7 +492,7 @@ test "a literal at a custom type, interpolation, an update, a call, an operator,
         try std.testing.expect(root.payload == .const_node);
         seen += 1;
     }
-    try std.testing.expectEqual(@as(usize, 12), seen);
+    try std.testing.expectEqual(@as(usize, 14), seen);
 }
 
 test "a literal checking rejects is evaluated and reported" {
