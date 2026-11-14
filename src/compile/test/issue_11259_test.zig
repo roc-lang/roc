@@ -201,7 +201,7 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     try bodies.demandIndex();
     const store = &artifact.moduleEnvConst().store;
     var rejected: usize = 0;
-    for (artifact.static_dispatch_plans.plans) |plan| {
+    for (artifact.static_dispatch_plans.plans.items()) |plan| {
         if (plan.resolution != .checked_error) continue;
         rejected += 1;
         try std.testing.expect(switch (bodies.index().nodeKind(plan.node)) {
@@ -215,7 +215,7 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     var found_good = false;
     var found_independent = expected.independent_expr == null;
     var completed_conversions: usize = 0;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());
         const region = store.getNodeRegion(@fromBackingInt(root_node));
         // A root evaluated at compile time whose own body contains the

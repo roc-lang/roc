@@ -33610,8 +33610,10 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
 
         // A body that matches tag patterns may match its parameters' values,
         // which come from callers the module may not see, so their rows count
-        // as produced (design.md "Pattern-Only Tags").
-        if (self.match_tag_patterns.items.len != state.match_tag_patterns_start) {
+        // as produced. A lambda written as a call argument is called only by
+        // that call's callee, so its parameters' rows are whatever the call
+        // relates them to (design.md "Pattern-Only Tags").
+        if (!frame.is_call_arg and self.match_tag_patterns.items.len != state.match_tag_patterns_start) {
             try self.matching_lambda_params.append(self.gpa, lambda.args);
         }
 
@@ -45835,10 +45837,17 @@ fn reportDerivedCodecOpenRecord(
 /// type for all of an interpolation's parts (design.md "Builtin Str
 /// Interpolation Part Compatibility"); an interpolation whose target is
 /// decided was related when its constraint was discharged.
-fn relateUndischargedInterpolationParts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+/// A receiver whose literal this boundary defaults is skipped
+/// (`boundaryDefaultsReceiver`). Returns whether it related a receiver not in
+/// `related_roots`, which it extends.
+fn relateUndischargedInterpolationParts(
+    self: *Self,
+    defaulting: BoundaryDefaulting,
+    related_roots: *std.AutoHashMapUnmanaged(Var, void),
+    env: *Env,
+) std.mem.Allocator.Error!bool {
     const rank = env.rank();
-    var related_roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer related_roots.deinit(self.gpa);
+    var related_any = false;
     var pool_index: usize = 0;
     // Relating a part can add vars to this rank's pool; they are fresh
     // structure, never an interpolation's constrained target, so the scan
@@ -45851,12 +45860,92 @@ fn relateUndischargedInterpolationParts(self: *Self, env: *Env) std.mem.Allocato
             .rigid, .alias, .structure, .field_presence, .err => continue,
         };
         if (flex.constraints.isEmpty()) continue;
+        if (self.boundaryDefaultsReceiver(defaulting, resolved, rank)) continue;
         if ((try related_roots.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        related_any = true;
         var constraints = self.types.iterStaticDispatchConstraints(flex.constraints);
         while (constraints.next()) |constraint| {
             if (constraint.origin.literalKind() != .interpolation) continue;
             try self.relateInterpolationPartsToItem(constraint, null, env);
         }
+    }
+    return related_any;
+}
+
+/// Whether a boundary relates its receivers' requirements under literal
+/// defaulting's protection set (`boundary_reachable_vars`). A boundary whose
+/// pool holds no literal candidate defaults nothing.
+const BoundaryDefaulting = enum { none, gated };
+
+/// Whether this boundary's literal defaulting decides `resolved`: a literal
+/// receiver of this rank that no root's interface reaches defaults here, and
+/// each of its requirements is then discharged against the default's method
+/// on its own (design.md "Builtin Str Interpolation Part Compatibility").
+/// Relating its interpolations' parts first would let one use retype
+/// another.
+fn boundaryDefaultsReceiver(self: *Self, defaulting: BoundaryDefaulting, resolved: types_mod.ResolvedVarDesc, rank: Rank) bool {
+    return switch (defaulting) {
+        .none => false,
+        .gated => resolved.desc.rank == rank and
+            !self.boundary_reachable_vars.contains(resolved.var_) and
+            self.varLiteralKind(resolved.var_) != null,
+    };
+}
+
+/// Whether this boundary's pool holds an open literal: a var still flex at
+/// this rank with literal-conversion provenance.
+fn boundaryHasLiteralCandidate(self: *Self, env: *Env) bool {
+    const rank = env.rank();
+    for (env.var_pool.getVarsForRank(rank)) |pool_var| {
+        const resolved = self.types.resolveVar(pool_var);
+        if (resolved.desc.content != .flex) continue;
+        if (resolved.desc.rank != rank) continue;
+        if (self.varLiteralKind(resolved.var_) == null) continue;
+        return true;
+    }
+    return false;
+}
+
+/// The reachable closure of every def root at this boundary (recursing into
+/// `where`-constraint signatures), plus the receiver-excluded overlay of the
+/// roots' scheme requirement relations, into `boundary_reachable_vars`. A
+/// recursive group generalizes as one unit, so all members' roots seed the
+/// same protection set. Recursive references need no special seeding: the
+/// binding-group recursion rule unifies them with the member's in-flight type
+/// immediately, so a literal constrained through a recursive call is already
+/// reachable from the member's root.
+fn collectBoundaryReachableVars(self: *Self, roots: []const BoundaryRoot) std.mem.Allocator.Error!void {
+    self.boundary_reachable_vars.clearRetainingCapacity();
+    for (roots) |root| {
+        try self.collectReachableVars(root.interface, &self.boundary_reachable_vars);
+    }
+    try self.addSchemeDispatchRequirementsToBoundaryReachability(roots);
+
+    // Every plain walk into the boundary set is done; fold in the
+    // receiver-excluded relation overlay for the membership-only consumers
+    // (defaulting protection and leak detection).
+    var relation_iter = self.scheme_relation_reachable_vars.keyIterator();
+    while (relation_iter.next()) |var_| {
+        try self.boundary_reachable_vars.put(var_.*, {});
+    }
+}
+
+/// Relate each undecided interpolation's parts this boundary generalizes to
+/// its item type, before defaulting and generalization read the pool. A
+/// receiver that defaulting decides is left to its default
+/// (`boundaryDefaultsReceiver`). Relating a part to its item type can make the
+/// part reachable, so the protection set is recollected and the pool revisited
+/// until a pass relates no new interpolation. Same-method requirements are
+/// related after defaulting (`quiesceSchemeRequirementsAtBoundary`), when every
+/// receiver defaulting decides has had each requirement discharged on its own.
+fn relateBoundaryInterpolations(self: *Self, roots: []const BoundaryRoot, env: *Env) std.mem.Allocator.Error!void {
+    const defaulting: BoundaryDefaulting = if (self.boundaryHasLiteralCandidate(env)) .gated else .none;
+    var related_interpolations: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer related_interpolations.deinit(self.gpa);
+    while (true) {
+        if (defaulting == .gated) try self.collectBoundaryReachableVars(roots);
+        if (!try self.relateUndischargedInterpolationParts(defaulting, &related_interpolations, env)) return;
+        if (defaulting == .none) return;
     }
 }
 
@@ -45873,7 +45962,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     var boundary_codecs = std.ArrayList(FinalCodecDispatchConstraint).empty;
     defer boundary_codecs.deinit(self.gpa);
 
-    try self.relateUndischargedInterpolationParts(env);
+    try self.relateBoundaryInterpolations(roots, env);
 
     try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
 
@@ -45890,16 +45979,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     const pool_vars = env.var_pool.getVarsForRank(rank);
 
     // Fast path: no open literal at this boundary, nothing to do.
-    var has_candidate = false;
-    for (pool_vars) |pool_var| {
-        const resolved = self.types.resolveVar(pool_var);
-        if (resolved.desc.content != .flex) continue;
-        if (resolved.desc.rank != rank) continue;
-        if (self.varLiteralKind(resolved.var_) == null) continue;
-        has_candidate = true;
-        break;
-    }
-    if (!has_candidate) {
+    if (!self.boundaryHasLiteralCandidate(env)) {
         // A boundary without literals still owns the instantiated relations
         // its definition created, so they settle here, in this definition's
         // context, exactly as the literal path's round zero settles them.
@@ -45911,26 +45991,9 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
         return;
     }
 
-    // The reachable closure of every def root at this boundary (recursing into
-    // `where`-constraint signatures). A recursive group generalizes as one
-    // unit, so all members' roots seed the same protection set. Recursive
-    // references need no special seeding: the binding-group recursion rule
-    // unifies them with the member's in-flight type immediately, so a literal
-    // constrained through a recursive call is already reachable from the
-    // member's root.
-    self.boundary_reachable_vars.clearRetainingCapacity();
-    for (roots) |root| {
-        try self.collectReachableVars(root.interface, &self.boundary_reachable_vars);
-    }
-    try self.addSchemeDispatchRequirementsToBoundaryReachability(roots);
-
-    // Every plain walk into the boundary set is done; fold in the
-    // receiver-excluded relation overlay for the membership-only consumers
-    // (defaulting protection and leak detection).
-    var relation_iter = self.scheme_relation_reachable_vars.keyIterator();
-    while (relation_iter.next()) |var_| {
-        try self.boundary_reachable_vars.put(var_.*, {});
-    }
+    // Capture can add scheme requirement relations, so the protection set is
+    // collected again for defaulting.
+    try self.collectBoundaryReachableVars(roots);
 
     // Default every unreachable candidate through the shared component machinery—
     // identical to `finalizeLiteralDefaults` except for the candidate universe

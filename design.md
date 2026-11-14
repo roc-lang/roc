@@ -838,15 +838,56 @@ corrupt table whose occupied cells outnumber its count, or a cell naming an
 entry that does not exist, is not detected.
 
 The stores of a checked artifact relocated beside its env, and of a pairing
-entry, load over the entry's bytes the same way. A store's list fields are
-`SafeList`s loaded borrowing the entry, so growth copies and `deinit` frees
-nothing borrowed; `SliceStoreSerde` rejects a `std.ArrayList` field at compile
-time, since one over loaded bytes would hand them to an allocator on growth or
-`deinit`. A store's plain slice fields have no growth operation; a loaded
-artifact frees only its own buffer (`serialized_backing`), never a sub-store's
-slices, which alias it. A loaded store whose build-only dedup tables are not
-stored (a checked type store's interning tables, a const store's blob index)
-takes no new entries.
+entry, load over the entry's bytes the same way. Every list field of such a
+store, and the artifact's own `direct_import_module_keys`, is a `SafeList` that
+a build owns and a load borrows from the entry, so growth copies and `deinit`
+frees nothing borrowed. `SliceStoreSerde` rejects a `std.ArrayList` field at
+compile time, since one over loaded bytes would hand them to an allocator on
+growth or `deinit`, and it rejects a raw slice field, since a slice cannot
+record whether it borrows. A built and a loaded artifact are therefore
+released by the same `deinit`: every sub-store's `deinit` runs, and a loaded
+artifact then releases its buffer (`serialized_backing`) last, after every list
+that borrowed it.
+
+Every dedup table a checked artifact's stores intern through is stored with
+them: the checked type store's structural-root interner (synthesized roots
+whose payloads carry no identity variable) and its scheme index (schemes by
+root and domain), the const store's blob index (blobs by bytes), and the
+canonical name store's proc-base index, beside the name store's interners,
+which keep their own tables. Each of the four is one `HashedProbeTable`
+(`collections/hashed_probe_table.zig`), the same code for building and for a
+loaded store: an open-addressed table in a `SafeList` of cells, each naming
+an entry and recording its 32-bit hash, at most half full, with a power-of-two
+length. Every hash is computed from fixed-width fields (a type payload hashes
+exactly the fields its structural comparison reads), so it is the same on
+every host, and placement depends only on the entries and their insertion
+order, so equal stores hold byte-identical tables. Growing rehashes from the
+recorded hashes alone. A loaded store therefore returns the same id for an
+existing entry as the store it was written from and deduplicates new entries
+against loaded ones; nothing marks a store as loaded and no store refuses
+additions. A table's shape is validated when the artifact or pairing body is
+loaded, together with every list's bounds (`validateLayout`, constant time):
+its length is a power of two or zero, it holds at most half as many entries as
+cells, and it holds no more entries than its column (the blob and proc-base
+indexes exactly as many). A violation is a miss.
+
+Reopening a finalized artifact for evaluation (`reopenForEvaluation`) copies
+nothing. Its evaluation columns and name store keep the storage they have;
+evaluation writes them in place and a borrowed list copies on its first
+growth, into the artifact's owning allocator, so `deinit` frees exactly the
+copies. This writes through a loaded artifact's bytes, which is sound because
+an artifact that can be reopened owns them: a checked-cache artifact borrows
+its environment's private copy-on-write mapping (or heap buffer), which no
+other artifact reads; a pairing with compile-time requests owns its evaluation
+columns (arena copies, or its arena's copy of the pairing entry), and a pairing
+without them has nothing to evaluate and is never reopened; a published
+artifact owns its lists. A platform is retired from its module once it is
+paired, so nothing reopens a platform a pairing reads. The one artifact whose
+bytes several compilations share is the embedded Builtin view below; it is
+baked with every root evaluated under both strategies, so it never has an
+unevaluated request, and `reopenForEvaluation` asserts that it is not the
+artifact being reopened (`assertExtensible`). That assertion is the single
+point where extension of a shared artifact would begin.
 
 A LirImage view loads the same way. Every list of its LIR store (a
 `GuardedList`, whose backing is a `SafeList`) and every plain column of its
@@ -2596,8 +2637,9 @@ requests, evaluation resumes on that module: its evaluation output (the
 compile-time roots, the constant templates, the constant store, and the
 `CheckedModule` name store, since a stored type names its labels and nominal types
 there and a value evaluated here can reach names the module's own source never
-mentions, such as the capture types of an imported closure) moves into storage
-the module owns, every unevaluated root returns to `pending`, and the module
+mentions, such as the capture types of an imported closure) grows where it
+was loaded, interning against its stored dedup tables ("Loading environments
+in place"), every unevaluated root returns to `pending`, and the module
 joins finalization with the compilation's other modules. Finalization
 requests only the pending roots of the modules it finalizes, so the reopened
 module's evaluated roots are restored from its store like any other module's,
@@ -5996,6 +6038,17 @@ classification, root requests, exhaustiveness policy) are per-pairing
 on-demand analyses. Bodies, templates, names and roots are never rewritten:
 both lowering strategies read the platform's own CIR, templates and roots, and
 only the types they read through the pairing differ.
+
+A pairing's type store borrows the platform's columns and copies a column
+before its first write. It interns its new types and schemes against the
+platform's stored tables without writing them: it probes a read-only view of
+each platform table first and its own table second, and enters new roots and
+schemes only in its own (`CheckedTypeStore.inherited_tables`). An image or
+scheme equal to one the platform already holds is therefore that platform
+entry, under a cold platform and a loaded one alike, and any number of apps
+pair with one platform while its bytes stay unchanged. A pairing entry stores
+only the pairing's own tables; installing one gives its store the platform's
+views again.
 
 Calls to requirement declarations receive their direct-call classification
 from the bound app procedure kind using the checked output rule;
@@ -11733,7 +11786,10 @@ is produced even when only patterns name it here:
   static-dispatch constraints of type variables, since a `where` method's
   result is reachable only through its constraint's function type. The walk
   runs at judgment time, not when the lambda finishes, because later relations
-  can split a parameter row's tags into new row parts.
+  can split a parameter row's tags into new row parts. A lambda written as a
+  call argument is the exception: only that call's callee calls it, so its
+  parameters are not recorded and their rows are judged by what the call
+  relates them to.
 - A derived parser builds its shape's values from its input, so every type
   reachable from a parser derivation's shape counts as produced.
 - A rejected expression (`Check.erroneous_value_exprs`) already owns an error
@@ -11776,8 +11832,12 @@ mistaken one. A module with no recorded patterns does no work, and the walk
 runs only when some pattern's tag is still marked.
 
 The rule is intentionally conservative about parameters: a value mixed with a
-parameter, or an inline callback over a known list (`xs.map(|v| match v {
-C => .. })`), shares the parameter's row and is not reported. A top-level
+parameter shares the parameter's row and is not reported. A callback written
+as a call argument is judged by its call: over a known list
+(`[A, B].map(|v| match v { C => .. })`) the `C` pattern is reported, and over
+a value that came from an enclosing lambda's parameter it is not, because the
+enclosing lambda's body holds the match and so its parameters are recorded. A
+top-level
 constant is judged like any other value: `mode = Debug` matched against
 `Release` is reported, and the annotation `mode : [Debug, Release]` (whose
 tags are unmarked) is how an author says `Release` is intended.
@@ -12732,6 +12792,20 @@ generalized interpolation's scheme relates its parts to the item type
 `a -> b where [b.from_interpolation : List(Str) -> Try(Iter(a) -> b, [InvalidInterpolation(Str)])]`),
 so a body compiled once for every instantiation builds its items from its parts
 without consulting any use.
+
+An interpolation whose target this boundary's literal defaulting decides is not
+related there: a receiver of the boundary's rank that no root's interface
+reaches (`boundary_reachable_vars`) defaults, and each of its interpolations is
+then discharged against the default on its own, exactly as when the target was
+decided before the boundary. Relating parts there would let one value retype
+another, and relating the receiver's interpolations into one requirement
+would leave all but one interpolation's parts unchecked. Relating a part can
+make it reachable, so the boundary recollects the reachable set and revisits
+its pool until no interpolation is newly related (`relateBoundaryInterpolations`).
+In `var $o = ""` followed by `$o = "${Ok(n)}"` and `$o = "${n.to_str()}"`, with
+`$o` never escaping, only `Ok(n)` is rejected. Pinned by
+test/snapshots/static_dispatch/interpolation_defaulted_local_parts_unrelated.md
+and test/snapshots/static_dispatch/interpolation_defaulted_local_sites_unrelated.md.
 
 Instantiating a generalized interpolation copies its constraint and its parts'
 types, so a part rejected by an instantiated copy is rejected by that use's
@@ -19727,7 +19801,9 @@ receiver it settles, such as an unannotated `weak = "a,b,c"` inside the
 definition, is not a type variable at all: each requirement on it is
 discharged against its default type on its own, exactly as when it is
 annotated (`Str`), so an annotation never changes whether two uses of a
-method agree. A receiver's requirements are every live relation on it the
+method agree. Two interpolations assigned to one local that defaults to `Str`
+are therefore each discharged against `Str` on its own ("Builtin Str
+Interpolation Part Compatibility"). A receiver's requirements are every live relation on it the
 boundary's definitions own, not only those attached to its descriptor: a
 nested definition that calls the method on the receiver holds that
 requirement in its own scheme (Pending Dispatch Requirements In Type
@@ -24491,6 +24567,39 @@ Only optimized builds (`--opt=speed` and `--opt=size`) run the analysis
 (`thread_confined_rc`). Dev builds, compile-time evaluation, and the
 interpreter emit atomic count updates for every allocation and record no
 host-visibility results.
+
+### Releasing The Last Reference
+
+A release decides that its allocation is dying from the result of its own
+decrement and from nothing else: the builtins' release primitive
+(`releaseRcPtr`, `releaseDataPtr`, `RocList.releaseAllocation`) decrements
+and reports whether that decrement took the count to zero. The release that
+did owns the allocation exclusively; it releases what the allocation holds (a
+list's items, a box's payload, an erased callable's capture) and then
+frees it. No release path reads the count first to ask whether it is unique.
+For an allocation shared across threads that question has no stable answer:
+two threads holding the last two references would both read 2, both skip the
+teardown, and one of them would then free the allocation with its contents
+still alive.
+
+The atomic decrement uses acquire-release ordering. Release ordering places
+every access a thread made through its reference before the teardown done by
+whichever thread releases last, and acquire ordering is what lets that last
+thread rely on it. Single-thread releases use plain loads and stores and
+follow the same decrement-then-decide shape, so the compiled helpers, the
+interpreter, and the dynamic-value walker share one definition.
+
+A uniqueness check that gates an in-place update reads the count with a
+relaxed atomic load, in the builtins (`loadRefcountForUniqueness`) and in the
+checks backends emit inline. Another thread holding a reference may be
+decrementing the count during the read. A result of one means no other
+thread holds a reference, and the release ordering of that thread's
+decrement has already placed its accesses before the update.
+
+The concurrent-release tests in `src/builtins/atomic_rc_test.zig` run in the
+builtins module tests and, under ThreadSanitizer, in
+`zig build run-test-builtins-tsan`, which checks the orderings against the
+memory model rather than against the host CPU.
 
 ### Uniqueness Inference
 

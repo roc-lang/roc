@@ -1238,48 +1238,30 @@ pub const ConstStore = struct {
     blob_backing: collections.SafeList(u8),
     /// `ConstBlobDataId` -> range into `blob_backing`.
     blob_views: collections.SafeList(ConstRange),
-    /// Build-only content index over the blobs' backing int ids. Entries hash
-    /// and compare by their bytes in `blob_backing`, read afresh on every
-    /// lookup, so the backing may move while the store is being built.
-    blob_index: std.HashMapUnmanaged(u32, void, BlobIndexContext, std.hash_map.default_max_load_percentage) = .empty,
-    /// True for a store reconstructed from a serialized buffer. Its
-    /// `blob_index` is not stored, so such a store takes no new blob data.
-    serialized: bool = false,
+    /// Content index over the blobs, by their bytes: every blob is entered
+    /// once, so equal bytes name one blob. Stored with the store, so a
+    /// loaded store deduplicates new blobs against the ones it loaded.
+    blob_index: collections.HashedProbeTable = .{},
 
-    pub const serde_transient_fields = .{"blob_index"};
-
-    /// Hashes an indexed blob by its bytes. Indexed blobs have distinct
-    /// bytes, so two entries are equal exactly when their ids are.
-    const BlobIndexContext = struct {
-        store: *const ConstStore,
-
-        pub fn hash(self: BlobIndexContext, id: u32) u64 {
-            return std.hash.Wyhash.hash(0, self.store.blobData(@fromBackingInt(id)));
-        }
-
-        pub fn eql(_: BlobIndexContext, a: u32, b: u32) bool {
-            return a == b;
-        }
-    };
-
-    /// Looks indexed blobs up by candidate bytes.
+    /// Compares a candidate's bytes with an indexed blob's.
     const BlobBytesContext = struct {
         store: *const ConstStore,
+        bytes: []const u8,
 
-        pub fn hash(_: BlobBytesContext, bytes: []const u8) u64 {
-            return std.hash.Wyhash.hash(0, bytes);
-        }
-
-        pub fn eql(self: BlobBytesContext, bytes: []const u8, id: u32) bool {
+        pub fn eql(self: BlobBytesContext, entry: u32) bool {
             // Local byte compare: `std.mem.eql` is banned in src/check.
-            const stored = self.store.blobData(@fromBackingInt(id));
-            if (stored.len != bytes.len) return false;
-            for (stored, bytes) |x, y| {
+            const stored = self.store.blobData(@fromBackingInt(entry));
+            if (stored.len != self.bytes.len) return false;
+            for (stored, self.bytes) |x, y| {
                 if (x != y) return false;
             }
             return true;
         }
     };
+
+    fn blobHash(bytes: []const u8) u32 {
+        return @truncate(std.hash.Wyhash.hash(0, bytes));
+    }
 
     pub fn init(allocator: Allocator) ConstStore {
         return .{
@@ -1511,7 +1493,6 @@ pub const ConstStore = struct {
     /// as `addBlobData` interns a copy of it; nothing else may touch the blob
     /// table in between.
     pub fn reserveBlobData(self: *ConstStore, len: usize) Allocator.Error![]u8 {
-        if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
         const start: usize = self.blob_backing.length;
         try self.blob_backing.resize(self.allocator, start + len);
         return self.blob_backing.items()[start..];
@@ -1523,17 +1504,11 @@ pub const ConstStore = struct {
         const start = self.blob_backing.items().len - len;
         errdefer self.blob_backing.shrinkRetainingCapacity(start);
         const bytes = self.blob_backing.items()[start..];
-        const entry = try self.blob_index.getOrPutContextAdapted(
-            self.allocator,
-            bytes,
-            BlobBytesContext{ .store = self },
-            BlobIndexContext{ .store = self },
-        );
-        if (entry.found_existing) {
+        const hash = blobHash(bytes);
+        if (self.blob_index.find(hash, BlobBytesContext{ .store = self, .bytes = bytes })) |existing| {
             self.blob_backing.shrinkRetainingCapacity(start);
-            return @fromBackingInt(entry.key_ptr.*);
+            return @fromBackingInt(existing);
         }
-        errdefer self.blob_index.removeByPtr(entry.key_ptr);
 
         const raw_id = std.math.cast(u32, self.blob_views.items().len) orelse return error.OutOfMemory;
         // An empty blob owns no backing, as `artifact_serialize.appendSpan`
@@ -1543,27 +1518,22 @@ pub const ConstStore = struct {
             .len = std.math.cast(u32, len) orelse return error.OutOfMemory,
         };
         _ = try self.blob_views.append(self.allocator, view);
-        entry.key_ptr.* = raw_id;
+        errdefer _ = self.blob_views.pop();
+        try self.blob_index.insertNew(self.allocator, hash, raw_id);
         return @fromBackingInt(raw_id);
     }
 
     pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
-        if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
-        const entry = try self.blob_index.getOrPutContextAdapted(
-            self.allocator,
-            bytes,
-            BlobBytesContext{ .store = self },
-            BlobIndexContext{ .store = self },
-        );
-        if (entry.found_existing) return @fromBackingInt(entry.key_ptr.*);
-        errdefer self.blob_index.removeByPtr(entry.key_ptr);
+        const hash = blobHash(bytes);
+        if (self.blob_index.find(hash, BlobBytesContext{ .store = self, .bytes = bytes })) |existing| return @fromBackingInt(existing);
 
         const raw_id = std.math.cast(u32, self.blob_views.items().len) orelse return error.OutOfMemory;
         const backing_len = self.blob_backing.items().len;
         const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
         errdefer self.blob_backing.shrinkRetainingCapacity(backing_len);
         _ = try self.blob_views.append(self.allocator, view);
-        entry.key_ptr.* = raw_id;
+        errdefer _ = self.blob_views.pop();
+        try self.blob_index.insertNew(self.allocator, hash, raw_id);
         return @fromBackingInt(raw_id);
     }
 
@@ -1642,10 +1612,18 @@ pub const ConstStore = struct {
         evidence_frame_pool: artifact_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
         blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
+        blob_index: collections.HashedProbeTable.Serialized = .{},
 
         comptime {
-            // 11 value/function side lists + 7 nested type-store lists.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
+            // 11 value/function side lists + 7 nested type-store lists + the
+            // blob index's cells.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 19);
+        }
+
+        /// Every blob is indexed, so the index holds exactly as many entries
+        /// as there are blobs. Constant time.
+        pub fn validateShape(self: *const Serialized) error{CorruptArtifact}!void {
+            if (self.blob_index.len != self.blob_views.len) return error.CorruptArtifact;
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -1864,8 +1842,7 @@ pub const ConstStore = struct {
 
     pub fn deinit(self: *ConstStore) void {
         self.type_store.deinit();
-        self.blob_index.deinit(self.allocator);
-        // A loaded store's pools borrow the relocated buffer, and a borrowed
+        // A loaded store's pools and blob index borrow the relocated buffer, and a borrowed
         // list frees nothing.
         self.values.deinit(self.allocator);
         self.fns.deinit(self.allocator);
@@ -1878,6 +1855,7 @@ pub const ConstStore = struct {
         self.evidence_frame_pool.deinit(self.allocator);
         self.blob_backing.deinit(self.allocator);
         self.blob_views.deinit(self.allocator);
+        self.blob_index.deinit(self.allocator);
         self.* = ConstStore.init(self.allocator);
     }
 
@@ -2276,6 +2254,42 @@ test "ConstStore: exact function capture back-edge survives serialization" {
     try std.testing.expectEqual(fn_id, loaded_fn_id);
     try std.testing.expectEqual(fn_node, loaded.getFn(loaded_fn_id).captures[0].value);
     try loaded.verifyComplete();
+}
+
+test "a loaded ConstStore keeps its blob ids and deduplicates new blobs against them" {
+    const CompactWriter = collections.CompactWriter;
+    const gpa = std.testing.allocator;
+    var store = ConstStore.init(gpa);
+    defer store.deinit();
+    const hello = try store.addBlobData("hello");
+    const world = try store.addBlobData("world");
+    try std.testing.expectEqual(hello, try store.addBlobData("hello"));
+
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var writer = CompactWriter.init();
+    const header = try writer.appendAlloc(arena.allocator(), ConstStore.Serialized);
+    try header.serialize(&store, arena.allocator(), &writer);
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const serialized: *ConstStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try collections.validateSerializedRelocations(ConstStore.Serialized, serialized, buffer.len);
+
+    var loaded = serialized.deserialize(@intFromPtr(buffer.ptr), gpa);
+    defer loaded.deinit();
+    try std.testing.expectEqual(hello, try loaded.addBlobData("hello"));
+    try std.testing.expectEqual(world, try loaded.addBlobData("world"));
+    const fresh = try loaded.addBlobData("fresh");
+    try std.testing.expectEqual(fresh, try loaded.addBlobData("fresh"));
+    const reserved = try loaded.reserveBlobData(5);
+    @memcpy(reserved, "world");
+    try std.testing.expectEqual(world, try loaded.commitBlobData(5));
+    try std.testing.expectEqualStrings("fresh", loaded.blobData(fresh));
+    try std.testing.expectEqual(@as(usize, 3), loaded.blob_views.items().len);
+
+    serialized.blob_index.len -= 1;
+    try std.testing.expectError(error.CorruptArtifact, collections.validateSerializedRelocations(ConstStore.Serialized, serialized, buffer.len));
 }
 
 test "ConstStore.appendFn: no leak or double-free under allocation failure" {
