@@ -226,7 +226,6 @@ fn initWithImportLeaving(
         imported_envs.items,
         transitive_envs,
         &module_envs,
-        &module_env.store.regions,
         module_builtin_ctx,
     );
     checker.fixupTypeWriter();
@@ -389,7 +388,6 @@ fn initConfiguredWithDeepestRank(
         module_env,
         imported_envs.items,
         &module_envs,
-        &module_env.store.regions,
         module_builtin_ctx,
     );
     checker.fixupTypeWriter();

@@ -123,7 +123,6 @@ const MonoTestEnv = struct {
             module_env,
             imported_envs_list.items,
             &module_envs,
-            &module_env.store.regions,
             module_builtin_ctx,
         );
         checker.fixupTypeWriter();
@@ -238,7 +237,6 @@ const MonoTestEnv = struct {
             module_env,
             imported_envs_list.items,
             &module_envs,
-            &module_env.store.regions,
             module_builtin_ctx,
         );
         checker.fixupTypeWriter();
@@ -359,7 +357,6 @@ const MonoTestEnv = struct {
             module_env,
             imported_envs_list.items,
             &module_envs,
-            &module_env.store.regions,
             module_builtin_ctx,
         );
         checker.fixupTypeWriter();
@@ -702,7 +699,6 @@ test "type checker catches polymorphic recursion (infinite type)" {
         module_env,
         imported_envs_list.items,
         &module_envs,
-        &module_env.store.regions,
         module_builtin_ctx,
     );
     checker.fixupTypeWriter();

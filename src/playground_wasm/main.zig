@@ -1427,7 +1427,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         try can.resolveDeferredImports(type_can_ir, .{ .imports = .{ .resolved_store = imported_envs } });
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        result.solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, &type_can_ir.store.regions, module_builtin_ctx);
+        result.solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, module_builtin_ctx);
         var solver = &result.solver.?;
         solver.fixupTypeWriter();
 

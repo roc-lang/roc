@@ -944,7 +944,7 @@ fn initSnapshotChecker(
     try can.resolveDeferredImports(env, .{
         .imports = .{ .resolved_store = imported_envs },
     });
-    return Check.init(allocator, &env.types, env, imported_envs, module_envs, &env.store.regions, .{
+    return Check.init(allocator, &env.types, env, imported_envs, module_envs, .{
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
         .str_stmt = config.builtin_indices.str_type,

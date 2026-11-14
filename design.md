@@ -4821,7 +4821,14 @@ every problem with the store's strings, the count of checking's, the snapshots
 checking's problems render with (copied out of the checker before it is
 released), and the checker's import display names. Each problem carries the
 source regions its report highlights, recorded where the problem is created;
-a report reads no other region than those and the module's CIR node regions. The snapshots keep
+a report reads no other region than those and the module's CIR node regions.
+While it checks, the checker has the region each type variable reports
+problems at without storing one per variable (`VarRegions`): a variable that
+is a CIR node has its node's region; every later variable is given its region
+once, when it is created, so consecutive variables sharing a region are one
+run; and a variable an instantiation copied from a same-module definition
+records the variable it was copied from and has that variable's region. A
+variable an instantiation maps to without creating it keeps its own. The snapshots keep
 their frozen captures and node formats beside the text the miss rendered, so a
 snapshot whose text was never rendered renders on demand with the module's
 names, the stored import display names and the module's default sources, the

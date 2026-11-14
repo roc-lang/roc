@@ -353,8 +353,9 @@ pub const Options = struct {
     /// What a relation does when a row repeats a label whose occurrences do
     /// not relate.
     repeated_label_rows: RepeatedLabelRows = .mismatch,
-    /// The region of the actual operand, which a reported mismatch records.
-    /// A relation that may report its mismatch must set it.
+    /// The region of the actual operand, which a reported mismatch records,
+    /// when the caller has it at hand. A caller that leaves it unset gives
+    /// the mismatch its region once one is reported.
     actual_region: ?base.Region = null,
 };
 
@@ -454,7 +455,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
                 .actual_var = b,
                 .actual_snapshot = actual_snapshot,
             },
-            .actual_region = opts.actual_region.?,
+            .actual_region = opts.actual_region orelse base.Region.zero(),
             .context = opts.context,
             .evidence = evidence,
             .leaf = leaf,

@@ -92,6 +92,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("typed_cir.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));
     std.testing.refAllDecls(@import("unify.zig"));
+    std.testing.refAllDecls(@import("var_regions.zig"));
     std.testing.refAllDecls(@import("snapshot/diff.zig"));
 
     std.testing.refAllDecls(@import("test/cross_module_test.zig"));

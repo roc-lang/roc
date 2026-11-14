@@ -20,6 +20,7 @@ const canonical_type_keys = @import("canonical_type_keys.zig");
 const copy_import = @import("copy_import.zig");
 const requirement_solution = @import("requirement_solution.zig");
 const unifier = @import("unify.zig");
+const VarRegions = @import("var_regions.zig");
 const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
 const snapshot_mod = @import("snapshot.zig");
@@ -126,8 +127,8 @@ gpa: std.mem.Allocator,
 types: *types_mod.Store,
 /// This module's env
 cir: *ModuleEnv,
-/// A list of regions. Owned copy, cloned from NodeStore at init time.
-regions: Region.List,
+/// The source region each type variable reports problems at.
+var_regions: VarRegions,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
 /// Module envs whose public APIs are semantically visible through imported checked data.
@@ -1703,6 +1704,9 @@ commit_probe_active: bool = false,
 /// destructive side-table transition and is forbidden while any probe can
 /// still roll the type store back.
 probe_depth: u32 = 0,
+/// Scratch for the variables one batch of copies gives a region
+/// (`setSortedVarsRegion`).
+scratch_region_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Scratch for the values of a recursive group entering its generalization
 /// scope (`pushGeneralizationScope`).
 scratch_group_values: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
@@ -1717,7 +1721,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .gpa = .input,
     .types = .input,
     .cir = .input,
-    .regions = .input,
+    .var_regions = .keyed,
     .imported_modules = .input,
     .owner_modules = .input,
     .owner_envs_by_identity = .keyed,
@@ -2171,6 +2175,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .probe_var_pool_lens = .scratch,
     .commit_probe_active = .lexical,
     .probe_depth = .lexical,
+    .scratch_region_vars = .scratch,
     .scratch_group_values = .scratch,
     .generalization_nesting_limit_region = .keyed,
 });
@@ -4558,7 +4563,6 @@ pub fn init(
     cir: *const ModuleEnv,
     imported_modules: []const *const ModuleEnv,
     auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
-    regions: *const Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
@@ -4570,7 +4574,6 @@ pub fn init(
         imported_modules,
         imported_modules,
         auto_imported_types,
-        regions,
         builtin_ctx,
     );
 }
@@ -4584,7 +4587,6 @@ pub fn initWithOwnerModules(
     imported_modules: []const *const ModuleEnv,
     owner_modules: []const *const ModuleEnv,
     auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
-    regions: *const Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
@@ -4596,7 +4598,6 @@ pub fn initWithOwnerModules(
         imported_modules,
         owner_modules,
         auto_imported_types,
-        regions,
         builtin_ctx,
     );
 }
@@ -4650,7 +4651,6 @@ fn initAssumePrepared(
     imported_modules: []const *const ModuleEnv,
     owner_modules: []const *const ModuleEnv,
     auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
-    regions: *const Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     // Finalize this module's deep content identity before any unification: the
@@ -4801,11 +4801,7 @@ fn initAssumePrepared(
         .owner_envs_by_identity = owner_envs_by_identity,
         .builtin_origin_identity = builtin_origin_identity,
         .auto_imported_types = auto_imported_types,
-        .regions = blk: {
-            var owned = Region.List{};
-            _ = try owned.appendSlice(gpa, regions.items());
-            break :blk owned;
-        },
+        .var_regions = VarRegions.init(@intCast(cir.store.regions.len())),
         .builtin_ctx = builtin_ctx,
         .snapshots = try SnapshotStore.initCapacity(gpa, 512),
         .problems = try ProblemStore.initCapacity(gpa, 64),
@@ -8309,23 +8305,24 @@ fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {
     }
     return false;
 }
-/// In debug builds, verifies that region and type arrays have matching lengths.
+/// In debug builds, verifies that no variable has a region the type store
+/// does not hold.
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .debug) {
-        const region_nodes = self.regions.len();
+        const covered = self.var_regions.covered;
         const type_nodes = self.types.len();
-        if (!(region_nodes == type_nodes)) {
+        if (covered > type_nodes) {
             base.invariant(
-                "Arrays out of sync:\n type_nodes={}\n  region_nodes={}\n ",
-                .{ type_nodes, region_nodes },
+                "Regions cover variables the type store does not hold:\n type_nodes={}\n  covered={}\n ",
+                .{ type_nodes, covered },
             );
         }
     }
 }
 
-/// Fills the type store with fresh variables up to the number of regions
+/// Fills the type store with fresh variables up to the number of CIR nodes
 inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
-    const region_nodes: usize = @intCast(self.regions.len());
+    const region_nodes: usize = @intCast(self.cir.store.regions.len());
     const type_nodes: usize = @intCast(self.types.len());
     if (type_nodes >= region_nodes) return;
     try self.types.ensureTotalCapacity(region_nodes);
@@ -8548,7 +8545,6 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     // needs the same owner the absorption will later be attributed to.
     var unify_opts = opts;
     unify_opts.record_construction_var = construction_var;
-    unify_opts.actual_region = self.getRegionAt(b);
     // A row repeating a label whose occurrences do not relate conflicts on
     // its own, whatever it is related to: normalizing it reports that
     // conflict once (design.md "Row Union Normalization"), and the operands
@@ -8566,6 +8562,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     switch (result) {
         .problem => |problem_idx| {
             const mismatch = &self.problems.problems.items[@backingInt(problem_idx)].type_mismatch;
+            mismatch.actual_region = self.getRegionAt(b);
             mismatch.context = self.mismatchContext(mismatch.context, b);
             const roots = self.unify_scratch.rejected_roots orelse
                 base.invariant("type checker invariant violated: a reported mismatch did not record its root operands", .{});
@@ -8613,15 +8610,17 @@ fn adoptUnifyScratch(self: *Self, env: *Env, actual: Var, owner: DeferredDispatc
     // A more precise solution would track the origin of each fresh variable during
     // unification and propagate that back, but the current approach is sufficient for
     // typical error reporting scenarios.
-    const region = self.getRegionAt(actual);
-    for (self.unify_scratch.fresh_vars.items()) |fresh_var| {
-        // Set the rank
-        const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
-        try env.var_pool.addVarToRank(fresh_var, fresh_rank);
+    const fresh_vars = self.unify_scratch.fresh_vars.items();
+    if (fresh_vars.len != 0) {
+        const region = self.getRegionAt(actual);
+        for (fresh_vars) |fresh_var| {
+            // Set the rank
+            const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
+            try env.var_pool.addVarToRank(fresh_var, fresh_rank);
 
-        // Set the region
-        try self.fillInRegionsThrough(fresh_var);
-        self.setRegionAt(fresh_var, region);
+            // Set the region
+            try self.setVarRegion(fresh_var, region);
+        }
     }
 
     // Copy any constraints created during unification into our own array. A
@@ -11719,11 +11718,7 @@ fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, regi
     instantiator.current_polarity = .pos;
     self.var_map.clearRetainingCapacity();
     const use_var = try instantiator.instantiateVar(signature_var);
-    var copied_iter = instantiator.var_map.valueIterator();
-    while (copied_iter.next()) |copied| {
-        try self.fillInRegionsThrough(copied.*);
-        self.setRegionAt(copied.*, region);
-    }
+    try self.setCopiedVarsRegion(instantiator.var_map, region);
     return use_var;
 }
 
@@ -12712,6 +12707,10 @@ fn instantiateVarHelpFromScheme(
         try instantiator.var_map.put(context.var_, context.var_);
     }
 
+    // Every variable the instantiation creates from here on is one of its
+    // copies.
+    const first_copy: u32 = @intCast(self.types.len());
+
     // Then, instantiate the variable with the provided context
     const instantiated_var = if (force_type_scheme_root) scheme: {
         // A scheme none of whose monomorphic nodes reaches a generalized
@@ -12776,9 +12775,8 @@ fn instantiateVarHelpFromScheme(
         }
     }
 
-    // If we had to insert any new type variables, ensure that we have
-    // corresponding regions for them. This is essential for error reporting.
-    const root_instantiated_region = self.regions.get(@fromBackingInt(@intCast(@backingInt(var_to_instantiate)))).*;
+    // Give the copies their regions, which error reporting reads.
+    const copy_origins = try self.setInstantiatedCopyRegions(first_copy, region_behavior, var_to_instantiate);
     self.scratch_evidence_pairs.clearRetainingCapacity();
     const var_context: InstantiatedVarContext = .{
         .records_scheme_use = evidence.recordsSchemeUse(),
@@ -12786,8 +12784,7 @@ fn instantiateVarHelpFromScheme(
         .registers_use = registers_use,
         .instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
         .group_index = self.currentGroupIndex(),
-        .region_behavior = region_behavior,
-        .root_region = root_instantiated_region,
+        .copy_origins = copy_origins,
         .deferred = if (self.scratch_deferred_callables.items.len != 0) &self.scratch_deferred_placeholders else null,
     };
     if (instantiator.var_map.count() > 0) {
@@ -12804,12 +12801,7 @@ fn instantiateVarHelpFromScheme(
         }
     }
     for (self.scratch_deferred_callables.items) |deferred| {
-        try self.fillInRegionsThrough(deferred.placeholder);
-        self.setRegionAt(deferred.placeholder, switch (region_behavior) {
-            .explicit => |region| region,
-            .use_root_instantiated => root_instantiated_region,
-            .use_last_var => self.regions.get(@fromBackingInt(@intCast(@backingInt(deferred.source)))).*,
-        });
+        self.var_regions.setOrigin(copy_origins, deferred.placeholder, deferred.source);
     }
 
     var deferred_saved = false;
@@ -12837,7 +12829,7 @@ fn instantiateVarHelpFromScheme(
                         .env = env,
                         .rank = instantiator.current_rank,
                         .region_behavior = region_behavior,
-                        .root_region = root_instantiated_region,
+                        .root_region = self.getRegionAt(var_to_instantiate),
                         .instantiation_expr = .of(var_context.instantiation_expr),
                         .group_index = .of(var_context.group_index),
                         .active_scheme_root = .of(self.active_scheme_root),
@@ -12937,8 +12929,9 @@ const InstantiatedVarContext = struct {
     registers_use: bool,
     instantiation_expr: ?CIR.Expr.Idx,
     group_index: ?u32,
-    region_behavior: InstantiateRegionBehavior,
-    root_region: Region,
+    /// The instantiation's copies whose region is that of the variable each
+    /// was copied from, when its copies take their regions that way.
+    copy_origins: VarRegions.Copies,
     /// The placeholders of the callables the instantiation deferred, by
     /// callable.
     deferred: ?*const collections.DenseMap(Var, Var),
@@ -13094,21 +13087,26 @@ inline fn registerInstantiatedVar(
     // Add to pool
     try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
 
-    // Set the region
-    try self.fillInRegionsThrough(fresh_var);
-    switch (ctx.region_behavior) {
-        .explicit => |region| {
-            self.setRegionAt(fresh_var, region);
-        },
-        .use_root_instantiated => {
-            self.setRegionAt(fresh_var, ctx.root_region);
-        },
-        .use_last_var => {
-            const old_var = old;
-            const old_region = self.regions.get(@fromBackingInt(@intCast(@backingInt(old_var)))).*;
-            self.setRegionAt(fresh_var, old_region);
-        },
+    self.var_regions.setOrigin(ctx.copy_origins, fresh_var, old);
+}
+
+/// Give the variables an instantiation created, those from `first_copy` on,
+/// their regions: one region for all of them, or each the region of the
+/// variable it was copied from, which the returned copies record as
+/// `VarRegions.setOrigin` names each origin.
+fn setInstantiatedCopyRegions(
+    self: *Self,
+    first_copy: u32,
+    region_behavior: InstantiateRegionBehavior,
+    instantiated: Var,
+) Allocator.Error!VarRegions.Copies {
+    const end: u32 = @intCast(self.types.len());
+    switch (region_behavior) {
+        .explicit => |region| try self.var_regions.setRange(self.gpa, first_copy, end, region),
+        .use_root_instantiated => try self.var_regions.setRange(self.gpa, first_copy, end, self.getRegionAt(instantiated)),
+        .use_last_var => return self.var_regions.addCopies(self.gpa, first_copy, end),
     }
+    return .none;
 }
 
 /// Schedule the original relations of a local scheme before its use copies.
@@ -13187,27 +13185,50 @@ fn recordRecursiveReference(self: *Self, node_idx: u32, scheme_root: Var) std.me
 
 // regions //
 
-/// Fill slots in the regions array up to and including the target var
-fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
-    const idx = @backingInt(target_var);
+/// Give a variable just created its region. Variables get their regions in
+/// the order they are created (`VarRegions`).
+fn setVarRegion(self: *Self, target_var: Var, new_region: Region) Allocator.Error!void {
+    try self.var_regions.set(self.gpa, target_var, new_region);
+}
 
-    const len = self.regions.len();
-    if (idx >= len) {
-        // Use Check's allocator since regions is owned by Check
-        const missing: usize = @intCast(@as(u64, idx) + 1 - len);
-        try self.regions.ensureUnusedCapacity(self.gpa, missing);
-        self.regions.appendNTimesAssumeCapacity(Region.zero(), missing);
+/// Give each of the variables `copies` maps to that has no region yet the
+/// region `region`, oldest first. A variable an instantiation mapped to
+/// without creating it has its region already.
+fn setCopiedVarsRegion(self: *Self, copies: *collections.DenseMap(Var, Var), region: Region) Allocator.Error!void {
+    const vars = &self.scratch_region_vars;
+    vars.clearRetainingCapacity();
+    var copied = copies.valueIterator();
+    while (copied.next()) |copy| {
+        if (!self.var_regions.isCovered(copy.*)) try vars.append(self.gpa, copy.*);
+    }
+    try self.setSortedVarsRegion(region);
+}
+
+/// Give the variables in `scratch_region_vars`, none of which has a region,
+/// the region `region`, oldest first.
+fn setSortedVarsRegion(self: *Self, region: Region) Allocator.Error!void {
+    const vars = self.scratch_region_vars.items;
+    std.sort.pdq(Var, vars, {}, struct {
+        fn older(_: void, a: Var, b: Var) bool {
+            return @backingInt(a) < @backingInt(b);
+        }
+    }.older);
+    for (vars) |var_| {
+        // Two sources can share one copy.
+        if (self.var_regions.isCovered(var_)) continue;
+        try self.var_regions.set(self.gpa, var_, region);
     }
 }
 
-/// Set the region for a var
-fn setRegionAt(self: *Self, target_var: Var, new_region: Region) void {
-    self.regions.set(@fromBackingInt(@intCast(@backingInt(target_var))), new_region);
+/// Give every variable created since the type store held `first_new_var`
+/// variables the region `region`.
+fn setNewVarsRegion(self: *Self, first_new_var: usize, region: Region) Allocator.Error!void {
+    try self.var_regions.setRange(self.gpa, @intCast(first_new_var), @intCast(self.types.len()), region);
 }
 
 /// Get the region for a var
-fn getRegionAt(self: *Self, target_var: Var) Region {
-    return self.regions.get(@fromBackingInt(@intCast(@backingInt(target_var)))).*;
+fn getRegionAt(self: *const Self, target_var: Var) Region {
+    return self.var_regions.get(target_var, self.cir.store.regions.items());
 }
 
 // fresh vars //
@@ -13231,8 +13252,7 @@ fn freshFromContentAtRank(
     rank: Rank,
 ) Allocator.Error!Var {
     const var_ = try self.types.freshFromContentWithRank(content, rank);
-    try self.fillInRegionsThrough(var_);
-    self.setRegionAt(var_, new_region);
+    try self.setVarRegion(var_, new_region);
     try env.var_pool.addVarToRank(var_, rank);
     return var_;
 }
@@ -13284,8 +13304,7 @@ fn freshBuiltinTypeInstance(self: *Self, builtin_type: Var, env: *Env, new_regio
     );
     const rank = env.rank();
     const var_ = try self.types.register(.{ .content = content, .rank = rank, .flags = flags });
-    try self.fillInRegionsThrough(var_);
-    self.setRegionAt(var_, new_region);
+    try self.setVarRegion(var_, new_region);
     try env.var_pool.addVarToRank(var_, rank);
     return var_;
 }
@@ -23704,6 +23723,7 @@ fn replayPredeclaredSchemeUse(
     instantiator.constrained_row_tail_copies = &row_tail_copies;
     const requirements_start = self.instantiated_requirements_stack.items.len;
     defer self.instantiated_requirements_stack.shrinkRetainingCapacity(requirements_start);
+    const first_copy: u32 = @intCast(self.types.len());
     if (self.typeSchemeIndexForRoot(scheme_root)) |scheme_idx| {
         try self.copySchemeDispatchRequirements(
             scheme_idx,
@@ -23712,6 +23732,8 @@ fn replayPredeclaredSchemeUse(
             &self.instantiated_requirements_stack,
         );
     }
+    // Each requirement copy has the region of the variable it copies.
+    const requirement_copies = try self.var_regions.addCopies(self.gpa, first_copy, @intCast(self.types.len()));
 
     // Register only vars created while copying the newly known requirements;
     // seeded body vars are the already-registered early-use vars. Build the
@@ -23775,8 +23797,7 @@ fn replayPredeclaredSchemeUse(
             }
         }
         try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
-        try self.fillInRegionsThrough(fresh_var);
-        self.setRegionAt(fresh_var, self.regions.get(@fromBackingInt(@intCast(@backingInt(old_var)))).*);
+        self.var_regions.setOrigin(requirement_copies, fresh_var, old_var);
     }
 
     try self.appendSchemeRequirementEvidencePairs(self.instantiated_requirements_stack.items[requirements_start..]);
@@ -30202,17 +30223,17 @@ fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
 /// Structural copies need ranks and source regions, but no dispatch,
 /// defaulting, ambiguity, or scheme-use bookkeeping.
 fn registerExpectedShapeVars(self: *Self, fresh_start: u64, env: *Env) Allocator.Error!void {
+    // Each copy has the region of the variable it copies.
+    const copies = try self.var_regions.addCopies(self.gpa, @intCast(fresh_start), @intCast(self.types.len()));
     var iterator = self.var_map.iterator();
     while (iterator.next()) |entry| {
         const fresh_var = entry.value_ptr.*;
         // A nominal opening seeds its substitution with borrowed actual args.
         // Only newly allocated cells need bookkeeping.
         if (@backingInt(fresh_var) < fresh_start) continue;
-        const source_region = self.getRegionAt(entry.key_ptr.*);
         const rank = self.types.resolveVar(fresh_var).desc.rank;
         try env.var_pool.addVarToRank(fresh_var, rank);
-        try self.fillInRegionsThrough(fresh_var);
-        self.setRegionAt(fresh_var, source_region);
+        self.var_regions.setOrigin(copies, fresh_var, entry.key_ptr.*);
     }
 }
 
@@ -30446,7 +30467,6 @@ test "tag projection copies selected slots together without copying other varian
         try store.mkTag(other, &.{unrelated}),
         try store.mkTag(selected, &.{ shared, shared }),
     }, try store.freshFromContent(.{ .structure = .empty_tag_union })));
-    try checker.fillInRegionsThrough(expected_union);
     const expected = Expected.none().withContextualType(.{ .var_ = expected_union, .context = .none });
     const before = store.len();
     const slots = (try checker.projectExpectedTagPayload(expected, selected, 2, &env)).?;
@@ -36019,7 +36039,6 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             self.known_empty_payload_vars_match.items,
             cond_constructors_known,
         );
-        try self.backfillRegionsForAnalysisVars();
         const result = result_or_err catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.TypeError => {
@@ -37360,16 +37379,6 @@ fn collectAbsentCtorPayloadBlockers(
         constructed_tags,
         out,
     );
-
-    try self.backfillRegionsForAnalysisVars();
-}
-
-/// Exhaustiveness analysis opens nominal declarations, minting analysis-only
-/// vars in the type store; keep the parallel regions array in sync with them.
-fn backfillRegionsForAnalysisVars(self: *Self) Allocator.Error!void {
-    const num_vars = self.types.len();
-    if (num_vars == 0) return;
-    try self.fillInRegionsThrough(@fromBackingInt(@intCast(num_vars - 1)));
 }
 
 fn payloadVarCanResolveToEmpty(content: Content) bool {
@@ -37515,7 +37524,6 @@ fn checkPatternExhaustiveness(
         known_empty_payload_vars,
         value_constructors_known,
     );
-    try self.backfillRegionsForAnalysisVars();
     const result = result_or_err catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.TypeError => return false,
@@ -40076,13 +40084,10 @@ fn copyVarWithSourceSubstitutions(
 /// regions for error reporting and register copied open literals on the
 /// defaulting worklist.
 fn postProcessCopiedVars(self: *Self, first_new_var: usize, region: Region) std.mem.Allocator.Error!void {
-    // If we had to insert any new type variables, ensure that we have
-    // corresponding regions for them. This is essential for error reporting.
+    // Give the new type variables their region, which error reporting reads.
+    try self.setNewVarsRegion(first_new_var, region);
     for (first_new_var..@as(usize, @intCast(self.types.len()))) |raw_var| {
         const fresh_var: Var = @fromBackingInt(@intCast(@as(u32, @intCast(raw_var))));
-        try self.fillInRegionsThrough(fresh_var);
-
-        self.setRegionAt(fresh_var, region);
 
         // Register a copied open literal on the worklist so this module's
         // defaulting passes find it without a whole-store scan—the same
@@ -40377,8 +40382,7 @@ fn selectedConstructorTemplate(
                     const args = selected orelse return null;
                     const content = try self.types.mkTagUnion(&.{.{ .name = constructor.name, .args = args }}, current);
                     const template = try self.types.freshFromContentWithRank(content, .generalized);
-                    try self.fillInRegionsThrough(template);
-                    self.setRegionAt(template, region);
+                    try self.setVarRegion(template, region);
                     return template;
                 },
                 .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
@@ -41557,7 +41561,7 @@ const Probe = struct {
     env: ?*Env,
     savepoint: types_mod.Store.Savepoint,
     deferred_constraints_len: usize,
-    regions_len: usize,
+    regions_mark: VarRegions.Mark,
     instantiation_dispatchers_len: usize,
     instantiation_dispatchers_checked: usize,
     pending_scheme_requirement_dispatchers_len: usize,
@@ -41607,7 +41611,7 @@ const Probe = struct {
             env.deferred_static_dispatch_constraints.shrinkRetainingCapacity(self.deferred_constraints_len);
             env.truncateClean(self.deferred_constraints_len);
         }
-        self.check.regions.shrinkRetainingCapacity(self.regions_len);
+        self.check.var_regions.truncate(self.regions_mark);
         // Per-instantiation dispatchers recorded during the probe reference fresh
         // receiver vars that were just rolled back with the type store.
         self.check.instantiation_dispatchers.shrinkRetainingCapacity(self.instantiation_dispatchers_len);
@@ -41715,7 +41719,7 @@ const Probe = struct {
 };
 
 fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
-    const regions_len = self.regions.items().len;
+    const regions_mark = self.var_regions.mark();
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
     const ambiguity_candidates_len = self.ambiguity_candidates.items.len;
@@ -41757,7 +41761,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
             probe_env.deferred_static_dispatch_constraints.items().len
         else
             0,
-        .regions_len = regions_len,
+        .regions_mark = regions_mark,
         .instantiation_dispatchers_len = instantiation_dispatchers_len,
         .instantiation_dispatchers_checked = self.instantiation_dispatchers_checked,
         .pending_scheme_requirement_dispatchers_len = pending_scheme_requirement_dispatchers_len,
@@ -44640,7 +44644,6 @@ test "row union normalization relates repeated labels and omits outer copies" {
             .fields = try store.appendRecordFields(&.{.{ .name = a, .presence = .required(outer_value) }}),
             .ext = inner,
         } } });
-        try checker.fillInRegionsThrough(row);
         try std.testing.expectEqual(@as(?RowLabelConflict, null), try checker.normalizeRowUnion(row, &env));
         try std.testing.expectEqual(store.resolveVar(outer_value).var_, store.resolveVar(inner_value).var_);
         try std.testing.expectEqual(store.resolveVar(inner).var_, store.resolveVar(row).var_);
@@ -44655,7 +44658,6 @@ test "row union normalization relates repeated labels and omits outer copies" {
             .{ .name = a, .args = try store.appendVars(&.{outer_payload}) },
             .{ .name = b, .args = types_mod.Var.SafeList.Range.empty() },
         }, inner));
-        try checker.fillInRegionsThrough(row);
         try std.testing.expectEqual(@as(?RowLabelConflict, null), try checker.normalizeRowUnion(row, &env));
         try std.testing.expectEqual(store.resolveVar(outer_payload).var_, store.resolveVar(inner_payload).var_);
         const outer_row = store.resolveVar(row).desc.content.structure.tag_union;
@@ -44677,7 +44679,6 @@ test "row union normalization relates repeated labels and omits outer copies" {
             .{ .name = a, .args = try store.appendVars(&.{outer_payload}) },
             .{ .name = b, .args = try store.appendVars(&.{try store.freshFromContent(.{ .structure = .empty_record })}) },
         }, inner));
-        try checker.fillInRegionsThrough(row);
         const conflict = (try checker.normalizeRowUnion(row, &env)) orelse return error.TestExpectedConflict;
         try std.testing.expect(conflict.name.eql(b));
         try std.testing.expect(store.resolveVar(outer_payload).var_ != store.resolveVar(inner_payload).var_);
@@ -44693,7 +44694,6 @@ test "row union normalization relates repeated labels and omits outer copies" {
             .name = a,
             .args = try store.appendVars(&.{try store.freshFromContent(.{ .structure = .empty_record })}),
         }}, inner));
-        try checker.fillInRegionsThrough(row);
         const conflict = (try checker.normalizeRowUnion(row, &env)) orelse return error.TestExpectedConflict;
         try std.testing.expect(conflict.name.eql(a));
     }
@@ -45421,10 +45421,10 @@ fn copyRelationToEnclosingScope(
         .registers_use = false,
         .instantiation_expr = requirement.failure_expr.get(),
         .group_index = self.currentGroupIndex(),
-        .region_behavior = .{ .explicit = region },
-        .root_region = region,
+        .copy_origins = .none,
         .deferred = null,
     };
+    try self.setCopiedVarsRegion(instantiator.var_map, region);
     var copied = instantiator.var_map.iterator();
     while (copied.next()) |entry| {
         try self.registerInstantiatedVar(entry.key_ptr.*, entry.value_ptr.*, instantiator.var_map, context, .value, env);
@@ -47539,11 +47539,7 @@ fn dischargeDeferredResultRelation(self: *Self, pending: DeferredResultRelation,
 /// `root` of `source` in the var pool when it is a copy (a root the
 /// instantiator shared is already ranked).
 fn registerInstantiatedCopies(self: *Self, instantiator: *const Instantiator, source: Var, root: Var, region: Region, env: *Env) std.mem.Allocator.Error!void {
-    var copied_iter = instantiator.var_map.valueIterator();
-    while (copied_iter.next()) |copied| {
-        try self.fillInRegionsThrough(copied.*);
-        self.setRegionAt(copied.*, region);
-    }
+    try self.setCopiedVarsRegion(instantiator.var_map, region);
     if (self.types.resolveVar(root).var_ != self.types.resolveVar(source).var_) {
         try env.var_pool.addVarToRank(root, instantiator.current_rank);
     }
@@ -50895,8 +50891,7 @@ fn freezeTypeGraphRoots(self: *Self, roots: []const Var, functions: FreezeFuncti
         // A frozen copy has its original's region and joins no solver
         // environment, so no generalization boundary ever reaches it.
         const frozen_var = try self.types.freshFromContentWithRank(.{ .flex = types_mod.Flex.init() }, .outermost);
-        try self.fillInRegionsThrough(frozen_var);
-        self.setRegionAt(frozen_var, self.getRegionAt(resolved.var_));
+        try self.setVarRegion(frozen_var, self.getRegionAt(resolved.var_));
         entry.value_ptr.* = frozen_var;
         try self.scratch_freeze_order.append(self.gpa, resolved.var_);
         switch (resolved.desc.content) {
@@ -51305,13 +51300,28 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
         });
     }
 
+    // The copies get their regions where they are created, as the
+    // instantiation's own copies did; a rollback forgets them with the copies.
+    switch (link.region_behavior) {
+        .explicit, .use_root_instantiated => {
+            self.scratch_region_vars.clearRetainingCapacity();
+            for (self.link_new_copies.items) |copy| try self.scratch_region_vars.append(self.gpa, copy.fresh);
+            try self.setSortedVarsRegion(switch (link.region_behavior) {
+                .explicit => |region| region,
+                .use_root_instantiated => link.root_region,
+                .use_last_var => unreachable, // the enclosing prong excludes it
+            });
+        },
+        .use_last_var => {
+            const origins = try self.var_regions.addCopies(self.gpa, @intCast(first_new), @intCast(self.types.len()));
+            for (self.link_new_copies.items) |copy| self.var_regions.setOrigin(origins, copy.fresh, copy.old);
+        },
+    }
+
     // Inside a probe the copies are part of the speculation: a rollback
     // undoes them and the link with them, and the outermost commit
     // registers them.
     if (self.probe_depth != 0 or self.commit_probe_active) {
-        if (self.types.len() > first_new) {
-            try self.fillInRegionsThrough(@fromBackingInt(@intCast(self.types.len() - 1)));
-        }
         const copies_start: u32 = @intCast(self.probe_link_copies.items.len);
         try self.probe_link_copies.appendSlice(self.gpa, self.link_new_copies.items);
         try self.probe_links.append(self.gpa, .{
@@ -51384,8 +51394,7 @@ fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCop
         .registers_use = true,
         .instantiation_expr = link.instantiation_expr.get(),
         .group_index = link.group_index.get(),
-        .region_behavior = link.region_behavior,
-        .root_region = link.root_region,
+        .copy_origins = .none,
         .deferred = null,
     };
     for (new_copies) |copy| {
@@ -51773,8 +51782,7 @@ fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Erro
         const edge_fn: Var = @fromBackingInt(@intCast(written.slot_data));
         const frozen_class = self.scratch_freeze_map.get(self.types.resolveVar(edge_fn).var_) orelse continue;
         const edge_var = try self.types.freshFromContentWithRank(.{ .flex = types_mod.Flex.init() }, .outermost);
-        try self.fillInRegionsThrough(edge_var);
-        self.setRegionAt(edge_var, self.getRegionAt(edge_fn));
+        try self.setVarRegion(edge_var, self.getRegionAt(edge_fn));
         const result = try self.unify(frozen_class, edge_var, env);
         if (!result.isEstablished()) {
             base.invariant("whole-use replay could not name a frozen dispatch edge", .{});
@@ -51883,8 +51891,7 @@ fn frozenUseRoot(self: *Self, root: Var) Allocator.Error!Var {
         .flex, .rigid, .err, .field_presence, .alias => return self.scratch_freeze_map.get(resolved.var_).?,
     };
     const copy = try self.types.freshFromContentWithRank(.{ .structure = flat }, .outermost);
-    try self.fillInRegionsThrough(copy);
-    self.setRegionAt(copy, self.getRegionAt(resolved.var_));
+    try self.setVarRegion(copy, self.getRegionAt(resolved.var_));
     return copy;
 }
 
@@ -52938,10 +52945,9 @@ fn finalCodecRelationInstance(
     const previous_scheme_root = self.active_scheme_root;
     defer self.active_scheme_root = previous_scheme_root;
     self.active_scheme_root = self.dispatchRelationOwner(pending.constraint.fn_var);
+    try self.setCopiedVarsRegion(instantiator.var_map, region);
     var copied_iter = instantiator.var_map.valueIterator();
     while (copied_iter.next()) |copied| {
-        try self.fillInRegionsThrough(copied.*);
-        self.setRegionAt(copied.*, region);
         // This private validation copy owns its attached relations too, not
         // just the outer codec callable. Shared callables keep their creator.
         if (contentConstraintRange(self.types.resolveVar(copied.*).desc.content)) |constraints| {
@@ -59334,12 +59340,13 @@ fn recordGeneratedCodecDerivationSnapshot(
         const copy = instantiator.var_map.get(source) orelse continue;
         try renamings.append(self.gpa, .{ .source_var = @backingInt(source), .copy_var = @backingInt(copy) });
     }
+    self.scratch_region_vars.clearRetainingCapacity();
     var copied_iter = instantiator.var_map.valueIterator();
     while (copied_iter.next()) |copied| {
-        if (shared_copies.contains(copied.*)) continue;
-        try self.fillInRegionsThrough(copied.*);
-        self.setRegionAt(copied.*, region);
+        if (shared_copies.contains(copied.*) or self.var_regions.isCovered(copied.*)) continue;
+        try self.scratch_region_vars.append(self.gpa, copied.*);
     }
+    try self.setSortedVarsRegion(region);
     if (!self.types.savepointActive()) {
         for (ground_marks.order.items, ground_marks.ground.items) |source, is_ground| {
             if (!is_ground) continue;
