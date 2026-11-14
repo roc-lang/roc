@@ -531,8 +531,9 @@ pub const Store = struct {
     decl_name_ids: std.AutoHashMapUnmanaged(NominalDeclKey, NameId) = .empty,
     name_arena: std.heap.ArenaAllocator,
 
-    /// Converted closed checked types, by module and checked id.
-    closed_memo: std.AutoHashMapUnmanaged(ClosedKey, TypeId) = .empty,
+    /// Converted closed checked types, by module and checked id
+    /// (`Converter.convert`).
+    closed_memo: std.AutoHashMapUnmanaged(ClosedKey, ClosedMemo) = .empty,
     /// The scheme position of each closed record or tag union that is a row
     /// node of the converting worker's signature: one whose row ends in a
     /// quantified uncommitted tail (design.md "Methods On Open Rows"). Such a
@@ -560,6 +561,12 @@ pub const Store = struct {
     const DeclKey = struct { module: ModuleIndex, key: names.NominalTypeKey };
 
     const ClosedKey = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
+
+    /// A memoized conversion, and whether the type reaches a record or tag
+    /// union whose row ends in an uncommitted tail, which a scope can name as
+    /// a closed row node (`Converter.endsInUncommittedTail`). Such a type
+    /// converts the same only in scopes that name no record or tag union.
+    const ClosedMemo = struct { ty: TypeId, reaches_row_node: bool };
 
     pub const InternKey = struct { start: u32, len: u32 };
 
@@ -1186,19 +1193,27 @@ pub const Converter = struct {
         var pending: std.ArrayList(Child) = .empty;
         defer pending.deinit(allocator);
 
-        // A scope with closed row nodes converts a type holding one to a type
-        // marked with the node's position, so a conversion made there is not
-        // the one every environment makes.
-        var memoize: ?bool = if (self.seal_undetermined_kinds) false else null;
-        if (try self.leaf(module, ty, env, &memoize)) |done| return done;
+        // Whether each converted child reaches a record or tag union a scope
+        // can name as a closed row node, parallel to `results`.
+        var reaches: std.ArrayList(bool) = .empty;
+        defer reaches.deinit(allocator);
+
+        // A scope that names closed row nodes converts a type holding one to
+        // the node's marked type or to the use's whole value, so a type
+        // reaching one is shared only between scopes that name none.
+        var shared: ?bool = null;
+        var root_reaches = false;
+        if (try self.leaf(module, ty, env, &shared, &root_reaches)) |done| return done;
         try self.pushFrame(&frames, &pending, results.items.len, module, ty);
         while (frames.items.len > 0) {
             const top = &frames.items[frames.items.len - 1];
             if (top.pending_next < pending.items.len) {
                 const child = pending.items[top.pending_next];
                 top.pending_next += 1;
-                if (try self.leaf(child.module, child.ty, env, &memoize)) |done| {
+                var child_reaches = false;
+                if (try self.leaf(child.module, child.ty, env, &shared, &child_reaches)) |done| {
                     try results.append(allocator, done);
+                    try reaches.append(allocator, child_reaches);
                 } else {
                     if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
                     try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty);
@@ -1208,15 +1223,19 @@ pub const Converter = struct {
             const frame = frames.pop().?;
             const children = results.items[frame.results_start..];
             const built = try self.finish(frame.module, frame.ty, children, env);
+            const built_reaches = std.mem.findScalar(bool, reaches.items[frame.results_start..], true) != null or
+                self.endsInUncommittedTail(frame.module, frame.ty);
             results.shrinkRetainingCapacity(frame.results_start);
+            reaches.shrinkRetainingCapacity(frame.results_start);
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
-            // every environment.
-            if (!try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty) and try self.memoizes(env, &memoize)) {
-                try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
+            // every environment that names no closed row node it reaches.
+            if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty) and (!built_reaches or try self.namesNoRow(env, &shared))) {
+                try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, .{ .ty = built, .reaches_row_node = built_reaches });
             }
             if (frames.items.len == 0) return built;
             try results.append(allocator, built);
+            try reaches.append(allocator, built_reaches);
         }
         unreachable; // the loop returns when the outermost frame finishes
     }
@@ -1234,16 +1253,43 @@ pub const Converter = struct {
         return try view.types().rootHasIdentityVariables(ty);
     }
 
-    /// Whether a conversion in `env` shares the memo of identity-free types,
-    /// decided on first need into `memoize`: not when `env` binds a closed row
-    /// node of a scope it converts in (`tailNodeAt`).
-    fn memoizes(self: Converter, env: Env, memoize: *?bool) Allocator.Error!bool {
-        if (memoize.*) |known| return known;
-        const shared = for (0..env.vars.len) |index| {
-            if (self.tailNodeAt(env, index) != null) break false;
+    /// Whether `env` names no record or tag union, so it converts every
+    /// identity-free type as every other such environment does, decided on
+    /// first need into `shared`. A scope's closed row nodes are the only
+    /// records and tag unions an environment names (`tailNodeAt`), bound to
+    /// a `variable` node in the scope itself and to the use's whole value in
+    /// an instantiation.
+    fn namesNoRow(self: Converter, env: Env, shared: *?bool) Allocator.Error!bool {
+        if (shared.*) |known| return known;
+        const names_none = for (env.vars) |variable| {
+            switch (self.modules.get(env.module).types().payload(variable)) {
+                .record, .tag_union => break false,
+                .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => {},
+            }
         } else true;
-        memoize.* = shared;
-        return shared;
+        shared.* = names_none;
+        return names_none;
+    }
+
+    /// Whether checked type `ty` of `module` is a record or tag union whose
+    /// row ends in an uncommitted tail: a record's in an uncommitted record
+    /// tail variable, a tag union's in an uncommitted tag tail. Only such a
+    /// type is a closed row node of a scope (`Program.appendClosedRowNodes`).
+    fn endsInUncommittedTail(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId) bool {
+        const types = self.modules.get(module).types();
+        var current = switch (types.payload(ty)) {
+            .record => |record| record.ext,
+            .tag_union => |tag_union| tag_union.ext,
+            .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => return false,
+        };
+        while (true) switch (types.payload(current)) {
+            .alias => |alias| current = alias.backing,
+            .record => |record| current = record.ext,
+            .tag_union => |tag_union| current = tag_union.ext,
+            .flex => |flex| return flex.row_tail == .uncommitted_record,
+            .empty_tag_union => return types.uncommittedTagTail(current),
+            .pending, .err, .rigid, .tuple, .nominal, .function, .empty_record, .field_kind => return false,
+        };
     }
 
     /// The position of the closed row node `env` binds at `index`, if it
@@ -1273,15 +1319,26 @@ pub const Converter = struct {
     }
 
     /// The node for `ty` when it needs no children converted first.
-    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env, memoize: *?bool) Allocator.Error!?TypeId {
+    /// `reaches` says whether the node reaches a record or tag union a
+    /// scope can name as a closed row node (`ClosedMemo`).
+    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env, shared: *?bool, reaches: *bool) Allocator.Error!?TypeId {
+        reaches.* = false;
         if (env.lookupIndex(module, ty)) |index| {
             // A closed row node of the scope converts as its own structure.
-            if (self.tailNodeAt(env, index) == null) return env.bound[index];
+            if (self.tailNodeAt(env, index) == null) {
+                reaches.* = self.endsInUncommittedTail(module, ty);
+                return env.bound[index];
+            }
         }
         if (self.platformIdentity(module, ty)) |solved| return solved;
         const view = self.modules.get(module);
-        if (!try rootHasIdentityVariables(view, ty) and try self.memoizes(env, memoize)) {
-            if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| return memo;
+        if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(view, ty)) {
+            if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| {
+                if (!memo.reaches_row_node or try self.namesNoRow(env, shared)) {
+                    reaches.* = memo.reaches_row_node;
+                    return memo.ty;
+                }
+            }
         }
         return switch (view.types().payload(ty)) {
             .pending => invariant("a pending checked type reached Boxy lowering"),
