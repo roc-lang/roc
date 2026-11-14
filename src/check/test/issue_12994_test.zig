@@ -6,7 +6,7 @@
 //! or after the annotation.
 const TestEnv = @import("TestEnv.zig");
 
-fn expectChecks(source: []const u8) !void {
+fn expectChecks(source: []const u8) TestEnv.TestEnvError!void {
     var env = try TestEnv.init("Test", source);
     defer env.deinit();
     try env.assertNoErrors();
