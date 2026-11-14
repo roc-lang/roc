@@ -40,12 +40,6 @@ const U32Span = lir_defs.U32Span;
 const ErasedCallArgsPlan = lir_defs.ErasedCallArgsPlan;
 const ErasedCallArgsPlanId = lir_defs.ErasedCallArgsPlanId;
 
-/// Source-level name to use when presenting a specialized LIR proc in debug output.
-pub const ProcDebugName = extern struct {
-    proc: u32,
-    string: base.StringLiteral.Idx,
-};
-
 const Self = @This();
 
 /// Every out-of-line statement row type (see `LIR.StmtRowId`). Each has its
@@ -1045,8 +1039,9 @@ body_prefix: BodyPrefix,
 proc_rewrite: ?ProcRewrite = null,
 /// Source location per proc, parallel to `proc_specs`.
 proc_locs: GuardedList.List(base.SourceLoc, "LirStore.proc_locs"),
-/// Source-level debug names for procs that have source names.
-proc_debug_names: GuardedList.List(ProcDebugName, "LirStore.proc_debug_names"),
+/// Source-level debug name per proc, parallel to `proc_specs`: a string in
+/// `strings`, or `none` for a proc without a source name.
+proc_debug_names: GuardedList.List(base.StringLiteral.Idx, "LirStore.proc_debug_names"),
 /// Source-level name per local, parallel to `locals`: an index into
 /// `strings`, or `no_local_name` for compiler-generated temporaries.
 local_names: GuardedList.List(u32, "LirStore.local_names"),
@@ -1258,21 +1253,17 @@ pub fn procDebugNameString(self: *const Self, id: LirProcSpecId) base.StringLite
 
 fn procDebugNameIndex(self: *const Self, id: LirProcSpecId) ?base.StringLiteral.Idx {
     const proc = @backingInt(id);
-    for (self.proc_debug_names.unsafeRawItemsForView()) |entry| {
-        if (entry.proc == proc) return entry.string;
-    }
-    return null;
+    // A body worker holds no procedure metadata of its own, so it sees no
+    // procedure's name.
+    if (proc >= self.proc_debug_names.len()) return null;
+    const string = self.proc_debug_names.get(proc);
+    return if (string == .none) null else string;
 }
 
 fn setProcDebugNameIndex(self: *Self, id: LirProcSpecId, string: base.StringLiteral.Idx) Allocator.Error!void {
-    const proc = @backingInt(id);
-    for (self.proc_debug_names.unsafeRawItemsMutForStore()) |*entry| {
-        if (entry.proc == proc) {
-            entry.string = string;
-            return;
-        }
-    }
-    try self.proc_debug_names.append(self.allocator, .{ .proc = proc, .string = string });
+    self.assertBodyMetadataImmutable();
+    std.debug.assert(string != .none);
+    self.proc_debug_names.set(@backingInt(id), string);
 }
 
 /// Copies the source file table from a lowering stage's program.
@@ -2165,6 +2156,7 @@ pub fn addProcSpec(self: *Self, proc: LirProcSpec, loc: base.SourceLoc) Allocato
     if (spec.body != .none) spec.shapes = spec.shapes.merged(self.shapes);
     try self.proc_specs.append(self.allocator, spec);
     try self.proc_locs.append(self.allocator, loc);
+    try self.proc_debug_names.append(self.allocator, .none);
     return @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
 }
 
@@ -2245,7 +2237,7 @@ pub fn procSpecCount(self: *const Self) usize {
     return self.proc_specs.len() + if (self.body_coordinator != null) self.body_prefix.proc_specs else 0;
 }
 
-/// Number of stored proc debug-name entries.
+/// Number of rows in the proc debug-name column.
 pub fn procDebugNameCount(self: *const Self) usize {
     return self.proc_debug_names.len();
 }
@@ -2914,11 +2906,6 @@ test "body shard reads coordinator prefix without copying it" {
     try std.testing.expectEqual(suffix_local, worker.getCFStmt(suffix_stmt).ret.value);
 }
 
-/// Returns one stored proc debug-name entry.
-pub fn getProcDebugName(self: *const Self, index: usize) ProcDebugName {
-    return self.proc_debug_names.get(index);
-}
-
 /// Returns the raw local-name table entry for the given local id.
 pub fn getLocalNameRaw(self: *const Self, id: LocalId) u32 {
     const index = @backingInt(id);
@@ -2929,17 +2916,17 @@ pub fn getLocalNameRaw(self: *const Self, id: LocalId) u32 {
     return self.local_names.get(index);
 }
 
-/// Remaps proc debug-name entries and drops names for pruned procs.
+/// Moves each retained proc's debug name to its compact id and drops the
+/// names of pruned procs. Compact ids preserve proc order, so the column
+/// compacts in place.
 pub fn compactProcDebugNames(self: *Self, old_to_new: *const collections.OptionalIndexColumn(LirProcSpecId)) void {
+    std.debug.assert(old_to_new.len() == self.proc_debug_names.len());
     var write: usize = 0;
     const names = self.proc_debug_names.unsafeRawItemsMutForStore();
-    for (names) |entry| {
-        if (entry.proc >= old_to_new.len()) continue;
-        const new_proc = old_to_new.get(entry.proc) orelse continue;
-        names[write] = .{
-            .proc = @backingInt(new_proc),
-            .string = entry.string,
-        };
+    for (names, 0..) |string, old_proc| {
+        const new_proc = old_to_new.get(old_proc) orelse continue;
+        std.debug.assert(@backingInt(new_proc) == write);
+        names[write] = string;
         write += 1;
     }
     self.proc_debug_names.shrinkRetainingCapacity(write);

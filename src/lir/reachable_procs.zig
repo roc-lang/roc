@@ -818,10 +818,7 @@ const Pass = struct {
                 }
             }
         }
-        for (0..self.store.procDebugNameCount()) |index| {
-            const entry = self.store.getProcDebugName(index);
-            if (entry.proc >= proc_count) reachableProcInvariant("proc debug name exceeds compact proc_specs len");
-        }
+        if (self.store.procDebugNameCount() != proc_count) reachableProcInvariant("proc debug names are not parallel to compact proc_specs");
         for (0..self.store.procSpecCount()) |proc_index| {
             const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body.get()) |body| self.verifyStmtRef(body, stmt_count) else if (proc.hosted.get() == null and !proc.external) {
