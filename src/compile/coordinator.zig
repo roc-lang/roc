@@ -1409,6 +1409,8 @@ pub const BoxyObjectLowering = struct {
     /// Whether that link composes the units' pieces (rather than placing
     /// their unit images with a fast dev link), so the units decode them.
     link_reads_pieces: bool = false,
+    /// The unit entries the compiler carries in its binary.
+    embedded: boxy_unit.EmbeddedUnits = .none,
 };
 
 /// The module objects of a `.boxy` compilation, each restored from the
@@ -1501,7 +1503,7 @@ const BoxyObjects = struct {
             .function_cache = .{ .allocator = coordinator.gpa, .io = coordinator.roc_ctx.std_io },
             .lowering = unit_lowering,
             .manager = manager,
-            .digests = .{ .gpa = coordinator.gpa, .io = coordinator.roc_ctx.std_io, .names = .{} },
+            .digests = .{ .gpa = coordinator.gpa, .io = coordinator.roc_ctx.std_io, .names = .{}, .embedded = lowering.embedded },
             .interfaces = undefined,
             .owned_interfaces = if (lowering.interfaces == null) .init(coordinator.gpa, coordinator.roc_ctx.std_io) else null,
             .session = try coordinator.postCheckExecutor().begin(),
@@ -1794,6 +1796,7 @@ const BoxyObjects = struct {
             .cache_manager = self.manager,
             .key = undefined,
             .want_pieces = want_pieces,
+            .embedded = self.lowering.embedded,
         } };
     }
 
@@ -1808,9 +1811,16 @@ const BoxyObjects = struct {
     /// unit's imports recorded, which they had by the time the unit was
     /// ready, and the unit's own part of its digests, hashed here.
     fn keyUnit(self: *BoxyObjects, prepared: *Prepared) Error!void {
+        const CtfeTiming = eval.CompileTimeFinalization.Timing;
+        const started = CtfeTiming.startStep(&self.coordinator.ctfe_timing);
         const unit = &prepared.unit;
         try self.digests.ensurePrepared(unit.artifact);
         unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{}, false, false, false);
+        if (CtfeTiming.detailOf(&self.coordinator.ctfe_timing)) |timing| {
+            const elapsed: u64 = @intCast(@max(0, CtfeTiming.startStep(timing) - started));
+            timing.steps_ns[@backingInt(CtfeTiming.Step.unit_keys)].add(elapsed);
+            unit.key_ns = elapsed;
+        }
     }
 
     /// Give the digests `artifact` and its import closure, which checking
@@ -1876,11 +1886,24 @@ const BoxyObjects = struct {
         /// The imports whose objects are not known yet.
         remaining: u32,
         outcome: union(enum) { pending, failed: Error, done: boxy_unit.Built } = .pending,
+        /// Under detailed timing, when the unit was offered and when its
+        /// last import's object became known.
+        offered_ns: i64 = 0,
+        ready_ns: i64 = 0,
 
         fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
             const self: *UnitTask = @ptrCast(@alignCast(context));
+            if (lir.CheckedPipeline.Timing.detailOf(self.prepared.unit.config.timing)) |timing| {
+                const started = lir.CheckedPipeline.Timing.startDetail(timing);
+                self.prepared.unit.import_wait_ns = @intCast(@max(0, self.ready_ns - self.offered_ns));
+                self.prepared.unit.queue_wait_ns = @intCast(@max(0, started - self.ready_ns));
+            }
             self.outcome = if (self.keyAndBuild()) |built| .{ .done = built } else |err| .{ .failed = err };
             return null;
+        }
+
+        fn markReady(self: *UnitTask) void {
+            self.ready_ns = lir.CheckedPipeline.Timing.startDetail(self.prepared.unit.config.timing);
         }
 
         fn keyAndBuild(self: *UnitTask) Error!boxy_unit.Built {
@@ -1921,6 +1944,7 @@ const BoxyObjects = struct {
         const task = try gpa.create(UnitTask);
         errdefer gpa.destroy(task);
         task.* = .{ .objects = self, .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0 };
+        task.offered_ns = lir.CheckedPipeline.Timing.startDetail(task.prepared.unit.config.timing);
         errdefer task.prepared.deinit(gpa);
         try self.units.put(gpa, artifact.key.bytes, task);
         errdefer _ = self.units.remove(artifact.key.bytes);
@@ -1936,7 +1960,10 @@ const BoxyObjects = struct {
             try waiting.value_ptr.append(gpa, task);
             task.remaining += 1;
         }
-        if (task.remaining == 0) try self.ready.append(gpa, task);
+        if (task.remaining == 0) {
+            task.markReady();
+            try self.ready.append(gpa, task);
+        }
         try self.submitReady();
     }
 
@@ -2118,6 +2145,7 @@ const BoxyObjects = struct {
             },
             .done => |built| {
                 task.outcome = .pending;
+                eval.CompileTimeFinalization.Timing.addCount(&self.coordinator.ctfe_timing, if (built.restored) .units_restored else .units_built, 1);
                 const object = try self.record(artifact, built);
                 try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored });
             },
@@ -2135,7 +2163,10 @@ const BoxyObjects = struct {
         defer list.deinit(gpa);
         for (list.items) |dependent| {
             dependent.remaining -= 1;
-            if (dependent.remaining == 0) try self.ready.append(gpa, dependent);
+            if (dependent.remaining == 0) {
+                dependent.markReady();
+                try self.ready.append(gpa, dependent);
+            }
         }
     }
 
@@ -2556,8 +2587,8 @@ pub const Coordinator = struct {
     pub fn setDetailedLoweringTiming(self: *Coordinator, enabled: bool) void {
         self.detailed_lowering_timing = enabled;
         if (enabled) {
-            self.ctfe_timing.lowering.enableDetailedMonotypeBody();
-            self.module_ctfe_timing.lowering.enableDetailedMonotypeBody();
+            self.ctfe_timing.lowering.enableDetail();
+            self.module_ctfe_timing.lowering.enableDetail();
         }
     }
 
@@ -3928,6 +3959,8 @@ pub const Coordinator = struct {
         );
         // The objects are read by the link and filed by this evaluation;
         // committing the modules below writes what the units read.
+        const CtfeTiming = eval.CompileTimeFinalization.Timing;
+        const units_wait_started = CtfeTiming.startStep(&self.ctfe_timing);
         if (self.boxy_objects) |*objects| {
             if (dependency_root != null) {
                 // Platform-only evaluation can leave app units waiting for
@@ -3939,12 +3972,17 @@ pub const Coordinator = struct {
                 try objects.waitAll();
             }
         }
+        CtfeTiming.finishStep(&self.ctfe_timing, units_wait_started, .units_wait);
         var stores = std.ArrayList(PendingStore).empty;
         defer stores.deinit(self.gpa);
         var report_arena = base.SingleThreadArena.init(self.gpa);
         defer report_arena.deinit();
+        const commit_started = CtfeTiming.startStep(&self.ctfe_timing);
         for (entries.items) |entry| try self.commitPreparedModule(entry.mod, &stores, report_arena.allocator());
+        CtfeTiming.finishStep(&self.ctfe_timing, commit_started, .module_commit);
+        const cache_writes_started = CtfeTiming.startStep(&self.ctfe_timing);
         try self.writePendingStores(stores.items);
+        CtfeTiming.finishStep(&self.ctfe_timing, cache_writes_started, .cache_writes);
         try unfinalized.commit();
     }
 
@@ -4714,7 +4752,8 @@ pub const Coordinator = struct {
                 if (mod.checkedArtifact()) |artifact| try artifacts.append(self.gpa, artifact);
             }
         }
-        return try boxy_interface.Digests.init(self.gpa, self.roc_ctx.std_io, artifacts.items);
+        const embedded: boxy_unit.EmbeddedUnits = if (self.boxy_object_lowering) |lowering| lowering.embedded else .none;
+        return try boxy_interface.Digests.init(self.gpa, self.roc_ctx.std_io, artifacts.items, embedded);
     }
 
     fn checkedModuleCacheKey(
@@ -7821,7 +7860,7 @@ pub const Coordinator = struct {
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
-        if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetailedMonotypeBody();
+        if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetail();
         const ctfe_timing = &local_ctfe_timing;
         var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
         ctfe_options.strategy = self.specialization_strategy;

@@ -519,29 +519,61 @@ const Walker = struct {
 /// program storing it keeps what reading function values takes (design.md
 /// "Stored Function Values"). `modules` lists the artifacts `root.module`
 /// indexes; `program` is every module of the program the root is evaluated
-/// in, which holds each nominal's declaring module.
+/// in, which holds each nominal's declaring module. `memo` remembers the
+/// answer for each value type across the roots of one program.
 pub fn rootHoldsFunction(
     allocator: Allocator,
+    memo: *FunctionTypeMemo,
     modules: []const *const checked.CheckedModuleArtifact,
     program: lir.CheckedPipeline.CheckedModuleSet,
     root: Root,
 ) Allocator.Error!bool {
     const artifact = modules[root.module];
     if (artifact.compile_time_roots.root(root.root).kind == .callable_binding) return true;
+    const own_types = artifact.typesView();
+    // The root's checked type is its wrapper's function type; its value is
+    // the wrapper's result.
+    const value_type = switch (own_types.payload(root.request.checked_type)) {
+        .function => |function| function.ret,
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => base.invariant("compile-time finalization invariant violated: a compile-time root's checked type is not a function type", .{}),
+    };
+    const key: FunctionTypeMemo.Key = .{ .key = artifact.key.digest().bytes, .ty = value_type };
+    const entry = try memo.answers.getOrPut(allocator, key);
+    if (!entry.found_existing) {
+        errdefer memo.answers.removeByPtr(entry.key_ptr);
+        entry.value_ptr.* = try typeHoldsFunction(allocator, program, key.key, own_types, value_type);
+    }
+    return entry.value_ptr.*;
+}
+
+/// `rootHoldsFunction`'s answers by value type. A module key names one
+/// checked type store, which does not change once checked, so an answer
+/// holds for every root of a program whose value has that type.
+pub const FunctionTypeMemo = struct {
+    answers: std.AutoHashMapUnmanaged(Key, bool) = .empty,
+
+    const Key = struct { key: [32]u8, ty: checked.CheckedTypeId };
+
+    pub fn deinit(self: *FunctionTypeMemo, allocator: Allocator) void {
+        self.answers.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+fn typeHoldsFunction(
+    allocator: Allocator,
+    program: lir.CheckedPipeline.CheckedModuleSet,
+    start_key: [32]u8,
+    start_types: checked.CheckedTypeStoreView,
+    start: checked.CheckedTypeId,
+) Allocator.Error!bool {
     const Pending = struct { key: [32]u8, types: checked.CheckedTypeStoreView, ty: checked.CheckedTypeId };
     const Seen = struct { key: [32]u8, ty: checked.CheckedTypeId };
     var seen = std.AutoHashMapUnmanaged(Seen, void).empty;
     defer seen.deinit(allocator);
     var pending = std.ArrayList(Pending).empty;
     defer pending.deinit(allocator);
-    const own_types = artifact.typesView();
-    const own_key = artifact.key.digest().bytes;
-    // The root's checked type is its wrapper's function type; its value is
-    // the wrapper's result.
-    switch (own_types.payload(root.request.checked_type)) {
-        .function => |function| try pending.append(allocator, .{ .key = own_key, .types = own_types, .ty = function.ret }),
-        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => base.invariant("compile-time finalization invariant violated: a compile-time root's checked type is not a function type", .{}),
-    }
+    try pending.append(allocator, .{ .key = start_key, .types = start_types, .ty = start });
     while (pending.pop()) |item| {
         const seen_entry = try seen.getOrPut(allocator, .{ .key = item.key, .ty = item.ty });
         if (seen_entry.found_existing) continue;
@@ -732,9 +764,12 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         // A nominal can be supplied by the ownership anchor, a platform
         // relation, or an ordinary import. None needs a pending CTFE root.
         const root: Root = .{ .module = 0, .root = request.compile_time_root.get().?, .request = request };
-        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(holder), .imports = &.{checked.importedView(consumer)} }, root));
-        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}) }, root));
-        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = &.{checked.importedView(holder)} }, root));
+        // Each program configuration gets its own memo, so each call walks.
+        var memos: [3]FunctionTypeMemo = .{ .{}, .{}, .{} };
+        defer for (&memos) |*memo| memo.deinit(allocator);
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &memos[0], &.{consumer}, .{ .root = checked.loweringView(holder), .imports = &.{checked.importedView(consumer)} }, root));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &memos[1], &.{consumer}, .{ .root = checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}) }, root));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &memos[2], &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = &.{checked.importedView(holder)} }, root));
     }
 }
 

@@ -166,6 +166,56 @@ pub const Executor = struct {
     }
 };
 
+/// The callback time of a parallel section's tasks, measured only when a
+/// caller asks for timing. Each task runs through a wrapper that reads the
+/// clock around its callback and records the duration in the task's own
+/// slot, so no two lanes write one counter; the owner sums the slots once
+/// every completion is received.
+pub const TimedTasks = struct {
+    std_io: std.Io,
+    entries: []Entry,
+
+    const Entry = struct {
+        inner: Task,
+        std_io: std.Io,
+        ns: u64 = 0,
+    };
+
+    /// Slots for `count` measured tasks.
+    pub fn init(allocator: std.mem.Allocator, count: usize, std_io: std.Io) std.mem.Allocator.Error!TimedTasks {
+        return .{ .std_io = std_io, .entries = try allocator.alloc(Entry, count) };
+    }
+
+    /// Release the slots.
+    pub fn deinit(self: *TimedTasks, allocator: std.mem.Allocator) void {
+        allocator.free(self.entries);
+        self.* = undefined;
+    }
+
+    /// `task`, measured in slot `slot`. Its id, context, and completion
+    /// value are unchanged.
+    pub fn wrap(self: *TimedTasks, slot: usize, task: Task) Task {
+        self.entries[slot] = .{ .inner = task, .std_io = self.std_io };
+        return .{ .id = task.id, .context = &self.entries[slot], .run = runEntry };
+    }
+
+    fn runEntry(context: *anyopaque, worker: Worker) ?*anyopaque {
+        const entry: *Entry = @ptrCast(@alignCast(context));
+        const started = std.Io.Timestamp.now(entry.std_io, .awake).nanoseconds;
+        const value = entry.inner.run(entry.inner.context, worker);
+        entry.ns = @intCast(@max(0, std.Io.Timestamp.now(entry.std_io, .awake).nanoseconds - started));
+        return value;
+    }
+
+    /// The summed callback time of the first `count` slots, every one of
+    /// whose tasks has completed.
+    pub fn totalNs(self: *const TimedTasks, count: usize) u64 {
+        var total: u64 = 0;
+        for (self.entries[0..count]) |entry| total +|= entry.ns;
+        return total;
+    }
+};
+
 /// Single-owner handle for incrementally feeding one bounded execution window.
 ///
 /// Sessions are neither thread-safe nor copyable after `begin`. Every accepted

@@ -30,6 +30,7 @@ pub const key = @import("cache_key.zig");
 pub const boxy_object_cache = @import("boxy_object_cache.zig");
 pub const boxy_interface = @import("boxy_interface.zig");
 pub const boxy_unit = @import("boxy_unit.zig");
+pub const boxy_embedded_units = @import("boxy_embedded_units.zig");
 pub const boxy_reach = @import("boxy_reach.zig");
 pub const config = @import("cache_config.zig");
 pub const manager = @import("cache_manager.zig");
@@ -70,6 +71,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("cache_key.zig"));
     std.testing.refAllDecls(boxy_object_cache);
     std.testing.refAllDecls(boxy_unit);
+    std.testing.refAllDecls(boxy_embedded_units);
     std.testing.refAllDecls(@import("cache_manager.zig"));
     std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_versioning.zig"));

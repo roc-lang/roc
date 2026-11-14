@@ -557,7 +557,7 @@ test "trmc transforms the canonical repeat shape and builds correct structure" {
     try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpecImmediate(repeat).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, repeat)));
 
-    try lir.Arc.insert(&store, &layouts, .{});
+    _ = try lir.Arc.insert(&store, &layouts, .{});
 
     var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &store);
     defer static_strings.deinit();
@@ -591,7 +591,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         var b = ProcBuilder.init(&store);
         defer b.deinit(allocator);
         const repeat = try buildRepeatProc(allocator, &b, &store, peano);
-        try lir.Arc.insert(&store, &layouts, .{});
+        _ = try lir.Arc.insert(&store, &layouts, .{});
 
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &store);
         defer static_strings.deinit();
@@ -619,7 +619,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         defer b.deinit(allocator);
         const repeat = try buildRepeatProc(allocator, &b, &store, peano);
         try lir.Trmc.run(&store, &layouts);
-        try lir.Arc.insert(&store, &layouts, .{});
+        _ = try lir.Arc.insert(&store, &layouts, .{});
 
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &store);
         defer static_strings.deinit();
@@ -678,7 +678,7 @@ test "trmc'd repeat is leak-free and allocation-exact when consumed" {
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpecImmediate(repeat).tail_transform);
     try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpecImmediate(root).tail_transform);
-    try lir.Arc.insert(&store, &layouts, .{});
+    _ = try lir.Arc.insert(&store, &layouts, .{});
 
     const n: u64 = 50;
     try std.testing.expectEqual(@as(u64, 0), try runProcU64Args(allocator, &store, &layouts, root, &runtime_env, &.{n}));
@@ -763,7 +763,7 @@ test "tce transforms the countdown shape and escapes the call-depth cap" {
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpecImmediate(count).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, count)));
-    try lir.Arc.insert(&store, &layouts, .{});
+    _ = try lir.Arc.insert(&store, &layouts, .{});
 
     try std.testing.expectEqual(
         @as(u64, 100_000),
@@ -839,7 +839,7 @@ test "tce loop-back copies swapped params through temps" {
     store.tail_call_builder = null;
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpecImmediate(proc).tail_transform);
-    try lir.Arc.insert(&store, &layouts, .{});
+    _ = try lir.Arc.insert(&store, &layouts, .{});
 
     // Odd swap count returns the second argument; even returns the first.
     // Sequential param writes without temp copies would return garbage.
@@ -992,7 +992,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpecImmediate(proc).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, proc)));
-    try lir.Arc.insert(&store, &layouts, .{});
+    _ = try lir.Arc.insert(&store, &layouts, .{});
 
     // Depth 2000 makes 2000 recursive calls (1000 S nodes): both rewritten
     // branches must loop for this to survive the 1024-frame cap.
@@ -1329,7 +1329,7 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
     try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpecImmediate(proc).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, proc)));
     try std.testing.expect(store.getCFStmtImmediate(ret).* == .ret);
-    try lir.Arc.insert(&store, &layouts, .{});
+    _ = try lir.Arc.insert(&store, &layouts, .{});
     try std.testing.expectEqual(@as(u64, 0), try runProcU64Args(allocator, &store, &layouts, proc, &runtime_env, &.{96}));
     try runtime_env.checkForLeaks();
 }
@@ -1543,7 +1543,7 @@ test "tce parallel transfers preserve every small source graph" {
         } else {
             try std.testing.expectEqualDeep(frame_before, frame_after);
         }
-        try lir.Arc.insert(&store, &layouts, .{});
+        _ = try lir.Arc.insert(&store, &layouts, .{});
         for ([_]u64{ 1, 2, 7 }) |iterations| {
             var expected = [_]u64{ 11, 17, 23, 31 };
             for (0..iterations) |_| {
@@ -1630,7 +1630,7 @@ test "tce reuses scratch across shrinking and growing procedure frames" {
         for (0..old.len) |index| try std.testing.expectEqual(GuardedList.at(old, index), GuardedList.at(frame, index));
         for (1..frame.len) |index| try std.testing.expect(@backingInt(GuardedList.at(frame, index - 1)) < @backingInt(GuardedList.at(frame, index)));
     }
-    try lir.Arc.insert(&store, &layouts, .{});
+    _ = try lir.Arc.insert(&store, &layouts, .{});
     for (widths, procs) |width, proc| {
         var inputs: [13]u64 = undefined;
         for (inputs[0..width], 0..) |*value, index| value.* = 11 + index;

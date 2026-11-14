@@ -221,6 +221,15 @@ Caches are transparent: an uncached, cold-cache, and warm-cache build produce
 the same result. Thread scheduling, cache history, directory order, and file
 timestamps do not affect emitted code.
 
+Neither does the way the compiler itself was built. A Debug compiler and an
+optimized one, on any host, emit the same LIR, machine code, objects and
+images for the same input: a stage never emits a statement, an instruction or
+data because of the compiler's own optimize mode or safety checks. A compiler
+invariant is checked inside the compiler ("Debug Invariants"), never by code
+the compiler adds to the program it compiles. The build relies on this: a
+Debug host tool builds the Builtin unit an optimized compiler carries
+("Embedded Units"), and `zig build run-test-builtin-unit` compares the two.
+
 ### Representation Capacity
 
 Every count, index, position, offset, and value that grows with the size of
@@ -15291,7 +15300,8 @@ construction and no Boxy runtime work. Its code and cached entries have no Boxy 
 explicit runtime contract, set by its producer and retained by images; only a
 Boxy producer can authorize descriptor operations. Store construction enforces
 this contract, and consumers use it without discovering a strategy by scanning
-procedures. CTFE always carries the specialized contract.
+procedures. A compile-time program carries the contract of the evaluator that
+lowered it.
 
 Erasure in LSS erases the identity of a callable, not its argument and result
 representations. Lambda Solved's `abi_fn` supplies those exact types; direct
@@ -15310,11 +15320,11 @@ to drive the trampoline, just as for ordinary calls. Specialized results pass
 unchanged through these tail positions; representation conversions execute as
 LIR before returning, never as runtime descriptor operations.
 
-Compile-time evaluation is not a runtime lowering-strategy selection. CTFE
-always uses `.lss`, including when the enclosing runtime compilation explicitly
-selects `.boxy`. Runtime strategy flags, cache entries, and host wrappers must
-not route a compile-time root through Boxy or reuse Boxy-lowered LIR as a CTFE
-result.
+Compile-time evaluation follows its own rule ("Compile-Time Evaluation
+Strategy"): the `.boxy` compile-time evaluator completes every root that
+neither holds a function value nor reads one under either strategy, and the
+selected strategy's evaluator completes the rest, so a `.boxy` compilation
+evaluates every root as `.boxy` programs (`finalizeProgramBoxy`).
 
 Compiler progress text follows the selected strategy. `.lss` reports the
 lambda-set-specializing work as `Specializing`. `.boxy` reports the same
@@ -16713,8 +16723,8 @@ and Per-Module Output is the invariant that makes it possible:
   never its importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
-  every restored object and compares the bytes, so a key that misses an input
-  fails instead of linking a stale object.
+  every restored or embedded object (Embedded Units) and compares the bytes,
+  so a key that misses an input fails instead of linking a stale object.
 - The TARGET is part of the object file's key because machine code is
   target-specific. If lowered data that is not object code is ever kept (a
   LIR image for the interpreter paths, for instance), it goes in a separate
@@ -16726,10 +16736,86 @@ and Per-Module Output is the invariant that makes it possible:
   and modules whose keys are known can be lowered independently and in
   parallel, since the inputs of each are its own and its imports' checked
   modules and nothing else.
+- An entry can come from the compiler's binary instead of the cache
+  (Embedded Units). That is the only other place a unit's entry comes from.
 
 Specialized builds keep no per-module object cache: their specializations are
 inherently cross-module, and they emit from the current checked modules
 ("Cache storage").
+
+#### Embedded Units
+
+The Builtin module's unit is the head of every import chain and the largest
+unit most programs have, and every input of its object is fixed when the
+compiler is built: it imports nothing, binds no hosted functions, and its
+link name digests its module name and checking interface. The compiler's
+build therefore builds it once and links the finished cache entry into the
+compiler (`compile.boxy_embedded_units`), so a compiler that embeds it never
+lowers or compiles it for that key, with a cold cache, a warm one, or
+`--no-cache`.
+
+Exactly one entry is embedded: the Builtin's ordinary unit for the target
+the compiler runs on at its default CPU level
+(`RocTarget.fromStdTarget` of the compiler's own target), at dev opt with
+inline expects compiled in, with no run image, no expect sites and no wasm
+stack checks, under the Builtin's stable link name. That is the unit
+compile-time evaluation links against (`lowering_policy.compileTimeObjectLowering`)
+and the unit a native dev `roc build` or `roc run`, and a `roc test` whose
+Builtin unit needs no expect sites (the Builtin has no expects), links,
+since all of them key it identically. A compiler target without a dev
+backend embeds nothing.
+
+Selection is by key, never by a description of the unit. The table records
+each entry's `KeyInput` (the Builtin's `objectInput`, the target and opt
+names, the policy bits). `boxy_unit.restoreOrBuild` keys each recorded input
+under the running compiler and serves the unit from the table when one
+equals the unit's key, before it looks in the cache. Every other key misses
+the table and takes the ordinary cache path unchanged: a `v1` CPU-level host
+(its target name differs), another target, another opt, a test unit with
+expect sites, the compiler-only function-value variant (`functionUnitKey`),
+and a link in which another module shares the Builtin's stable name, which
+names the Builtin by content.
+
+The entry is built by a Debug host tool (src/build/builtin_unit.zig): the
+compiler's own lowering, ARC and backend modules, which load the baked
+checked Builtin exactly as the compiler does, prepare the unit exactly as
+`compile.coordinator.BoxyObjects` prepares it, and encode the entry with
+`boxy_unit.buildEntry`, the encoder `restoreOrBuild` files entries with.
+The tool need not be the compiler it builds for, because what the compiler
+emits does not depend on how the compiler was built ("Output Determinism"):
+a Debug tool on the build machine builds the entry an optimized compiler
+for any target would. So a cross-compiled compiler embeds its unit like any
+other, and the tool's compilation is a Debug one. A cache key does fold in
+the running compiler's own build
+(`build_options.compiler_compatibility_hash`), which is why the table
+records key inputs and not keys. The table records the tool's source
+identity (`build_options.compiler_artifact_hash`), and the compiler asserts
+it equals its own. Any change to the compiler's sources, the Builtin, or the
+cache formats reruns the tool through the build graph, and an unchanged
+build reuses its table. The compiler's compilation waits for the table, so
+embedding puts the tool's compilation and run (about a minute) on the path
+to the compiler. A Debug compiler therefore embeds nothing unless built
+with `-Dembed-builtin-unit=true`, so iterating on the compiler does not pay
+for it; every other optimize mode embeds by default.
+
+The table also carries the Builtin's digests (`boxy_interface.Digests`):
+its interface digest and its object input, which, since it imports
+nothing, are its own part of its digests alone, recorded with its checked
+artifact key and its link name. `Digests.add` gives a module whose
+artifact key and link name equal a recorded pair those digests instead of
+hashing its public surface and stored values in every process; any other
+pair (another Builtin, or the Builtin named by content) hashes as usual.
+
+`zig build run-test-builtin-unit` builds the unit through `restoreOrBuild`
+into an empty cache, with the tool compiled as the compiler is (its target,
+its optimize mode), and requires the filed entry to be byte-identical to
+the Debug tool's table entry, the table to serve its key, and the embedded
+digests to be the ones hashing the Builtin gives. MiniCI runs it in
+ReleaseSafe, so it compares a Debug build's unit with an optimized build's;
+a compiler for a target the build machine cannot run is not verified.
+`ROC_VERIFY_BOXY_OBJECT_REUSE`
+rebuilds the embedded entry inside the compiler itself and compares it like
+a restored one, and hashes the Builtin to compare its embedded digests.
 
 #### Unit Pieces And Whole-Program Dead Code
 
@@ -16854,8 +16940,8 @@ compile-time evaluator's under either strategy, so the compilation lowers and
 compiles each procedure its compile-time roots reach once, and a checked
 module holds the same values whichever strategy completed it ("Compile-Time
 Evaluation Under `.lss`"). A module finalized on its own, outside a program
-session (the baked Builtin's among them), splits each batch of its roots
-between the two evaluators as `lowerEvalAndFinishRoots` describes.
+session (the baked Builtin's among them), is a program of that module alone
+and splits its roots between the two evaluators the same way.
 The `.boxy` compile-time evaluator (`evaluateRootsBoxy`) orders the pending
 roots by the values they read,
 computed from the checked modules alone (`eval/checked_root_graph.zig`: a
@@ -21908,6 +21994,10 @@ Roc marks one through `bool_likely : Bool -> Bool`, the identity on its
 operand: the `branch_expectation` pass, first of the procedure-local
 rewrites, marks cold the default of every Bool switch whose condition is a
 `bool_likely` result, reached through pure aliases from a single definition.
+The pass runs only for consumers that read the mark
+(`TargetConfig.reads_branch_expectations`, set by each caller): LLVM
+consumers do, and dev builds, the interpreter and compile-time evaluation
+skip it.
 `List.get` and `List.set` guard their unchecked operation this way, so a
 bounds check's miss arm is cold wherever those inline. The marker stays an
 ordinary identity low-level, and the range prover reads through it to the
@@ -23161,6 +23251,15 @@ pending work before treating its result slot as a value. The versioned pack
 format records the summary alongside the ownership ABI; an older entry without
 the result is incompatible, never assumed to return a completed value.
 
+ARC reports whether its insertion deferred any erased call
+(`Arc.InsertResult`): each emission records the fact for its own body, and the
+ordered shard append merges the records. No stage before ARC emits a deferred
+call. When ARC deferred none and no cache-supplied procedure's summary says it
+may leave a call pending, nothing can be pending after any statement, so the
+pass skips its walk and only commits `may_leave_pending` as false for every
+procedure. A Debug compiler walks anyway and asserts that it finds no deferred
+call and no procedure that may leave one.
+
 A call's result may be converted to another representation before it is
 returned, by statements after the call. The pass marks a direct call or a
 deferred call `returns_pending` when its value reaches the return through
@@ -23949,13 +24048,19 @@ ownership-complete payload view, which carries the union's whole unit. It is
 held when that payload reaches a consuming operand (the closure read out of a
 record of closures, whose captures are unwrapped and passed to the closure
 body), or when it dismantles through that payload view (the held tag-union
-view rule below). Its definition copies only the
+view rule below). A discriminant read of a tag-union view observes none of
+the container's slots, so a take of the union's slot can run before the
+view's definition. The definition of either kind of view copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
-view's residual shell, numbered in the view's own layout. A view whose shell
-names every refcounted slot of its layout carries nothing but that
-representation, so it is readable after the container has given every slot
-away. This is what lets
+view's residual shell, numbered in the view's own layout, where a tag-union
+view's one slot is slot 0. A view whose shell names every refcounted slot of
+its layout carries nothing but that representation, so it is readable after
+the container has given every slot away: a struct view for its scalar fields
+and the views nested in it, a tag-union view only for its discriminant, which
+sits in the copied inline bytes. So `when model.page is` still reads the
+page's tag after `model.page` itself left the dying `model` by a take into
+the next model. This is what lets
 `{ cursor, builder: { nodes, children }, node }` returned from one call
 hand `builder.nodes` to the next append without a retain: the builder is
 read as a view each time the source names it, and each list leaves the dying
@@ -24142,7 +24247,10 @@ its committed refcounted slots. A field read that holds no unit and has claimed
 nothing of its own is a view of its parent struct's slots, so a claim through
 it is a claim of the parent's slots offset by its first slot, and a read
 through it of a slot already claimed is a read after a take unless the view's
-residual shell names that slot. Path states keep the first word inline and share sparse
+residual shell names that slot. A tag union read the same way is a view of
+its parent's one slot: a payload read through it after that slot was claimed
+is a read after a take, and a residual shell naming its slot leaves it
+readable only for its discriminant. Path states keep the first word inline and share sparse
 persistent words for higher indices; forks and outcome-restitution receipts retain
 exact prior sets. Join comparison and memo hashing use field-set contents rather
 than snapshot addresses. A container's unit is spent only when its claims equal
@@ -28615,6 +28723,25 @@ available. Hot loading therefore applies only to apps with a real platform
 header. Windows uses explicit shared-memory handle inheritance for both the host
 shim child and the internal rebuild worker.
 
+## Runs Of A Built Executable
+
+A `roc` run that builds an executable and then executes it (any `--opt=size`
+or `--opt=speed` run, a run of a URL, a `--no-cache` dev run that does not
+watch, and a `.boxy` dev run of an app without a platform header) starts the
+program before the compiler releases the build's state. Every build path
+returns through one step (`finishBuildCommand`) once its output is published:
+the link has written the file, renamed it into place and closed every handle
+to it, and the build's cache entries are filed. Given `run_output`, that step
+flushes the compiler's output and starts the program, and the build's
+teardown (checked modules, stores, LIR, worker threads, scratch
+directories) then runs while the program does. The compiler writes nothing to
+stdout or stderr after the program starts, except developer diagnostics. The
+run waits for both: it finishes teardown, then waits for the program, and
+exits with the program's status exactly as when the two ran one after the
+other. Nothing the program reads is released by teardown: the executable
+lives in the run's own scratch directory, which is released only after the
+program exits. A build that fails starts nothing.
+
 ## Relationship To Cor LSS
 
 The `.lss` runtime lowering strategy mirrors Cor's LSS experiment after
@@ -28835,6 +28962,60 @@ fatal-signal handlers embed the same context without resolving names. A Debug
 compiler started with `ROC_DEBUG_FORCE_ICE=<phase>[:<module or stage>]`
 panics on purpose when a matching frame is pushed; CLI tests use it to pin
 each phase's report.
+
+### Detailed Timing
+
+`--timings` turns on detailed timing (`CheckedPipeline.Timing.enableDetail`),
+which itemizes every post-check stage beneath its own line. Without the flag
+no stage reads a clock for a detail, allocates for one, or stores one: a
+stage holding a timing tests whether it is detailed once per step, and the
+per-procedure and per-statement paths test a pointer that is null. Detailed
+timing never changes what the compiler emits, takes part in no cache key,
+and orders nothing.
+
+Compile-time evaluation reports its steps (root graph, root classification,
+waiting for builds, program builds, lowering, procedure code generation,
+entry wrappers, import image selection, host splice, static data placement,
+program runs, root job setup, unit keys, the wait for every unit, module
+commit, checked cache writes) and counts its roots by kind and by value
+form, its programs, batches, retry passes, units restored and built, import
+images selected and loaded, and slow-root progress threads. Value form is a
+syntactic classification for this output only: no compiler decision reads
+it.
+
+Boxy lowering reports setup, unit worker seeding, root workers, worker
+bodies, type table filling, layout and static data requests, export needs,
+names and runtime schemas, and static descriptors, and counts the workers it
+lowers by kind. Each module unit measures its steps on a timing of its own:
+digest and key, restore, lower, LIR passes, ARC, static data, code
+generation, unit image, export records, encoding, cache write, the wait for
+its imports' objects and the wait for a worker. The steps are summed over
+units, and the ten slowest units by their own work, with the Builtin
+module's unit always, are printed one per row.
+
+The LIR passes report each procedure-local phase's elapsed time,
+preparation, summed worker time, idle worker capacity and ordered commit,
+with procedures visited and changed, and each whole-program step before ARC
+and after it. Summed worker time comes from one slot per task
+(`post_check_task_executor.TimedTasks`) or per lane, folded by the
+coordinator after the barrier, so no two lanes write one counter. Idle
+capacity is each parallel section's elapsed time times the executor's
+worker count, less the summed worker time.
+
+ARC reports its serial steps, each parallel step's elapsed time and summed
+worker time, and idle worker capacity.
+
+A module unit's native code generation reports backend setup, procedure
+setup, waves, worker setup, stack planning with emission, fragment
+extraction, idle workers, fragment commit, symbolic reference resolution,
+entrypoints, the steps lifting code into pieces, image composition, DWARF,
+object encoding and the unit image, with the bytes of code, objects,
+images, pieces and cache entries, and code bytes and statements by LIR
+statement kind. A statement's bytes run from its start to the next
+statement's start.
+
+Lambda-set solving reports its analysis solve, which finds the row-joined
+types, its solver setup, and the real solve.
 
 ### Developer Diagnostics
 

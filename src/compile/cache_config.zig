@@ -386,7 +386,8 @@ pub const Constants = struct {
     /// 192: literal argument roots record their edge owner as their own root
     ///      source and hold no expression.
     /// 193: combines the two independent 192 entries.
-    pub const CACHE_VERSION = 193;
+    /// 194: checked artifacts index their compile-time roots by pattern.
+    pub const CACHE_VERSION = 194;
 };
 
 /// Configuration for the Roc cache system.

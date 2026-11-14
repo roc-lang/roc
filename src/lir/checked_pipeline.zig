@@ -269,6 +269,11 @@ pub const TargetConfig = struct {
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
     tag_reachability: bool = false,
+    /// The consumer reads the cold-default marks of switches on `bool_likely`
+    /// conditions, so the `branch_expectation` pass runs. Only the LLVM
+    /// backend reads them; dev builds, the interpreter and compile-time
+    /// evaluation turn this off.
+    reads_branch_expectations: bool = true,
     /// Elide checks proven always-safe by unsigned value-range analysis. This
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
@@ -331,7 +336,7 @@ pub const Timing = struct {
     std_io: std.Io,
     demand_mutex: std.Io.Mutex = .init,
     demand: DemandMetrics = .{},
-    detailed_monotype_body: bool = false,
+    detailed: bool = false,
     monotype_diagnostics_mutex: std.Io.Mutex = .init,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
     solved_lir_parallel_mutex: std.Io.Mutex = .init,
@@ -386,15 +391,109 @@ pub const Timing = struct {
     boxy_unit_restore_ns: TimingCounter = .{},
     lir_passes_ns: TimingCounter = .{},
     arc_ns: TimingCounter = .{},
+    /// Detailed Boxy lowering steps and work counts (`BoxyTiming`).
+    boxy_steps_ns: [BoxyTiming.step_count]TimingCounter = @splat(.{}),
+    boxy_workers_by_kind: [BoxyTiming.worker_kind_count]TimingCounter = @splat(.{}),
+    boxy_tables_filled: TimingCounter = .{},
+    /// Detailed module unit steps, summed over units (`UnitStep`).
+    unit_steps_ns: [unit_step_count]TimingCounter = @splat(.{}),
+    units_mutex: std.Io.Mutex = .init,
+    /// The slowest module units, and the Builtin module's unit.
+    units: UnitRecords = .{},
+    /// Detailed LIR pass steps outside the procedure-local phases.
+    pass_steps_ns: [pass_step_count]TimingCounter = @splat(.{}),
+    /// Detailed procedure-local phase measures, by `ProcPassMeasure` and
+    /// phase.
+    proc_passes: [proc_pass_measure_count][ProcPasses.phase_count]TimingCounter = @splat(@splat(.{})),
+    /// Detailed ARC insertion steps (`ArcTiming.Step`).
+    arc_steps_ns: [ArcTiming.step_count]TimingCounter = @splat(.{}),
+    /// Detailed steps of the specializing stages (`LssStep`).
+    lss_steps_ns: [lss_step_count]TimingCounter = @splat(.{}),
+    /// Detailed native code generation steps and counts of module units.
+    codegen_steps_ns: [codegen_step_count]TimingCounter = @splat(.{}),
+    codegen_counts: [codegen_count_count]TimingCounter = @splat(.{}),
+    /// Code bytes and statements emitted, by LIR statement kind.
+    stmt_bytes: [stmt_kind_count]TimingCounter = @splat(.{}),
+    stmt_counts: [stmt_kind_count]TimingCounter = @splat(.{}),
 
     pub fn init(std_io: std.Io) Timing {
         return .{ .std_io = std_io };
     }
 
-    /// Enable fine-grained, per-node Monotype body timing. This is opt-in
-    /// because timestamping interleaved body work has measurable overhead.
-    pub fn enableDetailedMonotypeBody(self: *Timing) void {
-        self.detailed_monotype_body = true;
+    /// Enable fine-grained timing: per-node Monotype body timing and every
+    /// detailed step and work count a stage records. This is opt-in because
+    /// timestamping interleaved work has measurable overhead.
+    pub fn enableDetail(self: *Timing) void {
+        self.detailed = true;
+    }
+
+    /// `timing` when it records detailed steps.
+    pub fn detailOf(timing: ?*Timing) ?*Timing {
+        const active = timing orelse return null;
+        return if (active.detailed) active else null;
+    }
+
+    /// A clock reading for a detailed step, or zero when `timing` records
+    /// no detail.
+    pub fn startDetail(timing: ?*Timing) i64 {
+        const active = detailOf(timing) orelse return 0;
+        return active.start();
+    }
+
+    /// The nanoseconds since `started_ns`, which `startDetail` read.
+    pub fn elapsedSince(self: *const Timing, started_ns: i64) u64 {
+        return @intCast(@max(0, timingNowNs(self.std_io) - started_ns));
+    }
+
+    /// Add the time since `started_ns` to unit step `step` when `timing`
+    /// records detail.
+    pub fn finishUnitStep(timing: ?*Timing, started_ns: i64, step: UnitStep) void {
+        const active = detailOf(timing) orelse return;
+        active.unit_steps_ns[@backingInt(step)].add(active.elapsedSince(started_ns));
+    }
+
+    /// Fold one lowering's procedure-local phase measures.
+    pub fn addProcPasses(self: *Timing, passes: *const ProcPasses.Timing) void {
+        const columns = [proc_pass_measure_count]*const [ProcPasses.phase_count]u64{
+            &passes.wall_ns,     &passes.prepare_ns, &passes.rewrite_ns, &passes.worker_ns,
+            &passes.capacity_ns, &passes.commit_ns,  &passes.visited,    &passes.changed,
+        };
+        for (&self.proc_passes, columns) |*row, values| {
+            for (row, values) |*counter, value| counter.add(value);
+        }
+    }
+
+    /// Add `amount` to codegen count `count` when `timing` records detail.
+    pub fn addCodegenCount(timing: ?*Timing, count: CodegenCount, amount: u64) void {
+        const active = detailOf(timing) orelse return;
+        active.codegen_counts[@backingInt(count)].add(amount);
+    }
+
+    /// Fold one ARC insertion's detailed steps.
+    pub fn addArc(self: *Timing, arc: *const ArcTiming) void {
+        addCounters(ArcTiming.step_count, &self.arc_steps_ns, arc.steps_ns);
+    }
+
+    /// Fold one Boxy lowering's detailed steps and counts.
+    pub fn addBoxy(self: *Timing, boxy: *const BoxyTiming) void {
+        for (&self.boxy_steps_ns, boxy.steps_ns) |*counter, value| counter.add(value);
+        for (&self.boxy_workers_by_kind, boxy.workers_by_kind) |*counter, value| counter.add(value);
+        self.boxy_tables_filled.add(boxy.tables_filled);
+    }
+
+    /// Keep `record` if it is among the slowest units or is the Builtin
+    /// module's unit.
+    pub fn addUnitRecord(self: *Timing, record: UnitRecord) void {
+        self.units_mutex.lockUncancelable(self.std_io);
+        defer self.units_mutex.unlock(self.std_io);
+        self.units.add(record);
+    }
+
+    fn unitsSnapshot(self: *const Timing) UnitRecords {
+        const mutable = @constCast(self);
+        mutable.units_mutex.lockUncancelable(self.std_io);
+        defer mutable.units_mutex.unlock(self.std_io);
+        return self.units;
     }
 
     pub fn snapshot(self: *const Timing) TimingSnapshot {
@@ -452,6 +551,23 @@ pub const Timing = struct {
             .lir_pass_parallel = self.lirPassParallelSnapshot(),
             .arc_parallel = self.arcParallelSnapshot(),
             .demand = self.demandSnapshot(),
+            .boxy_steps_ns = loadCounters(BoxyTiming.step_count, &self.boxy_steps_ns),
+            .boxy_workers_by_kind = loadCounters(BoxyTiming.worker_kind_count, &self.boxy_workers_by_kind),
+            .boxy_tables_filled = self.boxy_tables_filled.load(),
+            .unit_steps_ns = loadCounters(unit_step_count, &self.unit_steps_ns),
+            .units = self.unitsSnapshot(),
+            .pass_steps_ns = loadCounters(pass_step_count, &self.pass_steps_ns),
+            .arc_steps_ns = loadCounters(ArcTiming.step_count, &self.arc_steps_ns),
+            .lss_steps_ns = loadCounters(lss_step_count, &self.lss_steps_ns),
+            .codegen_steps_ns = loadCounters(codegen_step_count, &self.codegen_steps_ns),
+            .codegen_counts = loadCounters(codegen_count_count, &self.codegen_counts),
+            .stmt_bytes = loadCounters(stmt_kind_count, &self.stmt_bytes),
+            .stmt_counts = loadCounters(stmt_kind_count, &self.stmt_counts),
+            .proc_passes = proc_passes: {
+                var values: [proc_pass_measure_count][ProcPasses.phase_count]u64 = undefined;
+                for (&self.proc_passes, &values) |*row, *out| out.* = loadCounters(ProcPasses.phase_count, row);
+                break :proc_passes values;
+            },
         };
     }
 
@@ -507,6 +623,20 @@ pub const Timing = struct {
         self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
         self.arc_ns.add(snapshot_value.arc_ns);
         self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
+        addCounters(BoxyTiming.step_count, &self.boxy_steps_ns, snapshot_value.boxy_steps_ns);
+        addCounters(BoxyTiming.worker_kind_count, &self.boxy_workers_by_kind, snapshot_value.boxy_workers_by_kind);
+        self.boxy_tables_filled.add(snapshot_value.boxy_tables_filled);
+        addCounters(unit_step_count, &self.unit_steps_ns, snapshot_value.unit_steps_ns);
+        addCounters(pass_step_count, &self.pass_steps_ns, snapshot_value.pass_steps_ns);
+        addCounters(ArcTiming.step_count, &self.arc_steps_ns, snapshot_value.arc_steps_ns);
+        addCounters(lss_step_count, &self.lss_steps_ns, snapshot_value.lss_steps_ns);
+        addCounters(codegen_step_count, &self.codegen_steps_ns, snapshot_value.codegen_steps_ns);
+        addCounters(codegen_count_count, &self.codegen_counts, snapshot_value.codegen_counts);
+        addCounters(stmt_kind_count, &self.stmt_bytes, snapshot_value.stmt_bytes);
+        addCounters(stmt_kind_count, &self.stmt_counts, snapshot_value.stmt_counts);
+        for (&self.proc_passes, snapshot_value.proc_passes) |*row, values| addCounters(ProcPasses.phase_count, row, values);
+        for (snapshot_value.units.slowest[0..snapshot_value.units.len]) |record| self.addUnitRecord(record);
+        if (snapshot_value.units.builtin) |record| self.addUnitRecord(record);
     }
 
     fn start(self: *const Timing) i64 {
@@ -642,6 +772,247 @@ pub const Timing = struct {
 
 const TimingCounter = base.ConcurrentU64;
 
+fn loadCounters(comptime n: usize, counters: *const [n]TimingCounter) [n]u64 {
+    var values: [n]u64 = undefined;
+    for (counters, &values) |*counter, *value| value.* = counter.load();
+    return values;
+}
+
+fn addCounters(comptime n: usize, counters: *[n]TimingCounter, values: [n]u64) void {
+    for (counters, values) |*counter, value| counter.add(value);
+}
+
+/// Detailed timing of one Boxy lowering.
+pub const BoxyTiming = postcheck.Boxy.Lower.Timing;
+
+/// Detailed timing of the procedure-local LIR phases of one lowering.
+pub const ProcPassTiming = ProcPasses.Timing;
+
+/// Detailed timing of one ARC insertion.
+pub const ArcTiming = Arc.Timing;
+
+/// A step of a module unit's native code generation that detailed timing
+/// itemizes, summed over units.
+pub const CodegenStep = enum {
+    backend_setup,
+    /// Indexing the unit's data and procedures before the first wave.
+    procedure_setup,
+    /// Elapsed time of the procedure waves.
+    procedure_waves,
+    /// Worker code generator setup, summed over lanes.
+    procedure_worker_setup,
+    /// Stack planning and instruction emission, summed over lanes.
+    procedure_emit,
+    /// Fragment extraction, summed over lanes.
+    procedure_extract,
+    /// Worker capacity over the waves that no procedure used.
+    procedure_idle,
+    /// Appending fragments to the unit's code, in order.
+    procedure_commit,
+    /// Resolving the unit's symbolic references.
+    procedure_resolve,
+    entrypoints,
+    /// Finishing the unit's code before lifting it into pieces.
+    finish_image,
+    /// The data catalog pieces are extracted against.
+    catalog,
+    piece_extraction,
+    content_naming,
+    /// Host-visible data, helper aliases, and source files of the pieces.
+    piece_data,
+    /// Composing the pieces into an object for the unit image.
+    composition,
+    dwarf,
+    object_encoding,
+    /// Reading the composed object back into the unit image.
+    unit_image,
+};
+
+/// The number of `CodegenStep` members.
+pub const codegen_step_count = @typeInfo(CodegenStep).@"enum".field_names.len;
+
+/// A step of the specializing (`.lss`) stages that detailed timing
+/// itemizes.
+pub const LssStep = enum {
+    /// Lambda-set solving's analysis solve, which finds row-joined types.
+    lambda_analysis_solve,
+    lambda_solver_setup,
+    /// The real lambda-set solve and its finishing passes.
+    lambda_solve,
+};
+
+/// The number of `LssStep` members.
+pub const lss_step_count = @typeInfo(LssStep).@"enum".field_names.len;
+
+/// A byte or item count of module units' native code generation.
+pub const CodegenCount = enum {
+    procedures_emitted,
+    helpers_emitted,
+    code_bytes_emitted,
+    object_bytes,
+    image_bytes,
+    pieces_bytes,
+    cache_entry_bytes,
+};
+
+/// The number of `CodegenCount` members.
+pub const codegen_count_count = @typeInfo(CodegenCount).@"enum".field_names.len;
+
+/// The number of LIR statement kinds.
+pub const stmt_kind_count = @typeInfo(std.meta.Tag(LIR.CFStmt)).@"enum".field_names.len;
+
+/// A whole-program step of the LIR passes, or of the work after ARC, that
+/// detailed timing itemizes.
+pub const PassStep = enum {
+    /// Resolving `.boxy` erased calls' ownership sources.
+    erased_owner,
+    single_use_inline,
+    return_slot,
+    str_append,
+    tag_reachability,
+    /// Dropping procedures and data nothing references, before ARC.
+    reachable_procs_before_arc,
+    tail_drive,
+    /// Dropping procedures and data nothing references, after ARC.
+    reachable_procs_after_arc,
+    immortal_locals,
+    comptime_value_guards,
+    /// LIR dumps and censuses, which developer diagnostics enable.
+    lir_diagnostics,
+};
+
+/// The number of `PassStep` members.
+pub const pass_step_count = @typeInfo(PassStep).@"enum".field_names.len;
+
+/// A per-phase measure of the procedure-local LIR phases
+/// (`ProcPasses.Timing`).
+pub const ProcPassMeasure = enum { wall, prepare, rewrite, worker, capacity, commit, visited, changed };
+
+/// The number of `ProcPassMeasure` members.
+pub const proc_pass_measure_count = @typeInfo(ProcPassMeasure).@"enum".field_names.len;
+
+/// A detailed LIR pass step in progress; records nothing when `timing`
+/// records no detail.
+pub const PassStepScope = struct {
+    timing: ?*Timing,
+    started_ns: i64,
+    step: PassStep,
+
+    /// Start `step`, reading the clock only when `timing` records detail.
+    pub fn begin(timing: ?*Timing, step: PassStep) PassStepScope {
+        const active = Timing.detailOf(timing) orelse return .{ .timing = null, .started_ns = 0, .step = step };
+        return .{ .timing = active, .started_ns = active.start(), .step = step };
+    }
+
+    /// Record the step's duration. Idempotent.
+    pub fn end(self: *PassStepScope) void {
+        const active = self.timing orelse return;
+        active.pass_steps_ns[@backingInt(self.step)].add(active.elapsedSince(self.started_ns));
+        self.timing = null;
+    }
+};
+
+/// A step of one module unit that detailed timing itemizes (design.md
+/// "Caching Under `.boxy`").
+pub const UnitStep = enum {
+    /// Digesting the unit's inputs and computing its object cache key.
+    key,
+    /// Reading and decoding the unit's object from the object cache.
+    restore,
+    /// Boxy lowering of the unit.
+    lower,
+    /// LIR passes over the unit.
+    lir_passes,
+    /// ARC insertion into the unit.
+    arc,
+    /// Building the unit's static data exports.
+    static_data,
+    /// Native or wasm code generation of the unit's procedures.
+    codegen,
+    /// Building the unit image from its code pieces.
+    image,
+    /// The unit's export records and their digest.
+    export_records,
+    /// Encoding the unit's pieces and cache entry.
+    encode,
+    /// Writing the encoded entry to the object cache.
+    cache_write,
+    /// Between the unit's offer and the last of its imports' objects
+    /// becoming known.
+    import_wait,
+    /// Between the unit's imports being known and a worker starting it.
+    queue_wait,
+};
+
+/// The number of `UnitStep` members.
+pub const unit_step_count = @typeInfo(UnitStep).@"enum".field_names.len;
+
+/// One module unit's detailed step durations.
+pub const UnitRecord = struct {
+    name_bytes: [48]u8 = undefined,
+    name_len: u8 = 0,
+    restored: bool = false,
+    steps_ns: [unit_step_count]u64 = @splat(0),
+
+    /// A record of the unit of `module_name`, with no steps yet.
+    pub fn init(module_name: []const u8, restored: bool) UnitRecord {
+        var record: UnitRecord = .{ .restored = restored };
+        record.name_len = @intCast(@min(module_name.len, record.name_bytes.len));
+        @memcpy(record.name_bytes[0..record.name_len], module_name[0..record.name_len]);
+        return record;
+    }
+
+    /// The unit's module name.
+    pub fn name(self: *const UnitRecord) []const u8 {
+        return self.name_bytes[0..self.name_len];
+    }
+
+    /// The unit's own work, excluding the time it waited for its imports.
+    pub fn workNs(self: UnitRecord) u64 {
+        var total: u64 = 0;
+        for (self.steps_ns, 0..) |value, index| {
+            if (index == @backingInt(UnitStep.import_wait) or index == @backingInt(UnitStep.queue_wait)) continue;
+            total +|= value;
+        }
+        return total;
+    }
+};
+
+/// The slowest module units by their own work, slowest first, and the
+/// Builtin module's unit, which every compilation has.
+pub const UnitRecords = struct {
+    /// How many of the slowest units are kept.
+    pub const capacity = 10;
+
+    slowest: [capacity]UnitRecord = undefined,
+    len: u8 = 0,
+    builtin: ?UnitRecord = null,
+
+    /// Keep `record` among the slowest, or fold it into the Builtin record.
+    pub fn add(self: *UnitRecords, record: UnitRecord) void {
+        if (std.mem.eql(u8, record.name(), "Builtin")) {
+            if (self.builtin) |*kept| {
+                for (&kept.steps_ns, record.steps_ns) |*total, value| total.* +|= value;
+            } else self.builtin = record;
+            return;
+        }
+        const work = record.workNs();
+        var position: usize = self.len;
+        while (position > 0 and self.slowest[position - 1].workNs() < work) position -= 1;
+        if (position >= capacity) return;
+        const kept = @min(@as(usize, self.len), capacity - 1);
+        var index = kept;
+        while (index > position) : (index -= 1) self.slowest[index] = self.slowest[index - 1];
+        self.slowest[position] = record;
+        self.len = @intCast(kept + 1);
+    }
+
+    /// Whether every recorded unit's steps are zero.
+    pub fn isEmpty(self: *const UnitRecords) bool {
+        return self.len == 0 and self.builtin == null;
+    }
+};
+
 /// Immutable checked-to-LIR timings for progress reporting.
 pub const TimingSnapshot = struct {
     monotype_ns: u64 = 0,
@@ -682,6 +1053,24 @@ pub const TimingSnapshot = struct {
     arc_ns: u64 = 0,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
     demand: DemandMetrics = .{},
+    boxy_steps_ns: [BoxyTiming.step_count]u64 = @splat(0),
+    boxy_workers_by_kind: [BoxyTiming.worker_kind_count]u64 = @splat(0),
+    boxy_tables_filled: u64 = 0,
+    unit_steps_ns: [unit_step_count]u64 = @splat(0),
+    units: UnitRecords = .{},
+    pass_steps_ns: [pass_step_count]u64 = @splat(0),
+    proc_passes: [proc_pass_measure_count][ProcPasses.phase_count]u64 = @splat(@splat(0)),
+    arc_steps_ns: [ArcTiming.step_count]u64 = @splat(0),
+    lss_steps_ns: [lss_step_count]u64 = @splat(0),
+    codegen_steps_ns: [codegen_step_count]u64 = @splat(0),
+    codegen_counts: [codegen_count_count]u64 = @splat(0),
+    stmt_bytes: [stmt_kind_count]u64 = @splat(0),
+    stmt_counts: [stmt_kind_count]u64 = @splat(0),
+
+    /// The recorded `measure` of procedure-local phase `phase`.
+    pub fn procPass(self: *const TimingSnapshot, measure: ProcPassMeasure, phase: LirPassPhase) u64 {
+        return self.proc_passes[@backingInt(measure)][@backingInt(phase)];
+    }
 };
 
 /// A post-check stage `--timings` itemizes on its own line.
@@ -1092,6 +1481,7 @@ pub const LirPolicy = struct {
     thread_confined_rc: bool,
     layout_request_const_plans: bool,
     tag_reachability: bool,
+    reads_branch_expectations: bool,
     prove_ranges: bool,
 
     pub fn fromTarget(target: TargetConfig) LirPolicy {
@@ -1437,11 +1827,11 @@ pub fn prepareCheckedModulesMonotype(
     else
         null;
     var monotype_diagnostics: ?postcheck.Monotype.Lower.Diagnostics = if (target.timing) |timing|
-        if (timing.detailed_monotype_body) .{} else null
+        if (timing.detailed) .{} else null
     else
         null;
     if (monotype_timing) |*detail| {
-        detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
+        detail.body_work_timing_enabled = target.timing.?.detailed;
     }
     var demand_counters: postcheck.Monotype.Lower.DemandCounters = .{};
     const mono = monotype: {
@@ -1564,7 +1954,14 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     const lifted_input = lifted;
     lifted_owned = false;
     lifted = undefined;
-    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted_input);
+    var solve_detail: ?postcheck.LambdaSolved.Solve.Timing = if (Timing.detailOf(target.timing)) |timing| .{ .std_io = timing.std_io } else null;
+    var solved = try postcheck.LambdaSolved.Solve.runTimed(allocator, lifted_input, if (solve_detail) |*detail| detail else null);
+    if (solve_detail) |detail| {
+        const timing = target.timing.?;
+        timing.lss_steps_ns[@backingInt(LssStep.lambda_analysis_solve)].add(detail.analysis_ns);
+        timing.lss_steps_ns[@backingInt(LssStep.lambda_solver_setup)].add(detail.setup_ns);
+        timing.lss_steps_ns[@backingInt(LssStep.lambda_solve)].add(detail.solve_ns);
+    }
     errdefer solved.deinit();
     lambda_solve_timing_scope.end();
 
@@ -1791,14 +2188,16 @@ fn runProcedurePass(
     result: *LirProgram.Result,
     target: TargetConfig,
     phase: ProcPasses.Phase,
+    timing: ?*ProcPasses.Timing,
 ) Allocator.Error!void {
-    try ProcPasses.run(
+    try ProcPasses.runTimed(
         allocator,
         &result.store,
         &result.layouts,
         phase,
         target.post_check_executor,
         target.lir_pass_parallel_metrics_out,
+        timing,
     );
 }
 
@@ -1825,64 +2224,82 @@ fn finishLoweredOutput(
     // ownership source; the allocation's root is reached through the
     // representation-transparent aliases lowering emitted (design.md
     // "Destination-Passing Results and Allocation Reuse").
+    var proc_pass_detail: ?ProcPasses.Timing = if (Timing.detailOf(target.timing)) |timing| .{ .std_io = timing.std_io } else null;
+    defer if (proc_pass_detail) |*detail| target.timing.?.addProcPasses(detail);
+    const pass_timing: ?*ProcPasses.Timing = if (proc_pass_detail) |*detail| detail else null;
+    var erased_owner_scope = PassStepScope.begin(target.timing, .erased_owner);
     if (target.specialization_strategy != .lss) {
         const store = &lowered.lir_result.store;
+        var scratch = ErasedOwner.Scratch.init(allocator);
+        defer scratch.deinit();
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
-            try ErasedOwner.resolveProcReuseSources(allocator, store, &lowered.lir_result.layouts, proc_id);
+            try ErasedOwner.resolveProcReuseSources(&scratch, store, &lowered.lir_result.layouts, proc_id);
         }
     }
+    erased_owner_scope.end();
     // Branch expectations are read off the lowered switches before any
     // rewrite reshapes them.
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation);
+    if (target.reads_branch_expectations) try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation, pass_timing);
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .trmc);
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .trmc, pass_timing);
     if (target.specialization_strategy == .lss) {
         if (target.inline_mode == .none) {
+            var single_use_scope = PassStepScope.begin(target.timing, .single_use_inline);
             try SingleUseInline.run(&lowered.lir_result);
-            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .forwarding_join);
+            single_use_scope.end();
+            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .forwarding_join, pass_timing);
         }
         // Every inline mode produces tag-valued joins whose body matches the
         // tag at once: the iterator-fusion clone in `.none`, and the checked
         // wrappers substituted at their call sites in `.wrappers`, whose
         // `Try` results the caller matches immediately.
         if (target.fuse_tag_cases) {
-            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion);
+            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion, pass_timing);
         }
     }
     // Every mode: a join parameter nothing reads still keeps its written
     // value alive past any consuming call on the entry path. Scalarization
     // first gives each variable carried out of a construct with its result
     // its own parameter, so pruning can remove it.
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params);
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize, pass_timing);
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params, pass_timing);
     if (target.promote_loop_appends.enabled()) {
-        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append);
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append, pass_timing);
     }
     if (target.prove_ranges) {
-        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .range);
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .range, pass_timing);
     }
     if (target.reuse_boxes) {
-        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse, pass_timing);
     }
+    var return_slot_scope = PassStepScope.begin(target.timing, .return_slot);
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    return_slot_scope.end();
+    var str_append_scope = PassStepScope.begin(target.timing, .str_append);
     try StrAppend.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    str_append_scope.end();
     if (target.tag_reachability) {
+        var tag_reachability_scope = PassStepScope.begin(target.timing, .tag_reachability);
         try TagReachability.run(&lowered.lir_result);
+        tag_reachability_scope.end();
     }
+    var reachable_scope = PassStepScope.begin(target.timing, .reachable_procs_before_arc);
     if (frozen.*) |*data| {
         try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
     } else {
         try ReachableProcs.run(&lowered.lir_result);
     }
+    reachable_scope.end();
     lir_passes_timing_scope.end();
 
     var arc_timing_scope = PipelineStageScope.begin(target.timing, .arc);
     defer arc_timing_scope.end();
     var local_arc_metrics: ArcParallelMetrics = .{};
     const arc_metrics = arcMetricsOutput(target, &local_arc_metrics);
+    var arc_detail: ?ArcTiming = if (Timing.detailOf(target.timing)) |timing| .{ .std_io = timing.std_io } else null;
     var arc_roots = std.ArrayList(LIR.LirProcSpecId).empty;
     defer arc_roots.deinit(allocator);
     try arc_roots.appendSlice(allocator, lowered.lir_result.root_procs.items);
@@ -1912,7 +2329,7 @@ fn finishLoweredOutput(
             try arc_roots.append(allocator, proc);
         };
     }
-    try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
+    const arc_result = try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
         .specialize = target.specialize_arc_modes,
         .prove_uniqueness = target.prove_uniqueness,
@@ -1920,28 +2337,40 @@ fn finishLoweredOutput(
         .thread_confined_rc = target.thread_confined_rc,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
         .metrics_out = arc_metrics,
+        .timing = if (arc_detail) |*detail| detail else null,
     });
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
+    if (arc_detail) |*detail| target.timing.?.addArc(detail);
     arc_timing_scope.end();
 
-    try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items});
+    var tail_drive_scope = PassStepScope.begin(target.timing, .tail_drive);
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items}, arc_result.deferred_erased_calls);
+    tail_drive_scope.end();
 
     // Retain only procedures and data referenced after ARC.
+    var reachable_after_scope = PassStepScope.begin(target.timing, .reachable_procs_after_arc);
     if (frozen.*) |*data| {
         try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
     } else {
         try ReachableProcs.run(&lowered.lir_result);
     }
+    reachable_after_scope.end();
 
     // After the certifier has checked ARC's ledger, so that what it verified
     // is the placement ARC produced.
+    var immortal_scope = PassStepScope.begin(target.timing, .immortal_locals);
     _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store, if (target.immortal_string_literals) .static_data_and_strings else .static_data);
+    immortal_scope.end();
 
+    var guards_scope = PassStepScope.begin(target.timing, .comptime_value_guards);
     try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result, if (frozen.*) |*data| data else null);
+    guards_scope.end();
 
+    var diagnostics_scope = PassStepScope.begin(target.timing, .lir_diagnostics);
     try LirDump.run(&lowered.lir_result);
     if (SpecCensus.enabled()) try SpecCensus.runLir(allocator, &lowered.lir_result);
     ProcCensus.run(&lowered.lir_result, target.specialization_strategy);
+    diagnostics_scope.end();
 
     if (root_count != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
@@ -1988,6 +2417,7 @@ pub const PreparedBoxy = struct {
         std.debug.assert(target.specialization_strategy == .boxy);
         const allocator = self.allocator;
         var boxy_timing_scope = PipelineStageScope.begin(target.timing, .boxy_lowering);
+        var boxy_detail: ?BoxyTiming = if (Timing.detailOf(target.timing)) |timing| .{ .std_io = timing.std_io } else null;
         var output = try postcheck.Boxy.run(allocator, .{
             .modules = self.modules,
             .roots = rootRequests(self.roots, self.layout_requests, self.static_data_requests),
@@ -2003,8 +2433,10 @@ pub const PreparedBoxy = struct {
             .stored_functions = target.boxy_stored_functions,
             .function_unit = target.boxy_function_unit,
             .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
+            .timing = if (boxy_detail) |*detail| detail else null,
         });
         boxy_timing_scope.end();
+        if (boxy_detail) |*detail| target.timing.?.addBoxy(detail);
         try LirDump.run(&output.lir_result);
         var lowered: struct {
             lir_result: LirProgram.Result,

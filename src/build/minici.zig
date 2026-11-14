@@ -305,6 +305,10 @@ const jobs = [_]Job{
     .{ .name = "run-test-cli-platforms-boxy", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
     .{ .name = "run-test-builtin-bake-reproducible" },
+    // Builds its own ReleaseSafe verifier: the table is built by a Debug
+    // tool, so an optimized verifier is what checks that the compiler emits
+    // the same unit however it was built.
+    .{ .name = "run-test-builtin-unit", .build_args = &.{"-Doptimize=ReleaseSafe"} },
     .{ .name = "run-test-downstream-package" },
     .{ .name = "run-test-wasm-static-lib" },
     .{ .name = "run-test-dylib" },
@@ -3909,14 +3913,16 @@ test "appendCacheReuseSummary keeps a job's own configuration out of the reuse t
 test "only a job with build options of its own is exempt from the cache-reuse canary" {
     // Every job listed here compiles a configuration `build-ci` does not build.
     // Adding one is a decision to compile in a shard, so it is made here.
+    const exempt = [_][]const u8{ "run-check-machine-code-shim-archive", "run-test-builtin-unit" };
     var with_build_args: usize = 0;
     for (jobs) |job| {
         if (job.build_args.len == 0) continue;
-        with_build_args += 1;
-        try std.testing.expectEqualStrings("run-check-machine-code-shim-archive", job.name);
+        try std.testing.expect(with_build_args < exempt.len);
+        try std.testing.expectEqualStrings(exempt[with_build_args], job.name);
         try std.testing.expectEqual(@as(usize, 0), job.expected_compiles.len);
+        with_build_args += 1;
     }
-    try std.testing.expectEqual(@as(usize, 1), with_build_args);
+    try std.testing.expectEqual(exempt.len, with_build_args);
 }
 
 test "appendCacheReuseSummary names each phase that did not reuse its cache" {
