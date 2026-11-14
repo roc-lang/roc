@@ -558,6 +558,30 @@ test "a runtime program specialized again registers literal roots its evaluation
     try std.testing.expect(literal_roots != 0);
 }
 
+test "a runtime program specialized again converts an interpolation a literal argument root validates in place" {
+    // `describe`'s interpolation depends on its instance, and `main!`'s use
+    // of `describe` fixes it to `Str`, which checking converts in a
+    // validate-only literal argument root. Compile-time evaluation therefore
+    // specializes no discovery root for it, and the runtime program,
+    // specialized again because `stored` holds a function value, converts it
+    // in place rather than registering a literal root evaluation never
+    // registered (design.md "Literal Arguments").
+    const literal_roots = try coldEqualsWarmLiteralRoots(.respecialized,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\describe = |{ title }| "The movie '${title}'"
+        \\make : U64 -> (U64 -> U64)
+        \\make = |offset| |value| value + offset
+        \\stored = make(7)
+        \\main! = |args| {
+        \\    titles = [{ title: Str.inspect(stored(List.len(args))) }]
+        \\    Echo.line!(Str.join_with(titles.map(describe), ", "))
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(@as(usize, 0), literal_roots);
+}
+
 const dev_target: lir.CheckedPipeline.TargetConfig = .{
     .inline_mode = lir.CheckedPipeline.dev_inline_mode,
     .spec_constr_clone_inlining = lir.CheckedPipeline.dev_spec_constr_clone_inlining,

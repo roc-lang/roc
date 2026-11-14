@@ -2398,7 +2398,10 @@ app's procedure, a method dispatch selects by type, a stored function value,
 a target derived from a function's type), a custom interpolation, or a
 conversion root no evaluation requests. A specialization that converts a
 literal at the closed type of a stored `literal_argument` root restores that
-root's value instead of registering a literal root. Specializing the rest of
+root's value instead of registering a literal root, and one that converts a
+literal at the closed type of a validate-only `literal_argument` root (every
+interpolation's among them) converts it in place, since that root's
+evaluation already reports its outcome. Specializing the rest of
 the runtime program, or lowering any of it for execution, is runtime work,
 and compile-time evaluation without an LSS runtime consumer to continue its
 program does none of it. Its program roots are *discovery roots*,
@@ -15992,7 +15995,12 @@ strategy).
   program's modules by literal (`LiteralArgumentRootIndex`), and a
   specialization converting a literal whose node's type is closed restores
   the value of the root whose type's Monotype is that type
-  (`restoredLiteralArgument`) instead of registering a literal root. A debug
+  (`restoredLiteralArgument`) instead of registering a literal root. A
+  specialization converting a literal at the type of a validate-only root,
+  which stores no value, converts the literal in place, as a runtime program
+  does where it needs the value, and registers no literal root either
+  (`literalArgumentRootValidates`): the root's evaluation, which every
+  compilation runs, reports its outcome. A debug
   compiler asserts that every root for the literal at that type stored the
   same value. A root whose conversion failed reported the failure in its
   module and stores it; the specialization restores it as a failure already

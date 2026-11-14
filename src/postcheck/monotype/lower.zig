@@ -5966,17 +5966,22 @@ const DeclaredComptimeRoots = std.AutoHashMap(EntryRoot, u32);
 /// module indices do not; distinct checked modules routinely share an index.
 const SourceFileIds = std.AutoHashMap([32]u8, u32);
 
-/// The `literal_argument` roots with stored values in the lowering's module
-/// views, by the literal each converts (design.md "Literal Arguments"). A
-/// literal is converted where its type first becomes concrete, under either
-/// strategy, so a specialization converting a literal at the closed type of
-/// one of these roots restores that root's value. The coordinator builds the
-/// index once before any body is lowered, and workers read it.
+/// The `literal_argument` roots of the lowering's module views, by the
+/// literal each converts (design.md "Literal Arguments"). A literal is
+/// converted where its type first becomes concrete, under either strategy,
+/// so a specialization converting a literal at the closed type of one of
+/// these roots reads what that root did: it restores the value of a root
+/// whose value is stored, and it hoists no literal root for a literal a
+/// validate-only root converts, whose evaluation every compilation runs and
+/// reports. The coordinator builds the index once before any body is
+/// lowered, and workers read it.
 const LiteralArgumentRootIndex = struct {
-    ranges: std.AutoHashMapUnmanaged(Site, Range) = .empty,
-    candidates: []const Candidate = &.{},
-
-    const Range = struct { start: u32, len: u32 };
+    /// Roots whose value is stored: a converted value, or the failure a
+    /// rejected conversion stores.
+    stored: Table = .{},
+    /// Validate-only roots, whatever their payload: every compilation
+    /// evaluates them, and none stores a converted value.
+    validating: Table = .{},
 
     /// A literal: its module, expression, and conversion kind.
     const Site = struct { module: [32]u8, node: u32, kind: checked.LiteralArgumentKind };
@@ -5985,56 +5990,90 @@ const LiteralArgumentRootIndex = struct {
     /// views, and its identity there.
     const Candidate = struct { view: u32, root: checked.ComptimeRootId };
 
+    const Class = enum { stored, validating };
+
+    /// One class of roots, grouped by the literal each converts.
+    const Table = struct {
+        ranges: std.AutoHashMapUnmanaged(Site, Range) = .empty,
+        candidates: []const Candidate = &.{},
+
+        const Range = struct { start: u32, len: u32 };
+
+        fn build(allocator: Allocator, views: []const ModuleViewData, class: Class) Allocator.Error!Table {
+            var counts = std.AutoHashMapUnmanaged(Site, Range).empty;
+            errdefer counts.deinit(allocator);
+            var total: u32 = 0;
+            for (views) |*view| {
+                for (view.compile_time_roots.roots.items()) |root| {
+                    const site = siteOf(root, class) orelse continue;
+                    const entry = try counts.getOrPut(allocator, site);
+                    if (!entry.found_existing) entry.value_ptr.* = .{ .start = 0, .len = 0 };
+                    entry.value_ptr.len += 1;
+                    total += 1;
+                }
+            }
+            var next: u32 = 0;
+            var ranges = counts.valueIterator();
+            while (ranges.next()) |range| {
+                range.start = next;
+                next += range.len;
+                range.len = 0;
+            }
+            const candidates = try allocator.alloc(Candidate, total);
+            for (views, 0..) |*view, view_index| {
+                for (view.compile_time_roots.roots.items()) |root| {
+                    const site = siteOf(root, class) orelse continue;
+                    const range = counts.getPtr(site).?;
+                    candidates[range.start + range.len] = .{ .view = @intCast(view_index), .root = root.id };
+                    range.len += 1;
+                }
+            }
+            return .{ .ranges = counts, .candidates = candidates };
+        }
+
+        fn deinit(self: *Table, allocator: Allocator) void {
+            self.ranges.deinit(allocator);
+            allocator.free(self.candidates);
+            self.candidates = &.{};
+        }
+
+        fn rootsOf(self: *const Table, site: Site) []const Candidate {
+            const range = self.ranges.get(site) orelse return &.{};
+            return self.candidates[range.start..][0..range.len];
+        }
+    };
+
     fn build(allocator: Allocator, views: []const ModuleViewData) Allocator.Error!LiteralArgumentRootIndex {
-        var counts = std.AutoHashMapUnmanaged(Site, Range).empty;
-        errdefer counts.deinit(allocator);
-        var total: u32 = 0;
-        for (views) |*view| {
-            for (view.compile_time_roots.roots.items()) |root| {
-                const site = storedSite(root) orelse continue;
-                const entry = try counts.getOrPut(allocator, site);
-                if (!entry.found_existing) entry.value_ptr.* = .{ .start = 0, .len = 0 };
-                entry.value_ptr.len += 1;
-                total += 1;
-            }
-        }
-        var next: u32 = 0;
-        var ranges = counts.valueIterator();
-        while (ranges.next()) |range| {
-            range.start = next;
-            next += range.len;
-            range.len = 0;
-        }
-        const candidates = try allocator.alloc(Candidate, total);
-        for (views, 0..) |*view, view_index| {
-            for (view.compile_time_roots.roots.items()) |root| {
-                const site = storedSite(root) orelse continue;
-                const range = counts.getPtr(site).?;
-                candidates[range.start + range.len] = .{ .view = @intCast(view_index), .root = root.id };
-                range.len += 1;
-            }
-        }
-        return .{ .ranges = counts, .candidates = candidates };
+        var stored = try Table.build(allocator, views, .stored);
+        errdefer stored.deinit(allocator);
+        return .{ .stored = stored, .validating = try Table.build(allocator, views, .validating) };
     }
 
-    /// The literal a root converts, when it is a `literal_argument` root
-    /// whose value is stored.
-    fn storedSite(root: checked.CompileTimeRoot) ?Site {
+    /// The literal a root converts, when it is a `literal_argument` root of
+    /// `class`.
+    fn siteOf(root: checked.CompileTimeRoot, class: Class) ?Site {
         const argument = root.literal_argument orelse return null;
-        if (root.payload != .const_node) return null;
+        const member = switch (class) {
+            .stored => root.payload == .const_node,
+            .validating => argument.validate_only,
+        };
+        if (!member) return null;
         return .{ .module = argument.site.module.bytes, .node = argument.site.node, .kind = argument.site.kind };
     }
 
     fn deinit(self: *LiteralArgumentRootIndex, allocator: Allocator) void {
-        self.ranges.deinit(allocator);
-        allocator.free(self.candidates);
-        self.candidates = &.{};
+        self.stored.deinit(allocator);
+        self.validating.deinit(allocator);
     }
 
     /// The roots with stored values converting the literal `site`.
-    fn rootsOf(self: *const LiteralArgumentRootIndex, site: Site) []const Candidate {
-        const range = self.ranges.get(site) orelse return &.{};
-        return self.candidates[range.start..][0..range.len];
+    fn storedRootsOf(self: *const LiteralArgumentRootIndex, site: Site) []const Candidate {
+        return self.stored.rootsOf(site);
+    }
+
+    /// The validate-only roots converting the literal `site`.
+    fn validatingRootsOf(self: *const LiteralArgumentRootIndex, site: Site) []const Candidate {
+        return self.validating.rootsOf(site);
     }
 };
 
@@ -36165,7 +36204,7 @@ const BodyContext = struct {
                 }
                 const request_fn = try functionRequestNode(self.graph, task.assembler_node, &.{iterator_node}, assembler_fn.ret);
                 const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, request_fn, site);
-                const callee = if (self.builder.literal_roots)
+                const callee = if (self.builder.literal_roots and !try self.literalArgumentRootValidates(task.expr, .interpolation, request_fn))
                     try self.literalRootRead(task.expr, site, assembler, request_fn)
                 else
                     assembler;
@@ -36192,7 +36231,8 @@ const BodyContext = struct {
                 self.draft.evaluation_depth -= 1;
                 const site = self.literalRejectionSite(task.expr);
                 const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, task.assembler_node, site);
-                if (self.builder.literal_roots) _ = try self.literalRootRead(task.expr, site, assembler, task.assembler_node);
+                if (self.builder.literal_roots and !try self.literalArgumentRootValidates(task.expr, .interpolation, task.assembler_node))
+                    _ = try self.literalRootRead(task.expr, site, assembler, task.assembler_node);
                 // The segments and values lower interleaved, in order, each
                 // at `Str`, and are written once.
                 task.stage = .written_once;
@@ -52300,6 +52340,7 @@ const BodyContext = struct {
         // A conversion reaching a local procedure that needs its declaration
         // context runs where that context exists: in place, at runtime.
         if (self.dispatchPlanSelectsLocalProc(plan)) return value;
+        if (try self.literalArgumentRootValidates(expr_id, specializedLiteralKind(site), value_node)) return value;
         return try self.literalRootRead(expr_id, site, value, value_node);
     }
 
@@ -52315,12 +52356,8 @@ const BodyContext = struct {
         value_node: NodeId,
     ) Allocator.Error!?DraftExprId {
         const site = self.literalRejectionSite(expr_id);
-        const kind: checked.LiteralArgumentKind = switch (site.kind) {
-            .numeral => .numeral,
-            .quote => .quote,
-            .interpolation => Common.invariant("a specialized literal conversion pointed at an interpolation"),
-        };
-        const candidates = self.builder.literalArgumentRootIndex().rootsOf(.{ .module = self.view.key.bytes, .node = site.node, .kind = kind });
+        const kind = specializedLiteralKind(site);
+        const candidates = self.builder.literalArgumentRootIndex().storedRootsOf(.{ .module = self.view.key.bytes, .node = site.node, .kind = kind });
         if (candidates.len == 0) return null;
         if (!try self.graph.typeIsResolved(value_node)) return null;
         const ty = try self.activeTypeFromNode(value_node);
@@ -52350,6 +52387,34 @@ const BodyContext = struct {
             return restored;
         }
         return null;
+    }
+
+    /// Whether a validate-only `literal_argument` root converts this literal
+    /// at the closed type `node` denotes: the literal's value type for a
+    /// numeral or a quote, the assembler's function type for an
+    /// interpolation (design.md "Literal Arguments"). Every compilation
+    /// evaluates that root and reports its outcome, so the specialization
+    /// converts the literal in place, where the value is needed, and hoists
+    /// no literal root for it.
+    fn literalArgumentRootValidates(
+        self: *BodyContext,
+        expr_id: ExprSite,
+        kind: checked.LiteralArgumentKind,
+        node: NodeId,
+    ) Allocator.Error!bool {
+        const literal = expr_id.rawNode() orelse Common.invariant("a converted literal had no CIR node");
+        const candidates = self.builder.literalArgumentRootIndex().validatingRootsOf(.{ .module = self.view.key.bytes, .node = literal, .kind = kind });
+        if (candidates.len == 0) return false;
+        if (!try self.graph.typeIsResolved(node)) return false;
+        const ty = try self.activeTypeFromNode(node);
+        for (candidates) |candidate| {
+            const view = &self.builder.moduleViews()[candidate.view];
+            const argument = view.compile_time_roots.root(candidate.root).literal_argument orelse
+                Common.invariant("a validating literal argument root index entry named a root that converts no literal");
+            const root_ty = try self.closedCheckedMonoOf(view, argument.ty);
+            if (root_ty == ty or try self.typeStore().typeEql(self.nameStore(), root_ty, ty)) return true;
+        }
+        return false;
     }
 
     /// Every root converting one literal at one type stores one value.
@@ -71190,6 +71255,16 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) static_
 
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
     return .{ .bytes = key.bytes };
+}
+
+/// The literal argument kind of a numeral or quote whose conversion a
+/// specialization selects.
+fn specializedLiteralKind(site: Common.LiteralRejectionSite) checked.LiteralArgumentKind {
+    return switch (site.kind) {
+        .numeral => .numeral,
+        .quote => .quote,
+        .interpolation => Common.invariant("a specialized literal conversion pointed at an interpolation"),
+    };
 }
 
 /// Content bytes identifying a procedure-use root: the module it was
