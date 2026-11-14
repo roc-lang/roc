@@ -5463,6 +5463,21 @@ exactly as it is for a closed record. With `U` an uncommitted tail:
 A committed record never changes once it is committed. The empty record relates
 to a row only when that row holds no field, so a closed row absorbs no field
 a relation offers it, and relating it to a nominal type is a type mismatch.
+A nominal type over a record or tag union that meets a committed plain row of
+its own kind (one an annotation wrote, or one committed after it was built),
+in either direction and at any depth, is a type mismatch whose refusal
+records the facts its report states (`RecordTailRefusal.plain_record`,
+`plain_tag_union`): the nominal type, which side of the relation was the
+plain row, whether the nominal declares anonymous fields, and whether this
+module may build or take apart its values. The report says that a nominal type
+is never the same as a plain record or tag union, names the anonymous fields
+where the nominal has them, and suggests only fixes that hold: writing the
+nominal in the annotation that says the value is plain; for a record of a
+nominal the module may build and take apart, converting between the two with
+the nominal's record syntax; and for a nominal with anonymous fields, building
+it from the plain record's fields, which only the side holding the plain
+record can do. A nominal of another kind (`U64` meeting a record) is an
+ordinary mismatch.
 
 A record lifts into a nominal type only while the final extension of its
 row, followed through record segments and aliases, is an unbound flex
@@ -5719,7 +5734,11 @@ supplies), `test/cli/open_records_imported/` (the same across a module
 boundary, accepted and rejected), `test/cli/OpenRecordsPaddedRejected.roc`
 and `test/cli/OpenRecordsAddedFieldRejected.roc` (each refusal in every
 position, with its report), `test/cli/OpenRecordsHintFixes.roc` (every fix
-the refusal hints suggest, compiled and run), `test/cli/OptionalFieldsPerUse.roc` (two uses
+the refusal hints suggest, compiled and run),
+`test/cli/NominalPlainRowRejected.roc` and
+`test/cli/NominalPlainRowHintFixes.roc` (a nominal type meeting a committed
+plain record or tag union in each position and direction, with its report,
+and every fix its hint suggests), `test/cli/OptionalFieldsPerUse.roc` (two uses
 refused fields of different types), `test/cli/LiftedUseLeavesOtherUses.roc`
 and `test/cli/lifted_use_leaves_other_uses/` (uses that lift and keep their
 results, in one module and across modules),

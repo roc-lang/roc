@@ -277,6 +277,10 @@ b : Light
 b = pick(1) # ERROR! pick returns [Red, Green], which is not a Light.
 ```
 
+The same goes the other way: a `Light` can't be used where an annotation says
+`[Red, Green]`. To fix either one, write `Light` in the annotation instead of the tag
+union type.
+
 Each call to `pick_inferred` decides for itself whether its result becomes a `Light`, so
 `pick_inferred(2)` can still be used as a plain `[Red, Green]` somewhere else. A call to `pick`
 can still be used as a wider structural tag union, like `[Red, Green, Blue]`.

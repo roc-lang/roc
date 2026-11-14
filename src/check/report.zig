@@ -5921,7 +5921,118 @@ pub const ReportBuilder = struct {
                     }
                 }
             },
+            .plain_record => |plain_row| try self.renderPlainRowRefusal(report, plain_row, .record),
+            .plain_tag_union => |plain_row| try self.renderPlainRowRefusal(report, plain_row, .tag_union),
         }
+    }
+
+    /// Why a nominal type and a committed plain record or tag union don't
+    /// relate, and the fixes that hold for this refusal: write the nominal in
+    /// the annotation that says the value is plain, and, for a record of a
+    /// nominal this module can build or take apart, convert between the two
+    /// with the nominal's record syntax (design.md "Uncommitted Record
+    /// Tails"). A nominal with anonymous fields is converted only by building
+    /// it, so that fix is offered only where the plain record is the value.
+    fn renderPlainRowRefusal(self: *Self, report: *Report, refusal: problem_mod.RecordTailRefusal.PlainRow, comptime row: enum { record, tag_union }) Allocator.Error!void {
+        const nominal = refusal.nominal;
+        const plain = switch (row) {
+            .record => "plain record",
+            .tag_union => "plain tag union",
+        };
+        const members = switch (row) {
+            .record => "fields",
+            .tag_union => "tags",
+        };
+        const row_type = switch (row) {
+            .record => "record type",
+            .tag_union => "tag union type",
+        };
+        const record_syntax = try std.fmt.allocPrint(self.gpa, "{s}.{{ ... }}", .{self.nominalDisplayName(nominal)});
+        defer self.gpa.free(record_syntax);
+        var docs: [24]D = undefined;
+        var len: usize = 0;
+        const anonymous_fields = [_]D{
+            D.bytes("anonymous"),
+            D.bytes("("),
+            D.bytes("_").withAnnotation(.inline_code).withNoPrecedingSpace(),
+            D.bytes(")").withNoPrecedingSpace(),
+            D.bytes("fields"),
+        };
+        switch (refusal.plain_side) {
+            .expected => {
+                docs[len] = D.typeIdent(nominal).withAnnotation(.inline_code);
+                len += 1;
+                if (refusal.nominal_padded) {
+                    docs[len] = D.bytes("is a nominal type with");
+                    len += 1;
+                    @memcpy(docs[len..][0..anonymous_fields.len], &anonymous_fields);
+                    len += anonymous_fields.len;
+                    docs[len] = D.bytes(", and a nominal type is never the same as a " ++ plain ++ ".").withNoPrecedingSpace();
+                    len += 1;
+                } else {
+                    docs[len] = D.bytes("is a nominal type, and a nominal type is never the same as a " ++ plain ++ ", even one with exactly its " ++ members ++ ".");
+                    len += 1;
+                }
+            },
+            .actual => {
+                docs[len] = D.bytes("A " ++ plain ++ " is never the same as a nominal type like");
+                docs[len + 1] = D.typeIdent(nominal).withAnnotation(.inline_code);
+                len += 2;
+                if (refusal.nominal_padded) {
+                    docs[len] = D.bytes(", which also has").withNoPrecedingSpace();
+                    len += 1;
+                    @memcpy(docs[len..][0..anonymous_fields.len], &anonymous_fields);
+                    len += anonymous_fields.len;
+                    docs[len] = D.bytes(".").withNoPrecedingSpace();
+                    len += 1;
+                } else {
+                    docs[len] = D.bytes(", even when it has exactly its " ++ members ++ ".").withNoPrecedingSpace();
+                    len += 1;
+                }
+            },
+        }
+        try D.renderSlice(docs[0..len], self, report);
+        try report.document.addLineBreaks(2);
+        len = 0;
+        const annotation_hint = [_]D{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("To use a"),
+            D.typeIdent(nominal).withAnnotation(.inline_code),
+            D.bytes("here, write"),
+            D.typeIdent(nominal).withAnnotation(.inline_code),
+            D.bytes("instead of the " ++ row_type ++ " in the type annotation that says it's a " ++ plain ++ "."),
+        };
+        @memcpy(docs[0..annotation_hint.len], &annotation_hint);
+        len = annotation_hint.len;
+        const converts_both_ways = row == .record and !refusal.nominal_opaque and !refusal.nominal_padded;
+        const builds = row == .record and !refusal.nominal_opaque and refusal.nominal_padded and refusal.plain_side == .actual;
+        if (converts_both_ways) {
+            const syntax = try report.addOwnedString(record_syntax);
+            const conversion = [_]D{
+                D.bytes("You can also convert between a"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes("and a plain record with"),
+                D.bytes(syntax).withAnnotation(.inline_code),
+                D.bytes(": build a").withNoPrecedingSpace(),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes("from a record's fields, or take a"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes("apart and build a record from its fields."),
+            };
+            @memcpy(docs[len..][0..conversion.len], &conversion);
+            len += conversion.len;
+        } else if (builds) {
+            const building = [_]D{
+                D.bytes("You can also build a"),
+                D.typeIdent(nominal).withAnnotation(.inline_code),
+                D.bytes("from the record's fields with"),
+                D.bytes(try report.addOwnedString(record_syntax)).withAnnotation(.inline_code),
+                D.bytes(", which provides the anonymous fields automatically.").withNoPrecedingSpace(),
+            };
+            @memcpy(docs[len..][0..building.len], &building);
+            len += building.len;
+        }
+        try D.renderSlice(docs[0..len], self, report);
     }
 
     /// The text of a nominal type's name as the report shows it.

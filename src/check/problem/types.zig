@@ -673,6 +673,13 @@ pub const RecordTailRefusal = union(enum) {
     /// stays one. The payload is the nominal type the tag union was to
     /// become.
     compared_plain_tags: Ident.Idx,
+    /// A nominal type over a record met a committed plain record (one an
+    /// annotation wrote, or one committed after it was built): a plain record
+    /// never becomes a nominal type, and a nominal type is never a plain
+    /// record.
+    plain_record: PlainRow,
+    /// A nominal type over a tag union met a committed plain tag union.
+    plain_tag_union: PlainRow,
 
     /// Which refusal this is.
     pub const Kind = std.meta.Tag(RecordTailRefusal);
@@ -701,13 +708,29 @@ pub const RecordTailRefusal = union(enum) {
         taken_apart: bool,
     };
 
+    /// A nominal type that met a committed plain row of its own kind, whose
+    /// labels fit the nominal's.
+    pub const PlainRow = struct {
+        /// The nominal type.
+        nominal: Ident.Idx,
+        /// Which side of the relation was the plain row.
+        plain_side: Side,
+        /// The nominal type declares unnamed fields.
+        nominal_padded: bool,
+        /// The nominal type is opaque and this module is not its module, so
+        /// its values can be neither built nor taken apart here.
+        nominal_opaque: bool,
+
+        pub const Side = enum { expected, actual };
+    };
+
     /// Whether the record is one the binding takes apart with a record
     /// pattern, rather than one it builds.
     pub fn takenApart(self: RecordTailRefusal) bool {
         return switch (self) {
             .padded_nominal => |padded| padded.taken_apart,
             .added_field => |added| added.taken_apart,
-            .compared_plain, .compared_plain_tags => false,
+            .compared_plain, .compared_plain_tags, .plain_record, .plain_tag_union => false,
         };
     }
 };

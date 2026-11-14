@@ -340,7 +340,7 @@ fn expectPaddedPatternRefusal(comptime source: []const u8, omits: bool) TestEnv.
     const refusal = test_env.checker.problems.problems.items[0].type_mismatch.record_tail_refusal orelse return error.TestUnexpectedResult;
     const padded = switch (refusal) {
         .padded_nominal => |padded| padded,
-        .added_field, .compared_plain, .compared_plain_tags => return error.TestUnexpectedResult,
+        .added_field, .compared_plain, .compared_plain_tags, .plain_record, .plain_tag_union => return error.TestUnexpectedResult,
     };
     try std.testing.expect(padded.taken_apart);
     try std.testing.expectEqual(omits, padded.omits_omittable_field);
@@ -493,5 +493,179 @@ test "a union an exhaustive match closed gains no tag" {
         \\    x = C
         \\    if c r else x
         \\}
+    );
+}
+
+// A nominal type meeting a committed plain record or tag union
+
+/// Expect exactly one type mismatch, refused because a nominal type met a
+/// committed plain row of its own kind, with the side that was plain and
+/// whether the nominal declares anonymous fields.
+fn expectPlainRowRefusal(comptime source: []const u8, kind: Refusal.Kind, plain_side: Refusal.PlainRow.Side, padded: bool) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+    const refusal = test_env.checker.problems.problems.items[0].type_mismatch.record_tail_refusal orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(kind, std.meta.activeTag(refusal));
+    const plain_row = switch (refusal) {
+        .plain_record, .plain_tag_union => |plain_row| plain_row,
+        .padded_nominal, .added_field, .compared_plain, .compared_plain_tags => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(plain_side, plain_row.plain_side);
+    try std.testing.expectEqual(padded, plain_row.nominal_padded);
+    try std.testing.expect(!plain_row.nominal_opaque);
+}
+
+/// Expect exactly one type mismatch that carries no refusal.
+fn expectPlainMismatch(comptime source: []const u8) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+    try std.testing.expect(test_env.checker.problems.problems.items[0].type_mismatch.record_tail_refusal == null);
+}
+
+test "a nominal argument where an annotation takes a plain record is refused as a plain record" {
+    try expectPlainRowRefusal(
+        \\Pt := { x : U64 }
+        \\take : { x : U64 } -> U64
+        \\take = |r| r.x
+        \\p : Pt
+        \\p = Pt.{ x: 1 }
+        \\n = take(p)
+    , .plain_record, .expected, false);
+}
+
+test "a padded nominal in a field where an annotation writes the empty record is refused as a plain record" {
+    try expectPlainRowRefusal(
+        \\Only := { _ : U64 }
+        \\take : { k : {} } -> U64
+        \\take = |_| 1
+        \\beside : { k : Only }
+        \\beside = { k: {} }
+        \\n = take(beside)
+    , .plain_record, .expected, true);
+}
+
+test "a nominal inside a List where an annotation takes plain records is refused as a plain record" {
+    try expectPlainRowRefusal(
+        \\Pt := { x : U64 }
+        \\take : List({ x : U64 }) -> U64
+        \\take = |l| List.len(l)
+        \\p : Pt
+        \\p = Pt.{ x: 1 }
+        \\n = take([p])
+    , .plain_record, .expected, false);
+}
+
+test "a nominal result where an annotation returns a plain record is refused as a plain record" {
+    try expectPlainRowRefusal(
+        \\Pt := { x : U64 }
+        \\make : U64 -> { x : U64 }
+        \\make = |n| Pt.{ x: n }
+    , .plain_record, .expected, false);
+}
+
+test "a plain record an annotation writes passed where a nominal is expected is refused as a plain record" {
+    try expectPlainRowRefusal(
+        \\Pt := { x : U64 }
+        \\take : Pt -> U64
+        \\take = |Pt.{ x }| x
+        \\r : { x : U64 }
+        \\r = { x: 1 }
+        \\n = take(r)
+    , .plain_record, .actual, false);
+}
+
+test "an annotated empty record passed where a padded nominal is expected is refused as a plain record" {
+    try expectPlainRowRefusal(
+        \\Only := { _ : U64 }
+        \\take : Only -> U64
+        \\take = |_| 1
+        \\r : {}
+        \\r = {}
+        \\n = take(r)
+    , .plain_record, .actual, true);
+}
+
+test "a nominal tag union where an annotation takes a plain tag union is refused as a plain tag union" {
+    try expectPlainRowRefusal(
+        \\Color := [Red, Green]
+        \\take : [Red, Green] -> U64
+        \\take = |c| match c {
+        \\    Red => 1
+        \\    Green => 2
+        \\}
+        \\c : Color
+        \\c = Red
+        \\n = take(c)
+    , .plain_tag_union, .expected, false);
+}
+
+test "a plain tag union an annotation writes passed where a nominal is expected is refused as a plain tag union" {
+    try expectPlainRowRefusal(
+        \\Color := [Red, Green]
+        \\take : Color -> U64
+        \\take = |c| match c {
+        \\    Red => 1
+        \\    Green => 2
+        \\}
+        \\t : [Red, Green]
+        \\t = Red
+        \\n = take(t)
+    , .plain_tag_union, .actual, false);
+}
+
+test "a number where a plain record is expected carries no plain-row refusal" {
+    try expectPlainMismatch(
+        \\take : { x : U64 } -> U64
+        \\take = |r| r.x
+        \\n : U64
+        \\n = 3
+        \\m = take(n)
+    );
+}
+
+test "a nominal over a tag union where a plain record is expected carries no plain-row refusal" {
+    try expectPlainMismatch(
+        \\Color := [Red, Green]
+        \\take : { x : U64 } -> U64
+        \\take = |r| r.x
+        \\c : Color
+        \\c = Red
+        \\n = take(c)
+    );
+}
+
+test "a record literal still lifts into a nominal where its own annotation is absent" {
+    try expectOk(
+        \\Pt := { x : U64 }
+        \\take : Pt -> U64
+        \\take = |Pt.{ x }| x
+        \\n = take({ x: 1 })
+    );
+}
+
+test "a plain tag union with a tag the nominal lacks carries no plain-row refusal" {
+    try expectPlainMismatch(
+        \\Color := [Red, Green]
+        \\take : Color -> U64
+        \\take = |c| match c {
+        \\    Red => 1
+        \\    Green => 2
+        \\}
+        \\t : [Blue]
+        \\t = Blue
+        \\n = take(t)
+    );
+}
+
+test "a plain record with a field the nominal lacks carries no plain-row refusal" {
+    try expectPlainMismatch(
+        \\Pt := { x : U64 }
+        \\take : Pt -> U64
+        \\take = |Pt.{ x }| x
+        \\r : { x : U64, y : U64 }
+        \\r = { x: 1, y: 2 }
+        \\n = take(r)
     );
 }

@@ -311,6 +311,12 @@ b : Point
 b = make(1) # ERROR! make returns { x : F64, y : F64 }, which is not a Point.
 ```
 
+The same goes the other way: a `Point` can't be used where an annotation says
+`{ x : F64, y : F64 }`. To fix either one, write `Point` in the annotation instead of
+the record type. You can also convert between the two yourself: `Point.{ x, y: 0 }` builds a
+`Point` from a record's fields, and taking a `Point` apart with `Point.{ x, y }` gives you
+fields you can build a plain record from.
+
 The record `make_inferred` returns can become a `Point` because a `Point` has exactly the
 same fields, stored the same way. It can't gain a field where you use it, though, and it
 can't become a nominal record that has [`_` fields](#records-at-the-host-boundary):
