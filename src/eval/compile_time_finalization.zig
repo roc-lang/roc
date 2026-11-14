@@ -5088,7 +5088,7 @@ const DevProgressReporter = struct {
     /// The running batch's jobs, empty between batches. The reporter thread
     /// reads them only while holding `mutex`.
     jobs: []DevRootJob = &.{},
-    mutex: std.atomic.Mutex = .unlocked,
+    mutex: std.Io.Mutex = .init,
     stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     wake_epoch: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     thread: ?DevProgressThread = null,
@@ -5137,14 +5137,14 @@ const DevProgressReporter = struct {
         self.thread = null;
     }
 
+    /// Only a reporter with an `std_io` watches jobs (`beginBatch`), so every
+    /// caller has one.
     fn lock(self: *DevProgressReporter) void {
-        while (!self.mutex.tryLock()) {
-            std.atomic.spinLoopHint();
-        }
+        self.mutex.lockUncancelable(self.options.std_io.?);
     }
 
     fn unlock(self: *DevProgressReporter) void {
-        self.mutex.unlock();
+        self.mutex.unlock(self.options.std_io.?);
     }
 
     fn rootStarted(self: *DevProgressReporter) void {
