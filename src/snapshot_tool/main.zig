@@ -3417,6 +3417,8 @@ fn processDocsSnapshot(
     };
     defer build_env.deinit();
     build_env.setFinalizeExecutableArtifacts(false);
+    // Documentation has no runtime consumer, as in `roc docs`.
+    build_env.setSpecializationStrategy(.boxy);
     build_env.setSyntheticRootPackageIdentity();
     build_env.setSyntheticRootPlatformPackageIdentity();
 
@@ -3879,6 +3881,8 @@ fn processDevObjectSnapshot(
         return false;
     };
     defer build_env.deinit();
+    // The strategy each target's program lowers under below.
+    build_env.setSpecializationStrategy(.lss);
     build_env.setSyntheticRootPackageIdentity();
     build_env.setSyntheticRootPlatformPackageIdentity();
 
@@ -5153,6 +5157,7 @@ test "a snapshot reports what a build reports for the same module" {
     // The reports `roc check` collects.
     var build_env = try compile.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), dir_path, app_io);
     defer build_env.deinit();
+    build_env.setSpecializationStrategy(.boxy);
     try build_env.build(module_path);
     const drained = try build_env.drainReports();
     defer build_env.freeDrainedReports(drained);

@@ -171,6 +171,8 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         return err;
     };
     defer build_env.deinit();
+    // The strategy the program lowers under below.
+    build_env.setSpecializationStrategy(.lss);
     build_env.setSyntheticRootSourceMappingWithLineOffset(
         std.fs.path.basename(opts.paths.app_abs),
         opts.source,

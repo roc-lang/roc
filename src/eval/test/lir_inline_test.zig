@@ -9798,6 +9798,7 @@ test "issue 10181 explicit Str interpolation suffix checks cleanly" {
         &.{},
         try sharedPrePublishedBuiltin(),
         null,
+        .lss,
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 

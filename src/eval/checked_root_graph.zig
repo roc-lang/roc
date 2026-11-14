@@ -738,6 +738,54 @@ test "CTFE root classification resolves nominal backings throughout the checked 
     }
 }
 
+test "a publication's strategy alone decides which evaluator stores a function-holding root" {
+    const allocator = std.testing.allocator;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var parsed = try @import("inspected.zig").parseProgram(allocator, .module,
+            \\module [table, plain, total]
+            \\add_one : I64 -> I64
+            \\add_one = |x| x + 1
+            \\table : List(I64 -> I64)
+            \\table = [add_one, |x| x * 2]
+            \\plain : I64
+            \\plain = 40 + 2
+            \\total : I64
+            \\total = table.fold(plain, |acc, f| f(acc))
+        , &.{}, .{ .io = std.testing.io, .roots = .published_only, .strategy = strategy });
+        defer parsed.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
+        const module = &parsed.checked_artifact;
+        const views = try allocator.alloc(checked.ImportedModuleView, parsed.import_artifacts.len);
+        defer allocator.free(views);
+        for (parsed.import_artifacts, views) |*artifact, *view| view.* = checked.importedView(artifact);
+        const other: base.SpecializationStrategy = switch (strategy) {
+            .lss => .boxy,
+            .boxy => .lss,
+        };
+        var constants: usize = 0;
+        var holding: usize = 0;
+        for (module.root_requests.compile_time_requests.items()) |request| {
+            const root_id = request.compile_time_root.get().?;
+            const root = module.compile_time_roots.root(root_id);
+            if (root.kind != .constant) continue;
+            constants += 1;
+            const holds = try rootHoldsFunction(allocator, &.{module}, .{ .root = checked.loweringView(module), .imports = views }, .{ .module = 0, .root = root_id, .request = request });
+            if (holds) holding += 1;
+            // The publication's strategy has every value.
+            try std.testing.expect(!root.needsEvaluation(strategy));
+            // A value holding no function is the same value under either
+            // strategy, whichever evaluator stored it, a reader of the
+            // function-holding root's among them. A function value exists
+            // only in the representation of the evaluator that stored it.
+            try std.testing.expectEqual(holds, root.needsEvaluation(other));
+            try std.testing.expectEqual(holds and strategy == .boxy, root.boxy_value != null);
+            try std.testing.expectEqual(holds and strategy == .boxy, root.payload == .unevaluated);
+        }
+        try std.testing.expectEqual(@as(usize, 3), constants);
+        try std.testing.expectEqual(@as(usize, 1), holding);
+    }
+}
+
 fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) (@import("inspected.zig").Error || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
     var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .io = std.testing.io, .roots = .published_only });
