@@ -11939,7 +11939,10 @@ is produced even when only patterns name it here:
   static-dispatch constraints of type variables, since a `where` method's
   result is reachable only through its constraint's function type. The walk
   runs at judgment time, not when the lambda finishes, because later relations
-  can split a parameter row's tags into new row parts.
+  can split a parameter row's tags into new row parts. A lambda written as a
+  call argument is the exception: only that call's callee calls it, so its
+  parameters are not recorded and their rows are judged by what the call
+  relates them to.
 - A derived parser builds its shape's values from its input, so every type
   reachable from a parser derivation's shape counts as produced.
 - A rejected expression (`Check.erroneous_value_exprs`) already owns an error
@@ -11982,8 +11985,12 @@ mistaken one. A module with no recorded patterns does no work, and the walk
 runs only when some pattern's tag is still marked.
 
 The rule is intentionally conservative about parameters: a value mixed with a
-parameter, or an inline callback over a known list (`xs.map(|v| match v {
-C => .. })`), shares the parameter's row and is not reported. A top-level
+parameter shares the parameter's row and is not reported. A callback written
+as a call argument is judged by its call: over a known list
+(`[A, B].map(|v| match v { C => .. })`) the `C` pattern is reported, and over
+a value that came from an enclosing lambda's parameter it is not, because the
+enclosing lambda's body holds the match and so its parameters are recorded. A
+top-level
 constant is judged like any other value: `mode = Debug` matched against
 `Release` is reported, and the annotation `mode : [Debug, Release]` (whose
 tags are unmarked) is how an author says `Release` is intended.
