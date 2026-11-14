@@ -69,6 +69,38 @@ second stored expression, pattern, and statement tree. In `.boxy`, checked CIR
 is consumed directly by that lowerer, which derives every layout from checked
 types and the descriptors in scope.
 
+## UTF-8 validation
+
+`Str.from_utf8` and `Str.from_utf8_lossy` share one Zig builtin validator,
+`validateUtf8` in `src/builtins/str.zig`. It accepts exactly the well-formed
+sequences of Unicode Table 3-7 and, for ill-formed input, returns the zero-based
+start index of the first ill-formed sequence and its problem. The problem is
+decided in a fixed order: a byte that is neither ASCII nor C0-F7 is
+`InvalidStartByte`; the lead byte announces the length (C0-DF: 2, E0-EF: 3,
+F0-F7: 4), and a sequence running past the end of the input is
+`UnexpectedEndOfSequence` whatever its available bytes are; a following byte
+outside 80-BF is `ExpectedContinuation`; otherwise the lead and second byte
+decide `OverlongEncoding`, `EncodesSurrogateHalf`, or `CodepointTooLarge`.
+
+Validation never decodes code points. While no sequence is in progress, ASCII
+is skipped in 32- and 16-byte blocks; a tail shorter than 16 bytes is checked
+with loads that may overlap already-validated bytes. Other bytes go through a
+shift-based DFA over the nine states of Table 3-7: a 256-entry table of packed
+`u64` rows, one table load and one shift per byte, 16 bytes per unrolled chunk.
+Only a rejection reruns the DFA, out of line, from the start of the sequence in
+progress to find where the ill-formed sequence begins. The blocks use generic
+`@Vector(16, u8)` operations, so the pointer-width builtin bitcode stays
+target-independent (see "Backend Builtins"); targets without SIMD, such as
+`wasm32v1`, lower them to scalar instructions.
+
+`Str.from_utf8` makes one validation pass and shares the input allocation on
+success. `Str.from_utf8_lossy` shares it for valid input too; for invalid input
+it copies the valid prefix and each later valid run unchanged and replaces each
+ill-formed sequence with one U+FFFD. Such a sequence consumes its lead byte and
+the continuation bytes after it, up to its announced length, stopping early at a
+non-continuation byte or the end of the input; a byte in 80-BF or F8-FF consumes
+itself and every directly following byte in those ranges.
+
 ## UTF-16 and UTF-32 decoding primitives
 
 `Str.from_utf16_le`, `Str.from_utf16_be`, `Str.from_utf16_bom`, and their
