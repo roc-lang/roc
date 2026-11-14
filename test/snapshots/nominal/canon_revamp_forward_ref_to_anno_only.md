@@ -13,24 +13,11 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
 DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
+REFERENCE HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 3 14) (end 3 20))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "absent")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "canon_revamp_forward_ref_to_anno_only.md") (start 3 14) (end 3 20) (annotation error) (line-text "    callMe = absent"))))
 	(report
 		(severity warning)
 		(title "Declaration Has No Value")
@@ -41,7 +28,18 @@ DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
 			(source-region (file "canon_revamp_forward_ref_to_anno_only.md") (start 5 5) (end 5 17) (annotation error) (line-text "    absent : Foo"))
 			(line-break)
 			(line-break)
-			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity runtime_error)
+		(title "Reference Has No Value")
+		(region (start 3 14) (end 3 20))
+		(headline
+			(reflow "This refers to a declaration that has a type annotation but no implementation, so there is no value here to use."))
+		(document
+			(source-region (file "canon_revamp_forward_ref_to_anno_only.md") (start 3 14) (end 3 20) (annotation error) (line-text "    callMe = absent"))
+			(line-break)
+			(line-break)
+			(reflow "Give that declaration a value body, or stop referring to it here."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -86,7 +84,7 @@ Foo := [Whatever].{
 (can-ir
 	(d-let
 		(p-assign (ident "Foo.callMe"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "Foo") (local))))
 	(d-let
