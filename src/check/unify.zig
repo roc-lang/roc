@@ -1057,13 +1057,13 @@ const Unifier = struct {
     /// when the pair needs `unifyVars`.
     ///
     /// These are the `unifyVars` cases that end in `merge` with one side's
-    /// own content and do nothing else. One side is a plain flex
+    /// own content and do nothing else. Either one side is a plain flex
     /// (`isPlainFlex`), so no constraint is deferred, no literal is
-    /// determined and no row bound is checked. The other side's content is
-    /// one `contentForMerge` returns as it is: a nominal type, a tuple, an
-    /// empty row, an alias, a rigid, a function whose effect dependencies the
-    /// merge keeps, or another plain flex.
-    fn storedContentMerge(self: *const Self, a: ResolvedVarWord, b: ResolvedVarWord) ?MergeSide {
+    /// determined and no row bound is checked, and the other side's content
+    /// is one `contentForMerge` returns as it is (`mergeStoresContentOf`);
+    /// or the two sides store the same content, of a kind that unifies with
+    /// itself by merging (`sameContentMerges`).
+    fn storedContentMerge(self: *Self, a: ResolvedVarWord, b: ResolvedVarWord) ?MergeSide {
         const a_plain = self.isPlainFlex(a);
         const b_plain = self.isPlainFlex(b);
         if (a_plain and b_plain) {
@@ -1079,9 +1079,28 @@ const Unifier = struct {
             const empty = StaticDispatchConstraint.SafeList.Range.empty();
             return if (kept_constraints.start == empty.start) kept else null;
         }
-        if (a_plain) return if (self.mergeStoresContentOf(b)) .b else null;
-        if (b_plain) return if (self.mergeStoresContentOf(a)) .a else null;
-        return null;
+        if (a_plain) return if (self.mergeStoresContentOf(b, a)) .b else null;
+        if (b_plain) return if (self.mergeStoresContentOf(a, b)) .a else null;
+        return if (self.sameContentMerges(a, b)) .b else null;
+    }
+
+    /// Whether `a` and `b` store the same content and relating them merges
+    /// them into it, relating nothing else and failing nowhere.
+    fn sameContentMerges(self: *const Self, a: ResolvedVarWord, b: ResolvedVarWord) bool {
+        if (a.word.kind != b.word.kind) return false;
+        switch (a.word.kind) {
+            .empty_record, .empty_tag_union => return true,
+            // The same presence merges into itself.
+            .field_presence => return self.types_store.sameStoredContent(a.desc_idx, b.desc_idx),
+            // One application with the same arguments: every argument pair
+            // is one variable. An application of an invalid declaration
+            // merges to an erroneous type instead.
+            .nominal_type => return self.types_store.sameStoredContent(a.desc_idx, b.desc_idx) and
+                !self.types_store.nominalDeclIsInvalid(self.types_store.nominalAt(a.desc_idx)),
+            // Two rigids never unify, two erroneous types do not merge, and
+            // every other kind relates its parts or rewrites what it merges.
+            .rigid, .err, .flex, .alias, .tuple, .record, .tag_union, .fn_pure, .fn_effectful, .fn_unbound => return false,
+        }
     }
 
     /// Whether `resolved` is a flex that states nothing: it has no
@@ -1092,19 +1111,23 @@ const Unifier = struct {
         return self.types_store.flexAt(resolved.desc_idx).constraints.len() == 0;
     }
 
-    /// Whether a plain flex merging with `other` merges into `other`'s stored
-    /// content exactly.
-    fn mergeStoresContentOf(self: *const Self, other: ResolvedVarWord) bool {
+    /// Whether the plain flex `flex` merging with `other` merges into
+    /// `other`'s stored content exactly.
+    fn mergeStoresContentOf(self: *Self, other: ResolvedVarWord, flex: ResolvedVarWord) bool {
+        const targets: RowMergeTargets = .{ .a = flex.desc_idx, .b = other.desc_idx };
         return switch (other.word.kind) {
             .nominal_type, .tuple, .empty_record, .empty_tag_union, .alias, .rigid, .fn_effectful, .fn_unbound => true,
             // The merge discharges a pure function's effect dependencies.
             .fn_pure => self.types_store.funcAt(other.desc_idx).effect_deps.start == Var.SafeList.Range.empty().start,
             // A row is rewritten when its extension reaches the merged class.
-            .record, .tag_union => false,
-            // A presence fact can change as it merges, an erroneous type
-            // merges only with a flex that states no requirement, and a flex
-            // that is not plain has constraints or a literal to carry over.
-            .field_presence, .err, .flex => false,
+            .record => !self.rowExtReachesDesc(.record, self.types_store.recordAt(other.desc_idx).ext, targets),
+            .tag_union => !self.rowExtReachesDesc(.tag_union, self.types_store.tagUnionAt(other.desc_idx).ext, targets),
+            // A default is stripped from a committed value as it merges.
+            .field_presence => self.types_store.fieldPresenceAt(other.desc_idx) != .defaulted,
+            // An erroneous type merges only with a flex that states no
+            // requirement, and a flex that is not plain has constraints or a
+            // literal to carry over.
+            .err, .flex => false,
         };
     }
 
@@ -1606,19 +1629,22 @@ const Unifier = struct {
             .nominal_type => |a_type| {
                 // An application of an invalid declaration merges to `.err`
                 // successfully: the declaration error was already reported.
-                if (self.types_store.nominalDeclIsInvalid(a_type)) {
+                const a_decl = self.types_store.lookupNominalDecl(a_type);
+                if (a_decl) |decl| if (!self.types_store.getNominalDecl(decl).isValid()) {
                     try self.merge(vars, .err);
                     return;
-                }
+                };
 
                 switch (b_flat_type) {
                     .nominal_type => |b_type| {
-                        if (self.types_store.nominalDeclIsInvalid(b_type)) {
+                        // Two applications of one declaration share `a`'s
+                        // declaration, which is valid.
+                        if (!sameNominalIdentity(a_type, b_type) and self.types_store.nominalDeclIsInvalid(b_type)) {
                             try self.merge(vars, .err);
                             return;
                         }
 
-                        try self.unifyNominalType(vars, a_type, b_type);
+                        try self.unifyNominalType(vars, a_type, b_type, a_decl);
                     },
                     .tag_union => |b_tag_union| {
                         // Try to unify nominal tag union (a) with anonymous tag union (b)
@@ -1869,8 +1895,15 @@ const Unifier = struct {
     /// Unify two nominal type applications: identity, arity, then actual
     /// args pairwise. Backing types are never inspected here—nominal
     /// identity is the whole contract (callers already short-circuited
-    /// applications of invalid declarations to `.err`).
-    fn unifyNominalType(self: *Self, vars: *const ResolvedVarDescs, a_type: NominalType, b_type: NominalType) Error!void {
+    /// applications of invalid declarations to `.err`). `decl_idx` is `a`'s
+    /// declaration, if it has one.
+    fn unifyNominalType(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        a_type: NominalType,
+        b_type: NominalType,
+        decl_idx: ?types_mod.NominalDecl.Idx,
+    ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
@@ -1886,7 +1919,6 @@ const Unifier = struct {
         // A body-local declaration's trailing context arguments (design.md
         // "Body-Local Type Context") name the instantiation of the enclosing
         // functions its values belong to.
-        const decl_idx = self.types_store.lookupNominalDecl(a_type);
         const context_len: u32 = if (decl_idx) |idx| self.types_store.getNominalDecl(idx).flags.context_len else 0;
         const declared_len = a_type.args.len() - context_len;
         var i: u32 = a_type.args.len();

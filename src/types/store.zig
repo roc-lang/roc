@@ -104,6 +104,12 @@ const NominalDeclIndexEntry = struct {
 
     const SafeList = collections.SafeList(@This());
 
+    /// A declaration key as one integer, ordered as `orderByKey` orders
+    /// keys.
+    fn sortKey(origin_module: base.ModuleIdentity.Idx, statement: u32) u64 {
+        return (@as(u64, @backingInt(origin_module)) << 32) | statement;
+    }
+
     /// Total order over declaration keys: origin module identity index first,
     /// then statement.
     fn orderByKey(origin_module: base.ModuleIdentity.Idx, statement: u32, entry: @This()) std.math.Order {
@@ -2615,17 +2621,22 @@ pub const Store = struct {
         statement: u32,
     ) ?NominalDecl.Idx {
         const entries = self.nominal_decl_index.items();
-        var lo: usize = 0;
-        var hi: usize = entries.len;
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            switch (NominalDeclIndexEntry.orderByKey(origin_module, statement, entries[mid])) {
-                .lt => hi = mid,
-                .gt => lo = mid + 1,
-                .eq => return entries[mid].decl,
-            }
+        if (entries.len == 0) return null;
+        const key = NominalDeclIndexEntry.sortKey(origin_module, statement);
+        // The last entry whose key is not past `key` is always among the
+        // `span` entries from `first`. Each step selects a half instead of
+        // branching on the comparison, whose outcome is unpredictable; the
+        // number of steps depends on the entry count alone.
+        var first: usize = 0;
+        var span: usize = entries.len;
+        while (span > 1) {
+            const half = span / 2;
+            const upper = entries[first + half];
+            first = if (NominalDeclIndexEntry.sortKey(upper.origin_module, upper.statement) <= key) first + half else first;
+            span -= half;
         }
-        return null;
+        const found = entries[first];
+        return if (NominalDeclIndexEntry.sortKey(found.origin_module, found.statement) == key) found.decl else null;
     }
 
     /// Look up the declaration for a nominal application. Returns null only
@@ -2758,6 +2769,12 @@ pub const Store = struct {
         const desc_idx = self.resolveDescIdx(var_);
         const checked_var = self.getRootMeta(desc_idx).checked_var;
         return .{ .var_ = checked_var, .is_root = var_ == checked_var, .desc_idx = desc_idx, .word = self.descs.getWord(desc_idx) };
+    }
+
+    /// Whether descriptors `a` and `b` store the same content: the same kind
+    /// with the same payload.
+    pub fn sameStoredContent(self: *const Self, a: DescStore.Idx, b: DescStore.Idx) bool {
+        return DescStore.sameContent(self.descs.getRow(a), self.descs.getRow(b));
     }
 
     /// `resolveVarWord`, compressing the storage path on the way.
