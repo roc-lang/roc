@@ -12079,103 +12079,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateLLListSwap(args, ll.ret_layout, ll.unique_args);
         },
 
-        .list_take_first => {
-            // list_take_first(list, count) -> list
-            // Same as list but with length = min(count, len)
+        // The first or last `count` items, with `listSublist`'s outcomes
+        // over that window (`generateListSublist`).
+        .list_take_first, .list_take_last => {
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
-            const count_local = try self.emitSetNewLocal(.i32);
-
-            // Zero-width elements have no bytes to keep, so taking a prefix
-            // only shortens the length of an unallocated list.
-            {
-                const take_abi = self.builtinInternalListAbi("wasm.list_take_first.builtin_list_abi", ll.ret_layout);
-                if (take_abi.elem_size == 0) {
-                    const len_local = try self.emitListLenLocal(list_local);
-                    try self.emitU32Min(count_local, len_local);
-                    try self.emitZstListFromStackLen();
-                    return;
-                }
-            }
-
-            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
-            const result_local = try self.emitFpOffsetToNewLocal(result_offset);
-
-            // Same elements_ptr
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
-            try self.emitStoreOp(.i32, list_bytes_offset);
-
-            // new_len = min(count, old_len) using select
-            // Stack: count, old_len, count <= old_len
-            try self.emitLocalGets(.{ result_local, count_local });
-            try self.emitLoadAt(list_local, .i32, list_len_offset);
-            try self.emitLocalGet(count_local);
-            try self.emitLoadAt(list_local, .i32, list_len_offset);
-            try self.emitOps(.{ Op.i32_le_u, Op.select });
-            try self.emitStoreOp(.i32, list_len_offset);
-
-            // Same capacity
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, list_capacity_offset);
-            try self.emitStoreOp(.i32, list_capacity_offset);
-
-            try self.emitLocalGet(result_local);
-        },
-        .list_take_last => {
-            // list_take_last(list, count) -> list
-            // elements_ptr += (len - min(count, len)) * elem_size
-            // length = min(count, len)
-            const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
-            const count_local = try self.emitSetNewLocal(.i32);
-
-            // Load length
-            try self.emitLoadAt(list_local, .i32, list_len_offset);
-            const len_local = try self.emitSetNewLocal(.i32);
-
-            // actual_count = min(count, len)
-            try self.emitLocalGets(.{ count_local, len_local, count_local, len_local });
-            try self.emitOps(.{ Op.i32_le_u, Op.select });
-            const actual_count = try self.emitSetNewLocal(.i32);
-
-            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
-            const result_local = try self.emitFpOffsetToNewLocal(result_offset);
-
-            const list_abi = self.builtinInternalListAbi("wasm.list_take_last.builtin_list_abi", ll.ret_layout);
-            const elem_size = list_abi.elem_size;
-
-            // Zero-width elements have no bytes to keep, so taking a suffix
-            // only shortens the length of an unallocated list.
-            if (elem_size == 0) {
-                try self.emitU32Min(count_local, len_local);
-                try self.emitZstListFromStackLen();
-                return;
-            }
-
-            // new_ptr = old_ptr + (len - actual_count) * elem_size
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
-            try self.emitLocalGets(.{ len_local, actual_count });
-            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-            try self.emitStoreOp(.i32, list_bytes_offset);
-
-            // new_len = actual_count
-            try self.emitLocalGets(.{ result_local, actual_count });
-            try self.emitStoreOp(.i32, list_len_offset);
-
-            // Encode seamless-slice cap from the source allocation pointer.
-            const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
-
-            try self.emitLocalGets(.{ result_local, encoded_cap });
-            try self.emitStoreOp(.i32, list_capacity_offset);
-
-            try self.emitLocalGet(result_local);
+            const count = try self.emitU64ArgToNewLocal(GuardedList.at(args, 1));
+            const window: ListSublistWindow = if (ll.op == .list_take_first) .{ .first = count } else .{ .last = count };
+            try self.generateListSublist(.{ .owned = .{ .unique_args = ll.unique_args } }, list_local, window, ll.ret_layout);
         },
 
         .list_append_unsafe => {
@@ -12292,7 +12202,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
             const rec_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
-            const window: ListSublistWindowRecord = .{ .rec_local = rec_local, .len_field_off = len_field_off, .start_field_off = start_field_off };
+            const window: ListSublistWindow = .{ .record = .{ .rec_local = rec_local, .len_field_off = len_field_off, .start_field_off = start_field_off } };
             switch (ll.op) {
                 .list_sublist => try self.generateListSublist(.{ .owned = .{ .unique_args = ll.unique_args } }, list_local, window, ll.ret_layout),
                 .list_sublist_borrowed => try self.generateListSublist(.borrowed, list_local, window, ll.ret_layout),
@@ -18190,26 +18100,60 @@ fn emitU64ClampedToU32Bound(self: *Self, value: u32, bound: u32) Allocator.Error
     return self.emitSetNewLocal(.i32);
 }
 
-/// Compute the same bounded window for allocated and zero-width lists.
-fn emitListSublistWindow(self: *Self, list_local: u32, rec_local: u32, len_field_off: u32, start_field_off: u32) Allocator.Error!struct { start: u32, len: u32 } {
+/// Compute the same bounded window for allocated and zero-width lists from
+/// the requested U64 start and length in i64 locals, as the builtins bound
+/// it: the start at most the list's length, the length at most what follows.
+fn emitListSublistWindow(self: *Self, list_local: u32, requested: ListSublistRequest) Allocator.Error!struct { start: u32, len: u32 } {
     const size = try self.emitListLenLocal(list_local);
-    const requested_start = try self.emitLoadAtToNewLocal(rec_local, .i64, start_field_off);
-    const start = try self.emitU64ClampedToU32Bound(requested_start, size);
+    const start = try self.emitU64ClampedToU32Bound(requested.start, size);
     try self.emitLocalGets(.{ size, start });
     try self.emitOps(.{Op.i32_sub});
     const remaining = try self.emitSetNewLocal(.i32);
-    const requested_len = try self.emitLoadAtToNewLocal(rec_local, .i64, len_field_off);
-    const len = try self.emitU64ClampedToU32Bound(requested_len, remaining);
+    const len = try self.emitU64ClampedToU32Bound(requested.len, remaining);
     return .{ .start = start, .len = len };
 }
 
-/// The `{ len, start }` record a sublist reads its window from: its address
-/// in a wasm local and the offsets of its two U64 fields.
-const ListSublistWindowRecord = struct {
-    rec_local: u32,
-    len_field_off: u32,
-    start_field_off: u32,
+/// Where a sublist's window comes from.
+const ListSublistWindow = union(enum) {
+    /// A `{ len, start }` record (`list_sublist`, `list_sublist_borrowed`):
+    /// its address in a wasm local and the offsets of its two U64 fields.
+    record: struct { rec_local: u32, len_field_off: u32, start_field_off: u32 },
+    /// The first `count` items (`list_take_first`), the U64 count in an i64
+    /// local.
+    first: u32,
+    /// The last `count` items (`list_take_last`), the U64 count in an i64
+    /// local: the window from `len -| count`.
+    last: u32,
 };
+
+/// A sublist's requested U64 start and length, in i64 locals, before they
+/// are bounded by the list's length; the `listSublist` builtin takes them so.
+const ListSublistRequest = struct { start: u32, len: u32 };
+
+fn emitListSublistRequest(self: *Self, list_local: u32, window: ListSublistWindow) Allocator.Error!ListSublistRequest {
+    switch (window) {
+        .record => |record| return .{
+            .start = try self.emitLoadAtToNewLocal(record.rec_local, .i64, record.start_field_off),
+            .len = try self.emitLoadAtToNewLocal(record.rec_local, .i64, record.len_field_off),
+        },
+        .first => |count| {
+            try self.emitI64Const(0);
+            return .{ .start = try self.emitSetNewLocal(.i64), .len = count };
+        },
+        .last => |count| {
+            // start = size >= count ? size - count : 0
+            try self.emitLoadAt(list_local, .i32, list_len_offset);
+            self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+            const size = try self.emitSetNewLocal(.i64);
+            try self.emitLocalGets(.{ size, count });
+            try self.emitOps(.{Op.i64_sub});
+            try self.emitI64Const(0);
+            try self.emitLocalGets(.{ size, count });
+            try self.emitOps(.{ Op.i64_ge_u, Op.select });
+            return .{ .start = try self.emitSetNewLocal(.i64), .len = count };
+        },
+    }
+}
 
 /// Which sublist low-level is being lowered. An owned sublist consumes its
 /// list (`list_sublist`), and `unique_args` is the statement's proven-unique
@@ -18220,8 +18164,8 @@ const ListSublistMode = union(enum) {
     borrowed,
 };
 
-/// Emit a sublist of the list in wasm local `list_local` over `window`'s
-/// record, with exactly the outcomes of the `listSublist` builtin (owned) or
+/// Emit a sublist of the list in wasm local `list_local` over the window
+/// `window_source` names, with exactly the outcomes of the `listSublist` builtin (owned) or
 /// the `listSublistBorrowed` builtin (borrowed), and push the result's
 /// address.
 ///
@@ -18238,14 +18182,12 @@ const ListSublistMode = union(enum) {
 ///   length zero, and otherwise releases the list and gives the empty list.
 ///   A window from index zero of a reusable list shrinks it in place. Any
 ///   other window is a seamless slice that takes over the list's reference.
-fn generateListSublist(self: *Self, mode: ListSublistMode, list_local: u32, window_record: ListSublistWindowRecord, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateListSublist(self: *Self, mode: ListSublistMode, list_local: u32, window_source: ListSublistWindow, ret_layout: layout.Idx) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.list_sublist.builtin_list_abi", ret_layout);
-    const rec_local = window_record.rec_local;
-    const len_field_off = window_record.len_field_off;
-    const start_field_off = window_record.start_field_off;
+    const requested = try self.emitListSublistRequest(list_local, window_source);
 
     if (list_abi.elem_size == 0) {
-        const window = try self.emitListSublistWindow(list_local, rec_local, len_field_off, start_field_off);
+        const window = try self.emitListSublistWindow(list_local, requested);
         try self.emitLocalGet(window.len);
         try self.emitZstListFromStackLen();
         return;
@@ -18260,8 +18202,7 @@ fn generateListSublist(self: *Self, mode: ListSublistMode, list_local: u32, wind
         try self.emitRocListFields(fields);
         try self.emitI32Const(@intCast(list_abi.elem_align));
         try self.emitI32Const(@intCast(list_abi.elem_size));
-        try self.emitLoadAt(rec_local, .i64, start_field_off);
-        try self.emitLoadAt(rec_local, .i64, len_field_off);
+        try self.emitLocalGets(.{ requested.start, requested.len });
         try self.emitI32Const(@intCast(callbacks.elements_refcounted));
         try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
         try self.emitI32Const(updateModeImmForArg(mode.owned.unique_args, 0));
@@ -18270,7 +18211,7 @@ fn generateListSublist(self: *Self, mode: ListSublistMode, list_local: u32, wind
         return;
     }
 
-    const window = try self.emitListSublistWindow(list_local, rec_local, len_field_off, start_field_off);
+    const window = try self.emitListSublistWindow(list_local, requested);
 
     const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const result_local = try self.emitFpOffsetToNewLocal(result_offset);
@@ -19586,6 +19527,9 @@ const SublistCase = struct {
     len: u64,
     borrowed: bool,
     proven_unique: bool = false,
+    /// `list_take_first` / `list_take_last` of `len` items, which ignore
+    /// `start`, rather than a `list_sublist` over `{ len, start }`.
+    take: enum { none, first, last } = .none,
 };
 
 const sublist_source_len = 4;
@@ -19616,10 +19560,17 @@ fn nativeSublistOutcome(case: SublistCase, element_width: usize, elements_refcou
         .empty => list_mod.RocList.empty(),
     };
     const mode: builtins.utils.UpdateMode = if (case.proven_unique) .InPlace else .Immutable;
+    // The take ops are `listSublist` over the window every backend computes.
+    const size: u64 = source.len();
+    const start: u64 = switch (case.take) {
+        .none => case.start,
+        .first => 0,
+        .last => if (size >= case.len) size - case.len else 0,
+    };
     const result = if (case.borrowed)
-        list_mod.listSublistBorrowed(source, element_width, case.start, case.len, elements_refcounted, ops)
+        list_mod.listSublistBorrowed(source, element_width, start, case.len, elements_refcounted, ops)
     else
-        list_mod.listSublist(source, alignment, element_width, elements_refcounted, case.start, case.len, null, &list_mod.rcNone, mode, ops);
+        list_mod.listSublist(source, alignment, element_width, elements_refcounted, start, case.len, null, &list_mod.rcNone, mode, ops);
 
     const freed = env.getAllocationCount() == 0;
     const kind: @FieldType(SublistOutcome, "kind") = if (result.bytes == null and result.length == 0 and result.capacity_or_alloc_ptr == 0)
@@ -19677,7 +19628,11 @@ fn wasmSublistOutcome(case: SublistCase, element: layout.Idx) (ListWindowLengthE
     codegen.fp_local = try codegen.storage.allocAnonymousLocal(.i32);
     try codegen.emitI32Const(4096);
     try codegen.emitLocalSet(codegen.fp_local);
-    const window: ListSublistWindowRecord = .{ .rec_local = record_local, .len_field_off = 0, .start_field_off = 8 };
+    const window: ListSublistWindow = switch (case.take) {
+        .none => .{ .record = .{ .rec_local = record_local, .len_field_off = 0, .start_field_off = 8 } },
+        .first => .{ .first = try codegen.emitLoadAtToNewLocal(record_local, .i64, 0) },
+        .last => .{ .last = try codegen.emitLoadAtToNewLocal(record_local, .i64, 0) },
+    };
     const mode: ListSublistMode = if (case.borrowed) .borrowed else .{ .owned = .{ .unique_args = @intFromBool(case.proven_unique) } };
     try codegen.generateListSublist(mode, list_local, window, list_layout);
     try codegen.emitOps(.{Op.end});
@@ -19784,6 +19739,16 @@ test "issue 13020: inline wasm sublists of non-refcounted items match the builti
     }
 }
 
+test "issue 13020: inline wasm take_first and take_last of non-refcounted items match the builtin" {
+    for ([_]SublistSource{ .unique, .shared, .unique_slice, .empty }) |source| {
+        for ([_]u64{ 0, 1, 2, 4, 9, 1 << 40 }) |count| {
+            for ([_]@FieldType(SublistCase, "take"){ .first, .last }) |take| {
+                try expectSublistMatchesBuiltin(.{ .source = source, .start = 0, .len = count, .borrowed = false, .take = take }, .u8, 1, false);
+            }
+        }
+    }
+}
+
 test "issue 13020: inline wasm borrowed sublists of refcounted items match the builtin" {
     for ([_]SublistSource{ .unique, .shared, .unique_slice, .empty }) |source| {
         for ([_][2]u64{ .{ 0, 0 }, .{ 0, 2 }, .{ 1, 2 }, .{ 9, 1 } }) |window| {
@@ -19835,7 +19800,7 @@ fn expectListWindowLength(element: layout.Idx, start: u64, len: u64, expected: i
     switch (operation) {
         // The window is the same for both sublist modes; the borrowed one needs
         // no runtime functions.
-        .sublist => try codegen.generateListSublist(.borrowed, list_local, .{ .rec_local = record_local, .len_field_off = 0, .start_field_off = 8 }, list_layout),
+        .sublist => try codegen.generateListSublist(.borrowed, list_local, .{ .record = .{ .rec_local = record_local, .len_field_off = 0, .start_field_off = 8 } }, list_layout),
         .drop_at => {
             const index_arg = try store.addLocal(.{ .layout_idx = .u64 });
             const index_local = try codegen.storage.allocLocal(index_arg, .i64);

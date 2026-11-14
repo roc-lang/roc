@@ -1885,6 +1885,8 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "issue_13020_empty_view_releases_source_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "issue_13020_empty_view_releases_source_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
     .{ .app = "drop_last_in_place_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "drop_last_in_place_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
     .{ .app = "drop_last_in_place_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "drop_last_in_place_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "2" } },
+    .{ .app = "list_rest_patterns_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "list_rest_patterns_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "4" } },
+    .{ .app = "list_rest_patterns_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "list_rest_patterns_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--max-allocs", "4" } },
 };
 
 pub fn build(b: *std.Build) void {

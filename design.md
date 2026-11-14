@@ -25467,6 +25467,10 @@ also releases the items a reusable list drops; the call is cheap next to the
 per-item releases it may make. The split is by the list layout's
 `elements_refcounted`, never by anything the lowering guesses. Zero-sized
 items have no bytes to slice, so their sublist is the window length alone.
+`list_take_first` and `list_take_last`, which a list rest pattern lowers to,
+are `list_sublist` over the first `count` items and over the items from
+`len -| count`, as every backend computes those windows for `listSublist`,
+and the Wasm backend lowers them exactly as it lowers `list_sublist`.
 
 ## Wasm Function Limits
 
