@@ -1023,12 +1023,14 @@ pub fn finalizeProgram(
     // computes complete once that program's roots have (design.md
     // "Compile-Time Evaluation Under `.lss`"). The plan reads which roots
     // remain pending after it.
-    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, .before_solved);
+    var function_types: checked_root_graph.FunctionTypeMemo = .{};
+    defer function_types.deinit(allocator);
+    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .before_solved);
     var plan = try planRoots(allocator, modules, lowering_modules, program_roots, options.discovery_roots, lss_runtime, options.timing);
     defer plan.deinit(allocator);
     var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, runtime_target, options, &debug_events, demand_driven);
     errdefer specialized.deinit();
-    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, .after_solved);
+    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .after_solved);
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
         .evaluation => {},
@@ -1137,6 +1139,7 @@ fn evaluateBoxyRoots(
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     options: Options,
     debug_events: *DebugEvents,
+    function_types: *checked_root_graph.FunctionTypeMemo,
     phase: BoxyPhase,
 ) FinalizeError!void {
     // The pending roots of the first artifact of each checked identity;
@@ -1177,7 +1180,7 @@ fn evaluateBoxyRoots(
         .before_solved => {
             for (pending.items, chosen, graph.unavailable_boxy_reads) |root, *flag, unavailable| {
                 flag.* = !unavailable and (artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument or
-                    !try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules, root));
+                    !try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root));
             }
             var changed = true;
             while (changed) {
@@ -1210,7 +1213,7 @@ fn evaluateBoxyRoots(
     defer selected.deinit(allocator);
     for (pending.items, chosen) |root, flag| if (flag) try selected.append(allocator, root);
     if (selected.items.len == 0) return;
-    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events);
+    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events, function_types);
     for (modules) |entry| {
         if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
     }
@@ -2051,7 +2054,9 @@ fn finalizeProgramBoxy(
         }
     }
 
-    try evaluateRootsBoxy(allocator, modules, lowering_modules, roots.items, options, &debug_events);
+    var function_types: checked_root_graph.FunctionTypeMemo = .{};
+    defer function_types.deinit(allocator);
+    try evaluateRootsBoxy(allocator, modules, lowering_modules, roots.items, options, &debug_events, &function_types);
     // Every root is complete: a runtime program restores each value from
     // its module's store, and every literal of a generic body converts
     // through its literal argument (design.md "Literal Arguments").
@@ -2098,6 +2103,7 @@ fn evaluateRootsBoxy(
     roots: []const checked_root_graph.Root,
     options: Options,
     debug_events: *DebugEvents,
+    function_types: *checked_root_graph.FunctionTypeMemo,
 ) FinalizeError!void {
     if (roots.len == 0) return;
     if (options.timing) |timing| timing.recordBoxyRoots(roots.len);
@@ -2144,7 +2150,7 @@ fn evaluateRootsBoxy(
     const classification_started = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     for (roots, specialized) |root, *flag| {
         flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
-            try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules, root);
+            try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root);
     }
     if (base.dev_diagnostics.isSet(.trace_boxy_work)) if (options.timing) |timing| {
         std.debug.print("boxy-work: root preparation roots={d} graph_ns={d} classification_ns={d}\n", .{ roots.len, graph_finished - graph_started, nowNs(timing.std_io) - classification_started });
