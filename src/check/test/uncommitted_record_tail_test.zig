@@ -250,6 +250,38 @@ test "a use's record gains no optional field" {
     , .added_field, false);
 }
 
+test "a use's record gains no optional field beside one whose kind it pins" {
+    try expectRefusal(
+        \\make = |value| { a: value }
+        \\r : { a ?: U8, b ?: U8 }
+        \\r = make(5)
+    , .added_field, false);
+}
+
+test "a use's record holding an iterator gains no optional field" {
+    try expectRefusal(
+        \\wrap = |items| { it: items.iter() }
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped : { it : Iter(U64), unused ?: U64 }
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum + (wrapped.?unused ?? 0)
+        \\}
+    , .added_field, false);
+}
+
+test "a use's record pins an optional kind its binding left open" {
+    try expectOk(
+        \\make = |value| { a: value }
+        \\r : { a ?: U8 }
+        \\r = make(5)
+    );
+}
+
 test "a use's record gains no optional field through its nominal" {
     try expectRefusal(
         \\Wide := { a : U8, note ?: Str }
