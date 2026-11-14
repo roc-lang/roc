@@ -21350,7 +21350,9 @@ the list-pattern desugarer, after measuring ~(items+1)^branches statement
 blowup. Producers that use a value at several positions bind it to a local
 once and read the local at each position. A structural `to_hash` of a tag union
 with two or more variants binds the incoming hasher, which holds every earlier
-component's hash, so its branches do not each carry a copy. The match
+component's hash, so its branches do not each carry a copy. Constant
+restoration binds a `ConstStore` node it reaches twice ("Stored Function Capture
+Contract"). The match
 compiler holds the invariant by construction: rows (branches) are never
 duplicated during specialization—a row that does not test the selected
 occurrence ends the test group instead of being copied into every arm, and the
@@ -26440,10 +26442,45 @@ into the program kind it was not built for.
 Materialization records an active `(module, ConstNodeId, representation)` before
 descending into that node. The first exact graph back-edge reserves and uses a
 local; once the node is complete, Monotype lowering emits the ordinary
-recursive binding that owns it. Acyclic nodes allocate no such local. Completed
-nodes are memoized in the materialization context. This is graph
-materialization, not recovery of a discarded source binding: the checked module
-data already contains every value edge needed by the operation.
+recursive binding that owns it. Acyclic nodes allocate no such local. This is
+graph materialization, not recovery of a discarded source binding: the checked
+module data already contains every value edge needed by the operation.
+
+A `ConstStore` value is a DAG, and its restore keeps it one without breaking
+the Monotype sharing invariant. Each restore owns a binding scope that
+memoizes the nodes it completed, keyed by `(module, ConstNodeId,
+representation, static-data constant)`. A restore nested in another one in the
+same owner joins the enclosing scope: a restored function's captures and a
+stored codec's encoding are lexically inside the value restoring them, so a
+node they share is built once. A static-data candidate's runtime value restores
+in a scope of its own, since its initializer can be emitted as a procedure of
+its own. A restore in another owner opens its own scope, so no restored
+expression is read outside its owner.
+
+- The first read of a completed node uses its expression in place. Nothing is
+  bound, so a tree-shaped constant restores with no extra locals or lets.
+- A second read of a composite node (a tag with payloads, record, tuple, list of
+  nodes, box, nominal, or function value) promotes it. Its expression moves to
+  a new row bound to a fresh local, and the original row, which its first
+  parent holds, becomes a read of that local. Each later read is a fresh read
+  of the local. Static-data candidates and parts reached again in one restore
+  are promoted the same way.
+- A leaf (scalar, string, empty or packed list, zero-sized value, crash) is
+  never bound. Each read restores its own literal, which costs nothing where
+  a shared local would cost a reference count.
+- The let of a promoted node goes around the restore's result, outermost first
+  in node completion order, so each let follows the lets its value reads. A
+  node that reads the recursive binding of an enclosing node still under
+  construction (directly, or through a node it shares) is let-bound around
+  that enclosing node's expression instead, inside its recursive binding. Its
+  memo entry is dropped when that node completes, so it is never read outside
+  that binding's scope.
+- A node reached at a different representation (sealed or graph, or an unequal
+  sealed type) is restored again.
+
+A restored value has no control flow and its constructors and captures are
+strict, so binding a shared node at the restore's root evaluates nothing the
+value would not already build.
 
 Materializing a cached const does not synthesize a wrapper that calls an
 already-packed runtime function value. It builds an ordinary Monotype callable
