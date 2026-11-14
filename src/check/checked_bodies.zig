@@ -803,11 +803,17 @@ pub const CheckedBodies = struct {
         };
     }
 
-    /// Whether an interpolation's target is concretely the builtin `Str`, so
-    /// it concatenates its parts directly. An open target can instantiate at
-    /// a custom `from_interpolation` type and keeps its dispatch.
+    /// Whether an interpolation's target is concretely the builtin `Str` and
+    /// checking accepted its `from_interpolation` dispatch, so it concatenates
+    /// its parts directly. An open target can instantiate at a custom
+    /// `from_interpolation` type and keeps its dispatch. A rejected dispatch
+    /// also keeps it: its plan resolves to `checked_error`, which body
+    /// analysis marks divergent and lowering turns into a crash.
     pub fn interpolationIsBuiltinStr(self: CheckedBodies, id: ExprId) bool {
-        return checked_artifact.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) == .str;
+        if (checked_artifact.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) != .str) return false;
+        const constraint_fn_var = self.store().getExpr(id).e_interpolation.constraint_fn_var orelse
+            invariant("a checked interpolation had no constraint function variable");
+        return !self.env.types.varStaticDispatchRejected(constraint_fn_var);
     }
 
     /// The tag a structural equality compares by discriminant alone: a
