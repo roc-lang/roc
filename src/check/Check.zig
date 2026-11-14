@@ -1079,6 +1079,11 @@ hoist_retired_binder_walk: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// containing one is kept: the expression evaluates at runtime, in source
 /// order, and crashes where the rejected dispatch runs.
 rejected_instantiation_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+/// The callee expression of each call the erroneous-value sweep replaced with
+/// a runtime error. The call never applies its callee, so the requirements its
+/// callee's instantiation copied are never discharged by a call; an ambiguity
+/// verdict on one of them is void (`applyInstantiationAmbiguityVerdict`).
+runtime_error_call_callees: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
 /// Top-level-equivalent expressions checked in a guarded hoist position. A
 /// root whose expression is in this set is published as a guarded root.
 hoist_guarded_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
@@ -1942,6 +1947,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .hoist_retired_binders = .keyed,
     .hoist_retired_binder_walk = .scratch,
     .rejected_instantiation_exprs = .keyed,
+    .runtime_error_call_callees = .keyed,
     .hoist_guarded_exprs = .keyed,
     .selected_hoisted_roots = .keyed,
     .local_procedure_candidates = .settled,
@@ -18664,6 +18670,32 @@ fn applyAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
     try self.applyCreationAmbiguityVerdicts();
 }
 
+/// Reject, without a report, the requirements on an undetermined receiver when
+/// every active one was copied by a value use that is the callee of a call the
+/// erroneous-value sweep replaced with a runtime error
+/// (`runtime_error_call_callees`). That call never applies its callee, so the
+/// receiver is undetermined only because the rejected call never related it,
+/// and the rejection already owns its report. Each copy's owning use is
+/// explicit instantiation data (`use_instance_by_fn_var`, whose scheme-use
+/// record names the use's node).
+fn rejectRequirementsOfUnappliedCallees(self: *Self, constraints_range: StaticDispatchConstraint.SafeList.Range) Allocator.Error!bool {
+    if (self.runtime_error_call_callees.count() == 0) return false;
+    const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+    const scheme_uses = self.cir.scheme_uses.items();
+    var any_active = false;
+    for (constraints) |constraint| {
+        if (self.staticDispatchConstraintIsInactive(constraint)) continue;
+        any_active = true;
+        const use_idx = self.use_instance_by_fn_var.get(constraint.fn_var) orelse return false;
+        const record = scheme_uses[self.use_instances.items[use_idx].record];
+        if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.value_use)) return false;
+        if (!self.runtime_error_call_callees.contains(@fromBackingInt(record.node_idx))) return false;
+    }
+    if (!any_active) return false;
+    for (constraints) |constraint| try self.markStaticDispatchRejected(constraint);
+    return true;
+}
+
 /// Apply one `.instantiation` ambiguity verdict. The judgment already
 /// established the receiver is unpinnable (see `judgeAmbiguityCandidate`);
 /// everything else is re-derived here at the settled state, because the final
@@ -18674,6 +18706,8 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     const constraints_range = contentConstraintRange(resolved.desc.content) orelse return;
     if (constraints_range.len() == 0) return;
     if (self.reported_dispatch_vars.contains(resolved.var_)) return;
+
+    if (try self.rejectRequirementsOfUnappliedCallees(constraints_range)) return;
 
     // Re-run the origin-policy selection (see `selectAmbiguityConstraint` for
     // the decision table) so the reported constraint reflects the settled
@@ -40561,7 +40595,11 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
 
     var iter = self.erroneous_value_exprs.keyIterator();
     while (iter.next()) |expr_idx| {
-        if (self.cir.store.getExpr(expr_idx.*) == .e_runtime_error) continue;
+        switch (self.cir.store.getExpr(expr_idx.*)) {
+            .e_runtime_error => continue,
+            .e_call => |call| try self.runtime_error_call_callees.put(self.gpa, call.func, {}),
+            else => {},
+        }
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(expr_idx.*),
         } });

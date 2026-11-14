@@ -1637,6 +1637,23 @@ checker recovery. The recovery rules:
   expression and definition that mentions its type, so the rejection marks the
   constraint rejected and retires its owner, and the receiver keeps its type.
   An interpolation whose `Str` part demand fails keeps its `Str` result.
+- A call that is a runtime error never applies its callee, so the call relates
+  neither its arguments nor its result to the callee's instantiation. A
+  receiver of that instantiation's copied requirements can therefore be left
+  undetermined only by the call's own rejection, which already owns its
+  report: in `shown = apply(nope)` with
+  `apply : p -> Str where [p.to_str : p -> Str]`, nothing pins `p`. The
+  erroneous-value sweep records the callee of each call it replaces
+  (`runtime_error_call_callees`), and an ambiguity verdict whose every active
+  requirement was copied by such a callee's value use (`use_instance_by_fn_var`
+  names each copy's use, whose scheme-use record names its node) rejects
+  those requirements without a report and rewrites nothing
+  (`rejectRequirementsOfUnappliedCallees`). The callee itself is still
+  evaluated as a function value (Erroneous Call Operand Retirement). The sweep
+  runs before the verdicts and covers every call replaced while checking or
+  later, so the verdict sees one settled set; a call retired after it was
+  checked related its operands when it was checked, so its receivers are not
+  left undetermined by the retirement.
 
 A module that fails before checking, such as a dependent of a module whose
 source was rejected, has no CheckedModule. Checked-program finalization produces a
@@ -7901,6 +7918,11 @@ crashes at the rejected dispatch rather than restoring a compile-time failure
 that only a later read would surface. Nested function
 site collection walks a runtime error's `evaluated` operands like any other
 children, so a closure among them is a nested function like any other.
+Checked-artifact template reference collection
+(`CheckedTemplateRefCollector`) walks them the same way, so every value
+reference, dispatch plan, and nested-function construction among them gets
+its site evidence: a retired call's callee is evaluated, and Boxy builds a
+procedure value's dictionaries from that evidence when it lowers it.
 
 Retirement is atomic with dispatch introduction. A retired expression emits no
 constraint and no live plan; a required iterator recovery plan carries rejected
@@ -14678,6 +14700,13 @@ Other solved-graph mutations:
   rejection reads the explicit `CIR.Annotation.erroneous` record, which only an
   annotation that already produced a diagnostic carries, so no error-free
   program's typechecking or checked-module output changes.
+- `rejectRequirementsOfUnappliedCallees` (`markStaticDispatchFnRejected`)—
+  mechanism: diagnostic recovery after an already-reported error (Every
+  Rejection Is Explicit Recovery, above). It applies only to an ambiguity
+  verdict whose requirements were all copied by the callee of a call the
+  erroneous-value sweep replaced (`runtime_error_call_callees`), which an
+  error-free program never has, so no error-free program's typechecking or
+  checked-module output changes.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead
