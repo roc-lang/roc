@@ -6624,6 +6624,14 @@ validation, because runtime code can arrive there with any value of its type.
 Empirical validation decides only the sites that compile-time evaluation alone
 reaches.
 
+A requested callable binding root replaces its source occurrence too: runtime
+code reads the root's completed callable instead of computing it, so the
+destructure it extracts from, and every site its expression evaluates, runs
+only during the root's evaluation. The exception is a site inside a function
+body within that expression. The callable can hold that function, and runtime
+code that calls it reaches the site with any argument, so such a site stays
+classified by its enclosing procedure template.
+
 Local binding dependencies likewise remain candidates until their enclosing
 expression is either selected or rejected. A selected maximal parent owns the
 computation and its transient binders, including callable-typed binders that
