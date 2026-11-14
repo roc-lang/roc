@@ -9846,6 +9846,8 @@ fn compileLlvmAppObject(
         r.begin("LLVM Optimize + Emit");
     }
 
+    // The reporter prints the report when the build finishes.
+    var time_report: builder.TimeReport = .{ .allocator = ctx.arena };
     const compile_config = builder.CompileConfig{
         .input_path = bitcode_path,
         .output_path = object_path,
@@ -9866,6 +9868,7 @@ fn compileLlvmAppObject(
         .pic = true,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
         .private_runtime = true,
+        .time_report = if (reporter != null and args.timings) &time_report else null,
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
@@ -9873,6 +9876,7 @@ fn compileLlvmAppObject(
         std.log.err("LLVM object compilation failed for {s}", .{bitcode_path});
         return error.LLVMCompilationFailed;
     }
+    if (compile_config.time_report) |report| reporter.?.attachDetail(report.text);
 
     return .{
         .artifact_dir = artifact_dir,
