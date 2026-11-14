@@ -76,12 +76,20 @@ pub fn run(
     defer work.deinit(allocator);
     // The body of each join of the procedure being walked, by join id. A
     // join encloses every jump to it, so it is recorded before they are read.
+    // Join ids can be unique across the whole store, so the table is never
+    // shrunk: each procedure clears only the entries it set, and reads see
+    // the prefix up to its largest join id.
     var join_bodies = std.ArrayList(collections.OptionalId(LIR.CFStmtId)).empty;
     defer join_bodies.deinit(allocator);
+    var touched_joins = std.ArrayList(u32).empty;
+    defer touched_joins.deinit(allocator);
+    var join_len: usize = 0;
     for (0..proc_count) |proc_index| {
         const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(proc_index))));
         const body = proc.body.get() orelse continue;
-        join_bodies.clearRetainingCapacity();
+        for (touched_joins.items) |join_index| join_bodies.items[join_index] = .none;
+        touched_joins.clearRetainingCapacity();
+        join_len = 0;
         try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
             if (seen.isSet(@backingInt(stmt_id))) continue;
@@ -92,27 +100,29 @@ pub fn run(
                 if (join_index >= join_bodies.items.len) {
                     try join_bodies.appendNTimes(allocator, .none, join_index + 1 - join_bodies.items.len);
                 }
+                try touched_joins.append(allocator, join_index);
                 join_bodies.items[join_index] = .some(stmt.join.body);
+                join_len = @max(join_len, join_index + 1);
             } else if (stmt == .assign_call) {
                 try direct_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
                     .callee = @backingInt(stmt.assign_call.proc),
                     .stmt = stmt_id,
-                    .returns = returnOf(store, join_bodies.items, stmt.assign_call.target, stmt.assign_call.next),
+                    .returns = returnOf(store, join_bodies.items[0..join_len], stmt.assign_call.target, stmt.assign_call.next),
                 });
             } else if (stmt == .assign_call_erased) {
                 const erased = store.stmtRow(stmt.assign_call_erased.data);
                 if (erased.deferred) try deferred_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
                     .stmt = stmt_id,
-                    .returns = returnOf(store, join_bodies.items, stmt.assign_call_erased.target, stmt.assign_call_erased.next),
+                    .returns = returnOf(store, join_bodies.items[0..join_len], stmt.assign_call_erased.target, stmt.assign_call_erased.next),
                 });
             } else if (stmt == .dyn) {
                 const op = store.stmtRow(stmt.dyn.data);
                 if (op == .call_erased and op.call_erased.deferred) try deferred_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
                     .stmt = stmt_id,
-                    .returns = returnOf(store, join_bodies.items, stmt.dyn.target.?, stmt.dyn.next),
+                    .returns = returnOf(store, join_bodies.items[0..join_len], stmt.dyn.target.?, stmt.dyn.next),
                 });
             } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
                 outside.set(@backingInt(stmt.assign_literal.value.proc_ref));
