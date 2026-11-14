@@ -843,7 +843,7 @@ fn startAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias) error{ OutOfM
     // its arguments are the span with that element dropped.
     var args = alias.vars.nonempty;
     args.dropFirstElem();
-    args.count = self.types.aliasSourceArgCount(alias);
+    args.count = alias.source_arg_count;
     if (args.len() == 0) return false;
     try writer.writeAll("(");
     try self.frames.append(.{ .args = .{ .vars = args, .context = .General } });

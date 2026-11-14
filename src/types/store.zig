@@ -2118,12 +2118,6 @@ pub const Store = struct {
         };
     }
 
-    /// How many of `alias`'s args are source arguments; the rest are hidden
-    /// implicit-row parameters.
-    pub fn aliasSourceArgCount(_: *const Self, alias: Alias) u32 {
-        return alias.source_arg_count;
-    }
-
     /// Make a nominal type application: identity plus actual type args only.
     /// The backing type lives in the declaration table, not the application.
     /// Does not insert content into the types store
@@ -2488,7 +2482,7 @@ pub const Store = struct {
     pub fn sliceAliasArgs(self: *const Self, alias: Alias) []Var {
         std.debug.assert(alias.vars.nonempty.count > 0);
         const slice = self.vars.sliceRange(alias.vars.nonempty);
-        return slice[1..][0..self.aliasSourceArgCount(alias)];
+        return slice[1..][0..alias.source_arg_count];
     }
 
     /// All alias parameters, including hidden implicit-row parameters.
@@ -2497,7 +2491,7 @@ pub const Store = struct {
     }
 
     pub fn sliceAliasHiddenArgs(self: *const Self, alias: Alias) []Var {
-        return self.sliceAliasAllArgs(alias)[self.aliasSourceArgCount(alias)..];
+        return self.sliceAliasAllArgs(alias)[alias.source_arg_count..];
     }
 
     /// Iterate source arguments only.
@@ -2505,7 +2499,7 @@ pub const Store = struct {
         std.debug.assert(alias.vars.nonempty.count > 0);
         var span = alias.vars.nonempty;
         span.dropFirstElem();
-        span.count = self.aliasSourceArgCount(alias);
+        span.count = alias.source_arg_count;
         return self.vars.iterRange(span);
     }
 
@@ -2713,15 +2707,15 @@ pub const Store = struct {
             }
         }
     }
-    /// The word of descriptor `desc_idx`: its kind, flags and rank.
-    pub inline fn wordAt(self: *const Self, desc_idx: DescStore.Idx) Desc.Word {
-        return self.descs.getWord(desc_idx);
-    }
-
 
     /// The kind of content `var_`'s class holds.
     pub fn kindOf(self: *const Self, var_: Var) types.ContentKind {
         return self.descs.getWord(self.resolveDescIdx(var_)).kind;
+    }
+
+    /// The word of descriptor `desc_idx`: its kind, flags and rank.
+    pub inline fn wordAt(self: *const Self, desc_idx: DescStore.Idx) Desc.Word {
+        return self.descs.getWord(desc_idx);
     }
 
     /// The kind of content descriptor `desc_idx` holds.
@@ -5067,7 +5061,7 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     try std.testing.expectEqual(tag_union_ext, tag_union.ext);
     const alias = deserialized.resolveVar(alias_var).desc.content.alias;
-    try std.testing.expectEqual(@as(u32, 1), deserialized.aliasSourceArgCount(alias));
+    try std.testing.expectEqual(@as(u32, 1), alias.source_arg_count);
     try std.testing.expectEqualSlices(Var, &.{flex}, deserialized.sliceAliasArgs(alias));
     try std.testing.expectEqualSlices(Var, &.{tag_union_ext}, deserialized.sliceAliasHiddenArgs(alias));
     const backing = deserialized.resolveVar(deserialized.getAliasBackingVar(alias)).desc.content.structure.tag_union;

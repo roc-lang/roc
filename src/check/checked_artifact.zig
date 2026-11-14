@@ -37895,7 +37895,7 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
     const function = env.module_env.types.resolveVar(ModuleEnv.varFrom(defs[defs.len - 1])).desc.content.structure.fn_pure;
     const raw_alias = env.module_env.types.resolveVar(function.ret).desc.content.alias;
-    try std.testing.expectEqual(@as(u32, 1), env.module_env.types.aliasSourceArgCount(raw_alias));
+    try std.testing.expectEqual(@as(u32, 1), raw_alias.source_arg_count);
     try std.testing.expectEqual(@as(usize, 1), env.module_env.types.sliceAliasHiddenArgs(raw_alias).len);
     const raw_backing = env.module_env.types.resolveVar(env.module_env.types.getAliasBackingVar(raw_alias)).desc.content.structure.tag_union;
     try std.testing.expectEqual(env.module_env.types.resolveVar(raw_backing.ext).var_, env.module_env.types.resolveVar(env.module_env.types.sliceAliasHiddenArgs(raw_alias)[0]).var_);

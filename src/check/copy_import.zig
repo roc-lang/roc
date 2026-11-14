@@ -692,7 +692,7 @@ fn stepAlias(ctx: *CopyContext, frame: *AliasFrame) std.mem.Allocator.Error!bool
                     types_mod.TypeIdent{ .ident_idx = frame.translated_ident },
                     copied_vars[0],
                     copied_vars[1..],
-                    ctx.source_store.aliasSourceArgCount(frame.source),
+                    frame.source.source_arg_count,
                     translated_origin,
                     frame.source.source_decl,
                 );

@@ -26854,7 +26854,7 @@ fn finishAliasDeclarationParameters(self: *Self, decl_var: Var, hidden: []const 
         alias.ident,
         self.types.getAliasBackingVar(alias),
         self.scratch_vars.sliceFromStart(args_top),
-        self.types.aliasSourceArgCount(alias),
+        alias.source_arg_count,
         alias.origin_module,
         alias.source_decl.toOptional(),
         alias.source_decl.originIsBuiltin(),
@@ -49176,7 +49176,7 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
                 try appendReplayWord(out, self.gpa, @bitCast(alias.ident.ident_idx));
                 try appendReplayWord(out, self.gpa, @backingInt(alias.origin_module));
                 try appendReplayWord(out, self.gpa, @bitCast(alias.source_decl));
-                try appendReplayWord(out, self.gpa, self.types.aliasSourceArgCount(alias));
+                try appendReplayWord(out, self.gpa, alias.source_arg_count);
                 const args = self.types.sliceAliasArgs(alias);
                 try appendReplayWord(out, self.gpa, @intCast(args.len));
                 try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
@@ -49565,7 +49565,7 @@ fn frozenContent(self: *Self, copies: *const collections.DenseMapUnmanaged(Var, 
                 alias.ident,
                 backing,
                 args,
-                self.types.aliasSourceArgCount(alias),
+                alias.source_arg_count,
                 alias.origin_module,
                 alias.source_decl,
             );
