@@ -14790,7 +14790,7 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         try std.testing.expectEqual(@as(usize, 1), scheme_vars.len);
         const payload = artifact.checked_types.payload(scheme_vars[0]);
         try std.testing.expect(payload == .flex);
-        try std.testing.expect(payload.flex.bounded_row_ext);
+        try std.testing.expect(payload.flex.row_tail == .bounded);
         try std.testing.expectEqual(check.CheckedArtifact.RowDefault.empty_tag_union, payload.flex.row_default.?);
     }
     {

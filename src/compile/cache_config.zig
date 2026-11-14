@@ -386,7 +386,15 @@ pub const Constants = struct {
     /// 192: literal argument roots record their edge owner as their own root
     ///      source and hold no expression.
     /// 193: combines the two independent 192 entries.
-    pub const CACHE_VERSION = 193;
+    /// 193: on top of the 192 entry layout, uncommitted record and tag tails
+    ///      replace per-use structure, checked variables record uncommitted
+    ///      record tails, type stores list no widening field names, quantified
+    ///      record tails are restricted at every use, record pattern tails are
+    ///      marked, nominal declarations record padding, method requirements on
+    ///      open rows are held on the row variable for the whole record or tag
+    ///      union, and snapshots record which value a requirement is about.
+    /// 194: combines the two independent 193 entries.
+    pub const CACHE_VERSION = 194;
 };
 
 /// Configuration for the Roc cache system.

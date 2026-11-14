@@ -2781,19 +2781,14 @@ fn CheckedTypeVariableOf(comptime Constraints: type) type {
         constraints: Constraints = if (Constraints == CheckedConstraints) .empty else &.{},
         numeric_default_phase: ?NumericDefaultPhase = null,
         row_default: ?RowDefault = null,
-        /// A variable whose every constraint is an `is_eq` or `to_hash`: the
-        /// obligations deriving those methods over an open row give its tail.
-        /// Closing the row satisfies them, so a flex tail still seals to its row
-        /// default (design.md "Derived Equality And Hashing Over Open Rows"), and
+        /// A variable whose every constraint is an `is_eq` or `to_hash` closing
+        /// its row decides against the plain type, so a flex tail still seals
+        /// to its row default (design.md "Methods On Open Rows"), and
         /// a result row ending in the variable may still be determined by its
         /// request (design.md "Closed Result Rows At Template Boundaries").
         row_default_discharges_constraints: bool = false,
-        /// An implicitly opened row of an annotated definition that the
-        /// annotation bounds (design.md "Polarity"): the definition's body can
-        /// never add a tag to the row, only an instantiation of the definition
-        /// can. `.boxy` seals such a scheme variable to the empty row (design.md
-        /// "Sealed Result Rows").
-        bounded_row_ext: bool = false,
+        /// What kind of row tail the variable is (`RowTail`).
+        row_tail: RowTail = .ordinary,
 
         /// A build form owning a copy of this read form's constraints.
         pub fn toBuild(self: Self, allocator: Allocator) Allocator.Error!CheckedTypeVariableBuild {
@@ -2803,7 +2798,7 @@ fn CheckedTypeVariableOf(comptime Constraints: type) type {
                 .numeric_default_phase = self.numeric_default_phase,
                 .row_default = self.row_default,
                 .row_default_discharges_constraints = self.row_default_discharges_constraints,
-                .bounded_row_ext = self.bounded_row_ext,
+                .row_tail = self.row_tail,
             };
         }
     };
@@ -3566,7 +3561,24 @@ pub const StoredTypeVariable = struct {
     numeric_default_phase: collections.OptionalEnum(NumericDefaultPhase) = .none,
     row_default: collections.OptionalEnum(RowDefault) = .none,
     row_default_discharges_constraints: bool = false,
-    bounded_row_ext: bool = false,
+    row_tail: RowTail = .ordinary,
+};
+
+/// What kind of row tail a checked type variable is.
+pub const RowTail = enum(u8) {
+    /// Any other variable.
+    ordinary,
+    /// An implicitly opened row of an annotated definition that the
+    /// annotation bounds (design.md "Polarity"): the definition's body can
+    /// never add a tag to the row, only an instantiation of the definition
+    /// can. `.boxy` seals such a scheme variable to the empty row (design.md
+    /// "Sealed Result Rows").
+    bounded,
+    /// An uncommitted record tail (design.md "Uncommitted Record Tails"):
+    /// every instantiation commits it to the empty record or makes its record
+    /// a nominal type stored the same way, so `.boxy` seals it to the empty
+    /// record (design.md "Sealed Result Rows").
+    uncommitted_record,
 };
 
 /// POD form of `CheckedAliasType`: `args` is a range into `type_id_pool`.
@@ -3823,6 +3835,17 @@ pub const CheckedTypeStoreView = struct {
         const index = type_ids.synthesizedIndex(id);
         if (index >= self.stored_payloads.len) checkedArtifactInvariant("synthesized checked type id is out of range", .{});
         return index;
+    }
+
+    /// Whether `id` is an uncommitted tag tail a scheme quantified, which
+    /// `payload` reads as the empty tag union (design.md "Uncommitted Tag
+    /// Tails"). Type keys ignore the mark, so specializations never split on
+    /// it; `.boxy` reads it to give a worker a row node for each tag union of
+    /// its signature that ends in one. A synthesized type is composed of
+    /// sealed children and never is such a tail itself.
+    pub fn uncommittedTagTail(self: *const CheckedTypeStoreView, id: CheckedTypeId) bool {
+        if (type_ids.isSynthesized(id)) return false;
+        return self.sealedView().uncommittedTagTail(type_ids.asVar(id));
     }
 
     /// Materialize the public read-form payload for `id`. Slice fields alias the
@@ -4469,7 +4492,7 @@ fn checkedTypeVariableAlphaStep(
 
     if (left.numeric_default_phase != right.numeric_default_phase or
         left.row_default != right.row_default or
-        left.bounded_row_ext != right.bounded_row_ext or
+        left.row_tail != right.row_tail or
         left.constraints.len() != right.constraints.len())
     {
         return false;
@@ -6068,7 +6091,7 @@ fn cloneCheckedTypeBuildVariable(
         .numeric_default_phase = variable.numeric_default_phase,
         .row_default = variable.row_default,
         .row_default_discharges_constraints = variable.row_default_discharges_constraints,
-        .bounded_row_ext = variable.bounded_row_ext,
+        .row_tail = variable.row_tail,
     };
 }
 
@@ -14296,7 +14319,7 @@ const EvidencePass = struct {
                     }
                     param.path = .{ .last = parent, .len = param.path.len + 1 };
                 },
-                .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => {},
+                .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .open_row_value, .row_remainder => {},
             }
             try self.evidence_params_pool.append(self.allocator, param);
         }
@@ -14805,7 +14828,8 @@ const EvidencePass = struct {
                             checkedArtifactInvariant("constraint-callable evidence source type was not published", .{}),
                     } };
                 },
-                .erased_row_remainder => .erased_row_remainder,
+                .open_row_value => .open_row_value,
+                .row_remainder => .row_remainder,
                 .scheme_requirement => .scheme_requirement,
             };
             const published_path: static_dispatch.EvidencePath = switch (source) {
@@ -14813,7 +14837,7 @@ const EvidencePass = struct {
                     .last = try self.publishPathNode(path_nodes, param.path_node),
                     .len = param.path_len,
                 },
-                .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => .{},
+                .scheme_requirement, .use_site_only, .explicit_default, .open_row_value, .row_remainder => .{},
             };
             const contract_start: u32 = @intCast(self.evidence_param_callables.items.len);
             for (param.callable_contracts) |contract| {
@@ -14823,7 +14847,7 @@ const EvidencePass = struct {
             try self.evidence_params_pool.append(self.allocator, .{
                 .callable_contracts = .{ .start = contract_start, .len = @intCast(param.callable_contracts.len) },
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
-                .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
+                .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, if (source == .open_row_value) self.openRowValueOf(param.constraint) orelse param.dispatcher_var else param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
@@ -15017,6 +15041,15 @@ const EvidencePass = struct {
             const k = candidate.param;
             const param = params[k];
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
+            // A row variable holds one requirement per record or tag union
+            // ending in it; the relation's own value names which.
+            if (param.constraint.receiver == .open_row_value) {
+                if (constraint_fn_var) |fn_var| {
+                    const stated = self.openRowValueOf(param.constraint) orelse continue;
+                    const called = self.openRowValueOfCallable(fn_var) orelse continue;
+                    if (self.types.resolveVar(stated).var_ != self.types.resolveVar(called).var_) continue;
+                }
+            }
             if (same_method_fallback == null) same_method_fallback = @intCast(k);
             if (constraint_fn_root) |fn_root| {
                 if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) {
@@ -15357,7 +15390,16 @@ const EvidencePass = struct {
                     dispatcher_var = self.types.getAliasBackingVar(alias);
                     continue :redirect;
                 },
-                .structure => {
+                .structure => |flat| {
+                    // A record or tag union whose row ends in a row variable
+                    // is answered by what each use supplies: its row variable
+                    // holds the requirement (design.md "Methods On Open Rows").
+                    switch (flat) {
+                        .record, .tag_union => if (self.openRowOfStructure(resolved.var_)) |row| {
+                            return self.resolveVarObligation(row, method, structural_kind, constraint_fn_var, chain, policy);
+                        },
+                        .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => {},
+                    }
                     if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
                         if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
                             return switch (found) {
@@ -15641,7 +15683,7 @@ const EvidencePass = struct {
             switch (param.source) {
                 .scheme_callable => if (param.path.len == 0) return false,
                 .constraint_callable, .use_site_only => {},
-                .scheme_requirement, .explicit_default, .erased_row_remainder => return false,
+                .scheme_requirement, .explicit_default, .open_row_value, .row_remainder => return false,
             }
         }
         return true;
@@ -16245,6 +16287,46 @@ const EvidencePass = struct {
         return evidence;
     }
 
+    /// The record or tag union a requirement a row variable holds is about:
+    /// its method's first argument.
+    fn openRowValueOf(self: *EvidencePass, constraint: types.StaticDispatchConstraint) ?Var {
+        return self.openRowValueOfCallable(constraint.fn_var);
+    }
+
+    /// The value a method callable is called on: its first argument; null
+    /// for an erroneous signature.
+    fn openRowValueOfCallable(self: *EvidencePass, fn_var: Var) ?Var {
+        const func = self.types.resolveThroughAliases(fn_var).desc.content.unwrapFunc() orelse return null;
+        const args = self.types.sliceVars(func.args);
+        if (args.len == 0) return null;
+        return args[0];
+    }
+
+    /// The row variable a record's or tag union's row ends in, when that row
+    /// is still open: a rigid, or a flex that is not an uncommitted record
+    /// tail or an annotation's implicitly opened row.
+    fn openRowOfStructure(self: *EvidencePass, var_: Var) ?Var {
+        var current = var_;
+        var first = true;
+        var guard = types.debug.IterationGuard.init("openRowOfStructure");
+        while (true) {
+            guard.tick();
+            const resolved = self.types.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.types.getAliasBackingVar(alias),
+                .structure => |flat| switch (flat) {
+                    .record => |record| current = record.ext,
+                    .tag_union => |tag_union| current = tag_union.ext,
+                    .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return null,
+                },
+                .rigid => return if (first) null else resolved.var_,
+                .flex => return if (first or resolved.desc.flags.uncommitted_record_tail or resolved.desc.flags.bounded_row_ext) null else resolved.var_,
+                .err, .field_presence => return null,
+            }
+            first = false;
+        }
+    }
+
     fn evidenceContextForRecordParam(
         self: *EvidencePass,
         pairs: []const ModuleEnv.SchemeUsePair,
@@ -16259,6 +16341,13 @@ const EvidencePass = struct {
         // callable it copies, so an unpaired callable is shared with the use,
         // exactly like an unpaired receiver.
         const fresh_fn = self.pairForResolved(pairs, fn_root) orelse param.constraint.fn_var;
+        // A requirement a row variable holds is about the record or tag union
+        // that row ends: at this use, the value its method's copy is called on
+        // (design.md "Methods On Open Rows").
+        if (param.constraint.receiver == .open_row_value) {
+            const func = self.types.resolveThroughAliases(fresh_fn).desc.content.unwrapFunc() orelse unreachable; // a requirement's method variable is a function type
+            return try self.evidenceContext(param, self.types.sliceVars(func.args)[0], fresh_fn);
+        }
         return try self.evidenceContext(param, fresh_dispatcher, fresh_fn);
     }
 
@@ -16576,7 +16665,7 @@ const EvidencePass = struct {
         param: EvidenceParam,
     ) Allocator.Error!static_dispatch.CheckedEvidence {
         if (try self.evidenceForRecordParam(pairs, param, .defer_resolution)) |evidence| return evidence;
-        if (param.path_len == 0 or param.source == .constraint_callable or param.source == .erased_row_remainder) {
+        if (param.path_len == 0 or param.source == .constraint_callable or param.source == .open_row_value or param.source == .row_remainder) {
             return (try self.evidenceForRecordParam(pairs, param, .commit)).?;
         }
         const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
@@ -16775,7 +16864,7 @@ test "procedure evidence schema positively classifies callable paths and pathles
 
     var pathless_params = params;
     pathless_params[1].path = .{};
-    pathless_params[1].source = .erased_row_remainder;
+    pathless_params[1].source = .row_remainder;
     const pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = .fromBorrowedSlice(pathless_params[0..]),
     };
@@ -17399,12 +17488,18 @@ const CheckedTemplateRefCollector = struct {
                 for (run.args) |arg| try self.pushChild(.{ .expr = arg });
                 self.endChildren(children);
             },
+            // The operands a retired expression still evaluates are lowered
+            // before its crash, so their uses are collected like any other.
+            .runtime_error => |runtime_error| {
+                const children = self.beginChildren();
+                for (runtime_error.evaluated) |operand| try self.pushChild(.{ .expr = operand });
+                self.endChildren(children);
+            },
             .str_segment,
             .bytes_literal,
             .empty_list,
             .empty_record,
             .zero_argument_tag,
-            .runtime_error,
             .crash,
             .ellipsis,
             .anno_only,
@@ -25346,6 +25441,14 @@ fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView,
     templates.sealed_slots_pool = .fromOwnedSlice(try slots.toOwnedSlice(allocator));
 }
 
+/// Whether a scheme variable is an uncommitted record tail that may seal.
+fn recordTailCandidate(payload: CheckedTypePayload) bool {
+    return switch (payload) {
+        .flex => |flex| flex.row_tail == .uncommitted_record and flex.row_default == .empty_record and payload.variableSealsToRowDefault(),
+        .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+    };
+}
+
 /// Hidden callable interfaces can exchange rows absent from the nominal's
 /// visible type arguments, so argument occurrences prevent result sealing.
 fn nominalHidesCallableInterface(nominal: CheckedNominalType) bool {
@@ -25366,6 +25469,9 @@ const SealedSchemeSlots = struct {
     allocator: Allocator,
     types: CheckedTypeStoreView,
     candidates: collections.DenseMapUnmanaged(CheckedTypeId, bool) = .empty,
+    /// Uncommitted record tails (`RowTail.uncommitted_record`)
+    /// still eligible to seal.
+    record_candidates: collections.DenseMapUnmanaged(CheckedTypeId, bool) = .empty,
     seen: collections.DenseMapUnmanaged(CheckedTypeId, u8) = .empty,
     pending: std.ArrayList(Step) = .empty,
     expanded: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
@@ -25379,6 +25485,7 @@ const SealedSchemeSlots = struct {
 
     fn deinit(self: *SealedSchemeSlots) void {
         self.candidates.deinit(self.allocator);
+        self.record_candidates.deinit(self.allocator);
         self.seen.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
@@ -25390,6 +25497,24 @@ const SealedSchemeSlots = struct {
         evidence_params: []const static_dispatch.EvidenceParamRecord,
         slots: *std.ArrayList(u32),
     ) Allocator.Error!void {
+        try self.sealTagRows(variables, fn_root, evidence_params);
+        try self.sealRecordTails(variables);
+        // The maps record facts about variables, not slot numbers. Retain
+        // original order and every slot even when two slots name one variable.
+        for (variables, 0..) |variable, slot| {
+            const sealed = (self.candidates.get(variable) orelse false) or (self.record_candidates.get(variable) orelse false);
+            if (sealed) try slots.append(self.allocator, @intCast(slot));
+        }
+    }
+
+    /// Decide which bounded tag-row tails seal: those only the result's
+    /// coercion reach holds.
+    fn sealTagRows(
+        self: *SealedSchemeSlots,
+        variables: []const CheckedTypeId,
+        fn_root: CheckedTypeId,
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
+    ) Allocator.Error!void {
         self.candidates.clearRetainingCapacity();
         self.seen.clearRetainingCapacity();
         self.pending.clearRetainingCapacity();
@@ -25397,7 +25522,7 @@ const SealedSchemeSlots = struct {
         for (variables) |variable| {
             const payload = self.types.payload(variable);
             const bounded = switch (payload) {
-                .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+                .flex => |flex| flex.row_tail == .bounded and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
                 .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
             };
             if (bounded) try self.candidates.put(self.allocator, variable, true);
@@ -25409,7 +25534,10 @@ const SealedSchemeSlots = struct {
         const signature = while (true) switch (self.types.payload(root)) {
             .alias => |alias| root = alias.backing,
             .function => |found| break found,
-            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {
+                self.candidates.clearRetainingCapacity();
+                return;
+            },
         };
         // LIFO: inspect arguments, then evidence, before walking the result.
         // A small external occurrence can disqualify every candidate without
@@ -25433,7 +25561,10 @@ const SealedSchemeSlots = struct {
             switch (step.mode) {
                 .argument, .ordinary => {
                     if (step.mode == .argument) switch (payload) {
-                        .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) return,
+                        .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) {
+                            self.candidates.clearRetainingCapacity();
+                            return;
+                        },
                         .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
                     };
                     try self.pushChildren(payload, step.mode);
@@ -25458,10 +25589,17 @@ const SealedSchemeSlots = struct {
                 },
             }
         }
-        // The map records facts about variables, not slot numbers. Retain
-        // original order and every slot even when two slots name one variable.
-        for (variables, 0..) |variable, slot| {
-            if (self.candidates.get(variable) orelse false) try slots.append(self.allocator, @intCast(slot));
+    }
+
+    /// Decide which uncommitted record tails seal (design.md "Sealed Result
+    /// Rows"): every one whose row default is the empty record and whose
+    /// constraints closing the row discharges. A use can only close such a
+    /// tail or make its record a nominal type stored exactly like it, so no
+    /// instantiation changes the representation of anything the tail is in.
+    fn sealRecordTails(self: *SealedSchemeSlots, variables: []const CheckedTypeId) Allocator.Error!void {
+        self.record_candidates.clearRetainingCapacity();
+        for (variables) |variable| {
+            if (recordTailCandidate(self.types.payload(variable))) try self.record_candidates.put(self.allocator, variable, true);
         }
     }
 
@@ -25534,8 +25672,9 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
     /// it involves.
     pub fn sealed(self: *SealedSchemeVarWalk, variable: CheckedTypeId, fn_root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
         const payload = self.types.payload(variable);
+        if (recordTailCandidate(payload)) return true;
         const bounded = switch (payload) {
-            .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+            .flex => |flex| flex.row_tail == .bounded and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
             .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
         if (!bounded) return false;
@@ -26831,6 +26970,8 @@ fn publishCheckedExhaustivenessSites(
     const obligations = bodies.env.exhaustiveness_obligations.items();
     const sites = try allocator.alloc(CheckedExhaustivenessSite, obligations.len);
     errdefer allocator.free(sites);
+    var requested_roots = try requestedCompileTimeRoots(allocator, compile_time_roots, root_requests);
+    defer requested_roots.deinit(allocator);
 
     for (obligations, sites, 0..) |obligation, *site, index| {
         const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
@@ -26871,7 +27012,7 @@ fn publishCheckedExhaustivenessSites(
             .destructure_pattern => |source_pattern| .{ .pattern = source_pattern },
         };
         const owner_template = try exhaustivenessOwnerTemplateForSource(allocator, bodies, owner_artifact, templates, needle);
-        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, needle);
+        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, &requested_roots, needle);
         const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
             .{ .compile_time_replaced_by_root = root.id }
         else if (owner_template) |template_ref|
@@ -26923,15 +27064,25 @@ const CheckedBodyNeedle = union(enum) {
     pattern: CIR.Pattern.Idx,
 };
 
+/// Which nested function bodies a checked body search enters.
+const FunctionBodySearch = enum {
+    /// Nested lambdas' arguments and bodies are searched.
+    enter,
+    /// Nested lambdas' arguments and bodies are not searched: they run
+    /// wherever their function is called, not where the lambda stands.
+    skip,
+};
+
 /// Whether `needle` occurs within the checked expression tree rooted at
-/// `root`. Nested lambdas' bodies are searched; promoted procedures' bodies
-/// are their own templates'. Nodes wait on an explicit stack, so body
-/// nesting never becomes native call depth.
+/// `root`. `function_bodies` selects whether nested lambdas' bodies are
+/// searched; promoted procedures' bodies are their own templates'. Nodes wait
+/// on an explicit stack, so body nesting never becomes native call depth.
 fn checkedExprContains(
     allocator: Allocator,
     bodies: CheckedBodies,
     root: CIR.Expr.Idx,
     needle: CheckedBodyNeedle,
+    function_bodies: FunctionBodySearch,
 ) Allocator.Error!bool {
     const Node = union(enum) {
         expr: CIR.Expr.Idx,
@@ -26982,9 +27133,12 @@ fn checkedExprContains(
                 .tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .expr = arg }),
                 .nominal => |nominal| try pending.append(allocator, .{ .expr = nominal.backing_expr }),
                 .closure => |closure| try pending.append(allocator, .{ .expr = closure.lambda }),
-                .lambda => |lambda| {
-                    if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
-                    try pending.append(allocator, .{ .expr = lambda.body });
+                .lambda => |lambda| switch (function_bodies) {
+                    .enter => {
+                        if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
+                        try pending.append(allocator, .{ .expr = lambda.body });
+                    },
+                    .skip => {},
                 },
                 .binop => |binop| {
                     try pending.append(allocator, .{ .expr = binop.lhs });
@@ -27013,7 +27167,10 @@ fn checkedExprContains(
                     try pending.append(allocator, .{ .expr = for_.body });
                 },
                 .run_low_level => |run| for (run.args) |arg| try pending.append(allocator, .{ .expr = arg }),
-                .hosted_lambda => |hosted| if (patterns) for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
+                .hosted_lambda => |hosted| switch (function_bodies) {
+                    .enter => if (patterns) for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
+                    .skip => {},
+                },
                 .numeral,
                 .str_segment,
                 .bytes_literal,
@@ -27117,7 +27274,7 @@ fn exhaustivenessOwnerTemplateForSource(
             .checked_body => |root| root,
             .intrinsic_wrapper, .entry_wrapper, .unimplemented => continue,
         };
-        if (try checkedExprContains(allocator, bodies, root, needle)) return .{
+        if (try checkedExprContains(allocator, bodies, root, needle, .enter)) return .{
             .artifact = owner_artifact,
             .proc_base = template.proc_base,
             .template = template.template_id,
@@ -27126,14 +27283,37 @@ fn exhaustivenessOwnerTemplateForSource(
     return null;
 }
 
+/// The compile-time roots a root request evaluates, by root id.
+fn requestedCompileTimeRoots(
+    allocator: Allocator,
+    compile_time_roots: *const CompileTimeRootTable,
+    root_requests: *const RootRequestTable,
+) Allocator.Error!std.DynamicBitSetUnmanaged {
+    var requested = try std.DynamicBitSetUnmanaged.initEmpty(allocator, compile_time_roots.roots.items().len);
+    for (root_requests.requests.items()) |request| {
+        if (request.abi != .compile_time) continue;
+        const root = request.compile_time_root.get() orelse continue;
+        requested.set(@backingInt(root));
+    }
+    return requested;
+}
+
 fn exhaustivenessReplacingRootForSource(
     allocator: Allocator,
     bodies: CheckedBodies,
     compile_time_roots: *const CompileTimeRootTable,
+    requested_roots: *const std.DynamicBitSetUnmanaged,
     needle: CheckedBodyNeedle,
 ) Allocator.Error!?CompileTimeRoot {
     for (compile_time_roots.roots.items()) |root| {
-        if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
+        const function_bodies: FunctionBodySearch = switch (compileTimeRootSourceReplacement(root.kind)) {
+            .none => continue,
+            .whole_expression => .enter,
+            .outside_function_bodies => .skip,
+        };
+        // Only a requested root is ever evaluated. A root with no request
+        // replaces nothing: its source occurrence runs where it stands.
+        if (!requested_roots.isSet(@backingInt(root.id))) continue;
         // A literal conversion converts literal data and contains no site.
         if (root.literalConversionKind() != null) continue;
         if (root.hoisted_body) |body| switch (body) {
@@ -27150,19 +27330,32 @@ fn exhaustivenessReplacingRootForSource(
                 // itself. The exact-pattern check above owns the former;
                 // sites contained by the base expression belong to the
                 // latter.
-                if (try checkedExprContains(allocator, bodies, base_expr, needle)) return root;
+                if (try checkedExprContains(allocator, bodies, base_expr, needle, function_bodies)) return root;
                 continue;
             },
             // A rejected destructure binder's root crashes and contains no site.
             .pattern_error => continue,
             .expr, .valueless_binding => {},
         };
-        if (try checkedExprContains(allocator, bodies, root.rootExpr(), needle)) return root;
+        if (try checkedExprContains(allocator, bodies, root.rootExpr(), needle, function_bodies)) return root;
     }
     return null;
 }
 
-fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
+/// Which source occurrences within a requested root's expression run only
+/// during that root's evaluation, so that the root replaces them.
+const SourceReplacement = enum {
+    /// The root replaces no source occurrence.
+    none,
+    /// Every occurrence within the root's expression.
+    whole_expression,
+    /// Every occurrence within the root's expression except those inside a
+    /// function body. The root's value is a callable, and the function
+    /// bodies it holds run wherever runtime code calls it.
+    outside_function_bodies,
+};
+
+fn compileTimeRootSourceReplacement(kind: CompileTimeRootKind) SourceReplacement {
     return switch (kind) {
         .constant,
         .hoisted_constant,
@@ -27170,11 +27363,12 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
         .numeral_conversion,
         .quote_conversion,
         .repl_expr,
-        => true,
-        .callable_binding,
-        .expect,
-        .literal_argument,
-        => false,
+        => .whole_expression,
+        .callable_binding => .outside_function_bodies,
+        .expect => .none,
+        // A literal argument root has no body expression: it converts
+        // literal data and contains no source occurrence.
+        .literal_argument => .none,
     };
 }
 
@@ -31624,6 +31818,35 @@ pub const CheckedModuleArtifact = struct {
     /// reported here at the boundary (in debug builds, where `verifyComplete`
     /// runs)—not a lowering panic. Returns the first failure found, or
     /// null when the artifact is total.
+    /// Whether an evidence parameter's dispatcher is the scheme variable in
+    /// its slot: that variable itself, or for a requirement a row variable
+    /// holds, the record or tag union whose row ends in it, or the variable
+    /// itself when a row's composition left the value as that variable
+    /// (design.md "Methods On Open Rows").
+    fn evidenceParamDispatchesSlot(types_view: CheckedTypeStoreView, param: static_dispatch.EvidenceParamRecord, slot_ty: CheckedTypeId) bool {
+        if (param.dispatcher_ty == slot_ty) return true;
+        if (param.source != .open_row_value) return false;
+        var current = param.dispatcher_ty;
+        while (true) {
+            switch (types_view.payload(current)) {
+                .alias => |alias| current = alias.backing,
+                .record => |record| current = record.ext,
+                .tag_union => |tag_union| current = tag_union.ext,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                .empty_tag_union,
+                .field_kind,
+                => return current == slot_ty,
+            }
+        }
+    }
+
     pub fn validateDispatchEvidence(self: *const CheckedModuleArtifact) Allocator.Error!?DispatchEvidenceFailure {
         const table = &self.static_dispatch_plans;
         const type_view = self.typesView();
@@ -32004,7 +32227,7 @@ pub const CheckedModuleArtifact = struct {
                 if (param.source == .scheme_requirement or slot >= template.scheme_vars.len) {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
                 }
-                if (templates.scheme_vars_pool.items()[template.scheme_vars.start + slot] != param.dispatcher_ty) {
+                if (!evidenceParamDispatchesSlot(self.typesView(), param, templates.scheme_vars_pool.items()[template.scheme_vars.start + slot])) {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
                 }
             }
@@ -32202,7 +32425,7 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => template.checked_fn_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
+                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value, .row_remainder => {
                         if (param.path.len != 0) {
                             return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = template.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         }
@@ -32227,7 +32450,7 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => scope.scheme_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
+                    .scheme_requirement, .use_site_only, .explicit_default, .open_row_value, .row_remainder => {
                         if (param.path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         continue;
                     },
@@ -32246,7 +32469,7 @@ pub const CheckedModuleArtifact = struct {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 };
                 if (param.source == .scheme_requirement or slot >= scope.scheme_vars.len or
-                    templates.scheme_vars_pool.items()[scope.scheme_vars.start + slot] != param.dispatcher_ty)
+                    !evidenceParamDispatchesSlot(self.typesView(), param, templates.scheme_vars_pool.items()[scope.scheme_vars.start + slot]))
                 {
                     return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 }
@@ -33510,7 +33733,7 @@ const CheckedTypeStoreImportProjector = struct {
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
             .row_default_discharges_constraints = variable.row_default_discharges_constraints,
-            .bounded_row_ext = variable.bounded_row_ext,
+            .row_tail = variable.row_tail,
         };
     }
 
@@ -37020,8 +37243,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x59, 0xCA, 0x18, 0x41, 0xAF, 0x46, 0x8B, 0xF7, 0x8F, 0x24, 0x79, 0xB7, 0xD0, 0x3A, 0xC8, 0xDD,
-        0x47, 0x64, 0x17, 0x3E, 0x68, 0xBB, 0xF1, 0x13, 0xD2, 0xF7, 0xE4, 0x23, 0x7E, 0x84, 0x25, 0xDF,
+        0x08, 0x80, 0x82, 0x8E, 0x13, 0xD2, 0x86, 0x2D, 0xAA, 0x78, 0xF2, 0xBE, 0xAE, 0xE3, 0x19, 0x33,
+        0xCB, 0xCF, 0x11, 0xFC, 0xA8, 0x02, 0x06, 0x37, 0x14, 0x4D, 0xAE, 0x1E, 0x43, 0xB1, 0xA7, 0x40,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -38288,7 +38511,7 @@ const SealedSlotsFixture = struct {
     }
 
     fn variable(self: *SealedSlotsFixture) Allocator.Error!CheckedTypeId {
-        return self.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union } });
+        return self.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_tag_union } });
     }
 
     fn function(self: *SealedSlotsFixture, args: []const CheckedTypeId, ret: CheckedTypeId) Allocator.Error!CheckedTypeId {
@@ -38375,14 +38598,14 @@ test "sealed slot batching preserves bounded eligibility and duplicate slot orde
     const unit = try f.add(.empty_record);
     const a = try f.variable();
     const b = try f.variable();
-    const rigid = try f.add(.{ .rigid = .{ .bounded_row_ext = true, .row_default = .empty_tag_union } });
+    const rigid = try f.add(.{ .rigid = .{ .row_tail = .bounded, .row_default = .empty_tag_union } });
     const unbounded = try f.add(.{ .flex = .{ .row_default = .empty_tag_union } });
-    const record_row = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_record } });
-    const numeric = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .numeric_default_phase = .mono_specialization } });
+    const record_row = try f.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_record } });
+    const numeric = try f.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_tag_union, .numeric_default_phase = .mono_specialization } });
     const callable = try f.function(&.{unit}, unit);
     const constraints = [_]CheckedStaticDispatchConstraint{.{ .fn_name = try f.names.internMethodName("apply"), .fn_ty = callable, .origin = .method_call }};
-    const constrained = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
-    const discharged = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .row_default_discharges_constraints = true, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
+    const constrained = try f.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_tag_union, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
+    const discharged = try f.add(.{ .flex = .{ .row_tail = .bounded, .row_default = .empty_tag_union, .row_default_discharges_constraints = true, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
     const variables = [_]CheckedTypeId{ b, a, b, rigid, unbounded, record_row, numeric, constrained, discharged };
     try f.expectSlots(&variables, callable, &.{}, &.{ 0, 1, 2, 8 });
     try f.expectSlots(&variables, try f.function(&.{a}, unit), &.{}, &.{ 0, 2, 8 });

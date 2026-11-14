@@ -904,7 +904,7 @@ not_polymorphic = |x| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 644)
+							(e-call (constraint-fn-var 643)
 								(e-lookup-local
 									(p-assign (ident "inner")))
 								(e-empty_record)))
