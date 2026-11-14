@@ -83,6 +83,9 @@ const Built = struct {
     /// Stored static values whose `ConstStore` belongs to a module outside
     /// the root, its relations, and its lowering-visible imports.
     stored_outside_input: usize,
+    /// How many literal roots the Solved program the runtime consumer
+    /// continues registered.
+    literal_roots: usize,
 };
 
 fn buildWithCache(gpa: std.mem.Allocator, cache_dir: []const u8, app_path: []const u8) BuildError!Built {
@@ -144,6 +147,7 @@ fn buildWithCacheAndTests(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
     if (coord.hasUserErrors()) return reportErrors(&coord);
     const session = &coord.program_session.?;
     const respecialized = session.runtime_stages == .respecialized;
+    const literal_roots = if (session.runtime_prepared) |*prepared| prepared.literalRootCount() else 0;
     var runtime = try session.takeRuntime(gpa, session.runtime_roots, target);
     defer runtime.deinit();
 
@@ -191,6 +195,7 @@ fn buildWithCacheAndTests(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
         .static_callables = 0,
         .invalid_static_parts = 0,
         .stored_outside_input = stored_outside_input,
+        .literal_roots = literal_roots,
     };
     for (coord.appRootCheckedArtifact().compile_time_roots.roots.items()) |root| {
         if (root.lss_value_has_functions or root.payload == .fn_value) {
@@ -254,6 +259,12 @@ const ColdProgram = enum {
 };
 
 fn expectColdEqualsWarm(cold_program: ColdProgram, app_source: []const u8) ExpectError!void {
+    _ = try coldEqualsWarmLiteralRoots(cold_program, app_source);
+}
+
+/// Require the app's cold and warm runtime programs to be equal, and return
+/// how many literal roots each registered.
+fn coldEqualsWarmLiteralRoots(cold_program: ColdProgram, app_source: []const u8) ExpectError!usize {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -279,6 +290,8 @@ fn expectColdEqualsWarm(cold_program: ColdProgram, app_source: []const u8) Expec
     try std.testing.expectEqual(cold_program == .respecialized, cold.respecialized);
     try std.testing.expect(!warm.respecialized);
     try std.testing.expect(warm.cache_hits > 0);
+    try std.testing.expectEqual(cold.literal_roots, warm.literal_roots);
+    return cold.literal_roots;
 }
 
 // repro for https://github.com/roc-lang/roc/issues/12930
@@ -513,6 +526,36 @@ test "issue 12595 shared row callables lower identically from fresh and stored v
         \\    Ok({})
         \\}
     );
+}
+
+test "a runtime program specialized again registers literal roots its evaluation reported" {
+    // The runtime program specialized after evaluation reports no literal
+    // root outcome, so each of its literal roots must be one the evaluation
+    // registered; debug builds verify that (design.md "Runtime Programs Read
+    // Stored Values"). `paragraph`'s custom interpolation registers a literal
+    // root in the runtime body, and `stored` holds a function value, so the
+    // cold build specializes its runtime program again.
+    const literal_roots = try coldEqualsWarmLiteralRoots(.respecialized,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\Html := [Html(Str)].{
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Html), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments|
+        \\        Str.from_interpolation(segments).map_ok(|assemble| |values| Html(assemble(values)))
+        \\    to_str : Html -> Str
+        \\    to_str = |Html(s)| s
+        \\}
+        \\paragraph : Str -> Html
+        \\paragraph = |body| "<p>${body}</p>"
+        \\make : U64 -> (U64 -> U64)
+        \\make = |offset| |value| value + offset
+        \\stored = make(7)
+        \\main! = |args| {
+        \\    Echo.line!(paragraph(Str.inspect(stored(List.len(args)))).to_str())
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expect(literal_roots != 0);
 }
 
 const dev_target: lir.CheckedPipeline.TargetConfig = .{
