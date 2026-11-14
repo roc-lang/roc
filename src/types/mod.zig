@@ -13,7 +13,6 @@ pub const literal_defaulting = @import("literal_defaulting.zig");
 pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
 pub const generalize = @import("generalize.zig");
-pub const use_absorbers = @import("use_absorbers.zig");
 pub const import_mapping = @import("import_mapping.zig");
 pub const debug = @import("debug.zig");
 

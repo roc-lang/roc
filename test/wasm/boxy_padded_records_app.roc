@@ -15,6 +15,7 @@ Slot(a) := { z : U32, _ : U32, a : a, y : U8 }.{
 
 Padded := { z : U32, _ : U32, a : U64 }
 
+make : U32, U64 -> Padded
 make = |z, a| { z, a }
 
 read_z = |r| r.z

@@ -1,7 +1,7 @@
-# A constant holding a padded nominal is passed where a row-typed parameter
-# holds an empty record, in a call that runs at runtime. The parameter's record
-# has a closed row tail of its own and the nominal has a backing of its own, so
-# lifting the parameter's empty record into the nominal leaves both alone.
+# A constant whose record holds a padded nominal is passed to a function whose
+# annotation takes a record holding an empty record. The call is a type
+# mismatch: a record type an annotation writes without `..` is a plain record,
+# and a nominal with unnamed fields cannot be passed where one is expected.
 Only := { _ : U64 }
 
 unit_param : { k : {} }, U64 -> U64

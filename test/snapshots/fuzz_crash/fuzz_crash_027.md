@@ -2142,7 +2142,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red]")
+			(text "[Blue, Red, ..d] where [d.is_eq : d, d -> Bool]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -2193,7 +2193,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red]")
+			(text "[Blue, Red, ..d] where [d.is_eq : d, d -> Bool]")
 			(annotation-end)
 			(line-break)
 			(line-break)

@@ -54876,6 +54876,10 @@ const BodyContext = struct {
             // Structural entries already carry the checked callable contracts
             // materialized above; only targets need receiver-based selection.
             if (param.source == .scheme_requirement or entry.* != .target) continue;
+            // A requirement a row variable holds is answered by the value the
+            // caller supplied, which checking already resolved into this
+            // contract (design.md "Methods On Open Rows").
+            if (param.source == .open_row_value) continue;
             const node = subst[param.slot.get().?].node;
             const derived = derive: {
                 if (self.forwardedRequirement(node, schema.view.names, param.method)) |forwarded| switch (forwarded) {
@@ -55198,7 +55202,7 @@ const BodyContext = struct {
     fn evidenceParamRequiresConstraintRelation(param: static_dispatch.EvidenceParamRecord) bool {
         return switch (param.source) {
             .scheme_requirement, .constraint_callable, .use_site_only => true,
-            .scheme_callable, .explicit_default, .erased_row_remainder => false,
+            .scheme_callable, .explicit_default, .open_row_value, .row_remainder => false,
         };
     }
 

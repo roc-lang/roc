@@ -73,6 +73,10 @@ count_pending: std.array_list.Managed(Var),
 /// static-dispatch constraints (see `countVarOccurrencesOutsideOwnConstraints`).
 count_skips_own_constraints: ?Var = null,
 occurrence_counts_skipped_constraints: ?Var = null,
+/// While a requirement a row variable holds is written, the record or tag
+/// union it is about, written as the row variable's name (design.md "Methods
+/// On Open Rows").
+row_value_display: ?struct { value: Var, row: Var } = null,
 /// Extension vars already reached by the row collection currently running.
 /// Row collection runs to completion without rendering anything, so one
 /// buffer serves every row node.
@@ -538,7 +542,11 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
             const item = self.static_dispatch_constraints.items[i];
 
             const start = tmp_aw.writer.end;
-            try self.writeVar(tmp_writer, item.dispatcher_var, root_var);
+            if (item.constraint.receiver == .open_row_value) {
+                try self.writeRowName(tmp_writer, item.dispatcher_var, root_var);
+            } else {
+                try self.writeVar(tmp_writer, item.dispatcher_var, root_var);
+            }
             const type_name_end = tmp_aw.writer.end;
 
             try tmp_writer.writeAll(".");
@@ -550,7 +558,13 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
             // an output, whatever position the constrained variable occupies.
             const saved_polarity = self.polarity;
             self.polarity = .pos;
+            const saved_display = self.row_value_display;
+            self.row_value_display = if (item.constraint.receiver == .open_row_value) if (self.openRowValueOf(item.constraint)) |value| .{
+                .value = value,
+                .row = self.types.resolveVar(item.dispatcher_var).var_,
+            } else null else null;
             try self.writeVar(tmp_writer, item.constraint.fn_var, root_var);
+            self.row_value_display = saved_display;
             self.polarity = saved_polarity;
 
             const constraint_len = tmp_aw.writer.end - start;
@@ -705,6 +719,13 @@ fn requestVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeCon
     if (resolved.desc.content == .err) {
         try writer.writeAll("Error");
         return true;
+    }
+
+    if (self.row_value_display) |display| {
+        if (display.value == resolved.var_) {
+            try self.writeRowName(writer, display.row, root_var);
+            return true;
+        }
     }
 
     if (self.hasSeenVar(resolved.var_)) {
@@ -1092,7 +1113,9 @@ fn stepRecord(self: *TypeWriter, writer: *ByteWrite, frame: *RecordFrame, root_v
                         if (frame.fields_count > 0) try writer.writeAll(", ");
                         try writer.writeAll("..");
 
-                        if (flex.payload.name) |ident_idx| {
+                        if (self.holdsOpenRowValue(flex.var_)) {
+                            try self.writeRowName(writer, flex.var_, root_var);
+                        } else if (flex.payload.name) |ident_idx| {
                             const name = self.getIdent(ident_idx);
                             // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
                             if (name.len > 0 and name[0] != '#') {
@@ -1160,12 +1183,9 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                         // still shown in input positions, and when the ext var is
                         // shared or constrained elsewhere in the type (where it
                         // carries real information).
-                        const display: enum { hidden, anonymous, source_name, generated_name } = blk: {
-                            // A tail constrained only by the `is_eq` and
-                            // `to_hash` an open row's derivation gives it is
-                            // satisfied by the closed row an output stands
-                            // for, so it is implicit openness too.
-                            const implicit_openness = self.polarity == .pos and self.constraintsAreRowDerivations(flex.payload.constraints);
+                        const display: enum { hidden, anonymous, source_name, generated_name, row_name } = blk: {
+                            if (self.holdsOpenRowValue(flex.var_)) break :blk .row_name;
+                            const implicit_openness = self.polarity == .pos and flex.payload.constraints.len() == 0;
                             if (flex.payload.name) |ident_idx| {
                                 const name = self.getIdent(ident_idx);
                                 if (name.len > 0 and name[0] != '#') {
@@ -1192,6 +1212,7 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                             try writer.writeAll("..");
                             switch (display) {
                                 .hidden, .anonymous => {},
+                                .row_name => try self.writeRowName(writer, flex.var_, root_var),
                                 .source_name => try writer.writeAll(self.getIdent(flex.payload.name.?)),
                                 .generated_name => try self.writeFlexVarName(writer, flex.var_, .TagUnionExtension, root_var),
                             }
@@ -1314,7 +1335,13 @@ fn gatherRow(
         // for a cyclic row; a row that terminates on its own never revisits.
         if ((try self.ext_seen.getOrPut(resolved.var_)).found_existing) return .invalid;
         switch (resolved.desc.content) {
-            .flex => |flex| return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } },
+            .flex => |flex| {
+                // An uncommitted record tail stands for no field a program
+                // can read, so it renders as the closed row it reads as
+                // (design.md "Uncommitted Record Tails").
+                if (kind == .record and resolved.desc.flags.uncommitted_record_tail) return .empty_record;
+                return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } };
+            },
             .rigid => |rigid| return .{ .rigid = rigid },
             .alias => |alias| ext = self.types.getAliasBackingVar(alias),
             .structure => |flat_type| switch (kind) {
@@ -1429,7 +1456,7 @@ pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, contex
         // Check if this variable appears multiple times
         // Note: counting can fail with corrupted data, so we treat it as appearing once
         const occurrences = try self.countVarOccurrences(resolved_var, root_var);
-        if (occurrences <= 1) {
+        if (occurrences <= 1 and !self.holdsOpenRowValue(resolved_var)) {
             // If it appears once, then generate and write the name
             try writer.writeAll("_");
             try self.generateContextualName(writer, context);
@@ -1633,14 +1660,47 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
     }
 }
 
-/// Whether every constraint in `range` is an `is_eq` or `to_hash`, the
-/// obligations deriving those methods over an open row gives its tail.
-fn constraintsAreRowDerivations(self: *const TypeWriter, range: types_mod.StaticDispatchConstraint.SafeList.Range) bool {
+/// Whether `var_` is a row variable holding a requirement for the record or
+/// tag union it ends (design.md "Methods On Open Rows").
+fn holdsOpenRowValue(self: *const TypeWriter, var_: Var) bool {
+    const resolved = self.types.resolveVar(var_);
+    const range = switch (resolved.desc.content) {
+        .flex => |flex| flex.constraints,
+        .rigid => |rigid| rigid.constraints,
+        .alias, .structure, .err, .field_presence => return false,
+    };
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
-        const name = self.idents.getText(constraint.fn_name);
-        if (!std.mem.eql(u8, name, "is_eq") and !std.mem.eql(u8, name, "to_hash")) return false;
+        if (constraint.receiver == .open_row_value) return true;
     }
-    return true;
+    return false;
+}
+
+/// The record or tag union a requirement a row variable holds is about: its
+/// method's first argument.
+fn openRowValueOf(self: *const TypeWriter, constraint: types_mod.StaticDispatchConstraint) ?Var {
+    const func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return null;
+    const args = self.types.sliceVars(func.args);
+    if (args.len == 0) return null;
+    return self.types.resolveVar(args[0]).var_;
+}
+
+/// Write the name of a row variable that holds requirements: the name an
+/// annotation gave it, or one generated for it, never an anonymous `..`.
+fn writeRowName(self: *TypeWriter, writer: *ByteWrite, row: Var, root_var: Var) error{ OutOfMemory, WriteFailed }!void {
+    const resolved = self.types.resolveVar(row);
+    const source_name: ?Ident.Idx = switch (resolved.desc.content) {
+        .rigid => |rigid| rigid.name,
+        .flex => |flex| flex.name,
+        .alias, .structure, .err, .field_presence => null,
+    };
+    if (source_name) |ident_idx| {
+        const name = self.getIdent(ident_idx);
+        if (name.len > 0 and name[0] != '#') {
+            try writer.writeAll(name);
+            return;
+        }
+    }
+    try self.writeFlexVarName(writer, resolved.var_, .General, root_var);
 }
 
 /// Retrieves the text representation of an identifier by its index.

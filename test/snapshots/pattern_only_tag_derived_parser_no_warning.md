@@ -140,10 +140,10 @@ NO CHANGE
 				(p-assign (ident "_args")))
 			(e-block
 				(s-expr
-					(e-call (constraint-fn-var 407)
+					(e-call (constraint-fn-var 405)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
-						(e-call (constraint-fn-var 406)
+						(e-call (constraint-fn-var 404)
 							(e-lookup-local
 								(p-assign (ident "describe")))
 							(e-string

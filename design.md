@@ -2044,9 +2044,12 @@ initializer is an explicit zero-argument proof call to the one declared root
 function, whose return owns the concrete Monotype representation and lambda
 sets. Lambda solving unifies reads with that return without letting a read
 change it. Each use of an imported constant is checked at its own copy of the
-constant's type, and a copy may lift an anonymous record or tag union into a
-nominal the declaring module never names, so a read's type can differ from its
-root's by such lifts. A lifted pair, and every pair containing one, unifies its
+constant's type. The constant's own anonymous structure is committed when its
+module finishes checking (Uncommitted Record Tails), so a copy differs only
+where the constant's scheme quantifies an uncommitted tail: a read of a
+callable root may lift the record or tag union such a tail ends into a
+nominal the declaring module never names, so a read's type can differ from
+its root's by such lifts. A lifted pair, and every pair containing one, unifies its
 components without joining the two types: the callable slots beneath are
 shared, every type with no lift beneath it is joined as usual, and the root's
 return stays the type its own module declared. Every read is unified with its
@@ -4187,7 +4190,10 @@ equivalence class: merges keep it if either side had it, scheme
 instantiation copies it, and import copying carries it across modules. The
 nominal-versus-anonymous unification entry points reject a lift whose
 anonymous side carries the mark, so the verdict does not depend on which
-relation reached the structure first. The rejected side is pinned in
+relation reached the structure first. A closed record or tag union written in
+a backing is committed in any case and never lifts (Uncommitted Record
+Tails); the mark is what keeps a nominal value out of backing structure whose
+row is still a variable, such as a row the declaration leaves open. The rejected side is pinned in
 `src/check/test/type_checking_integration.zig` for a tag payload, a record
 field, a generalized constructor helper, an annotated structural parameter
 that feeds a backing, and an imported backing; the accepted controls keep a
@@ -5191,9 +5197,7 @@ test/snapshots/repro_issue_12968_record_update_list_field.md.
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
 interface once and classifies the binding as a scheme exactly when a reachable
-variable was promoted to generalized rank. The same walk records a binding
-that is no scheme but whose type reaches anonymous structure copied per use
-(Anonymous Structure Is Copied Per Use, below). This producer-side classification
+variable was promoted to generalized rank. This producer-side classification
 is necessary because generalization is per variable: a partially generalized
 scheme can have a monomorphic structural root and quantified descendants. Root
 rank is therefore not a valid proxy for whether a binding is a scheme. The walk
@@ -5412,130 +5416,354 @@ definitions take no part: a module's uses of an imported scheme give its
 variables types over the module's own variables, never the reverse, so no
 cycle passes through another module.
 
-### Anonymous Structure Is Copied Per Use
+### Uncommitted Record Tails
 
-A use of a binding can lift anonymous structure in the binding's type into a
-nominal type whose backing matches: given `make : U64 -> { count : U64 }` and
-`Counter := { count : U64 }`, the use `lifted : Counter = make(1)` relates
-the call's record to `Counter`, and unification rewrites the record's class
-to `Counter`. That rewrite belongs to the use. If the use shared the record
-with the binding's type, the lift would change `make` itself and every other
-use with it, and `plain = make(2)` would gain `Counter`'s methods. So each
-use owns its own copy of every anonymous record and tag union (empty ones
-included) that the binding's scope made, even when no variable in it is
-quantified, exactly as it owns copies of the quantified variables.
+Two relations can change anonymous structure after it is built: a lift
+rewrites an anonymous record or tag union into a nominal type whose backing
+matches (`Counter := { count : U64 }` takes in `{ count: 1 }`), and width
+absorption gives a record an optional or defaulted field it omits (Field
+Kinds). Each rewrites the class it reaches, so whatever shares that class
+changes with it. Whether structure can still change this way is therefore
+explicit data of its row: an ordinary type variable for a record, and an
+uncommitted empty tag union for a tag union closed by inference (Uncommitted
+Tag Tails, below). A use of a binding changes only its own instantiation of
+the binding's type, by the one rule instantiation follows everywhere: it
+copies what reaches a quantified variable and shares everything else.
 
-The rule is carried as explicit descriptor data, not by rank: such a class is
-monomorphic, so marking it generalized would make every body-local record of
-the scope look polymorphic to post-check stages. Instead, when a
-generalization boundary leaves a class it made ungeneralized and some use can
-change the class (`UseAbsorbers.copiedPerUse`), it marks the class
-`DescriptorFlags.per_use_structure`, and the rank stays what rank adjustment
-computed. Only a record, tag union, empty record, or empty tag union not
-written in an opened nominal backing (`Descriptor.liftsIntoNominal`) can be
-changed by a use, and only in these ways:
+A record that can still be lifted or widened ends in an *uncommitted tail*:
+a flex variable carrying `DescriptorFlags.uncommitted_record_tail`. Every
+record construction mints a fresh one as its row's extension: a record
+literal, `{}` included (a record of no fields over its own uncommitted
+tail); the skeleton a construction relates to its expected shape (Expected
+Shape Context); and a record pattern without `..`, which is a construction's
+shape seen from the consuming side (`area = |{ top_left, bottom_right }| ...`
+under `area : Rectangle -> F64` takes in the `Rectangle` its caller passes,
+and so does `{ x, y } = point`). Every other record row is committed. A
+record type written in an annotation or in a declaration's backing is closed
+as written, and `..` keeps its meaning there; the closed records the checker
+builds itself (the `{}` of a statement, a loop, `dbg`, or `expect`, an
+iterator step) are committed too.
 
-- A use lifts an anonymous tag union into a nominal type only when the
-  declaration's backing is a tag union whose row is open or lists every tag
-  the anonymous union itself lists, which is exactly what relating the two
-  checks before it lifts.
-- A use lifts an anonymous record into a nominal type only when the
-  declaration's backing is a record whose row is open or lists every field
-  of the anonymous record it cannot absorb. A backing absorbs only an
-  optional or defaulted field, and a field whose kind is still unsettled
-  becomes one only by relating to a widening field of its name.
-- A use widens a record with an optional or defaulted field the record does
-  not hold. That field's name was written in some module, as a `?:` or
-  defaulted field of an annotation, a `.?` access, or an unset.
-- A declaration that is one of its own type variables, or that is invalid
-  (relating to which poisons the structure), can take in anything.
+An uncommitted tail is not an open row. It never stands for a field of
+`required` or undetermined kind and never relates to a rigid row variable,
+so `{ x: 1 }` where `{ x : I64, y : Str }` is expected is a type mismatch,
+exactly as it is for a closed record. With `U` an uncommitted tail:
 
-So a structure is marked only when something the module's checking can see
-could change it. A tag union is marked when some visible declaration could
-take it in: an open tag-union backing row, a closed one listing all of the
-union's own tags, or, for an empty union, any tag-union backing. A record is
-marked when some visible declaration could take it in by the same rule over
-the fields it cannot absorb, or when some visible widening field name is
-not among its own fields. A structure nothing visible could change keeps the
-same type under every relation, so every use shares it. Only a class's own
-tags or fields are counted; a tag or field further along its row only rules
-out a lift or a widening, so leaving it out can only mark more.
+| `U` meets | Result |
+| --- | --- |
+| the empty record | `U` commits: the class is the empty record |
+| another uncommitted tail, or a flex row variable | one flex class, still uncommitted; static-dispatch constraints merge as for any two flex variables |
+| a record row in a construction relation whose fields are all `optional`, or `defaulted` where Defaulted Fields admits the omission, when `U` is not a use's copy (below) | `U` absorbs the row: the class becomes that row, and the row's own tail relates to a fresh uncommitted tail, which can absorb again later or commit |
+| a record row in an exact-width relation, a row with a `required` or undetermined field, or any record row with a field when `U` is a use's copy | type mismatch |
+| a rigid row variable | type mismatch |
+| an alias | `U` relates to the alias's backing |
+| an erroneous type | the error |
+| anything else | type mismatch |
 
-What a module's checking can see is collected before any binding generalizes
-(`Check.use_absorbers`). From each module the check copies types from
-(Builtin, its imports, the owners of what it imports, and a platform's
-requirement surface) it is every declaration in that module's type store,
-less the opaque ones, into which another module cannot lift, and the name of
-every optional or defaulted field of a record in that store: a field name
-written in one module reaches another only through the type stores it copies
-types from. Sealing a checked store lists those names
-(`Store.widening_names`), so a module reads each source's list rather than
-walking its records. From the module itself it is read from its syntax, since checking
-registers a declaration or an optional field only as it reaches it: every
-nominal declaration's backing, and every field name written as optional or
-defaulted in an annotation, accessed with `.?`, or unset. A backing written
-as a tag union or record is the only one of the module's own that can take
-in anonymous structure: an application or a lookup is checked as the alias or
-nominal type it names, and relating structure to a nominal type whose
-backing is not the same kind of structure never lifts. Names are compared by
-a hash of their text, as they come from several modules; a collision can
-only mark a structure that did not need it. Debug builds assert that every
-module a check copies types from was collected, that every declaration the
-module registered admits no lift its syntax did not record, and that every
-optional or defaulted field of a record in the module's store is a collected
-widening field. A class an enclosing scope made keeps its sharing:
-a weak binding's one type is still shared by every use, and a function
-returning it returns that same class. A merge keeps the mark only when both
-sides had it, so a class that joins an enclosing scope's class is shared like
-that class.
+A committed record never changes once it is committed. The empty record relates
+to a row only when that row holds no field, so a closed row absorbs no field
+a relation offers it, and relating it to a nominal type is a type mismatch.
+A nominal type over a record or tag union that meets a committed plain row of
+its own kind (one an annotation wrote, or one committed after it was built),
+in either direction and at any depth, is a type mismatch whose refusal
+records the facts its report states (`RecordTailRefusal.plain_record`,
+`plain_tag_union`): the nominal type, which side of the relation was the
+plain row, whether the nominal declares anonymous fields, and whether this
+module may build or take apart its values. The report says that a nominal type
+is never the same as a plain record or tag union, names the anonymous fields
+where the nominal has them, and suggests only fixes that hold: writing the
+nominal in the annotation that says the value is plain; for a record of a
+nominal the module may build and take apart, converting between the two with
+the nominal's record syntax; and for a nominal with anonymous fields, building
+it from the plain record's fields, which only the side holding the plain
+record can do. A nominal of another kind (`U64` meeting a record) is an
+ordinary mismatch.
 
-Binding classification records a binding whose type reaches a marked class
-(`Check.typeCopiedPerUse`). A binding that also reaches a quantified variable
-is a scheme; one that does not stays monomorphic, in
-`Check.per_use_copy_bindings`. Instantiation copies each marked class and
-every monomorphic node from which one is reachable, by the same reachability
-walk that reaches quantified variables, and gives the copy no mark; the copy
-is a new class at its use's rank. A scheme with a marked class therefore
-always walks its reachability. A monomorphic binding's copy quantifies
-nothing, so its uses record no scheme-use evidence, it carries no codec
-requirement, and post-check stages give it no dispatch scope of its own: a
-local function such as `g = |{}| Json.to_str(W.(r))` inside `|r| ...` reads
-the enclosing function's evidence for `r` exactly as if each use shared its
-type. Imported checked types are
-generalized templates whose nodes every use copies, so the mark needs no
-cross-module form; an exporting module's own lifts stay out of its exported
-types by the same rule.
+A record lifts into a nominal type only while the final extension of its
+row, followed through record segments and aliases, is an unbound flex
+variable: an uncommitted tail, or the row of a record known only from field
+uses (`get = |r| r.count` called with a `Counter`), or the empty record an
+opening of a nominal declaration's backing minted
+(`DescriptorFlags.nominal_backing_structure`), which a row reaches only by
+inference through an earlier relation to that declaration and which fixes
+only the declaration's own row. A tag union lifts only
+when no part of its row was written by an annotation or a type alias
+(`DescriptorFlags.annotation_tag_union`, which copies carry and which a
+merge keeps if either side had it) and its row ends in a flex variable that
+no annotation bounds (`DescriptorFlags.bounded_row_ext`) or in an
+uncommitted tag tail. A row ending in a committed empty record or empty tag
+union, or in a rigid, is committed, and relating it to a nominal type is a
+type mismatch. A permitted lift relates the anonymous row to the
+declaration's backing, so the tail commits or absorbs there, and an
+uncommitted tail of a record lifted into a nominal whose backing is `{}`
+commits to the empty record.
 
-A use's copy can then differ from the binding's own structure in more than
-a lift. A closed record relates to a record that lists more fields when every
-extra field is optional and omitted, which widens the closed row, so two uses
-of `make = |value| { a: value }` can relate its result to
-`{ a ?: U8, b ?: U8 }` and to `{ a ?: U8, b ?: Str }`. Monotype specializes
-`make` at each use's type. Boxy lowers one worker for the template, whose
-result record holds no slot for `b`, so it treats two closed records of one
-value with different field counts like records stored in different orders
-(`Builder.storageDifference`) and rebuilds the call's result at the use's
-type by descriptors.
+Annotations therefore mean exactly what they say: annotated plain records
+and tag unions are never used as named types. Given `Counter := { count :
+U64 }` and `Light := [Red, Green]`:
 
-Annotation instances follow the same rule. An annotation's instance of a
-type declaration is shared by later references at the same position only
-when it is ground and free of structure a use can change, by the same test;
-only such subtrees of a non-ground instance are shared with the next
-instance. Otherwise one
-definition's body, lifting its annotated result into a nominal type, would
-change every other annotation naming the same alias.
+- `make : U64 -> { count : U64 }` followed by `c : Counter = make(1)` is a
+  type mismatch: the result row is closed as written.
+- `make : U8 -> { a : U8 }` followed by `record : { a : U8, b ?: U8 } =
+  make(11)` is a type mismatch: the closed result absorbs nothing.
+- `lift : U64 -> { count : U64 }` whose body returns a `Counter` is a type
+  mismatch at the body's result.
+- `pick : U64 -> [Red, Green]` followed by `l : Light = pick(1)` is a type
+  mismatch, and so is `signals : U64 -> List([Red, Green])` used as
+  `List(Light)`, or a local `e : [Red, Green] = Red` used as a `Light`. The
+  row Polarity opens for each call still widens there
+  (`c : [Red, Green, Blue] = pick(1)`); it never lifts.
 
-The cost is one copy per use of a binding's anonymous records and of the tag
-unions a visible declaration could take in, with their field and tag runs,
-and of the nodes above them.
-The accepted and rejected sides are pinned by
-`test/cli/LiftedUseLeavesOtherUses.roc`,
-`test/cli/LiftedUseLeavesOtherUsesRejected.roc`,
-`test/cli/OptionalFieldsPerUse.roc`,
-`test/cli/issue_12482_encoder_for_in_nested_function.roc`,
-`test/cli/lifted_use_leaves_other_uses/`, and
-`src/check/test/per_use_structure_test.zig`, which pins which tag unions and
-records are copied and which are shared.
+A record nobody wrote a type for stays open after its function finishes. An
+uncommitted tail is an ordinary variable for rank, generalization, and
+instantiation: a generalization boundary quantifies every uncommitted record
+tail it owns, wherever the record sits in the binding's type (its result,
+its arguments, a callback's arguments or result, data, a nominal type's
+arguments, a function stored in data, or the type of a static-dispatch
+constraint), exactly as it quantifies any other variable it owns. These
+tails commit instead, to the empty record by ordinary unification, after
+rank adjustment and before quantifying (`Check.generalizeRank`,
+`Check.commitUncommittedTail`):
+
+- every tail of a definition a `provides` entry names, whose host compiled
+  against its closed rows (Host Symbol ABI);
+- a tail whose own constraints the empty record does not discharge;
+- a tail no binding's type reaches, through its components and the function
+  types of the constraints they carry (`Check.collectReachedVars`): a record
+  local to the body, such as a literal a weak local binding destructures,
+  which no use could close or lift, so it stays the ground record it is and
+  a constant built from it can be hoisted;
+- a tail a derived structural codec reaches, which commits before its
+  boundary generalizes (below);
+- a tail whose record the binding compared or hashed: deriving `is_eq` or
+  `to_hash` for it commits it at once (Methods On Open Rows), since the
+  binding decided those methods against the plain record. A use that then
+  makes the record a nominal type is a type mismatch whose report says the
+  function compared or hashed it as a plain record, with the fix that needs
+  no annotation first (`Tagged.{ ... }` where the record is built) and then
+  the type annotation.
+
+Rank adjustment then runs again, so structure that held only a committed
+tail is not quantified.
+
+Each use of the binding instantiates the tail into a copy
+(`DescriptorFlags.uncommitted_copy`, which later copies keep and a merge
+keeps while the class is still a flex variable), and a use may do exactly
+two things with its copy's record:
+
+1. close it: the copy commits, and the record is the plain record with
+   exactly the fields its binding built or took apart;
+2. make it a nominal type whose record has exactly those fields and is
+   stored the same way: a declaration whose backing has no unnamed field
+   (Nominal Record Field Order), so its values are laid out like the record.
+
+A use may not give the record any field, optional or defaulted, and may not
+make it a padded nominal type, one declared with unnamed fields, whose stored
+layout differs from the record's. Both are type mismatches at the use, in
+every position the record has: a result, a callback's argument, a parameter
+the binding takes apart, a record inside a method's type, a list item, or
+across a module boundary. The unifier refuses them where they arise
+(`Unifier.unifyRecordWithNominal` for a nominal, through
+`NominalDecl.Flags.padded` and the backing's optional or defaulted fields
+the record lacks; `Unifier.unifyUncommittedWithStructure` for a written-out
+structural type), records the refusal (`Scratch.record_tail_refusal`,
+`TypeMismatch.record_tail_refusal`), and the report explains it
+(`ReportBuilder.appendRecordTailRefusal`). Its hint offers the fix that
+needs no type annotation first, then the annotation: building the record
+as `Row.{ ... }` where it is built, or adding the field there; taking it
+apart with `Row.{ ... }` in the function's pattern, with a trailing `..`
+(`Wide.{ a, .. }`) when the nominal has optional or defaulted fields the
+pattern does not name, or ending a structural pattern with `..`; and the
+type annotation on the function that builds or takes the record. A required field the record lacks
+stays the ordinary mismatch it is for any record.
+
+Nothing is ever converted at a call. The value a use receives is the value
+its binding built, and the value a binding takes apart is the one the use
+passed, at the same layout, so no use rebuilds a record on its way out of a
+binding or on its way in. Rejecting the padded case is deliberate: wanting
+to make a function's open record a padded nominal type is an extremely rare
+edge case whose only benefit is slightly more concise code (`Row.{ ... }`
+in the function builds the padded value directly), and it is more globally
+beneficial for the compiler to run faster by not doing the extra work every
+such use would need. Not adding fields at a use follows the same intent: a
+use cannot change what a function it does not own built, and keeping that
+true keeps the rule identical within a module and across modules.
+
+The rule keeps a function from needing an annotation merely because its
+record is later used as a same-fields named type: deleting a type annotation
+does not change whether or how a program compiles, except where deleting it
+creates a static dispatch ambiguity. A record checked directly against a
+known type in the same function is not a use's copy: a literal annotated as
+a nominal (`row : Row = { columns: 3, values: 4 }`), or passed straight to a
+function annotated to take one, is built at that type, padded or not, with
+its optional and defaulted fields filled. `Row.{ ... }` construction is the
+same. A record literal used directly as a method receiver
+(`{ name: s }.greet()`) has no nominal type to dispatch on and is a missing
+method, as for any structural value.
+
+Given `Counter := { count : U64 }`, `Row := { columns : U64, _ : U32,
+values : U64 }`, and `Wide := { a : U8, note ?: Str }`:
+
+- `make = |n| { count: n }`: `c : Counter = make(1)` lifts its own copy,
+  `p = make(2)` keeps a plain record with no methods, and
+  `o : Other = make(3)` lifts a third copy into another same-fields nominal.
+- `apply = |f| f({ count: 1 })`: `apply(Counter.describe)` lifts the record
+  it passes; `mk = |n| |m| { a: n, b: m }` lets `reader : U64 -> T = mk(1)`
+  lift what the returned function builds; `build = |xs| xs.map(|x| { key:
+  x })` lifts the records its unknown receiver's callback builds.
+- `f = |{ x }| x` takes a `Point := { x : U8 }` or a plain record;
+  `keep = |r| if c r else { count: 0 }` returns a `Counter` for a `Counter`.
+- `r : Row = make_row(1, 2)` and `product(row)` with
+  `product = |{ columns, values }| columns * values` are type mismatches:
+  `Row` stores its values with padding the record does not have.
+- `w : Wide = make_a(1)` with `make_a = |n| { a: n }`, and
+  `x : { a : U8, note ?: Str } = make_a(1)`, are type mismatches: the record
+  was built without `note`. `Wide.{ a: n }` in `make_a`, or an annotation
+  on `make_a` whose record has `note`, builds it with that field.
+
+A use's copy that meets a literal's own tail in the same function
+(`if c make(1) else { a: 2 }`) is one class carrying the copy's restriction:
+the literal joins a record its binding did not build, so neither gains a
+field there.
+
+A value binding does not generalize (Value Bindings Generalize By
+Expression), so its uses share its one tail, as they share its tag rows
+(Value Rows: Uses Share One Row): `p = { x: 1, y: 2 }` followed by
+`q : Point = p` makes `p` a `Point` at every use, and a second use that
+needs a different nominal type is a type mismatch at that use.
+
+When a module finishes checking, and when a REPL expression does, every
+uncommitted record or tag tail that no scheme quantifies commits
+(`Check.commitUncommittedTails`, beside `Check.closeTopLevelValueRows`):
+the module's own uses have lifted its value bindings as far as they will,
+nothing outside the module can, and importers and compile-time evaluation
+read closed structure.
+
+A quantified uncommitted record tail stays in its scheme. Checked output
+records it as a flex record tail whose row default is the empty record, with
+`CheckedTypeVariable.uncommitted_record_tail` set, and copies it across
+modules with its flags, so an importer's use closes or lifts its own copy
+exactly as the defining module's uses do, and a nominal declaration's
+padding (`NominalDecl.Flags.padded`) travels with the declaration.
+`TypeWriter` renders an uncommitted record tail as a closed row: it stands
+for no field a program can read, and `make = |n| { count: n }` reads
+`a -> { count : a }`.
+
+Field reads see no difference from a closed record. A `.field` access, a
+`.?field` access, a destructure probe, and a record update relate the record
+to a row whose field is `required` or undetermined, which an uncommitted
+tail refuses, so a field the record lacks is the same mismatch it is for a
+closed row. A derived structural codec over a record with an uncommitted
+tail commits the tail closed before its boundary generalizes, wherever the
+record sits (Derived Structural Codec Record-Row Closure): the codec is a
+requirement, and a requirement never holds a quantified record tail.
+
+Post-check stages see a quantified uncommitted record tail as a scheme
+variable every instantiation of which stores its record exactly as the
+closed record does. `.lss` specializes each use at its committed row, so uses
+that commit the tail share one specialization. `.boxy` seals the tail to the
+empty record in the worker (Sealed Result Rows), and the worker's
+representation does not depend on the use. The record itself is a row node
+of the worker's signature (Methods On Open Rows): one hidden descriptor of the
+whole value as each use has it, so printing it renders the nominal type a use
+lifted it into in both lowering modes. Neither a commitment nor a lift
+changes a layout, so neither costs anything at run time.
+
+### Uncommitted Tag Tails
+
+A tag row the checker closes by inference, rather than an annotation
+closing it, ends in an *uncommitted tag tail*: an empty tag union carrying
+`DescriptorFlags.uncommitted_tag_tail`. An exhaustive match closes the
+inferred rows its patterns cover this way (`Check.closeExhaustiveVars`), a
+tag pattern with a closed row (an irrefutable destructure, an unannotated
+lambda's parameter) ends in one. A row a lift or a producer-owned single-tag
+construction closes against an opening of a nominal declaration's backing
+ends in the empty tag union that opening minted
+(`DescriptorFlags.nominal_backing_structure`), and lifts like an uncommitted
+one: the declaration fixes its own row, not the anonymous one. Derivation closings
+(`closeTagRowsForDerivation`, derived codecs and `map`) decide a derived
+plan against the exact closed row and commit it.
+
+The tail is an empty tag union, so it is closed for every purpose:
+exhaustiveness, widening, row joins, and rendering all read `[]`, and no
+relation adds a tag to it. Unification treats it as the empty tag union, and
+a merge keeps the mark unless the other side is a committed empty tag union
+(one an annotation wrote, or one committed after inference closed it); a
+flex row variable that meets it becomes it, so the restrictive side wins.
+What the mark adds is that a union ending in it may still lift into a
+nominal type whose backing fits, which a committed closed union never does,
+and that it generalizes: rank adjustment settles it at its group's rank, as
+it settles a flex variable, so a binding whose type holds it is a scheme,
+and each use's instantiation copies the union and its tail. Instantiation
+and import copying carry the mark.
+
+Unlike a record tail, a tag tail is quantified wherever instantiating the
+binding reaches it, in arguments, results, nested function types, and
+constraints alike. The common case is an argument
+(`is_ok = |r| match r { Ok(_) => Bool.True, Err(_) => Bool.False }` called
+with a `Try`), and no instantiation of a tag tail changes a layout: it can
+only commit or let its union lift, and an anonymous closed tag union and a
+nominal type over the same backing have one representation (`.boxy`'s
+`Program.storageDifference` reads a nominal through its backing, and a
+lowered nominal shares its backing's layout). A generalization boundary
+therefore quantifies every uncommitted tag tail it owns, without asking what
+reaches it: a tail in a dispatch requirement the scheme captures after it
+quantifies must be copied by each use, and quantifying one nothing reaches
+costs nothing. One that no scheme quantifies commits when the module
+finishes checking. Committing only clears the mark; the empty tag union
+stays.
+
+Post-check stages read an uncommitted tag tail as the empty tag union it
+is (`CheckedTypeStoreView.payload`); the checked read form exposes the mark
+separately (`CheckedTypeStoreView.uncommittedTagTail`), and type keys ignore
+it, so `.lss` specializes nothing for it. It is no identity variable of a
+scheme, so a worker takes no descriptor for the tail under `.boxy`; each tag
+union of its signature with a tag whose row ends in one is a row node instead
+(Methods On Open Rows), described by one hidden descriptor of the whole value
+as each use has it, so printing it renders the nominal type a use lifted it
+into in both lowering modes.
+
+The accepted and rejected sides of both tails are pinned by
+`src/check/test/uncommitted_record_tail_test.zig` (literal, `{}`, and
+pattern tails; lifts of results, callback arguments, returned functions'
+results, pattern parameters, both-sides tails, a record a static-dispatch
+constraint holds, a function stored in a list, and a nominal type's
+argument; two uses lifting into two nominal types; refusals of optional and
+defaulted fields at a result, through a nominal, and into a record a
+function takes apart; refusals of padded nominal types in both directions;
+an ordinary mismatch for a missing required field; shared value bindings;
+annotated tag unions that widen but never lift; a match-closed union
+lifting at a call and gaining no tag), `src/compile/test/sealed_slots_test.zig`
+(every record tail sealed, wherever it sits), `test/cli/OpenRecordsAtUses.roc`
+(closing and lifting through results, callbacks, `List`, `Box`, `Try`,
+tuples, returned and stored functions, a user nominal's arguments, a second
+unannotated function, unknown receivers, two nominal types and a plain
+record from one function, and a nominal whose defaulted field the record
+supplies), `test/cli/open_records_imported/` (the same across a module
+boundary, accepted and rejected), `test/cli/OpenRecordsPaddedRejected.roc`
+and `test/cli/OpenRecordsAddedFieldRejected.roc` (each refusal in every
+position, with its report), `test/cli/OpenRecordsHintFixes.roc` (every fix
+the refusal hints suggest, compiled and run),
+`test/cli/NominalPlainRowRejected.roc` and
+`test/cli/NominalPlainRowHintFixes.roc` (a nominal type meeting a committed
+plain record or tag union in each position and direction, with its report,
+and every fix its hint suggests), `test/cli/OptionalFieldsPerUse.roc` (two uses
+refused fields of different types), `test/cli/LiftedUseLeavesOtherUses.roc`
+and `test/cli/lifted_use_leaves_other_uses/` (uses that lift and keep their
+results, in one module and across modules),
+`test/cli/LiftedUseLeavesOtherUsesRejected.roc` (annotated results that do
+not lift, and a method of the lifted nominal called on another use), and
+`test/cli/UncommittedTagTailLocals.roc` (a generalized local matching a tag
+parameter and reading enclosing evidence, returned and called at an
+anonymous union and a nominal), `test/cli/printing_follows_use/` and
+`test/echo/printing_follows_use_dbg.roc` (records and match-closed tag unions
+printed with `Str.inspect`, `dbg`, and `?` inside `expect` as each use has
+them: directly, through a generic helper, inside a `List`, taken apart with
+`as`, from another module, at a use that does not lift, through a function
+whose only hidden input is a row node called directly, as a function value
+and in a compile-time constant, with a capture-free lambda inside, and with a
+nominal that has no inspect override). The CLI tests run under both lowering
+strategies and both backends.
 
 ### Scheme Relations Through Unrooted Variables
 
@@ -11634,6 +11862,11 @@ one rule whether the value is local or top-level:
   whose tail a scheme quantified, or that carries a constraint the empty row
   does not discharge, is left alone.
 
+A value's record follows the same rule through its uncommitted tail
+(Uncommitted Record Tails): every use shares it, a use that lifts the record
+into a nominal type does so for every use, and the tail commits to the empty record when the module finishes
+checking.
+
 A use of a top-level value is therefore never a widening of the value: no
 row coercion and no `ModuleEnv` record exist for value uses. Where a
 value with a closed row flows into an annotated function's RESULT, Row
@@ -12441,6 +12674,13 @@ merely because it called a function whose type only requires a method. No
 type variable, and the record's unknown part is a row. The program
 destructures the record, which closes it, or annotates it.
 
+An uncommitted record tail (Uncommitted Record Tails) is not such a row:
+its record's fields are known, and a use can only close its own copy or make
+the record a nominal type with exactly those fields. A boundary that owns an uncommitted tail in a codec's value
+shape commits it to the empty record before generalizing, whether or not an
+interface reaches it, since a requirement never holds a quantified record
+tail.
+
 Both sides are pinned by tests: accepted—
 test/cli/JsonParseInferredRecord.roc (a parser record inferred from field uses
 closes at quiescence), the issue #10824 tests in
@@ -12598,72 +12838,192 @@ rows in one body, through a forwarding definition and a local alias, in stored
 records, at two state types, through an import, and as bindings nothing uses, on
 every backend under both strategies.
 
-### Derived Equality And Hashing Over Open Rows
+### Methods On Open Rows
 
-Deferred dispatch relations record both their creating binding group and their
-creating scheme root, including an explicit absence outside a scheme. A derived
-equality or hashing component inherits both identities from its parent relation.
-The checker records its scheme requirement under that root and queues its
-unification children with the same owner; draining the relation inside another
-function does not transfer ownership to that function. Registry-only
-instantiations and parked codec relations retain these identities when queued
-later. The independent parser/function expect rows in
-`src/check/test/repros_test.zig` are covered by the checker regression named
-`codec row equality - independent expect parser and function error rows`.
+A record whose row ends in a row variable (`{ id : U64, ..r }`, written in an
+annotation or inferred from field use, as in `|l| l.id`) or a tag union whose
+row ends in one (`[Red, ..t]`) is some type that has these fields or tags: the
+caller supplies the actual type, which may be a plain record or tag union or a
+nominal type over one. A method call on such a value, whether an operator's
+desugared `is_eq` or `to_hash` or any method a program names (`l.foo(r)`), is a
+requirement answered at each call by the type the caller supplied, exactly as
+for a type variable:
 
-Deriving `is_eq` or `to_hash` for a record or tag union covers every field or
-tag the type can hold, including those its extension row supplies. A concrete
-extension is checked like the declared fields and tags, so a function anywhere
-in the row rejects the derivation. An open extension is a component like any
-other generic one: the derivation gives the row variable its own `is_eq` or
-`to_hash` constraint, which generalizes into a `where` requirement. So
-`|a, b| if a == Nope { False } else { a == b }` infers
-`[Nope, ..c], [Nope, ..c] -> Bool where [c.is_eq : c, c -> Bool]`, a call that
-instantiates `c` with a function-carrying row is rejected at that call, and an
-annotation that compares an open row declares the requirement
-(`[Nope, ..a] -> Bool where [a.is_eq : a, a -> Bool]`). The constraint is what
-keeps a tail instantiated after checking inside the derivation; without it,
-lowering would meet whatever the instantiation supplies, functions included.
-The same holds for a concrete extension a value's type hides behind a
-compared literal: `b : [Nope, Yep(Box(U64))]` makes `b == Nope` compare the
-`Box` payload too, and `Box` has no `is_eq`.
+- the caller supplies a nominal type: that type's method runs; if it has no
+  such method, the call is a missing-method error;
+- the caller supplies a plain record or tag union: it has `is_eq` and
+  `to_hash` when every field or payload, the ones the row variable stands for
+  included, supports them (a function field is an error at the call), and no
+  other method, so any other method is a missing-method error at the call.
 
-Closing a row discharges these constraints, since the empty row derives both
-methods. A tail that carries only them therefore still seals to its row
-default (the checked variable records this with
-`row_default_discharges_constraints`), and it does not make a value
-polymorphic. A top-level value is computed once, at one type, so once the
-module solves, each open row in its data whose tail carries only these
-constraints is grounded to the empty row by unifying the tail with it
-(`Check.closeValueRowTailsCarryingDerivations`), as every row of a top-level
-value closes when its module finishes checking (Value Rows: Uses Share One
-Row). The module commits its permitted weak-value row defaults after the
-late annotation audit, then drains the dispatch work they create before
-freezing codec derivations or rejecting unresolved scheme requirements.
-A non-generalized tail shared through a function stored in a weak value
-must receive its default before a borrowing scheme is judged unresolved.
-These are the existing value-row commitments, not another whole-module
-finalization pass. A function's generalized tail is left open: it
-generalizes, and each instantiation supplies its row. An instantiation whose
-copy of the tail nothing pins leaves that copy to its row default too, so the
-ambiguity judgment never reports it: `make : U64 -> Set([X, Y])` built with
-`insert` gives its implicitly opened tail a `to_hash` requirement, and
-`make(0).len()` closes the call's copy rather than reporting a hash with no
-owner. The instantiator records each copy it places in a row's extension
-position (`Instantiator.constrained_row_tail_copies`), the derivation records
-the extension it constrains, and the judgment acquits a candidate in that
-position (`AmbiguityCandidate.Position`) whose constraints the empty row
-discharges. A payload in the same row has no default, so an undetermined
-payload is still reported. Displayed in an output position, such a tail is implicit openness
-like an unconstrained one.
+An operator and a named method behave identically; a plain record or tag
+union differs from a nominal type only in having `is_eq` and `to_hash` and no
+other method. Builtins may be lowered specially for speed, never with
+different observable behavior.
 
-The row variable's evidence parameter is an `erased_row_remainder`: Monotype
-flattens the row, so the remainder has no path of its own from the callable.
-Each use resolves it from the checked use record, never as callable-derived
-evidence.
+The requirement is written and displayed on the row variable, in the syntax
+every requirement uses, but it is about the whole value: in
+`same : { id : U64, ..r }, { id : U64, ..r } -> Bool where [r.is_eq : r, r ->
+Bool]` and `read_foo : { id : U64, ..r }, { id : U64, ..r } -> Bool where
+[r.foo : r, r -> Bool]`, the `r` the method's signature names is the record
+that ends in `..r`, not the fields `r` stands for. A result or argument that
+mentions the whole value names it the same way (`r.bump : r -> r`,
+`r.merge : r, List(r) -> r`). A requirement can be placed on a record or tag
+union only through its row variable: a record or tag union with no row
+variable has no way to carry one.
 
-Both sides are pinned by the `derived_eq_open_row_*` snapshots in
-`test/snapshots/is_eq/` and by `test/echo/boxy_open_union_methods.roc`.
+One row variable can end two record types that differ in a field's type:
+`both : { a : U64, ..r }, { a : Str, ..r } -> (Bool, Bool) where [r.is_eq :
+r, r -> Bool]`. A use can make each of them a different type (the first a
+`Num`, the second a `Text`), so a requirement on `r` holds for every record
+type that ends in `r` in the binding's type: each is instantiated separately
+at a use and must have the method, with `r` in the method's signature
+standing for that record type. The binding holds one requirement, and
+publishes one evidence parameter, per method and per record type ending in
+the variable, and a body's method call is related to the one stated on the
+value it is called on.
+A requirement on `ρ` therefore never depends on which of those records the
+body called the method on.
+
+A requirement is decided once, when the receiver's type is known, never
+twice and never field by field at the call site of the method:
+
+- within the binding, the receiver may become a specific type: when it is
+  related to a nominal type (passed to a function taking `Tagged`, say), the
+  requirement is that nominal's method or a missing-method error; when its row
+  closes (related to a written `{ id : U64 }`), it is the plain record's
+  derived method or a missing-method error. The order of the method call and
+  the relation in the body does not matter: the relation stays pending until
+  the receiver's type is known (`Check` deferred dispatch, which parks a
+  relation whose receiver is a record or tag union ending in a row variable).
+- when the binding generalizes with the row variable still open, the
+  requirement becomes a requirement of its scheme (Pending Dispatch
+  Requirements In Type Schemes): every use copies it onto its own instance and
+  decides it there by the same rules, and a use whose own instance is still
+  open passes it on to its own scheme.
+- a row variable an annotation names (`..r`, a rigid) carries exactly the
+  requirements its `where` clause states, as every annotated type variable
+  does: a method call needing one the annotation lacks is reported against the
+  annotation. The clause is restated, when the annotation is generated, as a
+  requirement on each record or tag union ending in `r` (Rewrite Inventory),
+  so a use reads it as it reads an inferred one.
+
+A value binding's open row closes when its module finishes checking (Value
+Rows: Uses Share One Row), which decides the requirements still pending on
+it against the plain type. An open row holding requirements that no use can
+supply a type for is decided against the plain type too: at a definition's
+generalization boundary, an open row of the definition's rank that no binding
+of the boundary reaches (the row of an argument a body passes,
+`is_red(Fn(|x| x + 1))` inside `check`), and when the module finishes, an open
+row no scheme quantified (in an `expect`). Such a row is bounded rather than
+closed (Polarity's bounded row): nothing extends it or makes its value a
+nominal type, its requirements leave it as they are decided, and it stays a
+variable that later stages close as they close every unreached row, so its
+values' types are no more concrete to checking than an unconstrained row's. A
+requirement keeps the expression it was first held with as the place its
+failure is reported: for one a use copied from a scheme, that use.
+
+An operator and an explicit method call differ in one way that comes from
+the operator, not from the method: `==` relates both operands to one type, so
+in `Leaf("a") == e` the literal takes `e`'s named type, while
+`Leaf("a").is_eq(e)` and `Leaf("a").foo(e)` relate nothing to the receiver,
+whose literal row is then decided as the plain union and rejects the named
+argument (and likewise `{ id: 1 }.is_eq(one)`).
+
+A requirement a row variable holds is a method call on the value: its
+method takes the value as its first argument. A derived `map`, `map!`, parser
+or encoder is not held: its derivation decides the row it is derived over
+exactly, closing what it reads (`closeTagRowsForDerivation`), so it is decided
+where it is; a requirement such a derivation leaves on a row variable, about
+the fields or tags the row stands for rather than the whole value, is
+published as a pathless `row_remainder` evidence parameter dispatching on the
+row variable itself. A literal's conversion
+(`from_quote : Str -> a`) is not one, and a record or tag union never
+converts from a literal, so such a relation is decided against the plain
+type at once. A row's composition can leave the value and its row variable
+the same variable (a `?` error row); its requirement is then the variable's
+own and is published as such.
+
+A derivation of `is_eq` or `to_hash` for a value whose type contains such a
+record or tag union as a component (a `List` of them, a field, a payload) asks
+that component for its own requirement in the same way, so a closed record
+holding an open one compares that component by what each call supplies.
+
+A record or tag union with no row variable is a plain record or tag union for
+method purposes: a literal a function builds, a record pattern without `..`,
+a tag union an exhaustive match or a closed tag pattern closes, and a row an
+annotation writes without `..` (its implicit Polarity opening included).
+A row variable that joins such a record makes it no less plain: in
+`keep = |l| { _ = l.id; if c l else { id: 1 } }` the parameter's field-use row
+meets the literal's uncommitted tail, the merged class is that uncommitted
+tail, and `keep`'s type has no row variable to carry a requirement, so a
+method call on it is decided at the definition and comparing or hashing it
+commits the tail. A method call on it is decided at the boundary of the definition that built
+it (before the boundary's literals take their defaults, and again once the
+boundary's own work has queued all it will, before anything generalizes),
+against the plain type, once everything in that definition, its annotation
+included, has said what the value is (a function annotated to
+return `Tagged` makes the record it builds and compares a `Tagged` first):
+`is_eq` and `to_hash` are derived, and any other method is the
+missing-method error it is for any structural value. A requirement a generic
+callee's scheme carries (`generic_foo(r, r)` with `generic_foo = |x, y|
+x.foo(y)`) is decided the same way when it lands on such a value. Deriving
+`is_eq` or `to_hash` for a record or tag union that ends in an uncommitted
+tail commits the tail (Uncommitted Record Tails, Uncommitted Tag Tails): the
+binding compared or hashed it as a plain record, so a use can no longer make
+it a nominal type, and a use that tries is a type mismatch whose report says
+so.
+
+Lowering consumes these decisions. A body's method call on an open
+receiver is an evidence-dependent dispatch: Monotype specializes it at each
+instantiation from the use's evidence, and `.boxy` passes one dictionary per
+requirement, filled with the nominal's method or the compiler-derived
+structural implementation, as for a type variable's requirement. Under
+`.boxy` each record or tag union of a worker's signature whose row ends in a
+row variable, each record whose row ends in a quantified uncommitted record
+tail, and each tag union with a tag whose row ends in a quantified
+uncommitted tag tail (Uncommitted Record Tails, Uncommitted Tag Tails) is a
+row node (`Worker.row_nodes`), described by one hidden descriptor of the
+whole value as the use has it: the nominal type a caller supplied, or the
+plain record or tag union. The last two are closed rows, so they are row nodes
+whatever the body does with them: a worker's hidden inputs stay a function of
+its checked signature alone, which importing and defining units read alike,
+and no analysis of a body decides them. A closed row node stores its values
+exactly as the plain record or tag union does: its scheme position holds the
+checked record or tag union itself, which the worker's scope converts to its
+closed type marked with the position (`Store.tailNode`, a distinct type only
+for descriptors), and an instantiation's scope converts to the use's whole
+value. A call fills it with the type at that position of
+its actual function type (Bool, primitive or builtin nominal, as
+`[False, True]` for a tag union, whose tags the body builds by position). A
+use through an exact procedure alias has one too: an alias has the type of
+its forwarded lookup, so the alias's type at the use is the procedure's
+there, whether the use is a call, a value, or a dispatch edge whose
+instantiation went through the alias (see "Procedure Aliases"). Only a use
+with no actual type there fills it with the node over the use's other
+bindings, the plain value: a dispatch edge checking instantiated no callable
+for (`EvidenceTargetInstantiation.monomorphic`), whose use is the target's
+own checked type, and a root, which its wrapper calls at the root's own
+type.
+Every descriptor the body takes of a type containing such a node reads that
+input, so the position of a field or tag (`field_index`, `tag_index`) comes
+from the whole value's closed type through its nominal wrapper, and `dyn_eq`,
+`dyn_hash` and `dyn_inspect` read the whole value's descriptor: printing a
+value of such a type (`Str.inspect`, `dbg`, `?` inside `expect`, a derived
+`to_inspect`) renders what each call supplied, a nominal's inspect override
+included, identically in both lowering modes. A closed row node's field and
+tag positions are those of its closed type, which a nominal it lifts into
+shares, so they stay immediates. The body's own types keep an open node's
+written fields and row variable, whose descriptor stays an input for types
+the body writes over the row variable alone. The nodes' scheme positions are
+hidden inputs after the worker's variables, the closed ones first; lambdas
+and generalized local functions of the worker share them. A worker whose only
+hidden inputs are closed row nodes takes a type table like any other: a root
+reaches it through its root wrapper, which supplies the plain values' static
+descriptors.
+
+Both sides are pinned by tests that do every case through an operator and
+through a method named `foo` (`test/cli/MethodsOnOpenRows*.roc`).
 
 ### Builtin Str Interpolation Part Compatibility
 
@@ -13457,15 +13817,20 @@ The kind rules:
   record annotated with a required field cannot flow where an optional
   field is expected (or vice versa)—reconstruct the record instead. Only
   an undetermined kind can become either.
-- Width absorption is OPT-IN and POLARITY-RESTRICTED. The checker marks each
-  unification relation as construction/inference or exact-width. Construction
-  relations may survive meeting a closed empty tail only when every surviving
-  field already has resolved kind `optional` or `defaulted`; omitted optional
+- Width absorption is OPT-IN and POLARITY-RESTRICTED. Only an uncommitted
+  tail absorbs (Uncommitted Record Tails): a record construction's row can
+  take in fields it omits, and a committed row, such as a record type an
+  annotation wrote, never does. The checker marks each unification relation
+  as construction/inference or exact-width. A construction relation may
+  absorb a row into an uncommitted tail that is not a use's copy only when
+  every absorbed field already has resolved kind `optional` or `defaulted`; omitted optional
   fields become missing tagged slots and omitted defaulted fields materialize
   their defaults. Calls with committed arguments, nominal construction from an
   existing value, and platform requirements use exact-width relations, so a
-  wider value cannot widen a closed parameter, nominal backing, or host ABI
-  type during instantiation. An undetermined or `required` field does NOT
+  value that is not itself a fresh construction does not widen during
+  instantiation, even while its tail is uncommitted, and a wider value meets
+  a closed parameter, nominal backing, or host ABI type only as a type
+  mismatch. An undetermined or `required` field does NOT
   absorb; accepting either would silently merge typo'd extra fields or
   arbitrary record literals. Consequence: a definition may supply an
   optional/defaulted field on one control-flow branch and omit it on another
@@ -13820,11 +14185,15 @@ field-kind axis (see Field Kinds above):
   `required`; `.?a` on a defaulted field is rejected at finalize by the same
   always-present judgment as on a required field.
 - Construction may omit the field, exactly as `optional`—via the same
-  OPT-IN width absorption: a literal row lacking the field absorbs it only
-  when the field's kind RESOLVED `defaulted` (an annotation declared it),
-  and lowering materializes the DEFAULT VALUE into the inline slot (where an
-  optional field would materialize the missing tag). Undetermined kinds
-  still never absorb.
+  OPT-IN width absorption: a construction's uncommitted tail lacking the
+  field absorbs it only when the field's kind RESOLVED `defaulted` (an
+  annotation declared it), and lowering materializes the DEFAULT VALUE into
+  the inline slot (where an optional field would materialize the missing
+  tag). Undetermined kinds still never absorb, and neither does a class
+  holding a use's copy of an uncommitted tail
+  (`DescriptorFlags.uncommitted_copy`), which absorbs no field of any kind:
+  no construction of the using scope built the values such a copy describes
+  (Uncommitted Record Tails).
 
 Kind unification treats `optional` as layout-incompatible with the two inline
 kinds and treats a default identity as construction-only information:
@@ -14635,21 +15004,62 @@ Other solved-graph mutations:
   before returning. The write is to the class itself, a frozen class included,
   since the view is of the whole class and the rollback restores it. No solved
   type, dispatch decision, or plan metadata observes it.
+- `stateRowVariableRequirementsOnTheirValues`—policy: Methods On Open Rows
+  (above). After an annotation's type is generated and before anything is
+  related to it, each `where` requirement on a row variable the annotation
+  writes as an extension is replaced, on that rigid, by one requirement per
+  record or tag union ending in it, whose signature is a copy with that value
+  where the variable was (`Store.setVarContent` on the annotation's own
+  rigid). Tests pin the accepted side (a call on the annotated value checks
+  against the clause, and each use decides it) and the rejected side (a body
+  method call the clause lacks is reported against the annotation).
+- `decideOpenRowAsPlain`—policy: Methods On Open Rows (above). At a
+  generalization boundary and when the module finishes, an open row whose
+  requirements no use can answer has them removed from its class
+  (`Store.setVarContent`) and queued on the value they are about, and the row
+  is bounded (`Store.markBoundedRowExt`), so they are decided against the plain
+  type. Tests pin the plain decision (a function payload reported at the call
+  inside a function body) and the refusal to make the value nominal.
+- `commitComparedRowTail` / `Store.markComparedPlain`—policy: Methods On Open
+  Rows (above). Comparing or hashing a record or tag union that ends in an
+  uncommitted tail, at its definition's boundary, commits the tail by
+  ordinary unification and marks the empty row it commits to, and
+  unification reads the mark only to report a later lift to a nominal type
+  with the reason. Tests pin the comparison's plain result and the reported
+  lift.
 - `markNominalBackingStructure`—mechanism: provenance on vars an opening
   of a nominal declaration backing has just minted below its root, written before any
   relation reads them. Unification consults the mark under the declared
   rule in Declared Backing Structure (above); the write itself never changes
   content or links classes.
-- `markPerUseStructure`—policy: Anonymous Structure Is Copied Per Use
-  (above). A generalization boundary marks each class it made and left
-  ungeneralized that a use can change (a record or tag union something
-  visible could lift or widen), after rank adjustment and before anything
-  instantiates the binding. The write never changes content, rank, or links classes; scheme
-  classification and scheme instantiation consult it, so each use copies the
-  class instead of sharing it. The accepted side (every use keeps its own
-  type, and a lifting use still lifts) and the rejected side (a method of the
-  lifted nominal called on another use) are pinned by the tests that section
-  names.
+- `generalizeRank` / `commitUncommittedTail`—policy: Uncommitted Record
+  Tails and Uncommitted Tag Tails (above). After rank adjustment and before
+  quantifying, a generalization boundary commits, by ordinary unification
+  with the empty record, every uncommitted record tail it owns of a
+  definition a `provides` entry names, and every one whose own constraints
+  the empty record does not discharge, and every one no root reaches
+  (`Generalizer.owned_tails`, `Check.collectReachedVars`). Finalization
+  commits a tag tail by clearing its mark (`Store.commitUncommittedTagTail`),
+  which keeps its content. The accepted side (record tails quantified
+  wherever they sit, each use closing or lifting its own copy, and a matched
+  parameter's tag tail) and the rejected side (a use's copy refusing fields
+  and padded nominal types) are pinned by the tests those sections name.
+- `commitUncommittedTails`—policy: Uncommitted Record Tails (above). When a
+  module or REPL expression finishes checking, every uncommitted record or
+  tag tail no scheme quantifies commits, beside `closeTopLevelValueRows`.
+  Pinned by the same tests, including an importer that cannot lift or widen
+  a value binding's record.
+- `closeExhaustiveVars` and closed tag patterns
+  (`markUncommittedTagTail`)—policy: Uncommitted Tag Tails (above). A row an
+  exhaustive match or a closed tag pattern closes is closed with an
+  uncommitted tag tail rather than a committed empty tag union. The accepted side (a match-closed union lifts at
+  a call) and the rejected side (it gains no tag) are pinned by the tests
+  that section names.
+- `markAnnotationTagUnion`—mechanism: provenance on a tag union an
+  annotation or type alias generated, written before any relation reads it.
+  Unification consults it under the rule in Uncommitted Record Tails (an
+  annotated tag union never lifts); the write never changes content or links
+  classes.
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.
@@ -15161,7 +15571,9 @@ A worker's hidden inputs are, in order:
 
 - one descriptor per quantified variable of its scheme, in the scheme's
   checked `scheme_vars` order (a field kind variable's describes the field's
-  slot, Field Kinds);
+  slot, Field Kinds), then one per row node of its signature (Methods On
+  Open Rows), the closed ones first, each describing the whole value of a
+  record or tag union as the use has it;
 - one dictionary per evidence parameter of its scheme, in the checked
   `evidence_params` order the checker records;
 - one literal argument per literal requirement of its scheme, in the checked
@@ -15247,6 +15659,18 @@ A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.
+
+An uncommitted record tail a scheme quantifies
+(`CheckedTypeVariable.uncommitted_record_tail`, Uncommitted Record Tails) is
+the record counterpart, and seals to the empty record whenever its row
+default is the empty record and closing the row discharges its constraints
+(`SealedSchemeSlots.sealRecordTails`). No other condition applies: a use may
+only close the tail or make its record a nominal type stored exactly like
+the record, so every instantiation stores whatever holds the tail as the
+sealed worker does, wherever the tail sits in the worker's interface, and no
+use converts a value crossing the worker's boundary. Sealing the tail leaves
+its record a row node of the worker's signature (Methods On Open Rows): the
+record's descriptor, not the tail's, is the hidden input.
 
 Checked-module output computes all of a template's sealed slots together. It first
 collects the bounded candidates, then traverses its current immutable checked
@@ -15592,7 +16016,8 @@ address of its type table, immutable static data. A template takes it after
 its explicit parameters. An erased worker's capture record holds it after the
 captured values, except for a generalized local procedure whose calls pass
 its own scheme's instantiation: its argument record leads with the table, and
-its function value captures none. A worker without inputs takes no table.
+its function value captures none. A worker without inputs takes no table;
+a row node is an input, so a worker whose signature has one takes a table.
 Importing and defining units derive this ABI from the worker's signature
 alone.
 
@@ -19201,7 +19626,18 @@ literal chain's edge, a platform requirement the app binds to an alias, and a
 root (`Body.aliasChainInstance`; a dispatch edge's scope comes from
 `through_alias`). A platform requirement and a root record no instantiation, so
 the use's function type relates the alias's variables and the requirement's or
-root's evidence fills its scope.
+root's evidence fills its scope. Each alias of a chain has the type of its
+forwarded lookup, so the chain is walked at one function type, which is the
+final procedure's at the use: the use's own type, or for a dispatch edge the
+callable checking instantiated the alias's scheme at
+(`EvidenceTargetInstantiation.alias`). That type fills the procedure's row
+nodes (see "Methods On Open Rows"), so a function reached through an alias
+prints what each use supplies, as it does called directly. A use of a
+generalized local alias lowers the alias's forwarded lookup in the alias's
+scope as the use instantiates it, and the procedure the lookup names (or the
+next alias) is used at the alias's type at that use. A local alias whose
+binding is not generalized is bound once where it is declared, at its one
+checked type, which its uses fix.
 
 A method bound to an exact alias dispatches to the procedure the alias chain
 reaches, and the method target records the alias binding it was reached
@@ -21269,14 +21705,17 @@ builds its operand at this type rather than at the operand's record row. A
 padded record of no named fields is still such a record: it has storage, where
 the empty record has none.
 
-A structural record can lift into a padded nominal, and a padded nominal can
-reach a parameter written as its record row, open or closed, because a generic
-function has one body, which reads the record by the structural rule. The two
-types are one value in two memory orders, so where a value crosses between them
-it is rebuilt by the plan-driven `adapt` (Coercion Plans), whose plan moves
-each field by offset at any depth: `StorageDifference.record_order` on a
-result or a read, and the check of each explicit argument at a direct call. A
-function value converts by an adapter around it, like one a row widening reaches.
+A record literal checked at a padded nominal is built at it. A record a
+function built or takes apart with an uncommitted tail never becomes a
+padded nominal at a use (Uncommitted Record Tails), so no function's open
+record crosses between the two layouts. A padded nominal can still reach a
+parameter whose row is open, from field uses or a `..` pattern; a generic
+function has one body, but that body describes such a record as the whole
+value each call supplies (Methods On Open Rows, `Worker.row_nodes`), so it
+reads the padded nominal at the nominal's own layout through its descriptor,
+and the call's argument, result and function value all have that type. No
+value is stored in two record orders within data: `StorageDifference` holds
+that as an invariant.
 
 A specialized program specializes each use at its own types, so a call that hands
 a padded nominal to a row parameter gets an instance at that nominal, and the row

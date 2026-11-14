@@ -4,7 +4,6 @@ LiftingMaker := [].{
 		describe = |_| "counter"
 	}
 
-	make : U64 -> { count : U64 }
 	make = |n| { count: n }
 
 	unit = |_n| {}

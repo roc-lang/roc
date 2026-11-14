@@ -380,13 +380,11 @@ pub const Instantiator = struct {
 
     /// A rank-1 scheme can contain quantified leaves below monomorphic
     /// structural nodes. While instantiating such a scheme, copy exactly the
-    /// monomorphic nodes from which a generalized variable or per-use
-    /// structure (`DescriptorFlags.per_use_structure`) is reachable,
-    /// per-use structure included (as recorded in `Scratch.reach_state`), so
-    /// the walk reaches every node each use must own. Every other monomorphic
-    /// node stays shared: it is not quantified, so each use must see the same
-    /// node, including a function node's effect kind and effect
-    /// dependencies.
+    /// monomorphic nodes from which a generalized variable is reachable (as
+    /// recorded in `Scratch.reach_state`) so the walk reaches every
+    /// generalized descendant. Every other monomorphic node stays shared: it
+    /// is not quantified, so each use must see the same node, including a
+    /// function node's effect kind and effect dependencies.
     copy_scheme_structure: bool = false,
     /// Set by a caller that knows the next scheme root it instantiates has no
     /// monomorphic structural node from which a generalized variable is
@@ -449,7 +447,7 @@ pub const Instantiator = struct {
     /// When set, the resolved fresh copy of every row extension whose source
     /// is a constrained flex or rigid is added here: the copy stands in a row's
     /// tail position, where the row default closes it to the empty row
-    /// (design.md "Derived Equality And Hashing Over Open Rows").
+    /// (design.md "Methods On Open Rows").
     constrained_row_tail_copies: ?*DenseMap(Var, void) = null,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
@@ -701,8 +699,7 @@ pub const Instantiator = struct {
     }
 
     /// Fill `Scratch.reach_state` for every node reachable from `root`: true
-    /// when a generalized variable, or structure every use copies
-    /// (`schemeCopiesNode`), is reachable from that node. The walk
+    /// when a generalized variable is reachable from that node. The walk
     /// follows exactly the child edges the copy follows, stops at monomorphic
     /// flex and rigid leaves (shared, so their constraints are shared too),
     /// and records every edge by its child. Reachability then propagates from
@@ -849,11 +846,9 @@ pub const Instantiator = struct {
     }
 
     /// Whether every instantiation of a scheme copies this node itself: a
-    /// generalized variable, or anonymous structure made in the scheme's own
-    /// scope, which a use may lift into a nominal type
-    /// (`DescriptorFlags.per_use_structure`).
+    /// generalized variable.
     fn schemeCopiesNode(desc: types_mod.Descriptor) bool {
-        return desc.rank == .generalized or desc.flags.per_use_structure;
+        return desc.rank == .generalized;
     }
 
     /// Resolve shared declaration binders before copying. Every semantic
@@ -1106,11 +1101,10 @@ pub const Instantiator = struct {
         }
 
         // Ordinary instantiation shares every non-generalized var. A binding
-        // explicitly classified as a scheme instead copies its per-use
-        // structure and the non-generalized structural nodes from which a
-        // generalized leaf or per-use structure is reachable, so those stay
-        // reachable at arbitrary depth while every other monomorphic node and
-        // leaf keeps its identity. A polarity marker is
+        // explicitly classified as a scheme instead copies the non-generalized
+        // structural nodes from which a generalized leaf is reachable, so
+        // generalized leaves at arbitrary depth remain reachable while every
+        // monomorphic node and leaf keeps its identity. A polarity marker is
         // never shared: it stands for "decided by this instantiation" whatever
         // its rank (a where-method signature is instantiated per body use
         // before the enclosing scheme generalizes).
@@ -1138,6 +1132,9 @@ pub const Instantiator = struct {
 
         var flags = resolved.desc.flags.copied();
         flags.annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.desc.flags.annotation_tag_ext;
+        // A copy of an uncommitted record tail absorbs optional fields only
+        // (design.md "Uncommitted Record Tails").
+        if (flags.uncommitted_record_tail) flags.uncommitted_copy = true;
         switch (resolved.desc.content) {
             .rigid => |rigid| {
                 // Polarity vars (the deferred open-vs-closed tag union

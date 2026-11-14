@@ -16,7 +16,7 @@ expect Next(Leaf("a")) == make("a")
 expect Expr.Next(Expr.Leaf("a")) == make("a")
 expect make("a") == Next(Leaf("a"))
 expect Expr.Next(Expr.Leaf("b")) != make("a")
-expect Next(Leaf("a")).is_eq(make("a"))
+expect Next(Leaf("a")) == make("a")
 expect Expr.Next(Expr.Leaf("a")).is_eq(make("a"))
 
 # Keep equality generic until its callers supply the recursive type.
@@ -63,5 +63,5 @@ Key := [Val(Str)].{
 key : Str -> Key
 key = |value| Val(value)
 
-expect Val("a").is_eq(key("a"))
-expect Val("b").is_eq(key("a")).not()
+expect Val("a") == key("a")
+expect Val("b") != key("a")

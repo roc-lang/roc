@@ -120,6 +120,15 @@ const Fill = struct {
     /// A tag row a host-boundary annotation wrote is the same host row in
     /// every module that imports it (design.md "Row Joins").
     host_fixed_row: bool,
+    /// An uncommitted record tail, and the marks of a copy of one and of an
+    /// annotated tag union, describe the type in every module (design.md
+    /// "Uncommitted Record Tails").
+    uncommitted_record_tail: bool,
+    uncommitted_copy: bool,
+    record_pattern_tail: bool,
+    compared_plain: bool,
+    annotation_tag_union: bool,
+    uncommitted_tag_tail: bool,
 };
 
 const IdentityResult = enum { flex, rigid };
@@ -376,6 +385,12 @@ fn request(ctx: *CopyContext, source_var: Var) std.mem.Allocator.Error!bool {
         .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
         .nominal_backing_structure = resolved.desc.flags.nominal_backing_structure,
         .host_fixed_row = resolved.desc.flags.host_fixed_row,
+        .uncommitted_record_tail = resolved.desc.flags.uncommitted_record_tail,
+        .uncommitted_copy = resolved.desc.flags.uncommitted_copy,
+        .record_pattern_tail = resolved.desc.flags.record_pattern_tail,
+        .compared_plain = resolved.desc.flags.compared_plain,
+        .annotation_tag_union = resolved.desc.flags.annotation_tag_union,
+        .uncommitted_tag_tail = resolved.desc.flags.uncommitted_tag_tail,
     };
 
     // NOTE: a copied var whose content is a flex carrying a literal-conversion
@@ -540,6 +555,12 @@ fn finishFrame(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
             .empty_tag_union_is_default = fill.empty_tag_union_is_default,
             .nominal_backing_structure = fill.nominal_backing_structure,
             .host_fixed_row = fill.host_fixed_row,
+            .uncommitted_record_tail = fill.uncommitted_record_tail,
+            .uncommitted_copy = fill.uncommitted_copy,
+            .record_pattern_tail = fill.record_pattern_tail,
+            .compared_plain = fill.compared_plain,
+            .annotation_tag_union = fill.annotation_tag_union,
+            .uncommitted_tag_tail = fill.uncommitted_tag_tail,
         },
     });
     try ctx.scratch.values.append(ctx.allocator, fill.placeholder);
