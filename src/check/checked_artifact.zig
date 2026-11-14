@@ -26479,7 +26479,7 @@ fn publishCheckedExhaustivenessSites(
             .destructure_pattern => |source_pattern| .{ .pattern = source_pattern },
         };
         const owner_template = try exhaustivenessOwnerTemplateForSource(allocator, bodies, owner_artifact, templates, needle);
-        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, needle);
+        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, root_requests, needle);
         const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
             .{ .compile_time_replaced_by_root = root.id }
         else if (owner_template) |template_ref|
@@ -26738,10 +26738,14 @@ fn exhaustivenessReplacingRootForSource(
     allocator: Allocator,
     bodies: CheckedBodies,
     compile_time_roots: *const CompileTimeRootTable,
+    root_requests: *const RootRequestTable,
     needle: CheckedBodyNeedle,
 ) Allocator.Error!?CompileTimeRoot {
     for (compile_time_roots.roots) |root| {
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
+        // Only a requested root is ever evaluated. A root with no request
+        // replaces nothing: its source occurrence runs where it stands.
+        if (!compileTimeRootHasRootRequest(root_requests.requests, root)) continue;
         // A literal conversion converts literal data and contains no site.
         if (root.literalConversionKind() != null) continue;
         if (root.hoisted_body) |body| switch (body) {
