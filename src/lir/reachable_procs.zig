@@ -6,6 +6,7 @@
 //! explicit callable data.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
@@ -775,7 +776,9 @@ const Pass = struct {
         self.result.static_data_values.shrinkRetainingCapacity(write);
     }
 
+    /// Checks compiler invariants only, so release builds skip the scan.
     fn verifyReachableProcRefs(self: *Pass) Allocator.Error!void {
+        if (builtin.mode != .debug) return;
         const proc_count = self.store.procSpecCount();
         const stmt_count = self.store.cfStmtCount();
         for (self.result.root_procs.items) |proc| {
