@@ -501,6 +501,50 @@ pub const BuiltinFn = enum {
     pub fn writesResultWordTriple(self: BuiltinFn) bool {
         return writes_result_word_triple[@backingInt(self)];
     }
+
+    /// The `ParamWidths` of every builtin's wrapper, indexed by the builtin.
+    /// It is built once at compile time, so `paramWidths` is a table lookup.
+    const param_widths = blk: {
+        @setEvalBranchQuota(100_000);
+        var result: [@typeInfo(BuiltinFn).@"enum".field_names.len]ParamWidths = undefined;
+        for (std.meta.tags(BuiltinFn)) |builtin| {
+            result[@backingInt(builtin)] = .of(@TypeOf(@field(dev_wrappers, symbol_prefix ++ @tagName(builtin))));
+        }
+        break :blk result;
+    };
+
+    /// How many parameters this builtin's wrapper has, and which are `u64`
+    /// or `i64` (see `ParamWidths`).
+    pub fn paramWidths(self: BuiltinFn) ParamWidths {
+        return param_widths[@backingInt(self)];
+    }
+};
+
+/// How many parameters a C function has, and which of them are `u64` or
+/// `i64`.
+///
+/// The dev backend uses this to check its calls in debug builds. A `u64` or
+/// `i64` is 64 bits on every target, so the backend must pass it with a
+/// `…Wide64` builder method. The call builder notes which arguments it got
+/// that way, and `assertArgWidths` compares them with this.
+pub const ParamWidths = struct {
+    /// The number of parameters.
+    count: u8,
+    /// Bit i is set when parameter i is a `u64` or `i64`.
+    wide64: u64,
+
+    /// The parameters of the function type `F`, computed at compile time.
+    pub fn of(comptime F: type) ParamWidths {
+        return comptime blk: {
+            const params = @typeInfo(F).@"fn".param_types;
+            if (params.len > 64) @compileError("a builtin with more than 64 parameters does not fit `ParamWidths.wide64`");
+            var wide64: u64 = 0;
+            for (params, 0..) |T, i| {
+                if (T == u64 or T == i64) wide64 |= @as(u64, 1) << i;
+            }
+            break :blk .{ .count = params.len, .wide64 = wide64 };
+        };
+    }
 };
 
 /// Which exported subset of the registry a payload root links.
@@ -595,6 +639,16 @@ comptime {
             @compileError("dev_wrappers." ++ decl ++ " is not registered; add BuiltinFn." ++ decl[symbol_prefix.len..] ++ " to builtin_registry.zig");
         }
     }
+}
+
+test "ParamWidths marks the u64 and i64 parameters, in order" {
+    const widths = ParamWidths.of(fn (*u64, u64, usize, i64, f64, u32) callconv(.c) void);
+    try std.testing.expectEqual(6, widths.count);
+    try std.testing.expectEqual(0b1010, widths.wide64);
+
+    const capacity = BuiltinFn.list_with_capacity.paramWidths();
+    try std.testing.expectEqual(5, capacity.count);
+    try std.testing.expectEqual(0b10, capacity.wide64);
 }
 
 test "symbol names round-trip through the registry" {

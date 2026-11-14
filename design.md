@@ -25198,6 +25198,38 @@ the list of instruction sets lives only in `isa.zig`. Code that runs generated
 code in-process asks `isa.host`, never `RocTarget.detectNative`, which maps an
 architecture without a code generator to one that has one.
 
+The shared driver also serves every word size, and names each register
+width by the kind of value, from `backend/dev/widths.zig`: `word_width`
+for a target word (pointers, lengths, sizes, addresses), `wide64_width` for a
+value that is 64 bits on every target (U64, I64, F64 bits, an i128 or Dec
+half), and `scalar_width` for an integer of up to 8 bytes held in one register
+whose width follows its layout. Shared code never writes `.w64`, which names
+no kind of value. `ci/zig_lints.zig` rejects a `.w64` outside code for one
+instruction set: a `switch (isa)` arm, the code after a `switch (isa)` that
+only one instruction set reaches, an `if` on a `comptime switch (isa)` that is
+true for one instruction set, a function on the lint's list of
+single-instruction-set functions, or a test. A width follows the kind of
+value, never an immediate's numeric value: a small U64 is still 64 bits. Every
+helper that works on a register says how wide the register is. Most take a
+`comptime width: widths.RegisterWidth` argument, so a call without one does
+not compile. The rest have the width in their name (`emitLoadW8`), or always
+use the word width because they work on addresses (`emitLeaStack`). A `u64` or
+`i64` argument to a C function is passed with a `…Wide64` builder method. In
+debug builds, each call checks its arguments against the function's
+parameters: there must be one argument per parameter, and the `…Wide64`
+arguments must sit exactly at the `u64` and `i64` parameters. A struct that
+the generated code shares with the runtime, such as a request it passes to a
+builtin, is laid out at the target's pointer width by the runtime's own
+target-width function where it has one, such as
+`native_callable.pendingByteSize`, and otherwise by
+`boxy_runtime.desc.externLayout`; never by `@offsetOf` or `@sizeOf`, which
+describe the compiler's own machine. Word sizes and register bit counts use
+`target_ptr_size`, `word_bits` or `scalar_bits`, never a literal 8 or 64. A
+64-bit value's own size stays 8. Stack argument slots stay 8 bytes until the
+32-bit calling convention. A 32-bit instruction set's `RegisterWidth` has no
+`w64` member, so `wide64_width`, `scalar_width` and a stray `.w64` are compile
+errors on it until the driver routes those values through register pairs.
+
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned

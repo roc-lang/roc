@@ -599,25 +599,38 @@ pub fn ExternLayout(comptime T: type) type {
     };
 }
 
-/// The size of one field of a descriptor struct at `width`: pointers take the
-/// target's width, an array its element count times its element's size, and
-/// every other field its own fixed size.
+/// The size of one field of an extern struct at `width`: pointers, `usize` and
+/// `isize` take the target's width, an array its element count times its
+/// element's size, and every other field its own fixed size. A field whose
+/// size this cannot know at another width (a nested extern struct or union,
+/// or a C type such as `c_long`) is a compile error; packed structs such as
+/// `Flags` have a fixed size and are allowed.
 fn fieldSize(comptime F: type, width: PointerWidth) u32 {
+    if (F == usize or F == isize) return width.bytes();
+    if (F == c_long or F == c_ulong or F == c_longdouble) @compileError("extern struct fields cannot be " ++ @typeName(F) ++ ", whose size depends on the target");
     return switch (@typeInfo(F)) {
         .pointer => width.bytes(),
         .optional => |optional| switch (@typeInfo(optional.child)) {
             .pointer => width.bytes(),
-            .type, .void, .bool, .noreturn, .int, .float, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("descriptor fields are optional only when they are pointers"),
+            .type, .void, .bool, .noreturn, .int, .float, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("extern struct fields are optional only when they are pointers"),
         },
         .array => |array| @as(u32, @intCast(array.len)) * fieldSize(array.child, width),
-        .type, .void, .bool, .noreturn, .int, .float, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @sizeOf(F),
+        .@"struct" => |info| switch (info.layout) {
+            .@"packed" => @sizeOf(F),
+            .auto, .@"extern" => @compileError("extern struct fields cannot be a nested struct (" ++ @typeName(F) ++ "); its layout at another width is not known here"),
+        },
+        .@"union" => |info| switch (info.layout) {
+            .@"packed" => @sizeOf(F),
+            .auto, .@"extern" => @compileError("extern struct fields cannot be a union (" ++ @typeName(F) ++ "); its layout at another width is not known here"),
+        },
+        .type, .void, .bool, .noreturn, .int, .float, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"enum", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @sizeOf(F),
     };
 }
 
-/// The alignment of one field of a descriptor struct at `width`: an array
+/// The alignment of one field of an extern struct at `width`: an array
 /// aligns as its element does; every other field is a pointer or a
-/// power-of-two-sized scalar no wider than a pointer, whose alignment is its
-/// size.
+/// power-of-two-sized scalar, whose alignment is its size. So an 8-byte
+/// scalar aligns to 8 at both widths, as on arm32 and wasm32.
 fn fieldAlignment(comptime F: type, width: PointerWidth) u32 {
     return switch (@typeInfo(F)) {
         .array => |array| fieldAlignment(array.child, width),
@@ -626,6 +639,8 @@ fn fieldAlignment(comptime F: type, width: PointerWidth) u32 {
 }
 
 /// The offsets and size of the extern struct `T` at pointer width `width`.
+/// Descriptors use it, and so does any other struct a backend shares with a
+/// runtime built for that width.
 pub fn externLayout(comptime T: type, width: PointerWidth) ExternLayout(T) {
     const info = @typeInfo(T).@"struct";
     comptime std.debug.assert(info.layout == .@"extern");
@@ -680,4 +695,19 @@ test "descriptor layouts at both pointer widths" {
     try std.testing.expectEqual(@as(u32, 24), Field.layout(.u64).size);
     try std.testing.expectEqual(@as(u32, 12), Variant.layout(.u32).size);
     try std.testing.expectEqual(@as(u32, 16), Variant.layout(.u64).size);
+}
+
+test "usize and isize fields take the pointer width" {
+    const S = extern struct { flag: u32, len: usize, words: [2]usize, delta: isize };
+    const s32 = externLayout(S, .u32);
+    try std.testing.expectEqual(@as(u32, 4), s32.of(.len));
+    try std.testing.expectEqual(@as(u32, 8), s32.of(.words));
+    try std.testing.expectEqual(@as(u32, 16), s32.of(.delta));
+    try std.testing.expectEqual(@as(u32, 20), s32.size);
+    const s64 = externLayout(S, .u64);
+    try std.testing.expectEqual(@as(u32, 8), s64.of(.len));
+    try std.testing.expectEqual(@as(u32, 16), s64.of(.words));
+    try std.testing.expectEqual(@as(u32, 32), s64.of(.delta));
+    try std.testing.expectEqual(@as(u32, 40), s64.size);
+    try expectNativeLayout(S);
 }
