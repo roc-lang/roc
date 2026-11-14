@@ -734,7 +734,7 @@ pub const VarPool = struct {
     /// the `popRank` that pairs with its push, before any scope with a rank.
     declined_scopes: u32 = 0,
     /// The deepest rank a scope gets. Always `Rank.deepest` outside tests,
-    /// which lower it to reach the limit without nesting 65,534 scopes.
+    /// which lower it to reach the limit without nesting 16,382 scopes.
     deepest_rank: Rank = .deepest,
 
     pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!Self {
@@ -767,7 +767,7 @@ pub const VarPool = struct {
 
     // Ensure the var pool has ranks up to and including `next_rank`
     pub fn ensureRanksThrough(self: *Self, next_rank: Rank) std.mem.Allocator.Error!void {
-        const required_len = @backingInt(next_rank) + 1;
+        const required_len = @as(usize, @backingInt(next_rank)) + 1;
         while (self.ranks.items.len < required_len) {
             try self.ranks.append(try VarArrayList.initCapacity(self.allocator, 16));
         }
@@ -775,7 +775,7 @@ pub const VarPool = struct {
 
     // Get a slice of ranks, up to and including the current rank
     pub fn slice(self: *Self) []const VarArrayList {
-        return self.ranks.items[0 .. @backingInt(self.current_rank) + 1];
+        return self.ranks.items[0 .. @as(usize, @backingInt(self.current_rank)) + 1];
     }
 
     /// Enter a nested generalization scope at the next rank. A scope entered
@@ -814,7 +814,7 @@ pub const VarPool = struct {
     /// Both pools must be at the same current_rank.
     pub fn mergeFrom(self: *Self, other: *const VarPool) std.mem.Allocator.Error!void {
         std.debug.assert(self.current_rank == other.current_rank);
-        const upper = @backingInt(self.current_rank) + 1;
+        const upper = @as(usize, @backingInt(self.current_rank)) + 1;
         for (0..upper) |rank_idx| {
             try self.ranks.items[rank_idx].appendSlice(other.ranks.items[rank_idx].items);
         }

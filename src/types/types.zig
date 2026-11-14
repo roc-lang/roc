@@ -32,7 +32,7 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    // A rank counts nested generalization scopes in 16 bits. Source nesting
+    // A rank counts nested generalization scopes in 14 bits. Source nesting
     // scopes deeper than `Rank.deepest` is reported as a problem, and the
     // scopes past it are checked without being generalized
     // (`VarPool.pushRank`).
@@ -198,13 +198,14 @@ pub const Descriptor = struct {
 
     /// The first word of a stored descriptor: what kind of content the class
     /// holds, its flags and its rank, so a reader that needs only those
-    /// decodes nothing else. The word is full: a new field or flag needs
-    /// room made elsewhere.
+    /// decodes nothing else.
     pub const Word = packed struct(u32) {
         kind: ContentKind,
         flags: DescriptorFlags,
         /// A flex's `Flex.literal`; `.none` for every other kind.
         literal: Flex.Literal = .none,
+        /// Always zero.
+        spare: u2 = 0,
         rank: Rank,
 
         /// `Descriptor.liftsIntoNominal`, read from the word alone.
@@ -229,7 +230,7 @@ pub const Descriptor = struct {
     };
 
     comptime {
-        std.debug.assert(@bitSizeOf(ContentKind) + @bitSizeOf(DescriptorFlags) + @bitSizeOf(Flex.Literal) + @bitSizeOf(Rank) == @bitSizeOf(Word));
+        std.debug.assert(@bitSizeOf(ContentKind) + @bitSizeOf(DescriptorFlags) + @bitSizeOf(Flex.Literal) + 2 + @bitSizeOf(Rank) == @bitSizeOf(Word));
         std.debug.assert(@sizeOf(Row) == @sizeOf(Word) + @sizeOf(Payload));
     }
 
@@ -539,7 +540,7 @@ pub const ContentKind = enum(u4) {
 ///
 /// Keeping track of ranks makes type inference faster.
 ///
-pub const Rank = enum(u16) {
+pub const Rank = enum(u14) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
     outermost = 1,
@@ -548,7 +549,7 @@ pub const Rank = enum(u16) {
     /// own (`VarPool.pushRank`): the scope is checked at this rank and not
     /// generalized, after the module reports that its definitions nest too
     /// deeply.
-    deepest = std.math.maxInt(u16),
+    deepest = std.math.maxInt(u14),
     _,
 
     /// Get the lowest rank

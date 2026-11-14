@@ -384,7 +384,7 @@ pub const Constants = struct {
     /// 192: combines the two independent 191 entries, so it includes the 188,
     ///      189 and 190 changes.
     /// 193: a type descriptor is stored as a 16-byte row: one word of kind,
-    ///      flags, a flex's literal marker and a 16-bit rank, and a payload of
+    ///      flags, a flex's literal marker and a 14-bit rank, and a payload of
     ///      three words. A type store interns the identities of its nominal
     ///      types and aliases, which their descriptors name by row, and every
     ///      vars range has its length in the pool slot just before it, so a

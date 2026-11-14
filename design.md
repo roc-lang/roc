@@ -5215,8 +5215,8 @@ node's original inner-scope rank. The child-rank reduction cannot move a capture
 type back into an inner scope. Independent inner-scope variables remain eligible
 for generalization; captured variables wait for their owning boundary.
 
-A rank is 16 bits, so `Rank.deepest` is 65,535 and source can nest at most
-65,534 generalization scopes below the outermost rank. A scope the checker
+A rank is 14 bits, so `Rank.deepest` is 16,383 and source can nest at most
+16,382 generalization scopes below the outermost rank. A scope the checker
 would enter inside one at `Rank.deepest` gets no rank of its own
 (`VarPool.pushRank`): the module reports once that its definitions are nested
 too deeply to generalize, pointing at the definition or expression whose scope
