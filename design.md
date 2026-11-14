@@ -21878,6 +21878,10 @@ Roc marks one through `bool_likely : Bool -> Bool`, the identity on its
 operand: the `branch_expectation` pass, first of the procedure-local
 rewrites, marks cold the default of every Bool switch whose condition is a
 `bool_likely` result, reached through pure aliases from a single definition.
+The pass runs only for consumers that read the mark
+(`TargetConfig.reads_branch_expectations`, set by each caller): LLVM
+consumers do, and dev builds, the interpreter and compile-time evaluation
+skip it.
 `List.get` and `List.set` guard their unchecked operation this way, so a
 bounds check's miss arm is cold wherever those inline. The marker stays an
 ordinary identity low-level, and the range prover reads through it to the

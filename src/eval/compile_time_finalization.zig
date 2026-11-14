@@ -944,6 +944,7 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         // reserves none.
         .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
         .reuse_boxes = false,
+        .reads_branch_expectations = false,
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
         .proc_debug_names = true,
@@ -1956,6 +1957,7 @@ fn boxyCompileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
         .boxy_compile_time = true,
         .checked_module_state = .checking_finalization,
         .inline_expects = .run,
+        .reads_branch_expectations = false,
         .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
         .proc_debug_names = true,
         .post_check_executor = options.post_check_executor,

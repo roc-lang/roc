@@ -13912,6 +13912,16 @@ fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+/// Only `--opt=speed` and `--opt=size` hand their LIR to the LLVM backend,
+/// the one consumer of branch expectations
+/// (`TargetConfig.reads_branch_expectations`).
+fn readsBranchExpectationsForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
     return switch (opt) {
         .size, .speed => true,
@@ -14015,6 +14025,7 @@ fn checkedRuntimeLoweringConfig(
             .site_code_keys = siteCodeKeysForOpt(opt),
             .owned_proc_signatures = opt == .dev,
             .tag_reachability = tagReachabilityForOpt(opt),
+            .reads_branch_expectations = readsBranchExpectationsForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
             .reuse_boxes = optimizeLirForOpt(opt),
             .thread_confined_rc = optimizeLirForOpt(opt),
