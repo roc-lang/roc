@@ -30894,8 +30894,11 @@ fn abortExprTask(self: *Self, task: *ExprTask, env: *Env) void {
 /// function's static-dispatch evidence.
 fn storedValueVar(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!Var {
     const source_var = ModuleEnv.varFrom(expr_idx);
-    const resolved_source = self.types.resolveVar(source_var);
-    if (resolved_source.desc.rank != .generalized and !self.isBindingSchemeVar(source_var)) {
+    if (!self.isBindingSchemeVar(source_var)) {
+        // A generalized root reaches a quantified variable, so its binding
+        // boundary classified it as a scheme; a stored child that is no
+        // scheme therefore has a root its own scope still owns.
+        std.debug.assert(self.types.resolveVar(source_var).desc.rank != .generalized);
         return source_var;
     }
 
