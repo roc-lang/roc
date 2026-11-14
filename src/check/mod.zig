@@ -185,6 +185,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12014_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12128_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12024_test.zig"));
+    std.testing.refAllDecls(@import("test/redundant_return_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12030_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12141_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12151_test.zig"));

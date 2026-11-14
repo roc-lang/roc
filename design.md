@@ -3120,11 +3120,14 @@ or return, grouping parentheses preserve it, and an `if` with an `else` or
 a `match` propagates it to its branch bodies. A return's operand also occupies
 that position. Bindings, operands of other expressions, conditions, guards,
 loops and `if` without `else` do not propagate it. Nested lambdas start their own independent result positions.
-Canonicalization consumes this inventory to warn on redundant returns, and
-formatting consumes the same inventory to remove their keywords while preserving
-comments and adding parentheses where a bare identifier would otherwise parse
-as a punned record. Explicit early returns retain their control-flow meaning in
-CIR.
+Canonicalization consumes this inventory to warn on redundant returns and to
+canonicalize each one to its operand, so a redundant `return` produces the same
+CIR, types and generated code as the program written without it; no later stage
+sees a return node for it. Returns inside `expect` and returns outside any
+function are not redundant and keep their diagnostics. Formatting consumes the
+same inventory to remove their keywords while preserving comments and adding
+parentheses where a bare identifier would otherwise parse as a punned record.
+Explicit early returns retain their control-flow meaning in CIR as return nodes.
 
 ### Bidirectional source controls
 
