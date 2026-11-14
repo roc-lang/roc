@@ -4038,9 +4038,11 @@ const ConsumeAt = struct {
     stmt: u32,
 };
 
-/// One transfer edge (alias definition or join-parameter initialization)
-/// whose target is foreign when the source is used again after `stmt`.
-const EdgeCheck = struct { source: LIR.LocalId, stmt: u32, target: u32 };
+/// One transfer edge (alias definition or join-parameter initialization),
+/// checked against one member `source` of the edge's source place. When that
+/// member is used again after `stmt`, the target is foreign and `origin`,
+/// the edge's source, holds a second reference.
+const EdgeCheck = struct { source: LIR.LocalId, stmt: u32, target: u32, origin: u32 };
 
 /// The ownership place of every analyzed local: its liveness group, the
 /// leader together with every borrowed local anchored on it. Each member
@@ -4112,7 +4114,7 @@ const OwnershipPlaces = struct {
         var single: [1]u32 = undefined;
         for (self.membersOf(source, &single)) |member| {
             if (member == target) continue;
-            try checks.append(allocator, .{ .source = @fromBackingInt(@intCast(index_to_local[member])), .stmt = stmt, .target = target });
+            try checks.append(allocator, .{ .source = @fromBackingInt(@intCast(index_to_local[member])), .stmt = stmt, .target = target, .origin = source });
         }
     }
 };
@@ -4125,7 +4127,7 @@ fn settleEdgeChecks(order: *UseOrder, checks: []EdgeCheck, ctx: anytype) SolveEr
         }
     }.lessThan);
     for (checks) |check| {
-        if (try order.usesAfter(check.stmt, check.source)) ctx.dead(check.target);
+        if (try order.usesAfter(check.stmt, check.source)) ctx.dead(check.target, check.origin);
     }
 }
 
@@ -6498,12 +6500,24 @@ fn computeUniquenessDetailed(
         for (join_incoming.items, join_incoming_stmts.items) |incoming, stmt| {
             try places.appendEdgeChecks(allocator, &checks, index_to_local, incoming.source, stmt, incoming.target);
         }
+        // A rejected edge leaves the target holding a retained reference to
+        // the source's allocation, so the source (through any view chain,
+        // its viewed root) gains a second holder as well.
         try settleEdgeChecks(order, checks.items, struct {
             foreign: *std.bit_set.DynamicBitSetUnmanaged,
-            fn dead(ctx: @This(), target: u32) void {
+            destroyed: *std.bit_set.DynamicBitSetUnmanaged,
+            view_source: []const OptionalU32,
+            fn dead(ctx: @This(), target: u32, origin: u32) void {
                 ctx.foreign.set(target);
+                var root = origin;
+                var steps: usize = 0;
+                while (ctx.view_source[root].get()) |source| : (steps += 1) {
+                    root = source;
+                    if (steps > ctx.view_source.len) solveInvariant("ARC uniqueness view chain contained a cycle");
+                }
+                ctx.destroyed.set(root);
             }
-        }{ .foreign = &foreign_def });
+        }{ .foreign = &foreign_def, .destroyed = &destroyed, .view_source = view_source });
     }
     if (workspace) |cached| {
         try cached.consumption.apply(cached.allocator, order, consumes.items, index_to_local, &destroyed);
