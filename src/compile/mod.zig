@@ -307,5 +307,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12625_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12638_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12752_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_13000_test.zig"));
+    std.testing.refAllDecls(@import("test/derived_codec_signature_test.zig"));
     std.testing.refAllDecls(@import("test/import_cycle_checked_test.zig"));
 }

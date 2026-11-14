@@ -8540,7 +8540,12 @@ encoding and state types for exactly the methods needed by that shape:
 
 Selecting a derived method relates its public signature to the call before
 deciding whether the shape is supported, exactly as selecting an ordinary
-method relates that method's signature. A call on a type name such as
+method relates that method's signature. That relation belongs to the dispatch:
+a requirement whose runtime function is not the derived method's (`r.encoder_for
+: Str -> {}`, or `p.parser_for : {} -> p`) leaves both solved types as they
+are, is reported as a missing method on the receiver (as an undetermined type
+when a default decided the receiver), and retires the dispatch that owns it,
+so no erroneous type reaches lowering. A call on a type name such as
 `List.parser_for(format)` names the receiver with fresh type arguments, so the
 parser's `value` or the encoder's value argument is what determines them.
 Derivation needs every part of the receiver: a receiver that is still

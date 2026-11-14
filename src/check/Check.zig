@@ -58132,11 +58132,7 @@ fn relateDerivedParserShape(
     const err_var = try self.fresh(env, region);
     const parse_result_var = try self.freshParseResultTryVar(dispatcher_var, state_var, err_var, env, region);
     const parser_var = try self.freshFromContent(try self.types.mkFuncPure(&.{state_var}, parse_result_var), env, region);
-    const ret_result = try self.unifyInContext(parser_var, runtime_fn_var, env, .none);
-    if (!ret_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return null;
-    }
+    if (!try self.relateDerivedCodecSignature(parser_var, runtime_fn_var, dispatcher_var, constraint, env, failure_expr, failure_expr)) return null;
     return .{ .runtime_fn = runtime_fn_var, .encoding_var = encoding_var, .state_var = state_var, .err_var = err_var };
 }
 /// An implicit parser relation whose derived parser is validated as one
@@ -58349,12 +58345,40 @@ fn relateDerivedEncoderShape(
     const err_var = try self.fresh(env, region);
     const encode_result_var = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
     const encoder_var = try self.freshFromContent(try self.types.mkFuncPure(&.{ dispatcher_var, state_var }, encode_result_var), env, region);
-    const ret_result = try self.unifyInContext(encoder_var, runtime_fn_var, env, .none);
-    if (!ret_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return null;
-    }
+    if (!try self.relateDerivedCodecSignature(encoder_var, runtime_fn_var, dispatcher_var, constraint, env, null, owner_expr)) return null;
     return .{ .runtime_fn = runtime_fn_var, .encoding_var = encoding_var, .state_var = state_var, .err_var = err_var };
+}
+
+/// Relate a derived codec method's public runtime function to the runtime
+/// function its requirement declares. The relation is owned by the dispatch:
+/// a mismatch keeps both operands' solved types as they are, reports the
+/// requirement as one the receiver's derived method does not satisfy, and
+/// retires the dispatch that owns it.
+fn relateDerivedCodecSignature(
+    self: *Self,
+    derived_runtime_fn: Var,
+    required_runtime_fn: Var,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    explicit_error_expr: ?CIR.Expr.Idx,
+    owner_expr: ?CIR.Expr.Idx,
+) Allocator.Error!bool {
+    switch (try self.runUnify(derived_runtime_fn, required_runtime_fn, env, .{ .on_mismatch = .write_no_report })) {
+        .unified => return true,
+        // An erroneous type was already reported; only the dispatch is left
+        // to retire.
+        .suppressed_by_error => {
+            try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
+            try self.markStaticDispatchRejected(constraint);
+            return false;
+        },
+        .mismatch => {
+            try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, explicit_error_expr, owner_expr);
+            return false;
+        },
+        .problem => unreachable, // a `.write_no_report` relation records no problem of its own
+    }
 }
 
 fn satisfyImplicitEncoderForConstraint(
