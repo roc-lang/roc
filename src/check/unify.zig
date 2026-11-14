@@ -56,6 +56,8 @@ const Allocator = std.mem.Allocator;
 
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;
+const ResolvedVarWord = types_mod.Store.ResolvedVarWord;
+const MergeSide = types_mod.Store.MergeSide;
 
 const Var = types_mod.Var;
 const Rank = types_mod.Rank;
@@ -1007,42 +1009,103 @@ const Unifier = struct {
     }
 
     fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
-        switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
-            .equiv => return,
-            .not_equiv => |vars| {
-                // A deferred requirement callable is linked to its copy
-                // before anything relates it.
-                if (vars.a.desc.flags.deferred_callable or vars.b.desc.flags.deferred_callable) {
-                    try self.linkDeferredCallable(vars.a);
-                    try self.linkDeferredCallable(vars.b);
-                    return self.processGuardedPair(a_var, b_var);
-                }
-                if (try self.isPairVisited(a_var, b_var)) {
-                    return;
-                }
+        // Only the two classes' words are read here. Their content is decoded
+        // when the pair's `unify_vars` frame runs, if it comes to that.
+        const a = self.types_store.resolveVarWordAndCompressPath(a_var);
+        const b = self.types_store.resolveVarWordAndCompressPath(b_var);
+        if (a.desc_idx == b.desc_idx) return;
 
-                const visited_vars_len: u32 = @intCast(self.scratch.visited_vars.items().len);
-                _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
-                _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
-
-                const saved_unresolved_a = self.unresolved_a;
-                const saved_unresolved_b = self.unresolved_b;
-                self.unresolved_a = a_var;
-                self.unresolved_b = b_var;
-
-                try self.pushWorkFrame(.{ .guard_handler = .{
-                    .visited_vars_len = visited_vars_len,
-                    .saved_unresolved_a = saved_unresolved_a,
-                    .saved_unresolved_b = saved_unresolved_b,
-                } });
-                try self.pushWorkFrame(.{ .unify_vars = .{
-                    .a = vars.a.var_,
-                    .a_desc = vars.a.desc_idx,
-                    .b = vars.b.var_,
-                    .b_desc = vars.b.desc_idx,
-                } });
-            },
+        // A deferred requirement callable is linked to its copy before
+        // anything relates it.
+        if (a.word.flags.deferred_callable or b.word.flags.deferred_callable) {
+            try self.linkDeferredCallable(a);
+            try self.linkDeferredCallable(b);
+            return self.processGuardedPair(a_var, b_var);
         }
+        if (try self.isPairVisited(a_var, b_var)) {
+            return;
+        }
+
+        if (self.storedContentMerge(a, b)) |kept| {
+            return self.types_store.unionKeepingContent(a.var_, b.var_, kept, Rank.min(a.word.rank, b.word.rank));
+        }
+
+        const visited_vars_len: u32 = @intCast(self.scratch.visited_vars.items().len);
+        _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
+        _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
+
+        const saved_unresolved_a = self.unresolved_a;
+        const saved_unresolved_b = self.unresolved_b;
+        self.unresolved_a = a_var;
+        self.unresolved_b = b_var;
+
+        try self.pushWorkFrame(.{ .guard_handler = .{
+            .visited_vars_len = visited_vars_len,
+            .saved_unresolved_a = saved_unresolved_a,
+            .saved_unresolved_b = saved_unresolved_b,
+        } });
+        try self.pushWorkFrame(.{ .unify_vars = .{
+            .a = a.var_,
+            .a_desc = a.desc_idx,
+            .b = b.var_,
+            .b_desc = b.desc_idx,
+        } });
+    }
+
+    /// The side whose stored content is what relating `a` and `b` merges
+    /// them into, when the relation is nothing more than that merge; null
+    /// when the pair needs `unifyVars`.
+    ///
+    /// These are the `unifyVars` cases that end in `merge` with one side's
+    /// own content and do nothing else. One side is a plain flex
+    /// (`isPlainFlex`), so no constraint is deferred, no literal is
+    /// determined and no row bound is checked. The other side's content is
+    /// one `contentForMerge` returns as it is: a nominal type, a tuple, an
+    /// empty row, an alias, a rigid, a function whose effect dependencies the
+    /// merge keeps, or another plain flex.
+    fn storedContentMerge(self: *const Self, a: ResolvedVarWord, b: ResolvedVarWord) ?MergeSide {
+        const a_plain = self.isPlainFlex(a);
+        const b_plain = self.isPlainFlex(b);
+        if (a_plain and b_plain) {
+            // Two flexes merge into a flex with `a`'s name if it has one, else
+            // `b`'s, and with the canonical empty constraint range.
+            const a_flex = self.types_store.flexAt(a.desc_idx);
+            const b_flex = self.types_store.flexAt(b.desc_idx);
+            const kept: MergeSide = if (a_flex.name == null) .b else .a;
+            const kept_constraints = switch (kept) {
+                .a => a_flex.constraints,
+                .b => b_flex.constraints,
+            };
+            const empty = StaticDispatchConstraint.SafeList.Range.empty();
+            return if (kept_constraints.start == empty.start) kept else null;
+        }
+        if (a_plain) return if (self.mergeStoresContentOf(b)) .b else null;
+        if (b_plain) return if (self.mergeStoresContentOf(a)) .a else null;
+        return null;
+    }
+
+    /// Whether `resolved` is a flex that states nothing: it has no
+    /// constraints and no literal marker, and it is not a bounded row
+    /// extension.
+    fn isPlainFlex(self: *const Self, resolved: ResolvedVarWord) bool {
+        if (resolved.word.kind != .flex or resolved.word.literal != .none or resolved.word.flags.bounded_row_ext) return false;
+        return self.types_store.flexAt(resolved.desc_idx).constraints.len() == 0;
+    }
+
+    /// Whether a plain flex merging with `other` merges into `other`'s stored
+    /// content exactly.
+    fn mergeStoresContentOf(self: *const Self, other: ResolvedVarWord) bool {
+        return switch (other.word.kind) {
+            .nominal_type, .tuple, .empty_record, .empty_tag_union, .alias, .rigid, .fn_effectful, .fn_unbound => true,
+            // The merge discharges a pure function's effect dependencies.
+            .fn_pure => self.types_store.funcAt(other.desc_idx).effect_deps.start == Var.SafeList.Range.empty().start,
+            // A row is rewritten when its extension reaches the merged class.
+            .record, .tag_union => false,
+            // A presence fact can change as it merges, an erroneous type
+            // merges only with a flex that states no requirement, and a flex
+            // that is not plain has constraints or a literal to carry over.
+            .field_presence, .err, .flex => false,
+        };
     }
 
     /// How a handler absorbed a mismatch instead of propagating it.
@@ -3698,8 +3761,8 @@ const Unifier = struct {
         } });
     }
 
-    fn linkDeferredCallable(self: *Self, resolved: ResolvedVarDesc) std.mem.Allocator.Error!void {
-        if (!resolved.desc.flags.deferred_callable) return;
+    fn linkDeferredCallable(self: *Self, resolved: ResolvedVarWord) std.mem.Allocator.Error!void {
+        if (!resolved.word.flags.deferred_callable) return;
         const hook = self.deferred_callables orelse base.invariant("a deferred requirement callable reached a unification with no checker to link it", .{});
         try hook.link(hook.ctx, resolved.var_);
     }

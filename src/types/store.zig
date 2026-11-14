@@ -2760,6 +2760,17 @@ pub const Store = struct {
         return .{ .var_ = checked_var, .is_root = var_ == checked_var, .desc_idx = desc_idx, .word = self.descs.getWord(desc_idx) };
     }
 
+    /// `resolveVarWord`, compressing the storage path on the way.
+    pub fn resolveVarWordAndCompressPath(self: *Self, var_: Var) ResolvedVarWord {
+        const root = self.findStorageRootAndCompressPath(var_);
+        return .{
+            .var_ = root.meta.checked_var,
+            .is_root = var_ == root.meta.checked_var,
+            .desc_idx = root.desc_idx,
+            .word = self.descs.getWord(root.desc_idx),
+        };
+    }
+
     /// The descriptor `var_`'s class resolves to, decoding nothing.
     pub fn resolveDescIdx(self: *const Self, var_: Var) DescStore.Idx {
         var slot_idx = Self.varToSlotIdx(var_);
@@ -3055,50 +3066,103 @@ pub const Store = struct {
         const b_data = self.findStorageRoot(b_var);
         const a_word = self.descs.getWord(a_data.desc_idx);
         const b_word = self.descs.getWord(b_data.desc_idx);
-        if (a_word.flags.frozen or b_word.flags.frozen) return self.unionWithFrozen(a_data, a_word, b_data, b_word, new_desc);
+        if (a_word.flags.frozen or b_word.flags.frozen) {
+            return self.unionWithFrozen(a_data, a_word, b_data, b_word, new_desc.content == .err);
+        }
 
         var merged_desc = new_desc;
-        merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
+        merged_desc.flags = mergedFlags(new_desc.flags, types.ContentKind.of(new_desc.content), a_word, b_word);
+        return self.unionRows(a_data, a_word, b_data, b_word, try self.encodeDesc(merged_desc));
+    }
+
+    /// One of the two classes a merge relates.
+    pub const MergeSide = enum { a, b };
+
+    /// `union_` for a merge whose content is the content one of the two
+    /// classes already stores: the merged class holds `kept`'s stored content
+    /// as it stands, at `rank`, with the flags `union_` gives a merge whose
+    /// descriptor states none. Neither class's content is decoded.
+    pub fn unionKeepingContent(self: *Self, a_var: Var, b_var: Var, kept: MergeSide, rank: Rank) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        const a_data = self.findStorageRoot(a_var);
+        const b_data = self.findStorageRoot(b_var);
+        const a_word = self.descs.getWord(a_data.desc_idx);
+        const b_word = self.descs.getWord(b_data.desc_idx);
+        var merged_row = self.descs.getRow(switch (kept) {
+            .a => a_data.desc_idx,
+            .b => b_data.desc_idx,
+        });
+        if (a_word.flags.frozen or b_word.flags.frozen) {
+            return self.unionWithFrozen(a_data, a_word, b_data, b_word, merged_row.word.kind == .err);
+        }
+
+        // No generalization pass is running, so the kept word is unmarked.
+        std.debug.assert(!merged_row.word.marked());
+        merged_row.word.flags = mergedFlags(.{}, merged_row.word.kind, a_word, b_word);
+        merged_row.word.rank = rank;
+        return self.unionRows(a_data, a_word, b_data, b_word, merged_row);
+    }
+
+    /// The flags of the class two classes merge into, given the flags the
+    /// merged descriptor states and the kind of content it holds.
+    fn mergedFlags(
+        stated: types.DescriptorFlags,
+        merged_kind: types.ContentKind,
+        a_word: Desc.Word,
+        b_word: Desc.Word,
+    ) types.DescriptorFlags {
+        var flags = stated;
+        flags.annotation_tag_ext = merged_kind == .flex and
             (a_word.flags.annotation_tag_ext or b_word.flags.annotation_tag_ext);
-        merged_desc.flags.bounded_row_ext = a_word.flags.bounded_row_ext or b_word.flags.bounded_row_ext;
-        merged_desc.flags.host_fixed_row = a_word.flags.host_fixed_row or b_word.flags.host_fixed_row;
-        const merged_is_empty_tag_union = merged_desc.content == .structure and
-            merged_desc.content.structure == .empty_tag_union;
-        if (merged_is_empty_tag_union) {
+        flags.bounded_row_ext = a_word.flags.bounded_row_ext or b_word.flags.bounded_row_ext;
+        flags.host_fixed_row = a_word.flags.host_fixed_row or b_word.flags.host_fixed_row;
+        if (merged_kind == .empty_tag_union) {
             const a_is_explicit_empty = a_word.kind == .empty_tag_union and !a_word.flags.empty_tag_union_is_default;
             const b_is_explicit_empty = b_word.kind == .empty_tag_union and !b_word.flags.empty_tag_union_is_default;
-            merged_desc.flags.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
+            flags.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
                 (a_word.flags.empty_tag_union_is_default or b_word.flags.empty_tag_union_is_default);
         } else {
-            merged_desc.flags.empty_tag_union_is_default = false;
+            flags.empty_tag_union_is_default = false;
         }
         // A rejected dispatch edge is a fact about the constraint callable's
         // equivalence class, so merging two classes rejects the result if
         // either side was rejected.
-        merged_desc.flags.static_dispatch_rejected = a_word.flags.static_dispatch_rejected or
+        flags.static_dispatch_rejected = a_word.flags.static_dispatch_rejected or
             b_word.flags.static_dispatch_rejected;
         // Declared backing structure stays declared: a class that merged with
         // an opened nominal backing component is that component.
-        merged_desc.flags.nominal_backing_structure = a_word.flags.nominal_backing_structure or
+        flags.nominal_backing_structure = a_word.flags.nominal_backing_structure or
             b_word.flags.nominal_backing_structure;
         // Structure copied per use stays so only while it is nothing else: a
         // class it merged with keeps its own sharing.
-        merged_desc.flags.per_use_structure = a_word.flags.per_use_structure and
+        flags.per_use_structure = a_word.flags.per_use_structure and
             b_word.flags.per_use_structure;
         // A defaulting decision about one side is a decision about the merged
         // class: the default it committed is the type both sides now share.
-        merged_desc.flags.default_decided = a_word.flags.default_decided or
+        flags.default_decided = a_word.flags.default_decided or
             b_word.flags.default_decided;
-        if ((contentIsLeaf(merged_desc.content) and
+        return flags;
+    }
+
+    /// Merge two unfrozen classes into one that holds `merged_row`.
+    fn unionRows(
+        self: *Self,
+        a_data: StorageRoot,
+        a_word: Desc.Word,
+        b_data: StorageRoot,
+        b_word: Desc.Word,
+        merged_row: Desc.Row,
+    ) Allocator.Error!void {
+        if ((kindIsLeaf(merged_row.word.kind) and
             (!kindIsLeaf(a_word.kind) or !kindIsLeaf(b_word.kind))) or
-            !sameCopiedFlags(merged_desc.flags, a_word.flags) or
-            !sameCopiedFlags(merged_desc.flags, b_word.flags))
+            !sameCopiedFlags(merged_row.word.flags, a_word.flags) or
+            !sameCopiedFlags(merged_row.word.flags, b_word.flags))
         {
             self.ground_epoch +%= 1;
         }
 
         if (a_data.storage_var == b_data.storage_var) {
-            try self.setDesc(a_data.desc_idx, merged_desc);
+            try self.setDescRow(a_data.desc_idx, merged_row);
             return;
         }
 
@@ -3108,7 +3172,6 @@ pub const Store = struct {
         const settled_before = self.settled_descs.list.items.len;
         const a_settled = self.settled_descs.contains(a_data.desc_idx);
         const b_settled = self.settled_descs.contains(b_data.desc_idx);
-        const merged_row = try self.encodeDesc(merged_desc);
         const a_kept = DescStore.sameContent(self.descs.getRow(a_data.desc_idx), merged_row);
         const b_kept = DescStore.sameContent(self.descs.getRow(b_data.desc_idx), merged_row);
         if (a_settled and !a_kept) self.settled_descs.clear();
@@ -3131,9 +3194,16 @@ pub const Store = struct {
     /// stays the checked representative as in every merge. Relating a frozen
     /// class to an error leaves the two classes apart: the error side is
     /// already poisoned, and the frozen side must not change.
-    fn unionWithFrozen(self: *Self, a: StorageRoot, a_word: Desc.Word, b: StorageRoot, b_word: Desc.Word, new_desc: Desc) Allocator.Error!void {
+    fn unionWithFrozen(
+        self: *Self,
+        a: StorageRoot,
+        a_word: Desc.Word,
+        b: StorageRoot,
+        b_word: Desc.Word,
+        merged_is_err: bool,
+    ) Allocator.Error!void {
         if (a.storage_var == b.storage_var) return;
-        if (new_desc.content == .err) return;
+        if (merged_is_err) return;
         const frozen = if (b_word.flags.frozen) b else a;
         const other = if (b_word.flags.frozen) a else b;
         if (std.debug.runtime_safety) {
