@@ -110,14 +110,17 @@ fn segmentOf(self: *const Self, var_index: u32) usize {
     std.debug.assert(firsts.len != 0 and var_index >= firsts[0] and var_index < self.covered);
     // Most lookups are of a recently created variable.
     if (var_index >= firsts[firsts.len - 1]) return firsts.len - 1;
-    var low: usize = 0;
-    var high: usize = firsts.len - 1;
-    // `firsts[low] <= var_index < firsts[high]` holds throughout.
-    while (high - low > 1) {
-        const mid = low + (high - low) / 2;
-        if (firsts[mid] <= var_index) low = mid else high = mid;
+    // The last segment that starts at or before `var_index` is always among
+    // the `span` segments from `first`. Each step selects a half instead of
+    // branching on the comparison, whose outcome is unpredictable.
+    var first: usize = 0;
+    var span: usize = firsts.len;
+    while (span > 1) {
+        const half = span / 2;
+        first = if (firsts[first + half] <= var_index) first + half else first;
+        span -= half;
     }
-    return low;
+    return first;
 }
 
 /// Give `var_` the region `region`. A variable is given its region once, and
