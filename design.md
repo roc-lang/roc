@@ -5682,6 +5682,12 @@ construction edge. Evidence for such a lambda's requirements on a variable
 checking left unquantified comes from its callable-derived dispatch scope
 (Static Dispatch In Monotype), not from a scheme.
 
+A lambda stored at a construction edge whose slot expects a function type has
+its parameters seeded from that type before its body is checked (Lambda
+Parameters Seeded From Context), as a call operand's are. Its parameters are
+then the slot's, so its scheme quantifies only what the slot leaves free; the
+construction edge still instantiates whatever it quantifies.
+
 An annotation cannot make a weak binding polymorphic. An annotation on a weak
 binding that introduces a type variable, named (`a`, `_a`) or an anonymous
 `..`, claims a polymorphism the binding does not have and is rejected with
@@ -10827,6 +10833,55 @@ arithmetic remains polymorphic, including heterogeneous user arithmetic;
 nominal and extended rows still guide nested defaulted/optional construction;
 inconsistent shared type variables and unsupported real dispatches still fail.
 
+### Lambda Parameters Seeded From Context
+
+A lambda with no annotation of its own is checked knowing the parameter types
+its position expects, whenever that position supplies an expected function
+type: a call argument (the callee's formal parameter slot), a stored value in
+an aggregate (a record field, tuple or list item, or tag payload, through
+the enclosing construction's projected cell), or a record update field (the
+base row's field of that name). Before the body is checked, a skeleton function
+over the lambda's own parameter variables is related to that expected type
+(`seedLambdaParamsFromContext`). Dispatch on a parameter therefore resolves
+inside the body against the parameter's known type, and a generic method of
+that type can be called at several types, exactly as in the same lambda
+written as an annotated definition:
+
+```roc
+in_record : { seen : Store -> (List(U64), List(Str)) }
+in_record = { seen: |s| (s.read(count_cell), s.read(title_cell)) }
+```
+
+checks with `s : Store`, where checking the body first would leave `s` a
+variable that needs two `read` methods of different types.
+
+This is a policy: it accepts programs that checking the body first rejects.
+It changes no typing judgment of a well-typed program, because the expected
+type is the one the owning relation relates the lambda to anyway: a call's
+argument relation, or the aggregate's relation of the lambda's instantiated
+use to its slot. An expression-position lambda is instantiated exactly once,
+at its construction edge, so the parameters linked to the slot lose no
+polymorphism a program could use. The rule reads only explicit context:
+
+- Only a context whose type already names a type constructor (through
+  aliases) seeds anything; an unknown slot leaves the lambda as it was.
+- A projected cell is already the construction's own fresh shape copy and is
+  related directly. A record update's borrowed field is copied
+  (`copyExpectedShape`) inside the seed's commit-probe, so the base's own
+  type is never constrained by the seed.
+- The relation runs in one commit-probe. An expectation the lambda does not
+  fit (a different arity, or erroneous context) is rolled back with its copy,
+  and the owning relation reports the mismatch exactly as without the seed.
+- An annotated lambda is checked against its annotation and is not seeded.
+
+Pinned by `src/check/test/issue_13006_test.zig`. Accepted: a lambda in an
+annotated record field, tuple item, list item, tag payload, and record
+update calling a generic method at two types, and the record field form
+agreeing with the named annotated function. Rejected: a lambda with no
+expected context still needs two incompatible `read` methods on one
+parameter, and an arity mismatch against the expected function type is the
+ordinary mismatch.
+
 ### Call Arguments Relate In Order
 
 A call checks its arguments left to right, and relates each argument to its
@@ -14663,6 +14718,12 @@ Other solved-graph mutations:
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
   mechanism for a proved concrete builtin conversion; does not mutate the
   context's type or introduce a redirect rule.
+- `seedLambdaParamsFromContext`—policy: Lambda Parameters Seeded From
+  Context (above). A probe of whether the expected context names a type
+  constructor gates an ordinary unification of a skeleton over an
+  unannotated lambda's parameters with that context, committed only when it
+  succeeds. It writes nothing outside unification and introduces no redirect
+  rule.
 
 - `rowForMerge` (record and tag-union rows)—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes
