@@ -7036,8 +7036,9 @@ const Inserter = struct {
     }
 
     /// The walked graph in the shared solver's form: edges by node index and
-    /// their reverse, each node's read bits and the raw, group, and value-use
-    /// bits its definition rebinds, and each edge's kills.
+    /// their reverse, the raw, group, and value-use bits each node's
+    /// definition rebinds, and each edge's kills. The read bits are left
+    /// empty; `solveLiveness` sets them from the nodes' reads.
     fn livenessStructure(self: *const Inserter, graph: *const ReadBeforeRebindGraph, allocator: Allocator) ResourceError!arc_liveness.Graph {
         const node_count = graph.nodes.items.len;
         const succ_starts = try allocator.alloc(u32, node_count + 1);
@@ -7068,7 +7069,7 @@ const Inserter = struct {
             }
             def_starts[index + 1] = @intCast(defs.items.len);
         }
-        var structure = arc_liveness.Graph{
+        return .{
             .succ_starts = succ_starts,
             .succs = succs,
             .pred_starts = preds.starts,
@@ -7081,8 +7082,6 @@ const Inserter = struct {
             .kills = kills.items,
             .bit_len = self.domain().livenessBitLen(),
         };
-        try setLivenessReads(&structure, graph, allocator);
-        return structure;
     }
 
     /// Replaces the structure's read bits with the nodes' current reads.
