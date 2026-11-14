@@ -2398,7 +2398,10 @@ app's procedure, a method dispatch selects by type, a stored function value,
 a target derived from a function's type), a custom interpolation, or a
 conversion root no evaluation requests. A specialization that converts a
 literal at the closed type of a stored `literal_argument` root restores that
-root's value instead of registering a literal root. Specializing the rest of
+root's value instead of registering a literal root, and one that converts a
+literal at the closed type of a validate-only `literal_argument` root (every
+interpolation's among them) converts it in place, since that root's
+evaluation already reports its outcome. Specializing the rest of
 the runtime program, or lowering any of it for execution, is runtime work,
 and compile-time evaluation without an LSS runtime consumer to continue its
 program does none of it. Its program roots are *discovery roots*,
@@ -6620,6 +6623,23 @@ No candidate is recorded inside an ordinary top-level constant, because that
 enclosing root already evaluates and owns the destructure site. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
+
+Only a requested root is evaluated, so only a requested root replaces its source
+occurrence. A root that receives no request (its checked type is not concrete,
+for example) replaces nothing, and an exhaustiveness site it would have
+validated is classified as if no root had been recorded. A site that runtime
+code can reach is decided statically even when it was classified for empirical
+validation, because runtime code can arrive there with any value of its type.
+Empirical validation decides only the sites that compile-time evaluation alone
+reaches.
+
+A requested callable binding root replaces its source occurrence too: runtime
+code reads the root's completed callable instead of computing it, so the
+destructure it extracts from, and every site its expression evaluates, runs
+only during the root's evaluation. The exception is a site inside a function
+body within that expression. The callable can hold that function, and runtime
+code that calls it reaches the site with any argument, so such a site stays
+classified by its enclosing procedure template.
 
 Local binding dependencies likewise remain candidates until their enclosing
 expression is either selected or rejected. A selected maximal parent owns the
@@ -15975,7 +15995,12 @@ strategy).
   program's modules by literal (`LiteralArgumentRootIndex`), and a
   specialization converting a literal whose node's type is closed restores
   the value of the root whose type's Monotype is that type
-  (`restoredLiteralArgument`) instead of registering a literal root. A debug
+  (`restoredLiteralArgument`) instead of registering a literal root. A
+  specialization converting a literal at the type of a validate-only root,
+  which stores no value, converts the literal in place, as a runtime program
+  does where it needs the value, and registers no literal root either
+  (`literalArgumentRootValidates`): the root's evaluation, which every
+  compilation runs, reports its outcome. A debug
   compiler asserts that every root for the literal at that type stored the
   same value. A root whose conversion failed reported the failure in its
   module and stores it; the specialization restores it as a failure already
