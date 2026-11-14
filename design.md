@@ -1396,7 +1396,11 @@ checker recovery. The recovery rules:
   undeclared type) declares no type, and nothing may be related to it. Checking
   records this on the annotation itself (`CIR.Annotation.erroneous`) as soon as
   it generates the annotation's type, before any body or use is related to it,
-  so the record is available in every module that can see the definition. The
+  so the record is available in every module that can see the definition. A
+  where clause's method signature or where alias application is part of the
+  type the annotation generates, so one that names an undeclared type, or a
+  builtin type internal to its module (`Encoding.JsonEncoding`), makes the
+  annotation erroneous too. The
   definition's right-hand side becomes the runtime error, a method included.
   Every use of the definition, in its own module or an importing one, by name
   or as an associated item, is erroneous at the use (`defReference` classifies

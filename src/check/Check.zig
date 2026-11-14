@@ -23927,11 +23927,30 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     // An erroneous annotation declares no type. Record that on the annotation
     // itself, before anything is related to it, so every consumer (including
     // importers, which read this module's annotations) can refuse to relate
-    // anything to it.
+    // anything to it. A where clause's method signature is part of the type
+    // the annotation generates, so an error there makes the annotation
+    // erroneous too.
     self.var_set.clearRetainingCapacity();
-    if (try self.varContainsError(annotation_var, &self.var_set)) {
+    if (try self.varContainsError(annotation_var, &self.var_set) or
+        try self.whereSignaturesContainError(annotation.where))
+    {
         self.cir.store.markAnnotationErroneous(annotation_idx);
     }
+}
+
+/// Whether a method signature or where alias application an annotation's
+/// where clause generated holds an erroneous type.
+fn whereSignaturesContainError(self: *Self, where: ?CIR.WhereClause.Span) Allocator.Error!bool {
+    const where_span = where orelse return false;
+    for (self.cir.store.sliceWhereClauses(where_span)) |where_idx| {
+        const generated: CIR.TypeAnno.Idx = switch (self.cir.store.getWhereClause(where_idx)) {
+            .w_method => |method| method.anno,
+            .w_alias => |alias| alias.alias,
+            .w_malformed => continue,
+        };
+        if (try self.varContainsError(ModuleEnv.varFrom(generated), &self.var_set)) return true;
+    }
+    return false;
 }
 
 /// One implicitly opened tag-union extension minted while generating an

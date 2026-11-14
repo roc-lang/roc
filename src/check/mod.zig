@@ -200,6 +200,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12553_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12586_test.zig"));
     std.testing.refAllDecls(@import("test/derived_codec_signature_test.zig"));
+    std.testing.refAllDecls(@import("test/where_clause_erroneous_type_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12587_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12677_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12794_test.zig"));
