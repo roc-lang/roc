@@ -476,9 +476,15 @@ pub const Env = struct {
     pub const empty_bindings: []const checked.CheckedTypeId = &.{};
 
     pub fn lookup(self: Env, module: ModuleIndex, id: checked.CheckedTypeId) ?TypeId {
+        const index = self.lookupIndex(module, id) orelse return null;
+        return self.bound[index];
+    }
+
+    /// The scheme position `id` is bound at, if any.
+    pub fn lookupIndex(self: Env, module: ModuleIndex, id: checked.CheckedTypeId) ?usize {
         if (module != self.module) return null;
         for (self.vars, 0..) |variable, index| {
-            if (variable == id) return self.bound[index];
+            if (variable == id) return index;
         }
         return null;
     }
@@ -527,6 +533,15 @@ pub const Store = struct {
 
     /// Converted closed checked types, by module and checked id.
     closed_memo: std.AutoHashMapUnmanaged(ClosedKey, TypeId) = .empty,
+    /// The scheme position of each closed record or tag union that is a row
+    /// node of the converting worker's signature: one whose row ends in a
+    /// quantified uncommitted tail (design.md "Methods On Open Rows"). Such a
+    /// type stores its values exactly as the plain record or tag union does,
+    /// and is a distinct type only so a descriptor taken of it reads the
+    /// worker's input for the whole value (`Program.rowNodesAsVariables`).
+    /// Like a `variable` node's index, the position names a slot of the
+    /// scope the type was converted in.
+    tail_node_of: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
     /// The backing of each instantiated nominal node.
     backing_memo: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
     /// `Converter.representationClosed` of each type asked about.
@@ -600,6 +615,7 @@ pub const Store = struct {
         self.decl_name_ids.deinit(self.allocator);
         self.name_arena.deinit();
         self.closed_memo.deinit(self.allocator);
+        self.tail_node_of.deinit(self.allocator);
         self.backing_memo.deinit(self.allocator);
         self.representation_closed.deinit(self.allocator);
         self.erased_slots.deinit(self.allocator);
@@ -863,6 +879,7 @@ pub const Store = struct {
                     }
                     for (declared.padding) |padding| closed = closed and self.isClosed(padding);
                 }
+                try self.keyU32(if (record.tail_node) |position| position else std.math.maxInt(u32));
             },
             .tuple => |items| {
                 try self.keySpan(items);
@@ -877,6 +894,7 @@ pub const Store = struct {
                 }
                 try self.keyU32(if (tag_union.ext) |ext| @backingInt(ext) else std.math.maxInt(u32));
                 if (tag_union.ext) |ext| closed = closed and self.isClosed(ext);
+                try self.keyU32(if (tag_union.tail_node) |position| position else std.math.maxInt(u32));
             },
             .list => |elem| {
                 try self.keyType(elem);
@@ -943,6 +961,11 @@ pub const Store = struct {
             .variable => |index| .{ .variable = index },
         };
         try self.nodes.append(self.allocator, stored);
+        switch (node) {
+            .record => |record| if (record.tail_node) |position| try self.tail_node_of.put(self.allocator, id, position),
+            .tag_union => |tag_union| if (tag_union.tail_node) |position| try self.tail_node_of.put(self.allocator, id, position),
+            .primitive, .empty_record, .tuple, .list, .box, .nominal, .function, .variable => {},
+        }
         try self.closed_flags.append(self.allocator, closed);
         try self.variable_free_flags.append(self.allocator, self.inputVariableFree(node));
         switch (node) {
@@ -955,6 +978,13 @@ pub const Store = struct {
             .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => {},
         }
         return id;
+    }
+
+    /// The scheme position `ty` is a row node at, when it is a closed record
+    /// or tag union whose row ends in a quantified uncommitted tail of the
+    /// scope it was converted in (`tail_node_of`).
+    pub fn tailNode(self: *const Store, ty: TypeId) ?u32 {
+        return self.tail_node_of.get(ty);
     }
 
     /// The payload of `ty` when it is a presence slot.
@@ -1092,9 +1122,9 @@ pub const TagInput = struct {
 pub const NodeInput = union(enum) {
     primitive: Primitive,
     empty_record,
-    record: struct { fields: []const Field, ext: ?TypeId, declared: ?DeclaredOrderInput = null },
+    record: struct { fields: []const Field, ext: ?TypeId, declared: ?DeclaredOrderInput = null, tail_node: ?u32 = null },
     tuple: []const TypeId,
-    tag_union: struct { tags: []const TagInput, ext: ?TypeId },
+    tag_union: struct { tags: []const TagInput, ext: ?TypeId, tail_node: ?u32 = null },
     list: TypeId,
     box: TypeId,
     nominal: struct {
@@ -1156,14 +1186,18 @@ pub const Converter = struct {
         var pending: std.ArrayList(Child) = .empty;
         defer pending.deinit(allocator);
 
-        if (try self.leaf(module, ty, env)) |done| return done;
+        // A scope with closed row nodes converts a type holding one to a type
+        // marked with the node's position, so a conversion made there is not
+        // the one every environment makes.
+        var memoize: ?bool = if (self.seal_undetermined_kinds) false else null;
+        if (try self.leaf(module, ty, env, &memoize)) |done| return done;
         try self.pushFrame(&frames, &pending, results.items.len, module, ty);
         while (frames.items.len > 0) {
             const top = &frames.items[frames.items.len - 1];
             if (top.pending_next < pending.items.len) {
                 const child = pending.items[top.pending_next];
                 top.pending_next += 1;
-                if (try self.leaf(child.module, child.ty, env)) |done| {
+                if (try self.leaf(child.module, child.ty, env, &memoize)) |done| {
                     try results.append(allocator, done);
                 } else {
                     if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
@@ -1178,7 +1212,7 @@ pub const Converter = struct {
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
             // every environment.
-            if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
+            if (!try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty) and try self.memoizes(env, &memoize)) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
             }
             if (frames.items.len == 0) return built;
@@ -1200,12 +1234,53 @@ pub const Converter = struct {
         return try view.types().rootHasIdentityVariables(ty);
     }
 
+    /// Whether a conversion in `env` shares the memo of identity-free types,
+    /// decided on first need into `memoize`: not when `env` binds a closed row
+    /// node of a scope it converts in (`tailNodeAt`).
+    fn memoizes(self: Converter, env: Env, memoize: *?bool) Allocator.Error!bool {
+        if (memoize.*) |known| return known;
+        const shared = for (0..env.vars.len) |index| {
+            if (self.tailNodeAt(env, index) != null) break false;
+        } else true;
+        memoize.* = shared;
+        return shared;
+    }
+
+    /// The position of the closed row node `env` binds at `index`, if it
+    /// binds one: a scheme position holding the checked record or tag union
+    /// whose row ends in a quantified uncommitted tail
+    /// (`Program.templateScope`), bound to a `variable` node, the one the
+    /// converting scope names that position by. Such a record or tag union
+    /// converts to its closed type marked with that position
+    /// (`Store.tailNode`). An instantiation binds the position to the use's
+    /// whole value, which the record or tag union converts to.
+    fn tailNodeAt(self: Converter, env: Env, index: usize) ?u32 {
+        const position = switch (self.store.get(env.bound[index])) {
+            .variable => |position| position,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => return null,
+        };
+        return switch (self.modules.get(env.module).types().payload(env.vars[index])) {
+            .record, .tag_union => position,
+            .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => null,
+        };
+    }
+
+    /// The position `ty` is a closed row node at in `env`'s scope, if it is
+    /// one (`tailNodeAt`).
+    fn tailNodeOf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) ?u32 {
+        const index = env.lookupIndex(module, ty) orelse return null;
+        return self.tailNodeAt(env, index);
+    }
+
     /// The node for `ty` when it needs no children converted first.
-    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!?TypeId {
-        if (env.lookup(module, ty)) |bound| return bound;
+    fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env, memoize: *?bool) Allocator.Error!?TypeId {
+        if (env.lookupIndex(module, ty)) |index| {
+            // A closed row node of the scope converts as its own structure.
+            if (self.tailNodeAt(env, index) == null) return env.bound[index];
+        }
         if (self.platformIdentity(module, ty)) |solved| return solved;
         const view = self.modules.get(module);
-        if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(view, ty)) {
+        if (!try rootHasIdentityVariables(view, ty) and try self.memoizes(env, memoize)) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| return memo;
         }
         return switch (view.types().payload(ty)) {
@@ -1418,14 +1493,15 @@ pub const Converter = struct {
                     .variable => {},
                     .primitive, .tuple, .tag_union, .list, .box, .nominal, .function => invariant("a record row's remainder converted to a non-record type"),
                 };
-                if (fields.items.len == 0 and ext == null) return try self.store.emptyRecord();
+                const tail_node = self.tailNodeOf(module, ty, env);
+                if (fields.items.len == 0 and ext == null and tail_node == null) return try self.store.emptyRecord();
                 const store = self.store;
                 std.mem.sort(Field, fields.items, store, struct {
                     fn lessThan(s: *Store, a: Field, b: Field) bool {
                         return s.nameLessThan(a.name, b.name);
                     }
                 }.lessThan);
-                return try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
+                return try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext, .tail_node = tail_node } });
             },
             .tag_union => |tag_union| {
                 var tags: std.ArrayList(TagInput) = .empty;
@@ -1477,7 +1553,7 @@ pub const Converter = struct {
                         return s.nameLessThan(a.name, b.name);
                     }
                 }.lessThan);
-                return try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext } });
+                return try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext, .tail_node = self.tailNodeOf(module, ty, env) } });
             },
             .nominal => |nominal| return try self.nominalNode(module, nominal, children),
             .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these

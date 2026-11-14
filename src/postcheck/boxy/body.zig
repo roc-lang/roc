@@ -6792,7 +6792,11 @@ pub const Builder = struct {
         // of a procedure the app provides) takes every variable from the
         // call's function type.
         const recorded = subst.len != 0;
-        if (recorded and subst.len != target.scheme_vars.len) invariant("a call's checked substitution differs from its target's scheme");
+        // The row nodes follow the variables; each takes the type at its
+        // position of the call's function type, or the plain value
+        // (`Program.fillRowNodes`).
+        const first_node = target.scheme_vars.len - target.row_nodes.len;
+        if (recorded and subst.len != first_node) invariant("a call's checked substitution differs from its target's scheme");
         const bound = try self.allocator.alloc(TypeId, target.scheme_vars.len);
         errdefer self.allocator.free(bound);
         // A row variable takes its open row's remainder of the call's row
@@ -6816,6 +6820,10 @@ pub const Builder = struct {
             const ty = if (index < related.len) related[index].get() else null;
             if (row_vars[index] and ty != null) {
                 slot.* = ty.?;
+                continue;
+            }
+            if (index >= first_node) {
+                slot.* = try self.program.store.emptyRecord();
                 continue;
             }
             if (recorded and self.view.types().payload(subst[index]) != .err) {

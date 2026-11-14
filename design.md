@@ -5663,7 +5663,10 @@ variable every instantiation of which stores its record exactly as the
 closed record does. `.lss` specializes each use at its committed row, so uses
 that commit the tail share one specialization. `.boxy` seals the tail to the
 empty record in the worker (Sealed Result Rows), and the worker's
-representation does not depend on the use. Neither a commitment nor a lift
+representation does not depend on the use. The record itself is a row node
+of the worker's signature (Methods On Open Rows): one hidden descriptor of the
+whole value as each use has it, so printing it renders the nominal type a use
+lifted it into in both lowering modes. Neither a commitment nor a lift
 changes a layout, so neither costs anything at run time.
 
 ### Uncommitted Tag Tails
@@ -5711,8 +5714,14 @@ finishes checking. Committing only clears the mark; the empty tag union
 stays.
 
 Post-check stages read an uncommitted tag tail as the empty tag union it
-is. It is no identity variable of a scheme, so a worker takes no hidden
-descriptor for it under `.boxy`, and `.lss` specializes nothing for it.
+is (`CheckedTypeStoreView.payload`); the checked read form exposes the mark
+separately (`CheckedTypeStoreView.uncommittedTagTail`), and type keys ignore
+it, so `.lss` specializes nothing for it. It is no identity variable of a
+scheme, so a worker takes no descriptor for the tail under `.boxy`; each tag
+union of its signature with a tag whose row ends in one is a row node instead
+(Methods On Open Rows), described by one hidden descriptor of the whole value
+as each use has it, so printing it renders the nominal type a use lifted it
+into in both lowering modes.
 
 The accepted and rejected sides of both tails are pinned by
 `src/check/test/uncommitted_record_tail_test.zig` (literal, `{}`, and
@@ -5746,7 +5755,14 @@ results, in one module and across modules),
 not lift, and a method of the lifted nominal called on another use), and
 `test/cli/UncommittedTagTailLocals.roc` (a generalized local matching a tag
 parameter and reading enclosing evidence, returned and called at an
-anonymous union and a nominal). The CLI tests run under both lowering
+anonymous union and a nominal), `test/cli/printing_follows_use/` and
+`test/echo/printing_follows_use_dbg.roc` (records and match-closed tag unions
+printed with `Str.inspect`, `dbg`, and `?` inside `expect` as each use has
+them: directly, through a generic helper, inside a `List`, taken apart with
+`as`, from another module, at a use that does not lift, through a function
+whose only hidden input is a row node called directly, as a function value
+and in a compile-time constant, with a capture-free lambda inside, and with a
+nominal that has no inspect override). The CLI tests run under both lowering
 strategies and both backends.
 
 ### Scheme Relations Through Unrooted Variables
@@ -12934,9 +12950,20 @@ instantiation from the use's evidence, and `.boxy` passes one dictionary per
 requirement, filled with the nominal's method or the compiler-derived
 structural implementation, as for a type variable's requirement. Under
 `.boxy` each record or tag union of a worker's signature whose row ends in a
-row variable (`Worker.row_nodes`) is described by one hidden descriptor of
-the whole value as the use has it: the nominal type a caller supplied, or the
-plain record or tag union. A call fills it with the type at that position of
+row variable, each record whose row ends in a quantified uncommitted record
+tail, and each tag union with a tag whose row ends in a quantified
+uncommitted tag tail (Uncommitted Record Tails, Uncommitted Tag Tails) is a
+row node (`Worker.row_nodes`), described by one hidden descriptor of the
+whole value as the use has it: the nominal type a caller supplied, or the
+plain record or tag union. The last two are closed rows, so they are row nodes
+whatever the body does with them: a worker's hidden inputs stay a function of
+its checked signature alone, which importing and defining units read alike,
+and no analysis of a body decides them. A closed row node stores its values
+exactly as the plain record or tag union does: its scheme position holds the
+checked record or tag union itself, which the worker's scope converts to its
+closed type marked with the position (`Store.tailNode`, a distinct type only
+for descriptors), and an instantiation's scope converts to the use's whole
+value. A call fills it with the type at that position of
 its actual function type (Bool, primitive or builtin nominal, as
 `[False, True]` for a tag union, whose tags the body builds by position); a use with no actual type
 there fills it with the node over the use's other bindings, the plain value.
@@ -12944,12 +12971,18 @@ Every descriptor the body takes of a type containing such a node reads that
 input, so the position of a field or tag (`field_index`, `tag_index`) comes
 from the whole value's closed type through its nominal wrapper, and `dyn_eq`,
 `dyn_hash` and `dyn_inspect` read the whole value's descriptor: printing a
-value of such a type renders what each call supplied, a nominal's inspect
-override included, in both lowering modes. The body's own types keep the
-node's written fields and row variable, whose descriptor stays an input for
-types the body writes over the row variable alone. The node's scheme
-position is a hidden input after the worker's variables; lambdas of the
-worker share it.
+value of such a type (`Str.inspect`, `dbg`, `?` inside `expect`, a derived
+`to_inspect`) renders what each call supplied, a nominal's inspect override
+included, identically in both lowering modes. A closed row node's field and
+tag positions are those of its closed type, which a nominal it lifts into
+shares, so they stay immediates. The body's own types keep an open node's
+written fields and row variable, whose descriptor stays an input for types
+the body writes over the row variable alone. The nodes' scheme positions are
+hidden inputs after the worker's variables, the closed ones first; lambdas
+and generalized local functions of the worker share them. A worker whose only
+hidden inputs are closed row nodes takes a type table like any other: a root
+reaches it through its root wrapper, which supplies the plain values' static
+descriptors.
 
 Both sides are pinned by tests that do every case through an operator and
 through a method named `foo` (`test/cli/MethodsOnOpenRows*.roc`).
@@ -15486,7 +15519,9 @@ A worker's hidden inputs are, in order:
 
 - one descriptor per quantified variable of its scheme, in the scheme's
   checked `scheme_vars` order (a field kind variable's describes the field's
-  slot, Field Kinds);
+  slot, Field Kinds), then one per row node of its signature (Methods On
+  Open Rows), the closed ones first, each describing the whole value of a
+  record or tag union as the use has it;
 - one dictionary per evidence parameter of its scheme, in the checked
   `evidence_params` order the checker records;
 - one literal argument per literal requirement of its scheme, in the checked
@@ -15581,7 +15616,9 @@ default is the empty record and closing the row discharges its constraints
 only close the tail or make its record a nominal type stored exactly like
 the record, so every instantiation stores whatever holds the tail as the
 sealed worker does, wherever the tail sits in the worker's interface, and no
-use converts a value crossing the worker's boundary.
+use converts a value crossing the worker's boundary. Sealing the tail leaves
+its record a row node of the worker's signature (Methods On Open Rows): the
+record's descriptor, not the tail's, is the hidden input.
 
 Checked-module output computes all of a template's sealed slots together. It first
 collects the bounded candidates, then traverses its current immutable checked
@@ -15927,7 +15964,8 @@ address of its type table, immutable static data. A template takes it after
 its explicit parameters. An erased worker's capture record holds it after the
 captured values, except for a generalized local procedure whose calls pass
 its own scheme's instantiation: its argument record leads with the table, and
-its function value captures none. A worker without inputs takes no table.
+its function value captures none. A worker without inputs takes no table;
+a row node is an input, so a worker whose signature has one takes a table.
 Importing and defining units derive this ABI from the worker's signature
 alone.
 

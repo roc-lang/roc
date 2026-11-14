@@ -454,7 +454,7 @@ pub const StructuralMap = struct { name: types.NameId, payload_index: u32, arity
 pub const WorkerId = enum(u32) { _ };
 
 /// A record or tag union of a worker's signature whose row ends in a row
-/// variable (`Worker.row_nodes`).
+/// variable or in a quantified uncommitted tail (`Worker.row_nodes`).
 pub const RowNode = struct {
     /// Its descriptor's position among the worker's scheme variables.
     index: u32,
@@ -469,20 +469,25 @@ pub const Worker = struct {
     module: ModuleIndex,
     /// The checked scheme variables of the worker's scope, in hidden
     /// descriptor order. A template's sealed variables (design.md
-    /// "Sealed Result Rows") are omitted: they seal to the empty row.
+    /// "Sealed Result Rows") are omitted: they seal to the empty row. The
+    /// row nodes' positions follow the variables (`row_nodes`).
     scheme_vars: []const checked.CheckedTypeId,
     /// For a template worker: its scheme's kind variables.
     kinds: SchemeKinds = .{},
     /// The records and tag unions of the worker's signature whose rows end in
-    /// a row variable, each with the scheme position of the hidden
-    /// descriptor that describes it as a whole, as the instantiation has it
-    /// (a nominal type a caller supplied, or the plain record or tag union):
-    /// design.md "Methods On Open Rows". The position's checked entry is the
-    /// row variable's, so conversion never names it; only descriptors read it.
+    /// a row variable or in a quantified uncommitted tail, each with the
+    /// scheme position of the hidden descriptor that describes it as a
+    /// whole, as the instantiation has it (a nominal type a caller supplied,
+    /// or the plain record or tag union): design.md "Methods On Open Rows".
+    /// The positions are the last of `scheme_vars`. A closed row node's
+    /// checked entry is the record or tag union itself, which the worker's
+    /// scope converts to its closed type marked with the position
+    /// (`Store.tailNode`); an open one's is its row variable's, so
+    /// conversion never names it. Only descriptors read either.
     row_nodes: []const RowNode = &.{},
-    /// For a template worker: the position of each of `scheme_vars` in the
-    /// template's checked `scheme_vars`, which a use's substitution is
-    /// indexed by, and that checked list's length.
+    /// For a template worker: the position in the template's checked
+    /// `scheme_vars`, which a use's substitution is indexed by, of each of
+    /// `scheme_vars` before the row nodes, and that checked list's length.
     checked_slots: []const u32 = &.{},
     checked_scheme_count: u32 = 0,
     /// For a template worker lowered at `TemplateBinding.list_int`, and for
@@ -1452,6 +1457,14 @@ pub const Program = struct {
             if (sealed_dispatcher) continue;
             try dictionary_params.append(self.arena.allocator(), @intCast(index));
         }
+        // Each record of the signature whose row ends in a sealed uncommitted
+        // record tail, and each tag union whose row ends in an uncommitted
+        // tag tail, is a row node (design.md "Methods On Open Rows"): it
+        // takes a scheme position after the variables, holding the checked
+        // record or tag union itself, so it converts to its closed type
+        // marked with that position.
+        const real_count = scheme_vars.items.len;
+        try self.appendClosedRowNodes(module_index, &template, evidence_params, checked_scheme_vars, sealed_slots, &scheme_vars);
         const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.items.len);
         for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
         const env: types.Env = .{ .module = module_index, .vars = scheme_vars.items, .bound = bound };
@@ -1468,12 +1481,11 @@ pub const Program = struct {
             kind_roots[1 + 2 * index] = try self.converter().convert(module_index, param.callable_ty, env);
             kind_roots[2 + 2 * index] = try self.converter().convert(module_index, param.dispatcher_ty, env);
         }
-        const real_count = scheme_vars.items.len;
-        const row_nodes = try self.collectRowNodes(kind_roots, real_count);
+        const row_nodes = try self.collectRowNodes(kind_roots, real_count, scheme_vars.items.len);
         for (row_nodes) |node| {
+            if (self.store.tailNode(node.ty) != null) continue;
             const row = self.rowVariableOf(node.ty);
             try scheme_vars.append(self.arena.allocator(), scheme_vars.items[row]);
-            try checked_slots.append(self.arena.allocator(), checked_slots.items[row]);
         }
         const kinds = try self.schemeKinds(kind_roots, scheme_vars.items.len);
 
@@ -1675,9 +1687,12 @@ pub const Program = struct {
     /// checking recorded none for) stays empty.
     /// The records and tag unions `roots` reach whose rows end in one of the
     /// first `count` variables, in the order a walk first reaches them, each
-    /// given the next scheme position after `count` (`Worker.row_nodes`).
-    fn collectRowNodes(self: *Program, roots: []const TypeId, count: usize) Allocator.Error![]const RowNode {
+    /// given the next scheme position from `first_open`, and the closed row
+    /// nodes they reach at the positions they are marked with
+    /// (`Store.tailNode`, `Worker.row_nodes`).
+    fn collectRowNodes(self: *Program, roots: []const TypeId, count: usize, first_open: usize) Allocator.Error![]const RowNode {
         var found: std.ArrayList(RowNode) = .empty;
+        var open: usize = 0;
         var pending: std.ArrayList(TypeId) = .empty;
         defer pending.deinit(self.allocator);
         var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
@@ -1690,16 +1705,21 @@ pub const Program = struct {
         while (pending.pop()) |ty| {
             if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
             const start = pending.items.len;
+            if (self.store.tailNode(ty)) |position| {
+                try found.append(self.arena.allocator(), .{ .index = position, .ty = ty });
+            }
             switch (self.store.get(ty)) {
                 .record => |record| {
                     if (record.ext.get()) |ext| if (self.store.get(ext) == .variable and self.store.get(ext).variable < count) {
-                        try found.append(self.arena.allocator(), .{ .index = @intCast(count + found.items.len), .ty = ty });
+                        try found.append(self.arena.allocator(), .{ .index = @intCast(first_open + open), .ty = ty });
+                        open += 1;
                     };
                     for (self.store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
                 },
                 .tag_union => |tag_union| {
                     if (tag_union.ext) |ext| if (self.store.get(ext) == .variable and self.store.get(ext).variable < count) {
-                        try found.append(self.arena.allocator(), .{ .index = @intCast(count + found.items.len), .ty = ty });
+                        try found.append(self.arena.allocator(), .{ .index = @intCast(first_open + open), .ty = ty });
+                        open += 1;
                     };
                     for (self.store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(self.allocator, self.store.span(tag.payloads));
                 },
@@ -1716,6 +1736,110 @@ pub const Program = struct {
             std.mem.reverse(TypeId, pending.items[start..]);
         }
         return found.items;
+    }
+
+    /// Append to `scheme_vars` a position for each closed row node of
+    /// template `template`'s signature (its root and its evidence parameters'
+    /// types), in the order a walk first reaches them: each record whose row
+    /// ends in a sealed uncommitted record tail (`sealed_slots`), and each tag
+    /// union with a tag whose row ends in an uncommitted tag tail
+    /// (`CheckedTypeStoreView.uncommittedTagTail`). The position holds the
+    /// checked record or tag union itself, so the worker's scope converts it
+    /// to its closed type marked with the position (`Converter.tailNodeAt`).
+    /// A worker's hidden inputs stay a function of its checked signature: an
+    /// importing unit derives the same positions.
+    fn appendClosedRowNodes(
+        self: *Program,
+        module_index: ModuleIndex,
+        template: *const checked.CheckedProcedureTemplate,
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
+        checked_scheme_vars: []const checked.CheckedTypeId,
+        sealed_slots: []const u32,
+        scheme_vars: *std.ArrayList(checked.CheckedTypeId),
+    ) Allocator.Error!void {
+        const view = self.module(module_index);
+        const types_view = view.types();
+        var sealed_tails: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer sealed_tails.deinit(self.allocator);
+        for (sealed_slots) |slot| {
+            const variable = checked_scheme_vars[slot];
+            switch (types_view.payload(variable)) {
+                .flex => |flex| if (flex.row_tail == .uncommitted_record) try sealed_tails.append(self.allocator, variable),
+                .pending, .err, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => {},
+            }
+        }
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var index = evidence_params.len;
+        while (index > 0) {
+            index -= 1;
+            try pending.append(self.allocator, evidence_params[index].dispatcher_ty);
+            try pending.append(self.allocator, evidence_params[index].callable_ty);
+        }
+        try pending.append(self.allocator, template.checked_fn_root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            if (self.converter().platformIdentity(module_index, ty) != null) continue;
+            const start = pending.items.len;
+            switch (types_view.payload(ty)) {
+                .alias => |alias| try pending.append(self.allocator, alias.backing),
+                .record => |record| {
+                    var fields = record.fields;
+                    var current = record.ext;
+                    while (true) {
+                        for (0..fields.len()) |field_index| try pending.append(self.allocator, fields.get(field_index).ty);
+                        fields = .empty;
+                        switch (types_view.payload(current)) {
+                            .alias => |alias| current = alias.backing,
+                            .record => |ext_record| {
+                                fields = ext_record.fields;
+                                current = ext_record.ext;
+                            },
+                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => break,
+                        }
+                    }
+                    if (std.mem.findScalar(checked.CheckedTypeId, sealed_tails.items, current) != null and
+                        std.mem.findScalar(checked.CheckedTypeId, scheme_vars.items, ty) == null)
+                    {
+                        try scheme_vars.append(self.arena.allocator(), ty);
+                    }
+                },
+                .tag_union => |tag_union| {
+                    var tags = tag_union.tags;
+                    var current = tag_union.ext;
+                    var tag_count: usize = 0;
+                    while (true) {
+                        tag_count += tags.len();
+                        for (0..tags.len()) |tag_index| try pending.appendSlice(self.allocator, tags.get(tag_index).args);
+                        tags = .empty;
+                        switch (types_view.payload(current)) {
+                            .alias => |alias| current = alias.backing,
+                            .tag_union => |ext_union| {
+                                tags = ext_union.tags;
+                                current = ext_union.ext;
+                            },
+                            .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .record, .empty_tag_union, .field_kind => break,
+                        }
+                    }
+                    if (tag_count != 0 and types_view.uncommittedTagTail(current) and
+                        std.mem.findScalar(checked.CheckedTypeId, scheme_vars.items, ty) == null)
+                    {
+                        try scheme_vars.append(self.arena.allocator(), ty);
+                    }
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(self.allocator, nominal.args),
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .field_kind => {},
+            }
+            // Children are visited in the order they were listed.
+            std.mem.reverse(checked.CheckedTypeId, pending.items[start..]);
+        }
     }
 
     /// The scheme position of the row variable a row node's row ends in.
@@ -1741,7 +1865,7 @@ pub const Program = struct {
                     continue;
                 }
             }
-            bound[node.index] = try self.substitute(self.allocator, node.ty, bound);
+            bound[node.index] = try self.plainValue(node.ty, bound);
         }
         // Bool, primitive or builtin nominal, is the tag union `[False,
         // True]`, whose tags a body builds by position.
@@ -1764,7 +1888,7 @@ pub const Program = struct {
         const identity = try self.allocator.alloc(TypeId, target.scheme_vars.len);
         defer self.allocator.free(identity);
         for (identity, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
-        return try self.rewriteTypeWithRowNodes(self.allocator, ty, identity, null, target.row_nodes);
+        return try self.rewriteTypeWithRowNodes(self.allocator, ty, identity, null, target.row_nodes, .keep);
     }
 
     /// A type of worker `id`'s signature at the instantiation `bound`, its
@@ -1777,7 +1901,7 @@ pub const Program = struct {
         const target = self.worker(id).*;
         if (subst.len == 0 or target.key != .template) return subst;
         if (subst.len != target.checked_scheme_count) invariant("a use's checked substitution differs from its target's scheme");
-        if (target.checked_slots.len == subst.len and target.row_nodes.len == 0) return subst;
+        if (target.checked_slots.len == subst.len) return subst;
         const kept = try self.arena.allocator().alloc(checked.CheckedTypeId, target.checked_slots.len);
         for (kept, target.checked_slots) |*entry, slot| entry.* = subst[slot];
         return kept;
@@ -2167,11 +2291,23 @@ pub const Program = struct {
     }
 
     fn rewriteType(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId) Allocator.Error!TypeId {
-        return try self.rewriteTypeWithRowNodes(allocator, root, bound, function_as, &.{});
+        return try self.rewriteTypeWithRowNodes(allocator, root, bound, function_as, &.{}, .keep);
     }
 
+    /// `ty` of worker `id`'s scope at the instantiation `bound`, each closed
+    /// row node in it the plain record or tag union it marks
+    /// (`Store.tailNode`): the whole value of a use that relates nothing to
+    /// the node.
+    pub fn plainValue(self: *Program, ty: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
+        return try self.rewriteTypeWithRowNodes(self.allocator, ty, bound, null, &.{}, .strip);
+    }
+
+    /// Whether a rewritten closed row node keeps its position
+    /// (`Store.tailNode`).
+    const TailNodes = enum { keep, strip };
+
     /// `rewriteType`, reading each of `row_nodes` as its variable.
-    fn rewriteTypeWithRowNodes(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId, row_nodes: []const RowNode) Allocator.Error!TypeId {
+    fn rewriteTypeWithRowNodes(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId, row_nodes: []const RowNode, tail_nodes: TailNodes) Allocator.Error!TypeId {
         var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
         defer done.deinit(allocator);
         const Frame = struct { ty: TypeId, expanded: bool };
@@ -2279,8 +2415,12 @@ pub const Program = struct {
                             .declared = .{ .padding = padding, .entries = self.store.declaredEntries(declared) },
                         } });
                     }
-                    if (fields.items.len == 0 and ext == null) break :blk try self.store.emptyRecord();
-                    break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
+                    const tail_node: ?u32 = switch (tail_nodes) {
+                        .keep => self.store.tailNode(frame.ty),
+                        .strip => null,
+                    };
+                    if (fields.items.len == 0 and ext == null and tail_node == null) break :blk try self.store.emptyRecord();
+                    break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext, .tail_node = tail_node } });
                 },
                 .tag_union => |tag_union| blk: {
                     var tags: std.ArrayList(types.TagInput) = .empty;
@@ -2314,7 +2454,10 @@ pub const Program = struct {
                             return s.nameLessThan(a.name, b.name);
                         }
                     }.lessThan);
-                    break :blk try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext } });
+                    break :blk try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext, .tail_node = switch (tail_nodes) {
+                        .keep => self.store.tailNode(frame.ty),
+                        .strip => null,
+                    } } });
                 },
             };
             try done.put(allocator, frame.ty, result);

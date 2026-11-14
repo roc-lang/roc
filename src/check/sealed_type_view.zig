@@ -113,6 +113,20 @@ pub const SealedTypeView = struct {
         return &self.env.types;
     }
 
+    /// Whether `var_` is an uncommitted tag tail a scheme quantified: the
+    /// empty tag union inference closed a row with, still carrying
+    /// `DescriptorFlags.uncommitted_tag_tail` after the module-end commit
+    /// cleared every unquantified one (design.md "Uncommitted Tag Tails").
+    /// `payload` reads it as the empty tag union it is.
+    pub fn uncommittedTagTail(self: SealedTypeView, var_: Var) bool {
+        const resolved = self.typeStore().resolveVar(var_);
+        if (!resolved.desc.flags.uncommitted_tag_tail or resolved.desc.flags.empty_tag_union_is_default) return false;
+        return switch (resolved.desc.content) {
+            .structure => |flat| flat == .empty_tag_union,
+            .flex, .rigid, .alias, .field_presence, .err => false,
+        };
+    }
+
     fn nameRow(self: SealedTypeView, ident: Ident.Idx) SealedNameRow {
         const index: usize = ident.idx;
         if (index >= self.names.len) invariant("a sealed checked type named an identifier publication never interned", .{});

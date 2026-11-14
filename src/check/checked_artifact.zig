@@ -3793,6 +3793,17 @@ pub const CheckedTypeStoreView = struct {
         return index;
     }
 
+    /// Whether `id` is an uncommitted tag tail a scheme quantified, which
+    /// `payload` reads as the empty tag union (design.md "Uncommitted Tag
+    /// Tails"). Type keys ignore the mark, so specializations never split on
+    /// it; `.boxy` reads it to give a worker a row node for each tag union of
+    /// its signature that ends in one. A synthesized type is composed of
+    /// sealed children and never is such a tail itself.
+    pub fn uncommittedTagTail(self: *const CheckedTypeStoreView, id: CheckedTypeId) bool {
+        if (type_ids.isSynthesized(id)) return false;
+        return self.sealedView().uncommittedTagTail(type_ids.asVar(id));
+    }
+
     /// Materialize the public read-form payload for `id`. Slice fields alias the
     /// view's pools or the module's sealed solver store; no allocation.
     pub fn payload(self: *const CheckedTypeStoreView, id: CheckedTypeId) CheckedTypePayload {
