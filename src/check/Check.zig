@@ -49290,13 +49290,16 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
     const group = self.method_name_binding_groups.get(name) orelse MethodNameBindingGroup{ .start = 0, .len = 0 };
     for (self.method_name_bindings.items[group.start..][0..group.len]) |entry| {
         const binding = entry.binding;
-        const env = entry.env orelse {
-            const def = self.cir.store.getDef(binding.def_idx);
-            if (self.topLevelPattern(def.pattern)) |processing_def| {
-                if (processing_def.status != .processed or self.defInOnStackGroup(binding.def_idx)) return null;
-            }
-            try self.appendLocalSchemeMintNames(ModuleEnv.varFrom(binding.type_node_idx), &binding_names);
-            continue;
+        const env = switch (entry.owner) {
+            .imported => |imported_env| imported_env,
+            .local => {
+                const def = self.cir.store.getDef(binding.def_idx);
+                if (self.topLevelPattern(def.pattern)) |processing_def| {
+                    if (processing_def.status != .processed or self.defInOnStackGroup(binding.def_idx)) return null;
+                }
+                try self.appendLocalSchemeMintNames(ModuleEnv.varFrom(binding.type_node_idx), &binding_names);
+                continue;
+            },
         };
         self.scratch_method_mint_requirements.clearRetainingCapacity();
         for (env.bindingSchemeCodecRequirementsForNode(binding.type_node_idx)) |requirement| {
@@ -49326,11 +49329,17 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
 }
 
 /// A method binding a dispatch lookup can select, with its interned name.
-/// `env` is null for a binding of this module.
 const MethodNameBinding = struct {
     name: MethodNameId,
-    env: ?*const ModuleEnv,
+    owner: MethodNameBindingOwner,
     binding: ModuleEnv.MethodBinding,
+};
+
+/// The module whose `method_defs` table a `MethodNameBinding` came from.
+const MethodNameBindingOwner = union(enum) {
+    /// The module being checked.
+    local,
+    imported: *const ModuleEnv,
 };
 
 const MethodNameBindingGroup = struct { start: u32, len: u32 };
@@ -49345,7 +49354,7 @@ fn buildMethodNameBindings(self: *Self) Allocator.Error!void {
     for (self.cir.method_defs.entries.items()) |entry| {
         try bindings.append(self.gpa, .{
             .name = try self.method_mint_names.internMethodIdent(self.cir.getIdentStoreConst(), entry.key.methodIdent()),
-            .env = null,
+            .owner = .local,
             .binding = entry.value,
         });
     }
@@ -49353,7 +49362,7 @@ fn buildMethodNameBindings(self: *Self) Allocator.Error!void {
         for (env.method_defs.entries.items()) |entry| {
             try bindings.append(self.gpa, .{
                 .name = try self.method_mint_names.internMethodIdent(env.getIdentStoreConst(), entry.key.methodIdent()),
-                .env = env,
+                .owner = .{ .imported = env },
                 .binding = entry.value,
             });
         }
