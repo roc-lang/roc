@@ -25771,7 +25771,7 @@ multi-worker build emit the same bytes.
 The Wasm backend emits some list and string low-levels as inline code instead
 of a builtin call. Every inline lowering has exactly the outcomes of the
 builtin that every other backend calls, case by case: the same result value,
-the same allocations, and the same reference count and element releases. An
+the same allocations, and the same reference count and item releases. An
 inline lowering is a faster spelling of the builtin, never a different
 operation.
 
@@ -25779,7 +25779,7 @@ Every value an inline lowering produces keeps the list representation the
 builtins rely on. A list that is not a seamless slice owns an allocation
 exactly when its capacity is nonzero, and the empty list with no capacity is
 `{null, 0, 0}`. A zero-length result that owns nothing is therefore that empty
-list, never a pointer to a refcount word with no element storage: a
+list, never a pointer to a refcount word with no item storage: a
 capacity-zero list is one the builtins' `RocList.decref` never frees, so such
 an allocation would leak the first time a builtin consumed it.
 
@@ -25791,7 +25791,7 @@ capacity word.
 
 `list_sublist_borrowed` is inline, with `listSublistBorrowed`'s outcomes: an
 empty window gives the empty list, and any other window is a seamless slice
-that records the source's element count for teardown while the source is
+that records the source's item count for teardown while the source is
 exclusive. `list_sublist` is inline when its items are not refcounted, with
 `listSublist`'s outcomes. The list is reusable when it is not a seamless
 slice and is exclusive: its argument is proven unique (`unique_args`), it has
@@ -25801,8 +25801,8 @@ and gives the empty list; a window from index zero of a reusable list shrinks
 it in place; any other window is a seamless slice that takes over the list's
 reference. With refcounted items, `list_sublist` calls `listSublist`, which
 also releases the items a reusable list drops; the call is cheap next to the
-per-item releases it may make. The split is by the list layout's
-`elements_refcounted`, never by anything the lowering guesses. Zero-sized
+per-item releases it may make. The split is by whether the list layout marks
+its items refcounted, never by anything the lowering guesses. Zero-sized
 items have no bytes to slice, so their sublist is the window length alone.
 `list_take_first` and `list_take_last`, which a list rest pattern lowers to,
 are `list_sublist` over the first `count` items and over the items from

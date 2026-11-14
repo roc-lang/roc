@@ -1460,11 +1460,9 @@ pub const LowLevel = enum(u16) {
     /// normalizes the consuming form into the borrowing read, a retain of
     /// the result, and a release of the allocation.
     pub fn deadLenderArg(self: LowLevel) ?u32 {
-        return switch (self) {
-            .box_unbox => 0,
-            .erased_capture_load => 1,
-            else => null,
-        };
+        if (self == .box_unbox) return 0;
+        if (self == .erased_capture_load) return 1;
+        return null;
     }
 
     /// Ownership signature ARC solves for this neutral low-level statement.

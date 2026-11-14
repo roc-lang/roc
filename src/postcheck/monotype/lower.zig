@@ -18275,7 +18275,7 @@ const ConstRestoreScope = struct {
     /// `ConstRestoreLet.next`.
     lets: collections.OptionalU32 = .none,
     node_indices: std.AutoHashMapUnmanaged(MaterializedConstNodeAddress, u32) = .empty,
-    candidate_indices: std.AutoHashMapUnmanaged(DraftStaticDataId, u32) = .empty,
+    candidate_indices: collections.DenseMapUnmanaged(DraftStaticDataId, u32) = .empty,
 };
 
 /// A restored node reached more than once, bound to `local` where every

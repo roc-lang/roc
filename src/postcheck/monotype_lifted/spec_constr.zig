@@ -1464,7 +1464,7 @@ const Pass = struct {
     /// shared through prefix functions, decided at its copies.
     prefix_splits: []PrefixSplit = &.{},
     /// Every prefix function, so no clone inlines one back into a copy.
-    prefix_fns: std.AutoHashMapUnmanaged(Ast.FnId, void) = .empty,
+    prefix_fns: collections.DenseMapUnmanaged(Ast.FnId, void) = .empty,
     /// Prefix functions reserved and not yet written.
     prefix_writes: std.ArrayList(PrefixWrite) = .empty,
     /// Source bodies built by splits: clone sources created after clones
@@ -2815,8 +2815,8 @@ const Pass = struct {
 
         // Locals no run may read, and the position after the statement that
         // binds each local in scope, zero for a parameter or capture.
-        var blocked: std.AutoHashMapUnmanaged(Ast.LocalId, void) = .empty;
-        var bound_at: std.AutoHashMapUnmanaged(Ast.LocalId, u32) = .empty;
+        var blocked: collections.DenseMapUnmanaged(Ast.LocalId, void) = .empty;
+        var bound_at: collections.DenseMapUnmanaged(Ast.LocalId, u32) = .empty;
         for ([_]Ast.Span(Ast.TypedLocal){ source_fn.args, source_fn.captures }) |slots_span| {
             const slots = program.typedLocalSpan(slots_span);
             for (0..slots.len) |slot_index| {
@@ -2845,7 +2845,7 @@ const Pass = struct {
         }
         // The last position that reads each local, the final expression
         // being position `stmts.len`.
-        var last_read: std.AutoHashMapUnmanaged(Ast.LocalId, u32) = .empty;
+        var last_read: collections.DenseMapUnmanaged(Ast.LocalId, u32) = .empty;
         for (scans, 0..) |scan, position| {
             for (scan.reads) |local| try last_read.put(arena, local, @intCast(position));
         }
@@ -2892,7 +2892,7 @@ const Pass = struct {
                 if (chosen_end - segment_start == 1 and try self.stmtIsWrapperShaped(arena, stmts[segment_start])) continue;
 
                 var live_ins: std.ArrayList(Ast.LocalId) = .empty;
-                var seen: std.AutoHashMapUnmanaged(Ast.LocalId, void) = .empty;
+                var seen: collections.DenseMapUnmanaged(Ast.LocalId, void) = .empty;
                 var live_out: ?Ast.LocalId = null;
                 for (scans[segment_start..chosen_end]) |scan| {
                     for (scan.reads) |local| {
@@ -2971,8 +2971,8 @@ const Pass = struct {
         const Item = struct { child: Ast.ExprChild, loop_depth: u32 };
         var stack: std.ArrayList(Item) = .empty;
         var children: std.ArrayList(Ast.ExprChild) = .empty;
-        var seen: std.AutoHashMapUnmanaged(Ast.LocalId, void) = .empty;
-        var joins: std.AutoHashMapUnmanaged(Ast.JoinPointId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(Ast.LocalId, void) = .empty;
+        var joins: collections.DenseMapUnmanaged(Ast.JoinPointId, void) = .empty;
         var jumps: std.ArrayList(Ast.JoinPointId) = .empty;
         var fixed = false;
         for (reads.items) |local| try seen.put(arena, local, {});
@@ -17230,7 +17230,7 @@ fn prefixDigest(prefix_run: PrefixRun) names.TypeDigest {
     return .{ .bytes = hasher.finalResult() };
 }
 
-fn appendPrefixRead(arena: Allocator, reads: *std.ArrayList(Ast.LocalId), seen: *std.AutoHashMapUnmanaged(Ast.LocalId, void), local: Ast.LocalId) Allocator.Error!void {
+fn appendPrefixRead(arena: Allocator, reads: *std.ArrayList(Ast.LocalId), seen: *collections.DenseMapUnmanaged(Ast.LocalId, void), local: Ast.LocalId) Allocator.Error!void {
     if ((try seen.getOrPut(arena, local)).found_existing) return;
     try reads.append(arena, local);
 }
@@ -17240,7 +17240,7 @@ fn appendPrefixRead(arena: Allocator, reads: *std.ArrayList(Ast.LocalId), seen: 
 /// visible, anywhere in the type.
 fn typeHoldsTagOrFunction(allocator: Allocator, program: *const Ast.Program, root: Type.TypeId) Allocator.Error!bool {
     const types = &program.types;
-    var visited: std.AutoHashMapUnmanaged(Type.TypeId, void) = .empty;
+    var visited: collections.DenseMapUnmanaged(Type.TypeId, void) = .empty;
     defer visited.deinit(allocator);
     var pending: std.ArrayList(Type.TypeId) = .empty;
     defer pending.deinit(types.allocator);

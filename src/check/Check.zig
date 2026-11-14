@@ -40663,10 +40663,10 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
 
     var iter = self.erroneous_value_exprs.keyIterator();
     while (iter.next()) |expr_idx| {
-        switch (self.cir.store.getExpr(expr_idx.*)) {
-            .e_runtime_error => continue,
-            .e_call => |call| try self.runtime_error_call_callees.put(self.gpa, call.func, {}),
-            else => {},
+        const erroneous_expr = self.cir.store.getExpr(expr_idx.*);
+        if (erroneous_expr == .e_runtime_error) continue;
+        if (erroneous_expr == .e_call) {
+            try self.runtime_error_call_callees.put(self.gpa, erroneous_expr.e_call.func, {});
         }
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(expr_idx.*),
