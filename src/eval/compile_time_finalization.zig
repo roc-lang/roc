@@ -7378,7 +7378,9 @@ pub fn finishPendingExhaustiveness(module: *const checked.CheckedModuleArtifact,
                 // site's code.
                 .pending, .unevaluated => pending.mode == .static,
             },
-            .compile_time_only, .runtime_reachable, .not_pending => pending.mode == .static,
+            // Runtime code can reach the site with any value of its type.
+            .runtime_reachable => true,
+            .compile_time_only, .not_pending => pending.mode == .static,
         } else pending.mode == .static;
         if (decided_statically) _ = try store.appendProblem(pending.problem);
     }
