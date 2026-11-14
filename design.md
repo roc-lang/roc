@@ -838,15 +838,56 @@ corrupt table whose occupied cells outnumber its count, or a cell naming an
 entry that does not exist, is not detected.
 
 The stores of a checked artifact relocated beside its env, and of a pairing
-entry, load over the entry's bytes the same way. A store's list fields are
-`SafeList`s loaded borrowing the entry, so growth copies and `deinit` frees
-nothing borrowed; `SliceStoreSerde` rejects a `std.ArrayList` field at compile
-time, since one over loaded bytes would hand them to an allocator on growth or
-`deinit`. A store's plain slice fields have no growth operation; a loaded
-artifact frees only its own buffer (`serialized_backing`), never a sub-store's
-slices, which alias it. A loaded store whose build-only dedup tables are not
-stored (a checked type store's interning tables, a const store's blob index)
-takes no new entries.
+entry, load over the entry's bytes the same way. Every list field of such a
+store, and the artifact's own `direct_import_module_keys`, is a `SafeList` that
+a build owns and a load borrows from the entry, so growth copies and `deinit`
+frees nothing borrowed. `SliceStoreSerde` rejects a `std.ArrayList` field at
+compile time, since one over loaded bytes would hand them to an allocator on
+growth or `deinit`, and it rejects a raw slice field, since a slice cannot
+record whether it borrows. A built and a loaded artifact are therefore
+released by the same `deinit`: every sub-store's `deinit` runs, and a loaded
+artifact then releases its buffer (`serialized_backing`) last, after every list
+that borrowed it.
+
+Every dedup table a checked artifact's stores intern through is stored with
+them: the checked type store's structural-root interner (synthesized roots
+whose payloads carry no identity variable) and its scheme index (schemes by
+root and domain), the const store's blob index (blobs by bytes), and the
+canonical name store's proc-base index, beside the name store's interners,
+which keep their own tables. Each of the four is one `HashedProbeTable`
+(`collections/hashed_probe_table.zig`), the same code for building and for a
+loaded store: an open-addressed table in a `SafeList` of cells, each naming
+an entry and recording its 32-bit hash, at most half full, with a power-of-two
+length. Every hash is computed from fixed-width fields (a type payload hashes
+exactly the fields its structural comparison reads), so it is the same on
+every host, and placement depends only on the entries and their insertion
+order, so equal stores hold byte-identical tables. Growing rehashes from the
+recorded hashes alone. A loaded store therefore returns the same id for an
+existing entry as the store it was written from and deduplicates new entries
+against loaded ones; nothing marks a store as loaded and no store refuses
+additions. A table's shape is validated when the artifact or pairing body is
+loaded, together with every list's bounds (`validateLayout`, constant time):
+its length is a power of two or zero, it holds at most half as many entries as
+cells, and it holds no more entries than its column (the blob and proc-base
+indexes exactly as many). A violation is a miss.
+
+Reopening a finalized artifact for evaluation (`reopenForEvaluation`) copies
+nothing. Its evaluation columns and name store keep the storage they have;
+evaluation writes them in place and a borrowed list copies on its first
+growth, into the artifact's owning allocator, so `deinit` frees exactly the
+copies. This writes through a loaded artifact's bytes, which is sound because
+an artifact that can be reopened owns them: a checked-cache artifact borrows
+its environment's private copy-on-write mapping (or heap buffer), which no
+other artifact reads; a pairing with compile-time requests owns its evaluation
+columns (arena copies, or its arena's copy of the pairing entry), and a pairing
+without them has nothing to evaluate and is never reopened; a published
+artifact owns its lists. A platform is retired from its module once it is
+paired, so nothing reopens a platform a pairing reads. The one artifact whose
+bytes several compilations share is the embedded Builtin view below; it is
+baked with every root evaluated under both strategies, so it never has an
+unevaluated request, and `reopenForEvaluation` asserts that it is not the
+artifact being reopened (`assertExtensible`). That assertion is the single
+point where extension of a shared artifact would begin.
 
 A LirImage view loads the same way. Every list of its LIR store (a
 `GuardedList`, whose backing is a `SafeList`) and every plain column of its
@@ -2596,8 +2637,9 @@ requests, evaluation resumes on that module: its evaluation output (the
 compile-time roots, the constant templates, the constant store, and the
 `CheckedModule` name store, since a stored type names its labels and nominal types
 there and a value evaluated here can reach names the module's own source never
-mentions, such as the capture types of an imported closure) moves into storage
-the module owns, every unevaluated root returns to `pending`, and the module
+mentions, such as the capture types of an imported closure) grows where it
+was loaded, interning against its stored dedup tables ("Loading environments
+in place"), every unevaluated root returns to `pending`, and the module
 joins finalization with the compilation's other modules. Finalization
 requests only the pending roots of the modules it finalizes, so the reopened
 module's evaluated roots are restored from its store like any other module's,
@@ -5087,8 +5129,31 @@ checking argument expressions. A known function already supplies that arity
 shape; an unresolved callable is related once to a fresh arity-shaped function.
 Arguments are checked with those formal shapes, then the ordinary formal/actual
 relations are committed in one linear fold. Shared formal variables therefore
-flow through one graph relation; the checker never performs a pairwise
-argument scan.
+flow through one graph relation; checking never performs a pairwise argument
+scan.
+
+The fold relates arguments in order, so the parameter type a rejected argument
+met already carries what earlier operands gave the function's shared
+variables. Only once a relation has been rejected, and only when the callee's
+type is an instance of a scheme, the checker asks whether the argument is
+wrong by itself: in a commit-probe it relates the argument to its parameter in
+a fresh copy of that scheme, then relates one earlier operand (an earlier
+argument, or a method call's receiver) to the same copy. The first earlier
+operand whose relation fails there is reported with the argument as a
+conflict between the two, showing both types and the function's declared
+type (`refineCallArgsConflict`, `fn_call_args_conflict`). Every probe rolls
+back, so the solved graph and the call's recovery are those of any rejected
+argument. The trial sees the argument as the rejected relation left it, which
+keeps the child writes that completed before the rejection, exactly as the
+ordinary report's argument type does; when those writes alone stop the
+argument fitting the fresh copy, or no single earlier operand conflicts with
+it, the ordinary argument report stands. A direct call's scheme is the one its
+callee's value use instantiated (`direct_callee_scheme`), and a method call's
+is the one its dispatch target instantiated
+(`DispatchTargetInstantiation.scheme_var`); a callee with neither has no
+conflict report. Pinned by
+test/snapshots/call_args_conflict_shared_type_var.md and
+test/snapshots/call_args_conflict_method_receiver.md.
 
 Expected aggregate structure is recursive checking context, not a second owner
 of the expression's root relation. A record update passes a borrowed base-row
@@ -5110,6 +5175,18 @@ ordinary full-shape relation owns the diagnostic. This preserves the explicit
 stored-value scheme-use edge, gives nested constructions their declared field
 kinds before siblings meet, and keeps the shared expected graph pristine for
 the owning relation and its error report.
+
+The owning relation's root types often differ only somewhere inside, where a
+comparison of the roots' own shapes finds nothing to say. The unifier keeps
+the pair whose relation failed first in its operands' roles: every child
+relation, through aliases and opened nominal backings alike, relates the
+expected side's part first. A report that shows the roots in those roles
+compares that pair when the roots' own shapes agree
+(`ReportBuilder.mismatchLeafFor`), so a list of records missing a field names
+the field whether an annotation, a call, a record update, or an enclosing
+aggregate owns the relation. Pinned by
+test/snapshots/list_first_item_mismatch_owner_reports.md and
+test/snapshots/repro_issue_12968_record_update_list_field.md.
 
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
@@ -5958,6 +6035,17 @@ on-demand analyses. Bodies, templates, names and roots are never rewritten:
 both lowering strategies read the platform's own CIR, templates and roots, and
 only the types they read through the pairing differ.
 
+A pairing's type store borrows the platform's columns and copies a column
+before its first write. It interns its new types and schemes against the
+platform's stored tables without writing them: it probes a read-only view of
+each platform table first and its own table second, and enters new roots and
+schemes only in its own (`CheckedTypeStore.inherited_tables`). An image or
+scheme equal to one the platform already holds is therefore that platform
+entry, under a cold platform and a loaded one alike, and any number of apps
+pair with one platform while its bytes stay unchanged. A pairing entry stores
+only the pairing's own tables; installing one gives its store the platform's
+views again.
+
 Calls to requirement declarations receive their direct-call classification
 from the bound app procedure kind using the checked output rule;
 callable-evaluation bindings remain indirect unless they are exact procedure
@@ -6219,7 +6307,13 @@ lowering in its worker's workspace and never added to the checked module:
   (`RootSource.literal`, a `LiteralNode` naming a literal expression or a
   custom literal pattern; `CompileTimeRoot.literalNode`), it holds no
   expression, and lowering converts the literal's value through the
-  conversion plan keyed by the literal's node.
+  conversion plan keyed by the literal's node;
+- a literal argument root's body ("Literal Arguments"): the root's source is
+  the expression owning its edge (`RootSource.literal_argument`), which
+  locates the root for reports and which the root does not evaluate; it holds
+  no expression and no body nodes (`bodyParts` is empty), and lowering
+  converts its literal at the edge `CompileTimeRoot.literal_argument`
+  records.
 
 ### Forbidden Checked-Boundary Shapes
 
@@ -6526,6 +6620,23 @@ No candidate is recorded inside an ordinary top-level constant, because that
 enclosing root already evaluates and owns the destructure site. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
+
+Only a requested root is evaluated, so only a requested root replaces its source
+occurrence. A root that receives no request (its checked type is not concrete,
+for example) replaces nothing, and an exhaustiveness site it would have
+validated is classified as if no root had been recorded. A site that runtime
+code can reach is decided statically even when it was classified for empirical
+validation, because runtime code can arrive there with any value of its type.
+Empirical validation decides only the sites that compile-time evaluation alone
+reaches.
+
+A requested callable binding root replaces its source occurrence too: runtime
+code reads the root's completed callable instead of computing it, so the
+destructure it extracts from, and every site its expression evaluates, runs
+only during the root's evaluation. The exception is a site inside a function
+body within that expression. The callable can hold that function, and runtime
+code that calls it reaches the site with any argument, so such a site stays
+classified by its enclosing procedure template.
 
 Local binding dependencies likewise remain candidates until their enclosing
 expression is either selected or rejected. A selected maximal parent owns the
@@ -11503,7 +11614,9 @@ one rule whether the value is local or top-level:
 - An UNANNOTATED value's open row is one weak flex shared by every use in the
   enclosing scope. Uses that need wider unions widen the shared row, and the
   union that accumulates is the value's one type: `e = Boom` read where
-  `[Boom, Zed, ..]` is accepted and matched against `Aa` is `[Aa, Boom, Zed]`.
+  `[Boom, Zed, ..]` is accepted and matched against `Aa` is `[Aa, Boom, Zed]`
+  (and the `Aa` pattern is reported as unmatchable, since nothing produces
+  `Aa`; Pattern-Only Tags).
   Two uses that need different CLOSED unions (`pastel : [Purple, Mauve] -> Str`
   and `vibrant : [Purple, Orange] -> Str` both applied to `color = Purple`)
   are a type mismatch at the second use, exactly as Roc RFC 0010 specifies;
@@ -11571,6 +11684,115 @@ rebuilds the tag or asks for the annotation it needs.
 - Requiring an annotation on a value other modules can import. Roc never
   requires an annotation on any declaration other than a platform-host
   boundary.
+
+### Pattern-Only Tags
+
+A `match` branch's tag pattern is typed like any other use of the matched
+value: `C` is the open union `[C, ..]`, related to the scrutinee, so it adds
+`C` to the value's shared row (Value Rows: Uses Share One Row). That typing is
+unchanged by this section. What this section adds is a diagnostic: a pattern
+whose tag is in the value's type only because patterns asked for it can never
+match, and is reported with the Unmatchable Pattern warning.
+
+The rule is carried by one bit on each tag entry of a row,
+`types.Tag.pattern_only`:
+
+- A tag pattern of a user-written `match` branch, nested ones included, mints
+  its tag marked (`PatternCtx.match_alternative`). Every other producer mints
+  it unmarked: tag expressions, annotations, nominal backings, lambda
+  parameter and destructuring patterns, compiler-generated matches (`?` and
+  `??` desugarings), imports, and instantiation.
+- When unification relates two rows that both hold a tag, the merged tag is
+  marked only if both were (`processSharedTagsAfterChildren`); a tag only one
+  row holds keeps its own mark. A tag repeated along one row's chain names one
+  tag, so the occurrence that survives is marked only if every occurrence
+  was: the unifier's gather keeps the first occurrence (`mergeSortedExtension`),
+  and `normalizeRowUnion` keeps the innermost and rewrites its part to clear
+  the mark when an omitted occurrence was unmarked (`omitRowLabels`).
+- Every other copy of a tag may drop the mark. Dropping it can only lose a
+  warning, never add one, so copies that rebuild tags field by field
+  (instantiation, import, frozen replay copies) leave the copy unmarked.
+
+The mark is diagnostic metadata. Unification never reads it to decide a
+relation, and nothing that identifies a type reads it: canonical and sealed
+type keys, digests, snapshot comparison, exhaustiveness, Monotype, and layouts
+all read a tag's name and payloads only.
+
+Some values come from outside the module's own code, so a tag their row holds
+is produced even when only patterns name it here:
+
+- A lambda's parameters get their values from callers the module may not see.
+  A lambda whose body checked a recorded match tag pattern has its parameter
+  spans recorded (`Check.matching_lambda_params`), and everything reachable
+  from their types counts as produced: through aliases, records, tuples, tag
+  payloads, function arguments and results, nominal type arguments, and the
+  static-dispatch constraints of type variables, since a `where` method's
+  result is reachable only through its constraint's function type. The walk
+  runs at judgment time, not when the lambda finishes, because later relations
+  can split a parameter row's tags into new row parts. A lambda written as a
+  call argument is the exception: only that call's callee calls it, so its
+  parameters are not recorded and their rows are judged by what the call
+  relates them to.
+- A derived parser builds its shape's values from its input, so every type
+  reachable from a parser derivation's shape counts as produced.
+- A rejected expression (`Check.erroneous_value_exprs`) already owns an error
+  report about the value it was meant to produce, so every type reachable from
+  its type counts as produced; a literal whose deferred conversion to a
+  pattern-widened row fails is reported once, not again as an unmatchable
+  pattern.
+
+The judgment (`Check.reportPatternOnlyMatchTags`) runs once the module's types
+are settled: after deferred constraints, literal defaulting, and
+generated-codec finalization, and before any row is closed or any type is
+poisoned. It is deferred because a later relation can still produce a tag a
+pattern asked for. In
+
+```roc
+var $state = Idle
+for arg in args {
+	match $state {
+		Busy => ...
+		Idle => {}
+	}
+	if arg == "start" {
+		$state = Busy
+	}
+}
+```
+
+the `Busy` pattern is checked before `$state = Busy`, and only that later
+assignment clears the mark. Each recorded pattern is reported when its tag is
+still marked in the settled row of the value it matches and the row part that
+lists it is not produced. A match that had a type error is skipped: one
+that was retired, one whose scrutinee, branch guard, or branch value was
+rejected (including a branch value rejected against the match's expected
+result, which does not retire the match), and a branch part the
+exhaustiveness check already reported as redundant or unmatchable. A pattern
+whose whole row is pattern-only is skipped too: no producer gave that row any
+tag, so the module produces no value of that type at all (the result of a stub
+that only crashes, for instance), and no single pattern of the match is the
+mistaken one. A module with no recorded patterns does no work, and the walk
+runs only when some pattern's tag is still marked.
+
+The rule is intentionally conservative about parameters: a value mixed with a
+parameter shares the parameter's row and is not reported. A callback written
+as a call argument is judged by its call: over a known list
+(`[A, B].map(|v| match v { C => .. })`) the `C` pattern is reported, and over
+a value that came from an enclosing lambda's parameter it is not, because the
+enclosing lambda's body holds the match and so its parameters are recorded. A
+top-level
+constant is judged like any other value: `mode = Debug` matched against
+`Release` is reported, and the annotation `mode : [Debug, Release]` (whose
+tags are unmarked) is how an author says `Release` is intended.
+
+The rejected side is pinned by
+`test/snapshots/repro_issue_12833_incompatible_match_pattern.md` and
+`test/snapshots/pattern_only_tag_warnings.md`; the accepted side by
+`test/snapshots/pattern_only_tag_var_loop_no_warning.md`,
+`test/snapshots/pattern_only_tag_parameter_no_warning.md`,
+`test/snapshots/pattern_only_tag_produced_no_warning.md`, and
+`test/snapshots/pattern_only_tag_derived_parser_no_warning.md`; the merge rule
+by the unifier tests in `src/check/test/unify_test.zig`.
 
 ### Hosted Try Question Widening Removed
 
@@ -11979,8 +12201,10 @@ Five consumers keep the rule exact:
 - `normalizeRowUnion` relates each repeated occurrence to the next one out,
   then rewrites the row part that holds the outer copy to omit it. Inner
   parts may be shared by other types (a callback's own error row) and keep
-  their labels; the outer part's meaning is unchanged by the omission. A part
-  left with no labels redirects to its extension
+  their labels; the outer part's meaning is unchanged by the omission. The
+  kept inner tag's part is also rewritten, with no label omitted, when it
+  must lose its pattern-only mark (Pattern-Only Tags); that changes no type.
+  A part left with no labels redirects to its extension
   (`RedirectRule.row_union_normalization`), taking the lower of the two ranks
   as unification would. A row's repeated pairs relate together or not at
   all: they are first probed as one set against throwaway problem stores,
@@ -12485,6 +12709,20 @@ generalized interpolation's scheme relates its parts to the item type
 so a body compiled once for every instantiation builds its items from its parts
 without consulting any use.
 
+An interpolation whose target this boundary's literal defaulting decides is not
+related there: a receiver of the boundary's rank that no root's interface
+reaches (`boundary_reachable_vars`) defaults, and each of its interpolations is
+then discharged against the default on its own, exactly as when the target was
+decided before the boundary. Relating parts there would let one value retype
+another, and relating the receiver's interpolations into one requirement
+would leave all but one interpolation's parts unchecked. Relating a part can
+make it reachable, so the boundary recollects the reachable set and revisits
+its pool until no interpolation is newly related (`relateBoundaryRequirements`).
+In `var $o = ""` followed by `$o = "${Ok(n)}"` and `$o = "${n.to_str()}"`, with
+`$o` never escaping, only `Ok(n)` is rejected. Pinned by
+test/snapshots/static_dispatch/interpolation_defaulted_local_parts_unrelated.md
+and test/snapshots/static_dispatch/interpolation_defaulted_local_sites_unrelated.md.
+
 Instantiating a generalized interpolation copies its constraint and its parts'
 types, so a part rejected by an instantiated copy is rejected by that use's
 types. The instantiation records the use that instantiated each copy
@@ -12502,16 +12740,25 @@ target is known: `describe = |person| "${person.name} is ${person.age}"` is
 `age : U64` record fails to relate to it. The unifier keeps the pair whose
 relation failed first (a child mismatch a record or alias relation flags counts,
 an ignored one does not) and snapshots it before poisoning. When that pair
-reaches the item type of a copy the checker instantiated, the mismatch is
+reaches the item type of a copy the checker instantiated, and the rejected
+relation relates the value the instantiating use produced, the mismatch is
 reported as the use giving the interpolation's values different types: at the
 interpolation, with the use and both types, rather than as the call's or
 dispatch's own mismatch, whose types the failed relation has partly merged. The
-copy is then rejected, so discharging it reports nothing further. A mismatch
+copy is then rejected, so discharging it reports nothing further. A relation
+relates the use's value when it is the use's own relation, reads the use as an
+operand, or relates a call's arguments to the use as its callee
+(`currentRelationRelatesUse`). Reaching the item type is not enough by itself:
+unification gives every type it has related one variable, so an unrelated
+later mismatch involving, say, `Str` reaches the item type of every
+interpolation whose values became `Str`, and that mismatch is its own report. A mismatch
 found while relating a part to its item type is that part's own report. Pinned
 by test/snapshots/repro_issue_12213_method_interpolates_mixed_field_types.md
 (a method call) and
 test/snapshots/static_dispatch/interpolation_use_conflicting_values.md (a
-function call).
+function call), and by
+test/snapshots/static_dispatch/interpolation_tie_unrelated_mismatch.md (an
+unrelated mismatch after the use).
 
 Interpolation metadata records whether its regions are this module's source.
 Cross-module copying marks them imported, since a module renders only its own
@@ -19427,7 +19674,10 @@ neither fail nor bind anything else. A type has one method of each name, so
 when a receiver is still a type variable at its definition's generalization
 boundary, its requirements of one method become one requirement: the boundary
 relates their callables before it defaults literals and generalizes, and an
-inferred scheme never holds two requirements of one method on one type.
+inferred scheme never holds two requirements of one method on one type. A
+receiver that the boundary's literal defaulting decides is not about to be
+generalized, so its requirements are not related: each is discharged against
+the default on its own ("Builtin Str Interpolation Part Compatibility").
 Requirements that cannot be one are a type mismatch. That includes a relation
 that would make the method's type infinite, which no type can be (two uses of
 `row.i32()` whose results must be both `a` and `{ id: a }`); unification
@@ -24062,6 +24312,39 @@ Only optimized builds (`--opt=speed` and `--opt=size`) run the analysis
 (`thread_confined_rc`). Dev builds, compile-time evaluation, and the
 interpreter emit atomic count updates for every allocation and record no
 host-visibility results.
+
+### Releasing The Last Reference
+
+A release decides that its allocation is dying from the result of its own
+decrement and from nothing else: the builtins' release primitive
+(`releaseRcPtr`, `releaseDataPtr`, `RocList.releaseAllocation`) decrements
+and reports whether that decrement took the count to zero. The release that
+did owns the allocation exclusively; it releases what the allocation holds (a
+list's items, a box's payload, an erased callable's capture) and then
+frees it. No release path reads the count first to ask whether it is unique.
+For an allocation shared across threads that question has no stable answer:
+two threads holding the last two references would both read 2, both skip the
+teardown, and one of them would then free the allocation with its contents
+still alive.
+
+The atomic decrement uses acquire-release ordering. Release ordering places
+every access a thread made through its reference before the teardown done by
+whichever thread releases last, and acquire ordering is what lets that last
+thread rely on it. Single-thread releases use plain loads and stores and
+follow the same decrement-then-decide shape, so the compiled helpers, the
+interpreter, and the dynamic-value walker share one definition.
+
+A uniqueness check that gates an in-place update reads the count with a
+relaxed atomic load, in the builtins (`loadRefcountForUniqueness`) and in the
+checks backends emit inline. Another thread holding a reference may be
+decrementing the count during the read. A result of one means no other
+thread holds a reference, and the release ordering of that thread's
+decrement has already placed its accesses before the update.
+
+The concurrent-release tests in `src/builtins/atomic_rc_test.zig` run in the
+builtins module tests and, under ThreadSanitizer, in
+`zig build run-test-builtins-tsan`, which checks the orderings against the
+memory model rather than against the host CPU.
 
 ### Uniqueness Inference
 

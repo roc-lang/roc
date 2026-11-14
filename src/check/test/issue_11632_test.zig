@@ -56,7 +56,9 @@ test "issue 11632: derived encoder permits later match tags" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    // The match is accepted; nothing produces `C`, so its branch is only
+    // reported as unmatchable (design.md "Pattern-Only Tags").
+    try test_env.assertOneTypeWarning("Unmatchable Pattern");
 }
 
 test "issue 11632: derived encoder rejects a rigid open tag row" {
@@ -87,7 +89,9 @@ test "issue 11632: nested inferred tag rows remain open through later uses" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    // The match is accepted; nothing produces `B`, so its branch is only
+    // reported as unmatchable (design.md "Pattern-Only Tags").
+    try test_env.assertOneTypeWarning("Unmatchable Pattern");
 }
 
 test "issue 11632: fresh caller openness is not definition annotation authority" {
@@ -108,5 +112,7 @@ test "issue 11632: fresh caller openness is not definition annotation authority"
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    // The match is accepted; nothing produces `C`, so its branch is only
+    // reported as unmatchable (design.md "Pattern-Only Tags").
+    try test_env.assertOneTypeWarning("Unmatchable Pattern");
 }

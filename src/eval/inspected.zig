@@ -1156,7 +1156,7 @@ pub fn devEvalTopLevelExpects(
     defer requests.deinit(allocator);
     var test_plan = std.ArrayList(lir.CheckedPipeline.RootTestPlanMetadata).empty;
     defer test_plan.deinit(allocator);
-    for (resources.checked_artifact.root_requests.requests) |request| {
+    for (resources.checked_artifact.root_requests.requests.items()) |request| {
         if (request.kind != .test_expect) continue;
         const index: u32 = @intCast(requests.items.len);
         try requests.append(allocator, request);
@@ -1208,7 +1208,7 @@ pub fn devEvalTopLevelExpects(
         std.debug.assert(metadata.kind == .test_expect and metadata.order == request.order);
         regions[index] = switch (request.source) {
             .statement => |statement| resources.module_env.store.getStatementRegion(statement),
-            .def, .expr, .required_binding, .hoisted, .literal => {
+            .def, .expr, .required_binding, .hoisted, .literal, .literal_argument => {
                 base.invariant("eval helper invariant violated: test root was not published from an expect statement", .{});
             },
         };
@@ -1268,7 +1268,7 @@ pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
 /// Return the finalized string value of the explicitly published compile-time
 /// REPL root. The returned bytes borrow from `resources`.
 pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const u8 {
-    for (resources.checked_artifact.compile_time_roots.roots) |root| {
+    for (resources.checked_artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .repl_expr) continue;
 
         var node = switch (root.payload) {
@@ -1700,7 +1700,7 @@ fn lowerCheckedRootWithViews(
         .root = check.CheckedArtifact.loweringView(root_module),
         .imports = import_views,
     };
-    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = root_module.root_requests.runtime_requests };
+    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = root_module.root_requests.runtime_requests.items() };
     const target = lowerToLirTarget(target_usize, options);
     var lowered = switch (target.specialization_strategy) {
         .lss => try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target),

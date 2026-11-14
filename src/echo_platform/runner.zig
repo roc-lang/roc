@@ -224,7 +224,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     };
     defer allocator.free(relation_views);
 
-    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(allocator, root_artifact.root_requests.runtime_requests) catch |err| {
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(allocator, root_artifact.root_requests.runtime_requests.items()) catch |err| {
         diag.step("selectPlatformEntrypointRoots", err);
         return err;
     };

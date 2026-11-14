@@ -137,7 +137,7 @@ fn assertBuiltinIterExtremum(
     const wanted_offset = std.mem.find(u8, source, needle) orelse return error.TestUnexpectedResult;
     var found_plan = false;
 
-    for (artifact.static_dispatch_plans.by_node) |entry| {
+    for (artifact.static_dispatch_plans.by_node.items()) |entry| {
         const expr_idx: can.CIR.Expr.Idx = @fromBackingInt(@intCast(entry.key));
         const expr = env.store.getExpr(expr_idx);
         if (expr != .e_dispatch_call) continue;
@@ -179,7 +179,7 @@ fn assertBuiltinIterExtremum(
         // branch exists to establish.
         try std.testing.expect(body_use_count >= 2);
 
-        const plan = artifact.static_dispatch_plans.plans[entry.val];
+        const plan = artifact.static_dispatch_plans.plans.items()[entry.val];
         switch (plan.resolution) {
             .evidence_dependent => |resolution| {
                 try std.testing.expect(resolution.independent_callable);

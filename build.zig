@@ -673,6 +673,9 @@ const TestsSummaryStep = struct {
     producers: std.StringHashMapUnmanaged(void) = .empty,
     serialize_runs: bool = false,
     last_run: ?*Step = null,
+    /// Set by `finish`, after which the summary's argument list ends in the
+    /// passthrough separator and no further report can be counted.
+    finished: bool = false,
 
     fn create(b: *std.Build, test_filters: []const []const u8, forced_passes: usize) *TestsSummaryStep {
         const self = b.allocator.create(TestsSummaryStep) catch @panic("OOM");
@@ -693,6 +696,7 @@ const TestsSummaryStep = struct {
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
         const run: *Step.Run = @fieldParentPtr("step", run_step);
         const b = run.step.owner;
+        if (self.finished) std.debug.panic("test report producer registered after its summary finished: {s}", .{run.producer.?.name});
         const entry = self.producers.getOrPut(b.allocator, run.producer.?.name) catch @panic("OOM");
         if (entry.found_existing) std.debug.panic("duplicate test report producer: {s}", .{run.producer.?.name});
         const basename = b.fmt("{s}.tsv", .{run.producer.?.name});
@@ -715,6 +719,14 @@ const TestsSummaryStep = struct {
             self.last_run = run_step;
         }
         self.step.dependOn(run_step);
+    }
+
+    /// End the report list: arguments after the separator are passthrough
+    /// filters, so every report must be added before this.
+    fn finish(self: *TestsSummaryStep) void {
+        self.finished = true;
+        self.run.addArg("--");
+        self.run.addPassthruArgs();
     }
 };
 
@@ -2279,6 +2291,7 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
     const compiler_version_module = compiler_version_options.createModule();
+    roc_modules.base.addImport("compiler_version", compiler_version_module);
     roc_modules.lsp.addImport("compiler_version", compiler_version_module);
     roc_modules.build_options.addImport("compiler_identity", compiler_identity);
     const unit_test_runner = UnitTestRunner{
@@ -4220,8 +4233,8 @@ pub fn build(b: *std.Build) void {
 
     for (module_tests_result.tests) |module_test| {
         // Standalone module tests have fresh roots, so display-version imports
-        // must be declared separately from the production LSP module.
-        if (std.mem.eql(u8, module_test.test_step.name, "lsp")) {
+        // must be declared separately from the production modules.
+        if (std.mem.eql(u8, module_test.test_step.name, "base") or std.mem.eql(u8, module_test.test_step.name, "lsp")) {
             module_test.test_step.root_module.addImport("compiler_version", compiler_version_module);
         }
 
@@ -4523,6 +4536,40 @@ pub fn build(b: *std.Build) void {
         .compile = rc_conformance_test,
     });
 
+    // The builtins' concurrent-release tests under ThreadSanitizer, which
+    // reports a refcount decrement whose memory ordering lets one thread's
+    // accesses race with another thread's free, on any architecture. The
+    // same tests run without the sanitizer in the builtins module tests.
+    // Zig ships a ThreadSanitizer runtime for Linux and macOS only, and it
+    // cannot start under musl, so this binary targets the host and its system
+    // libc rather than `target`. `build-ci` builds it, so MiniCI's
+    // `run-test-builtins-tsan` job only runs it.
+    const run_test_builtins_tsan_step = b.step("run-test-builtins-tsan", "Run the builtins' concurrent refcount tests under ThreadSanitizer");
+    const tsan_target = hostToolTarget(b, optimize);
+    const tsan_supported = (tsan_target.result.os.tag == .linux or tsan_target.result.os.tag == .macos) and
+        (tsan_target.result.cpu.arch == .x86_64 or tsan_target.result.cpu.arch == .aarch64) and
+        !tsan_target.result.abi.isMusl();
+    if (tsan_supported) {
+        const builtins_tsan_test = b.addTest(.{
+            .name = "builtins_tsan_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/atomic_rc_test.zig"),
+                .target = tsan_target,
+                .optimize = optimize,
+                .link_libc = true,
+                .sanitize_thread = true,
+            }),
+        });
+        var builtins_imports = roc_modules.builtins.import_table.iterator();
+        while (builtins_imports.next()) |entry| builtins_tsan_test.root_module.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        build_test_zig_step.dependOn(&builtins_tsan_test.step);
+        const run_builtins_tsan_test = b.addRunArtifact(builtins_tsan_test);
+        if (run_args.len != 0) run_builtins_tsan_test.addArgs(run_args);
+        run_test_builtins_tsan_step.dependOn(&run_builtins_tsan_test.step);
+    } else {
+        run_test_builtins_tsan_step.dependOn(&b.addFail("ThreadSanitizer needs a Linux (glibc) or macOS host on x86_64 or aarch64").step);
+    }
+
     const trmc_lir_test = roc_test_binaries.add(.{ .name = "trmc_lir_test", .root = "src/eval/test/trmc_lir_test.zig", .links_llvm = true });
     // Drives the interpreter thousands of frames deep to prove the Debug
     // call-depth guard fires first, which needs the same native stack the other
@@ -4660,8 +4707,6 @@ pub fn build(b: *std.Build) void {
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);
     run_check_cli_global_stdio_step.dependOn(&check_cli_stdio.step);
 
-    tests_summary.run.addArg("--");
-    tests_summary.run.addPassthruArgs();
     run_test_zig_step.dependOn(tests_summary.step);
 
     b.default_step.dependOn(build_web_step);
@@ -5204,6 +5249,9 @@ pub fn build(b: *std.Build) void {
     }
 
     test_fixtures.addUpdateStep(&.{build_test_hosts_step});
+
+    // After every suite is registered, so each report precedes the separator.
+    tests_summary.finish();
 
     // Last, so that every top-level step exists -- including the ones created
     // inside addMainExe.

@@ -115,6 +115,9 @@ const Phase = struct {
     /// Per-sub memory ranges, filled only for sequential breakdowns by
     /// slicing the sample buffer over each sub's reconstructed window.
     sub_mem: [max_subphases]Reporter.MemRange = @splat(.{}),
+    /// Preformatted text written beneath the phase's rows (for example LLVM's
+    /// per-pass timing report). Owned by the caller of `attachDetail`.
+    detail: []const u8 = "",
 };
 
 /// Configuration for a `Reporter`.
@@ -328,6 +331,18 @@ pub const Reporter = struct {
             ranked.rows[ranked.len] = .{ .name = copied, .ns = row.ns };
             ranked.len += 1;
         }
+    }
+
+    /// Attach preformatted text to the active phase, written beneath its rows
+    /// once it ends. Like counters, it is explicit `--timings` output. The
+    /// text is not copied, so it must outlive `finish`.
+    pub fn attachDetail(self: *Reporter, text: []const u8) void {
+        if (!self.always) return;
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        if (self.finished) return;
+        const idx = self.active orelse return;
+        self.phases[idx].detail = text;
     }
 
     fn endActiveLocked(self: *Reporter, subs: []const SubTiming) void {
@@ -565,8 +580,29 @@ pub const Reporter = struct {
         self.writer.flush() catch {};
     }
 
-    /// Write a finished phase as one or more committed rows. Caller holds mutex.
+    /// Write a finished phase as one or more committed rows, followed by its
+    /// attached detail text. Caller holds mutex.
     fn writeCommittedPhase(self: *Reporter, idx: usize) void {
+        self.writeCommittedRows(idx);
+        self.writeDetail(self.phases[idx].detail);
+    }
+
+    /// Write detail text indented to the sub-timing column. Caller holds mutex.
+    fn writeDetail(self: *Reporter, detail: []const u8) void {
+        const text = std.mem.trimEnd(u8, detail, " \r\n");
+        if (text.len == 0) return;
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |raw_line| {
+            const line = std.mem.trimEnd(u8, raw_line, " \r");
+            if (line.len == 0) {
+                self.writer.writeAll("\n") catch {};
+            } else {
+                self.writer.print("      {s}\n", .{line}) catch {};
+            }
+        }
+    }
+
+    fn writeCommittedRows(self: *Reporter, idx: usize) void {
         const p = self.phases[idx];
         const check = if (self.is_tty) ansi.green ++ "\u{2713}" ++ ansi.reset else "\u{2713}";
         var mem_buf: [48]u8 = undefined;
@@ -907,6 +943,51 @@ test "ranked timings print copied names in the order given" {
     try testing.expect(slow < fast);
     try testing.expect(std.mem.find(u8, out, "Slowest Module Type Inference") != null);
     try testing.expect(std.mem.find(u8, out, "1_500ms") != null);
+}
+
+test "attached detail prints beneath its phase row" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    reporter.begin("LLVM Optimize + Emit");
+    reporter.attachDetail("  Total Execution Time: 1.0 seconds  \n\n  0.5 (50.0%)  InstCombinePass\n\n");
+    reporter.end();
+    reporter.begin("Linking");
+    reporter.end();
+    reporter.finish();
+    const out = buf.written();
+    const row = std.mem.find(u8, out, "LLVM Optimize + Emit") orelse return error.TestUnexpectedResult;
+    const pass = std.mem.find(u8, out, "\n        0.5 (50.0%)  InstCombinePass\n") orelse return error.TestUnexpectedResult;
+    const linking = std.mem.find(u8, out, "Linking") orelse return error.TestUnexpectedResult;
+    try testing.expect(row < pass and pass < linking);
+    try testing.expect(std.mem.find(u8, out, "Total Execution Time: 1.0 seconds\n\n") != null);
+}
+
+test "attached detail is omitted without --timings" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = false,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    reporter.begin("LLVM Optimize + Emit");
+    reporter.attachDetail("InstCombinePass");
+    reporter.end();
+    reporter.finish();
+    try testing.expect(std.mem.find(u8, buf.written(), "InstCombinePass") == null);
 }
 
 test "ranked timings are omitted without --timings" {

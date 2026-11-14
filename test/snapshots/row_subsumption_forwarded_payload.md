@@ -73,7 +73,19 @@ TYPE MISMATCH - row_subsumption_forwarded_payload.md:24:12:24:12
 			(annotation-start code-block)
 			(indent 1)
 			(text "Try(Str, [B])")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Maybe")
+			(reflow " ")
+			(annotated code "A")
+			(reflow " ")
+			(reflow "should be")
+			(reflow " ")
+			(annotated code "B")
+			(reflow "?"))))
 ~~~
 # TOKENS
 ~~~zig
