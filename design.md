@@ -2021,12 +2021,43 @@ rewrite above, this replacement resolves a reference; it mutates no solved
 type and stamps no dispatch plan, so it adds no Rewrite Inventory entry
 (Solver-Mutating Rewrites). Omitted defaulted fields of a construction through
 an alias are found by checking, as for any construction whose nominal type
-canonicalization does not know (Defaulted Fields). The default-cycle pass is
-the one place canonicalization looks through an alias, and only along names it
-resolved itself: an alias whose annotation is a reference to a local type
-declaration names that declaration, so a construction through it contributes
-the same omission edges as one written through the nominal type's own name
-(Defaulted Fields).
+canonicalization does not know (Defaulted Fields). Canonicalization looks
+through an alias in exactly two places, and only along names it resolved
+itself. The default-cycle pass is one: an alias whose annotation is a
+reference to a local type declaration names that declaration, so a
+construction through it contributes the same omission edges as one written
+through the nominal type's own name (Defaulted Fields). The exposed type
+surface check is the other (Exposed Type Surfaces).
+
+### Exposed Type Surfaces
+
+A module warns when an exposed, non-opaque nominal type's backing mentions a
+type that other modules cannot name: `private_type_in_exposed_field` for a
+mention inside a record field, `private_type_in_exposed_type` otherwise.
+Canonicalization runs this check (`Can.checkExposedTypeSurfaces`) over the
+annotations of the module's public type declarations: the exposed types, the
+type module's main type, and every exposed type declared under them. Local
+alias annotations are walked through, so a mention through a private alias is
+judged at the type the alias names. Imported types are other modules' surfaces
+and are not walked; opaque types expose no backing and are skipped.
+
+A private local nominal type is publicly named when a public alias renames it,
+by the same rule documentation and `roc bump` apply to solved types (Builtin
+Types Named Through Aliases): the alias's annotation, with parentheses
+stripped and private local aliases followed, applies the nominal type to
+exactly the alias's own parameters, in order. Following an alias composes the
+parameter positions its arguments carry, so `A(x, y) : B(y, x)` with
+`B(p, q) : N(q, p)` renames `N`, while a partial application, a repeated
+parameter, the parameters in another order, a concrete argument where the
+nominal type takes a parameter, or any type built around the nominal does
+not. A chain that reaches a public alias leaves the renaming to that alias.
+When several public aliases rename one nominal type, the one declared first
+in the source names it. A renamed nominal type is not warned about, and
+unless it is opaque its own backing is checked as a public surface, with
+warnings naming the renaming alias. Renaming publishes the nominal type's own
+name only: a type path does not resolve through an alias into the block of
+the type it names, so a mention of a type nested in a renamed type's block
+still warns, and an alias nested there renames nothing.
 
 ### Builtin Types Named Through Aliases
 
@@ -2063,7 +2094,10 @@ behaves in any module.
   entry of its own, and every reference to it renders as a reference to the
   alias. The nominal type may be declared in the alias's module or in a
   module the package does not expose, and a renamed type can rename further
-  types through aliases nested in it.
+  types through aliases nested in it. The exposed type surface check
+  applies the same renaming rule within one module to its annotations
+  (Exposed Type Surfaces), so a field typed through such an alias draws no
+  private-type warning.
 
 ### Compile-Time Evaluation And Static Storage
 

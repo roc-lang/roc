@@ -6957,6 +6957,13 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
         try public_type_decls.put(gpa, stmt_idx, {});
     }
 
+    var renamed_nominals: RenamedNominals = .empty;
+    defer renamed_nominals.deinit(gpa);
+    try self.collectRenamedNominals(&public_type_decls, &renamed_nominals);
+    for (renamed_nominals.keys()) |nominal_idx| {
+        try public_type_decls.put(gpa, nominal_idx, {});
+    }
+
     var checked_public_nominals: std.AutoHashMapUnmanaged(Statement.Idx, void) = .{};
     defer checked_public_nominals.deinit(gpa);
 
@@ -6968,6 +6975,7 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
 
         try self.checkPublicNominalStatementSurface(
             stmt_idx,
+            null,
             &public_type_decls,
             &checked_public_nominals,
         );
@@ -6976,9 +6984,163 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
     for (public_roots.items) |root| {
         try self.checkPublicNominalStatementSurface(
             root.stmt_idx,
+            null,
             &public_type_decls,
             &checked_public_nominals,
         );
+    }
+
+    for (renamed_nominals.keys(), renamed_nominals.values()) |nominal_idx, alias_idx| {
+        const alias_header = self.env.store.getTypeHeader(self.env.store.getStatement(alias_idx).s_alias_decl.header);
+        try self.checkPublicNominalStatementSurface(
+            nominal_idx,
+            alias_header.name,
+            &public_type_decls,
+            &checked_public_nominals,
+        );
+    }
+}
+
+/// Each private local nominal declaration a public alias renames, mapped to
+/// the alias that names it, in the source order of the nominal declarations'
+/// first renaming aliases.
+const RenamedNominals = std.AutoArrayHashMapUnmanaged(Statement.Idx, Statement.Idx);
+
+/// Find the private local nominal declarations that public aliases rename
+/// (design.md "Exposed Type Surfaces"). When several public aliases rename one
+/// nominal declaration, the alias declared first in the source names it.
+fn collectRenamedNominals(
+    self: *Self,
+    public_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+    renamed: *RenamedNominals,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    var public_aliases = std.ArrayList(Statement.Idx).empty;
+    defer public_aliases.deinit(gpa);
+    var public_iter = public_type_decls.keyIterator();
+    while (public_iter.next()) |stmt_idx| {
+        if (self.env.store.getStatement(stmt_idx.*) == .s_alias_decl) try public_aliases.append(gpa, stmt_idx.*);
+    }
+    if (public_aliases.items.len == 0) return;
+    std.mem.sort(Statement.Idx, public_aliases.items, self, statementPrecedesInSource);
+
+    // An alias chain that never repeats a declaration takes fewer steps than
+    // the module has nodes.
+    const max_steps = self.env.store.nodes.len();
+
+    var positions = std.ArrayList(?u32).empty;
+    defer positions.deinit(gpa);
+    var next_positions = std.ArrayList(?u32).empty;
+    defer next_positions.deinit(gpa);
+
+    for (public_aliases.items) |alias_idx| {
+        const nominal_idx = (try self.aliasRenamedNominal(
+            alias_idx,
+            public_type_decls,
+            max_steps,
+            &positions,
+            &next_positions,
+        )) orelse continue;
+        const gop = try renamed.getOrPut(gpa, nominal_idx);
+        if (!gop.found_existing) gop.value_ptr.* = alias_idx;
+    }
+}
+
+fn statementPrecedesInSource(self: *Self, a: Statement.Idx, b: Statement.Idx) bool {
+    return self.env.store.getStatementRegion(a).start.offset < self.env.store.getStatementRegion(b).start.offset;
+}
+
+/// The private local nominal declaration that the public alias `alias_idx`
+/// renames: its annotation, with parentheses stripped and private local
+/// aliases followed, applies the nominal declaration to exactly the alias's own
+/// parameters, in order. `positions[k]` is the index of the public alias's
+/// parameter that the current alias's `k`th parameter stands for, or null
+/// when that parameter is bound to anything else.
+fn aliasRenamedNominal(
+    self: *Self,
+    alias_idx: Statement.Idx,
+    public_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+    max_steps: usize,
+    positions: *std.ArrayList(?u32),
+    next_positions: *std.ArrayList(?u32),
+) std.mem.Allocator.Error!?Statement.Idx {
+    const gpa = self.env.gpa;
+    const alias = self.env.store.getStatement(alias_idx).s_alias_decl;
+    const public_params = self.env.store.sliceTypeAnnos(self.env.store.getTypeHeader(alias.header).args);
+
+    positions.clearRetainingCapacity();
+    for (0..public_params.len) |param_index| try positions.append(gpa, @as(u32, @intCast(param_index)));
+    var current_params = public_params;
+    var anno = alias.anno;
+
+    var steps: usize = 0;
+    while (steps < max_steps) : (steps += 1) {
+        const applied: struct { base: TypeAnno.LocalOrExternal, args: []const TypeAnno.Idx } =
+            switch (self.env.store.getTypeAnno(self.typeAnnoWithoutParens(anno))) {
+                .lookup => |lookup| .{ .base = lookup.base, .args = &.{} },
+                .apply => |apply| .{ .base = apply.base, .args = self.env.store.sliceTypeAnnos(apply.args) },
+                .rigid_var, .rigid_var_lookup, .underscore, .tag_union, .tag, .tuple, .record, .@"fn", .parens, .malformed => return null,
+            };
+        const target_idx = switch (applied.base) {
+            .local => |local| local.decl_idx,
+            .builtin, .external, .external_identity, .pending => return null,
+        };
+        // A public declaration has a public name of its own, and a public
+        // alias further along the chain does its own renaming.
+        if (public_type_decls.contains(target_idx)) return null;
+
+        next_positions.clearRetainingCapacity();
+        for (applied.args) |arg| {
+            try next_positions.append(gpa, self.aliasParamPosition(arg, current_params, positions.items));
+        }
+
+        const target = self.env.store.getStatement(target_idx);
+        if (target == .s_nominal_decl) {
+            const nominal_header = self.env.store.getTypeHeader(target.s_nominal_decl.header);
+            const nominal_params = self.env.store.sliceTypeAnnos(nominal_header.args);
+            if (nominal_params.len != public_params.len or next_positions.items.len != public_params.len) return null;
+            for (next_positions.items, 0..) |position, arg_index| {
+                if (position == null or position.? != arg_index) return null;
+            }
+            return target_idx;
+        }
+        if (target != .s_alias_decl) return null;
+        const next_alias = target.s_alias_decl;
+        const next_params = self.env.store.sliceTypeAnnos(self.env.store.getTypeHeader(next_alias.header).args);
+        if (next_params.len != next_positions.items.len) return null;
+        std.mem.swap(std.ArrayList(?u32), positions, next_positions);
+        current_params = next_params;
+        anno = next_alias.anno;
+    }
+    // Only a cyclic alias chain, which is reported where it is declared, takes
+    // that many steps.
+    return null;
+}
+
+/// The public alias parameter index that `arg` carries through an alias whose
+/// parameters are `params`, or null when `arg` is not one of those parameters.
+fn aliasParamPosition(
+    self: *Self,
+    arg: TypeAnno.Idx,
+    params: []const TypeAnno.Idx,
+    positions: []const ?u32,
+) ?u32 {
+    const arg_anno = self.env.store.getTypeAnno(self.typeAnnoWithoutParens(arg));
+    if (arg_anno != .rigid_var_lookup) return null;
+    const referenced = arg_anno.rigid_var_lookup.ref;
+    for (params, positions) |param, position| {
+        if (param == referenced) return position;
+    }
+    return null;
+}
+
+fn typeAnnoWithoutParens(self: *Self, anno_idx: TypeAnno.Idx) TypeAnno.Idx {
+    var current = anno_idx;
+    while (true) {
+        const anno = self.env.store.getTypeAnno(current);
+        if (anno != .parens) return current;
+        current = anno.parens.anno;
     }
 }
 
@@ -7055,9 +7217,13 @@ fn typeIsAtOrUnderPublicRoot(
     return false;
 }
 
+/// Check the backing of a public non-opaque nominal declaration. Warnings name
+/// the declaration by `public_name` when an alias gives it its public name,
+/// and by its own name otherwise.
 fn checkPublicNominalStatementSurface(
     self: *Self,
     stmt_idx: Statement.Idx,
+    public_name: ?Ident.Idx,
     public_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
     checked_public_nominals: *std.AutoHashMapUnmanaged(Statement.Idx, void),
 ) std.mem.Allocator.Error!void {
@@ -7070,7 +7236,7 @@ fn checkPublicNominalStatementSurface(
     if (nominal.is_opaque) return;
 
     const header = self.env.store.getTypeHeader(nominal.header);
-    try self.checkPublicNominalTypeSurface(header.name, nominal.anno, public_type_decls);
+    try self.checkPublicNominalTypeSurface(public_name orelse header.name, nominal.anno, public_type_decls);
 }
 
 fn checkPublicNominalTypeSurface(
