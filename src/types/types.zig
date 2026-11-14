@@ -32,9 +32,14 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    // A rank counts nested generalization scopes, which valid source can nest
-    // arbitrarily deep, so it takes a full word.
-    try std.testing.expectEqual(36, @sizeOf(Descriptor));
+    // A rank counts nested generalization scopes in 16 bits. Source nesting
+    // scopes deeper than `Rank.deepest` is reported as a problem, and the
+    // scopes past it are checked without being generalized
+    // (`VarPool.pushRank`).
+    try std.testing.expectEqual(32, @sizeOf(Descriptor));
+    // The stored form: one word of kind, flags and rank, then the payload.
+    try std.testing.expectEqual(4, @sizeOf(Descriptor.Word));
+    try std.testing.expectEqual(16, @sizeOf(Descriptor.Row));
     try std.testing.expectEqual(28, @sizeOf(Content));
     try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
@@ -96,10 +101,10 @@ pub const Var = enum(u32) {
 /// A mapping from polymorphic type variables to concrete type variables
 pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
 
-/// Checker decisions a descriptor carries alongside its content. Descriptors
-/// live in a struct-of-arrays keyed by every union-find resolve, so these share
-/// one byte-wide column instead of one column each.
-pub const DescriptorFlags = packed struct(u16) {
+/// Checker decisions a descriptor carries alongside its content. They share
+/// the stored descriptor's word with its kind and rank (`Descriptor.Word`),
+/// which has room for exactly these ten: a new flag must find room there.
+pub const DescriptorFlags = packed struct(u10) {
     /// The checker closed this otherwise-unresolved variable to `[]` after
     /// proving that no runtime constructor can inhabit it. The checked output
     /// preserves the variable identity and carries `[]` only as its row default.
@@ -159,7 +164,6 @@ pub const DescriptorFlags = packed struct(u16) {
     /// rank, so instantiation does not carry the flag, and a merge keeps it
     /// only when both sides had it.
     per_use_structure: bool = false,
-    _padding: u6 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -186,11 +190,237 @@ pub const DescriptorFlags = packed struct(u16) {
     }
 };
 
-/// A type descriptor
+/// A type descriptor: the decoded view of one stored row (`Descriptor.Row`).
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
     flags: DescriptorFlags = .{},
+
+    /// The first word of a stored descriptor: what kind of content the class
+    /// holds, its flags and its rank, so a reader that needs only those
+    /// decodes nothing else. The word is full: a new field or flag needs
+    /// room made elsewhere.
+    pub const Word = packed struct(u32) {
+        kind: ContentKind,
+        flags: DescriptorFlags,
+        /// A flex's `Flex.literal`; `.none` for every other kind.
+        literal: Flex.Literal = .none,
+        rank: Rank,
+
+        /// `Descriptor.liftsIntoNominal`, read from the word alone.
+        pub fn liftsIntoNominal(self: Word) bool {
+            if (self.flags.nominal_backing_structure) return false;
+            return switch (self.kind) {
+                .record, .tag_union, .empty_record, .empty_tag_union => true,
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .flex, .rigid, .alias, .field_presence, .err => false,
+            };
+        }
+    };
+
+    /// The rest of a stored descriptor: the content's payload, laid out per
+    /// kind by `encode`. Words a kind does not use are zero, so a row's bytes
+    /// are a function of the descriptor alone.
+    pub const Payload = [3]u32;
+
+    /// A stored descriptor. Every byte belongs to a field.
+    pub const Row = struct {
+        word: Word,
+        payload: Payload,
+    };
+
+    comptime {
+        std.debug.assert(@bitSizeOf(ContentKind) + @bitSizeOf(DescriptorFlags) + @bitSizeOf(Flex.Literal) + @bitSizeOf(Rank) == @bitSizeOf(Word));
+        std.debug.assert(@sizeOf(Row) == @sizeOf(Word) + @sizeOf(Payload));
+    }
+
+    /// This descriptor as a stored row in `store`, the type store that holds
+    /// it. A nominal type or alias stores `identity`, the index of its
+    /// identity row in that store (`NominalIdentity`, `AliasIdentity`); other
+    /// kinds ignore it. A vars range keeps only its start
+    /// (`Store.storedVarRange`).
+    pub inline fn encode(self: Descriptor, identity: u32, store: anytype) Row {
+        var payload: Payload = @splat(0);
+        var literal: Flex.Literal = .none;
+        const kind: ContentKind = switch (self.content) {
+            .flex => |flex| kind: {
+                payload[0] = @backingInt(collections.OptionalU32.of(if (flex.name) |name| name.denseIndex() else null));
+                putRange(&payload, 1, flex.constraints);
+                literal = flex.literal;
+                break :kind .flex;
+            },
+            .rigid => |rigid| kind: {
+                payload[0] = rigid.name.denseIndex();
+                putRange(&payload, 1, rigid.constraints);
+                break :kind .rigid;
+            },
+            .alias => |alias| kind: {
+                payload[0] = identity;
+                payload[1] = store.storedVarRange(alias.vars.nonempty);
+                break :kind .alias;
+            },
+            .field_presence => |presence| kind: {
+                switch (presence) {
+                    .required => payload[0] = 0,
+                    .optional => payload[0] = 1,
+                    .defaulted => |id| {
+                        payload[0] = 2;
+                        payload[1] = @backingInt(id.origin_module);
+                        payload[2] = id.expr_node;
+                    },
+                }
+                break :kind .field_presence;
+            },
+            .err => .err,
+            .structure => |flat| switch (flat) {
+                .record => |record| kind: {
+                    putRange(&payload, 0, record.fields);
+                    payload[2] = @backingInt(record.ext);
+                    break :kind .record;
+                },
+                .tuple => |tuple| kind: {
+                    payload[0] = store.storedVarRange(tuple.elems);
+                    break :kind .tuple;
+                },
+                .nominal_type => |nominal| kind: {
+                    payload[0] = identity;
+                    payload[1] = store.storedVarRange(nominal.args);
+                    break :kind .nominal_type;
+                },
+                inline .fn_pure, .fn_effectful, .fn_unbound => |func, tag| kind: {
+                    payload[0] = store.storedVarRange(func.args);
+                    payload[1] = @backingInt(func.ret);
+                    payload[2] = store.storedVarRange(func.effect_deps);
+                    break :kind @field(ContentKind, @tagName(tag));
+                },
+                .empty_record => .empty_record,
+                .tag_union => |tag_union| kind: {
+                    putRange(&payload, 0, tag_union.tags);
+                    payload[2] = @backingInt(tag_union.ext);
+                    break :kind .tag_union;
+                },
+                .empty_tag_union => .empty_tag_union,
+            },
+        };
+        return .{ .word = .{ .kind = kind, .flags = self.flags, .literal = literal, .rank = self.rank }, .payload = payload };
+    }
+
+    /// The descriptor a stored row holds. `store` is the type store that
+    /// holds the row, which gives a nominal type's or alias's identity row by
+    /// index (`nominalIdentity`, `aliasIdentity`) and a vars range by its
+    /// stored start (`varRange`).
+    pub inline fn decode(row: Row, store: anytype) Descriptor {
+        const content: Content = switch (row.word.kind) {
+            .flex => .{ .flex = decodeFlex(row) },
+            .rigid => .{ .rigid = decodeRigid(row) },
+            .alias => .{ .alias = decodeAlias(row, store) },
+            .field_presence => .{ .field_presence = decodeFieldPresence(row) },
+            .err => .err,
+            .record => .{ .structure = .{ .record = decodeRecord(row) } },
+            .tuple => .{ .structure = .{ .tuple = decodeTuple(row, store) } },
+            .nominal_type => .{ .structure = .{ .nominal_type = decodeNominal(row, store) } },
+            inline .fn_pure, .fn_effectful, .fn_unbound => |tag| .{ .structure = @unionInit(FlatType, @tagName(tag), decodeFunc(row, store)) },
+            .empty_record => .{ .structure = .empty_record },
+            .tag_union => .{ .structure = .{ .tag_union = decodeTagUnion(row) } },
+            .empty_tag_union => .{ .structure = .empty_tag_union },
+        };
+        return .{ .content = content, .rank = row.word.rank, .flags = row.word.flags };
+    }
+
+    // Each kind's payload, for a reader that has already switched on the
+    // kind: `decode` for one kind, building nothing else.
+
+    /// The flex a `.flex` row holds.
+    pub inline fn decodeFlex(row: Row) Flex {
+        std.debug.assert(row.word.kind == .flex);
+        return .{
+            .name = if (@as(collections.OptionalU32, @fromBackingInt(row.payload[0])).get()) |dense| Ident.Idx.fromDenseIndex(dense) else null,
+            .constraints = getRange(StaticDispatchConstraint.SafeList.Range, row.payload, 1),
+            .literal = row.word.literal,
+        };
+    }
+
+    /// The rigid a `.rigid` row holds.
+    pub inline fn decodeRigid(row: Row) Rigid {
+        std.debug.assert(row.word.kind == .rigid);
+        return .{
+            .name = Ident.Idx.fromDenseIndex(row.payload[0]),
+            .constraints = getRange(StaticDispatchConstraint.SafeList.Range, row.payload, 1),
+        };
+    }
+
+    /// The alias an `.alias` row holds.
+    pub inline fn decodeAlias(row: Row, store: anytype) Alias {
+        std.debug.assert(row.word.kind == .alias);
+        const identity = store.aliasIdentity(row.payload[0]);
+        return .{
+            .ident = .{ .ident_idx = identity.ident },
+            .vars = .{ .nonempty = store.varRange(row.payload[1]) },
+            .source_arg_count = identity.source_arg_count,
+            .origin_module = identity.origin_module,
+            .source_decl = identity.source_decl,
+        };
+    }
+
+    /// The field presence a `.field_presence` row holds.
+    pub inline fn decodeFieldPresence(row: Row) FieldPresence {
+        std.debug.assert(row.word.kind == .field_presence);
+        const p = row.payload;
+        return switch (p[0]) {
+            0 => .required,
+            1 => .optional,
+            2 => .{ .defaulted = .{ .origin_module = @fromBackingInt(p[1]), .expr_node = p[2] } },
+            else => unreachable, // `encode` writes only the three field-presence kinds
+        };
+    }
+
+    /// The record a `.record` row holds.
+    pub inline fn decodeRecord(row: Row) Record {
+        std.debug.assert(row.word.kind == .record);
+        return .{ .fields = getRange(RecordField.SafeMultiList.Range, row.payload, 0), .ext = @fromBackingInt(row.payload[2]) };
+    }
+
+    /// The tuple a `.tuple` row holds.
+    pub inline fn decodeTuple(row: Row, store: anytype) Tuple {
+        std.debug.assert(row.word.kind == .tuple);
+        return .{ .elems = store.varRange(row.payload[0]) };
+    }
+
+    /// The nominal type a `.nominal_type` row holds.
+    pub inline fn decodeNominal(row: Row, store: anytype) NominalType {
+        std.debug.assert(row.word.kind == .nominal_type);
+        const identity = store.nominalIdentity(row.payload[0]);
+        return .{
+            .ident = .{ .ident_idx = identity.ident },
+            .args = store.varRange(row.payload[1]),
+            .origin_module = identity.origin_module,
+            .source = identity.source,
+        };
+    }
+
+    /// The function a `.fn_pure`, `.fn_effectful` or `.fn_unbound` row holds.
+    pub inline fn decodeFunc(row: Row, store: anytype) Func {
+        std.debug.assert(row.word.kind == .fn_pure or row.word.kind == .fn_effectful or row.word.kind == .fn_unbound);
+        return .{
+            .args = store.varRange(row.payload[0]),
+            .ret = @fromBackingInt(row.payload[1]),
+            .effect_deps = store.varRange(row.payload[2]),
+        };
+    }
+
+    /// The tag union a `.tag_union` row holds.
+    pub inline fn decodeTagUnion(row: Row) TagUnion {
+        std.debug.assert(row.word.kind == .tag_union);
+        return .{ .tags = getRange(Tag.SafeMultiList.Range, row.payload, 0), .ext = @fromBackingInt(row.payload[2]) };
+    }
+
+    inline fn putRange(payload: *Payload, at: usize, range: anytype) void {
+        payload[at] = @backingInt(range.start);
+        payload[at + 1] = range.count;
+    }
+
+    inline fn getRange(comptime Range: type, payload: Payload, at: usize) Range {
+        return .{ .start = @fromBackingInt(payload[at]), .count = payload[at + 1] };
+    }
 
     /// Whether unification can lift this class into a nominal type whose
     /// backing matches, rewriting it to that nominal: an anonymous record or
@@ -200,13 +430,91 @@ pub const Descriptor = struct {
     /// variables, so sharing it shares that change (design.md "Anonymous
     /// Structure Is Copied Per Use").
     pub fn liftsIntoNominal(self: Descriptor) bool {
-        if (self.flags.nominal_backing_structure) return false;
-        return switch (self.content) {
-            .structure => |flat_type| switch (flat_type) {
-                .record, .tag_union, .empty_record, .empty_tag_union => true,
-                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => false,
+        return self.word().liftsIntoNominal();
+    }
+
+    /// The kind, flags and rank of this descriptor, as its stored word holds
+    /// them.
+    fn word(self: Descriptor) Word {
+        return .{ .kind = ContentKind.of(self.content), .flags = self.flags, .rank = self.rank };
+    }
+};
+
+/// The identity of a nominal type application apart from its arguments. A
+/// type store keeps one row per distinct identity its descriptors hold
+/// (`Store.nominal_identities`), and a stored nominal descriptor names its
+/// row. Every field is compared exactly, so a row stands for exactly one
+/// combination of name, declaring module and source bits.
+pub const NominalIdentity = extern struct {
+    ident: Ident.Idx,
+    origin_module: ModuleIdentity.Idx,
+    source: NominalType.Source,
+
+    pub const SafeList = MkSafeList(@This());
+
+    pub fn of(nominal: NominalType) NominalIdentity {
+        return .{ .ident = nominal.ident.ident_idx, .origin_module = nominal.origin_module, .source = nominal.source };
+    }
+};
+
+/// The identity of an alias apart from its vars, interned like
+/// `NominalIdentity` (`Store.alias_identities`).
+pub const AliasIdentity = extern struct {
+    ident: Ident.Idx,
+    origin_module: ModuleIdentity.Idx,
+    source_decl: SourceDecl,
+    source_arg_count: u32,
+
+    pub const SafeList = MkSafeList(@This());
+
+    pub fn of(alias: Alias) AliasIdentity {
+        return .{
+            .ident = alias.ident.ident_idx,
+            .origin_module = alias.origin_module,
+            .source_decl = alias.source_decl,
+            .source_arg_count = alias.source_arg_count,
+        };
+    }
+};
+
+/// The kind of a descriptor's content: the tags of `Content` and of its
+/// `structure` payload `FlatType`, flattened into one. A stored descriptor
+/// keeps it in its word (`Descriptor.Word`).
+pub const ContentKind = enum(u4) {
+    flex,
+    rigid,
+    alias,
+    field_presence,
+    err,
+    record,
+    tuple,
+    nominal_type,
+    fn_pure,
+    fn_effectful,
+    fn_unbound,
+    empty_record,
+    tag_union,
+    empty_tag_union,
+
+    /// The kind of `content`.
+    pub fn of(content: Content) ContentKind {
+        return switch (content) {
+            .flex => .flex,
+            .rigid => .rigid,
+            .alias => .alias,
+            .field_presence => .field_presence,
+            .err => .err,
+            .structure => |flat| switch (flat) {
+                .record => .record,
+                .tuple => .tuple,
+                .nominal_type => .nominal_type,
+                .fn_pure => .fn_pure,
+                .fn_effectful => .fn_effectful,
+                .fn_unbound => .fn_unbound,
+                .empty_record => .empty_record,
+                .tag_union => .tag_union,
+                .empty_tag_union => .empty_tag_union,
             },
-            .flex, .rigid, .alias, .field_presence, .err => false,
         };
     }
 };
@@ -231,10 +539,16 @@ pub const Descriptor = struct {
 ///
 /// Keeping track of ranks makes type inference faster.
 ///
-pub const Rank = enum(u32) {
+pub const Rank = enum(u16) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
     outermost = 1,
+    /// The deepest rank a descriptor can record. The checker gives a
+    /// generalization scope nested inside one at this rank no rank of its
+    /// own (`VarPool.pushRank`): the scope is checked at this rank and not
+    /// generalized, after the module reports that its definitions nest too
+    /// deeply.
+    deepest = std.math.maxInt(u16),
     _,
 
     /// Get the lowest rank
@@ -247,14 +561,24 @@ pub const Rank = enum(u32) {
         return @fromBackingInt(@intCast(@max(@backingInt(a), @backingInt(b))));
     }
 
-    /// Get the next rank
+    /// Get the next rank. Only ranks below `deepest` have one; a scope the
+    /// checker enters goes through `innerScope` instead.
     pub fn next(a: Rank) Rank {
-        return @fromBackingInt(@intCast(@backingInt(a) + 1));
+        std.debug.assert(a != .deepest);
+        return @fromBackingInt(@backingInt(a) + 1);
+    }
+
+    /// The rank of a generalization scope entered inside one at this rank:
+    /// the next rank, or `deepest` itself inside a scope at `deepest`, where
+    /// `VarPool.pushRank` gives the inner scope no rank of its own.
+    pub fn innerScope(a: Rank) Rank {
+        return if (a == .deepest) a else a.next();
     }
 
     /// Get the prev rank
     pub fn prev(a: Rank) Rank {
-        return @fromBackingInt(@intCast(@backingInt(a) - 1));
+        std.debug.assert(a != .generalized);
+        return @fromBackingInt(@backingInt(a) - 1);
     }
 };
 
@@ -395,7 +719,7 @@ pub const Flex = struct {
     /// literal's type, so only the variable's own class carries this.
     literal: Literal = .none,
 
-    pub const Literal = enum(u8) {
+    pub const Literal = enum(u2) {
         none,
         numeral,
         quote,
@@ -462,8 +786,10 @@ pub const Rigid = struct {
 /// A named alias to a different type
 pub const Alias = struct {
     ident: TypeIdent,
+    /// The backing var followed by the args: source arguments first, then
+    /// hidden implicit-row parameters.
     vars: Var.SafeList.NonEmptyRange,
-    /// Source arguments precede hidden implicit-row parameters in `vars`.
+    /// How many of the args are source arguments.
     source_arg_count: u32,
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).

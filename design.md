@@ -5215,6 +5215,18 @@ node's original inner-scope rank. The child-rank reduction cannot move a capture
 type back into an inner scope. Independent inner-scope variables remain eligible
 for generalization; captured variables wait for their owning boundary.
 
+A rank is 16 bits, so `Rank.deepest` is 65,535 and source can nest at most
+65,534 generalization scopes below the outermost rank. A scope the checker
+would enter inside one at `Rank.deepest` gets no rank of its own
+(`VarPool.pushRank`): the module reports once that its definitions are nested
+too deeply to generalize, pointing at the definition or expression whose scope
+first went past the limit, and checking continues with the scope at the
+enclosing rank, not generalized when it ends. That continuation is diagnostic
+recovery on an already-reported error, so it is a mechanism (Solver-Mutating
+Rewrites). The limit is a property of the descriptor's representation, not of
+any walk's storage (Stack Safety): no stage's call depth or storage depends on
+it.
+
 Roc generalization is exclusively rank-1. Quantification belongs to a value
 binding; an arbitrary expression does not acquire a scheme, and the result of
 calling a polymorphic function is a monotype even when that result contains a

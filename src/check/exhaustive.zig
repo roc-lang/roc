@@ -4614,12 +4614,7 @@ fn inhabitedWitnessCase(graph_allocator: Allocator) (Allocator.Error || Ident.Er
         } } });
         std.mem.reverse(types.Tag, &tags);
     }
-    const alias = try store.freshFromContent(.{ .alias = .{
-        .ident = .{ .ident_idx = other },
-        .vars = .{ .nonempty = try store.appendVars(&.{witnesses[0]}) },
-        .source_arg_count = 0,
-        .origin_module = fixture_module,
-    } });
+    const alias = try store.freshFromContent(try store.mkAlias(.{ .ident_idx = other }, witnesses[0], &.{}, fixture_module));
     const prefix = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
         .tags = try store.appendTags(&.{.{ .name = other, .args = try store.appendVars(&.{recursive}) }}),
         .ext = alias,
@@ -4728,12 +4723,7 @@ test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
         .tags = try store.appendTags(&.{.{ .name = sentinel, .args = try store.appendVars(&.{mixed_cycle}) }}),
         .ext = mixed_cycle,
     } } });
-    const alias = try store.freshFromContent(.{ .alias = .{
-        .ident = .{ .ident_idx = named },
-        .vars = .{ .nonempty = try store.appendVars(&.{rigid}) },
-        .source_arg_count = 0,
-        .origin_module = fixture_module,
-    } });
+    const alias = try store.freshFromContent(try store.mkAlias(.{ .ident_idx = named }, rigid, &.{}, fixture_module));
     const aliased_row = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = .empty(), .ext = alias } } });
     const record_name = try idents.insert(gpa, try Ident.from_bytes("RecordWrapper"));
     const source = types.NominalType.Source.init(try types.SourceDecl.fromStatementChecked(0), false, false);
@@ -4860,21 +4850,11 @@ fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.
     const optional = try store.appendRecordFields(&.{.{ .name = field, .presence = .unknown(optional_kind, empty) }});
     const impossible = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = unit } } });
     const absent = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = optional, .ext = flex } } });
-    const alias = try store.freshFromContent(.{ .alias = .{
-        .ident = .{ .ident_idx = field },
-        .vars = .{ .nonempty = try store.appendVars(&.{impossible}) },
-        .source_arg_count = 0,
-        .origin_module = fixture_module,
-    } });
+    const alias = try store.freshFromContent(try store.mkAlias(.{ .ident_idx = field }, impossible, &.{}, fixture_module));
     const cycle_a = try store.fresh();
     const cycle_b = try store.fresh();
     try store.setVarContent(cycle_a, .{ .structure = .{ .record = .{ .fields = .empty(), .ext = cycle_b } } });
-    try store.setVarContent(cycle_b, .{ .alias = .{
-        .ident = .{ .ident_idx = field },
-        .vars = .{ .nonempty = try store.appendVars(&.{cycle_a}) },
-        .source_arg_count = 0,
-        .origin_module = fixture_module,
-    } });
+    try store.setVarContent(cycle_b, try store.mkAlias(.{ .ident_idx = field }, cycle_a, &.{}, fixture_module));
     const false_cycle = try store.fresh();
     const false_cycle_tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = false_cycle } } });
     try store.setVarContent(false_cycle, .{ .structure = .{ .record = .{ .fields = .empty(), .ext = false_cycle_tail } } });
@@ -4971,12 +4951,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
     const optional = try store.appendRecordFields(&.{.{ .name = optional_name, .presence = .unknown(optional_kind, optional_payload) }});
     var tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = open_tail } } });
     for (0..depth) |_| {
-        tail = try store.freshFromContent(.{ .alias = .{
-            .ident = .{ .ident_idx = field },
-            .vars = .{ .nonempty = try store.appendVars(&.{tail}) },
-            .source_arg_count = 0,
-            .origin_module = fixture_module,
-        } });
+        tail = try store.freshFromContent(try store.mkAlias(.{ .ident_idx = field }, tail, &.{}, fixture_module));
         tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = .empty(), .ext = tail } } });
     }
     const root = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = optional, .ext = tail } } });
