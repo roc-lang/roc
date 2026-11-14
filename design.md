@@ -25452,6 +25452,22 @@ into an allocation of exactly their length; a non-empty heap string's bytes
 are shared, the list retaining the string's allocation and taking its
 capacity word.
 
+`list_sublist_borrowed` is inline, with `listSublistBorrowed`'s outcomes: an
+empty window gives the empty list, and any other window is a seamless slice
+that records the source's element count for teardown while the source is
+exclusive. `list_sublist` is inline when its items are not refcounted, with
+`listSublist`'s outcomes. The list is reusable when it is not a seamless
+slice and is exclusive: its argument is proven unique (`unique_args`), it has
+no allocation, or its refcount is one. An empty window keeps a reusable
+list's allocation and capacity at length zero and otherwise releases the list
+and gives the empty list; a window from index zero of a reusable list shrinks
+it in place; any other window is a seamless slice that takes over the list's
+reference. With refcounted items, `list_sublist` calls `listSublist`, which
+also releases the items a reusable list drops; the call is cheap next to the
+per-item releases it may make. The split is by the list layout's
+`elements_refcounted`, never by anything the lowering guesses. Zero-sized
+items have no bytes to slice, so their sublist is the window length alone.
+
 ## Wasm Function Limits
 
 The WebAssembly JS API fixes implementation limits every engine a web page
