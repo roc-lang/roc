@@ -739,15 +739,17 @@ fn requireHoleParamsBorrowed(store: *const LirStore, layouts: *const layout_mod.
 fn recordProcedureFacts(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
     const proc_count = store.procSpecCount();
     try recordTailGroups(store, solution);
+    var words = std.ArrayList(u32).empty;
+    defer words.deinit(store.allocator);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         if (store.getProcSpecImmediate(proc).arcBody() == null) continue;
         const sig = solution.sigOf(proc);
         const rows = solution.sigTable().retConditionsOf(sig);
-        const words = try store.allocator.alloc(u32, rows.len);
-        defer store.allocator.free(words);
-        for (rows, words) |row, *word| word.* = @bitCast(row);
-        const conditions = try store.addU32Span(words);
+        words.clearRetainingCapacity();
+        try words.ensureTotalCapacity(store.allocator, rows.len);
+        for (rows) |row| words.appendAssumeCapacity(@bitCast(row));
+        const conditions = try store.addU32Span(words.items);
         const spec = store.getProcSpecPtr(proc);
         spec.rc_read_only_params = sig.read_only_params;
         spec.rc_ret_unique = sig.ret_unique;
