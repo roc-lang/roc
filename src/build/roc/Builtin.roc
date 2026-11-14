@@ -4499,13 +4499,14 @@ Builtin :: [].{
 		update = |list, index, func| {
 			if index < List.len(list) {
 				prepared_list = list_map_prepare_reuse(list)
-				match list_owned_unique(prepared_list) {
+				updated = match list_owned_unique(prepared_list) {
 					1 => {
 						item = list_move_out_unsafe(prepared_list, index)
-						Ok(list_move_in_unsafe(prepared_list, index, func(item)))
+						list_move_in_unsafe(prepared_list, index, func(item))
 					}
-					_ => Ok(list_set_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index))))
+					_ => list_set_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index)))
 				}
+				Ok(updated)
 			} else {
 				Err(OutOfBounds)
 			}

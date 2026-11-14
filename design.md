@@ -24710,7 +24710,11 @@ declared unique (`list_move_in_unsafe` and `list_set`), so every `List.update`
 result is born unique: uniqueness inference deletes the test of each later
 update in a chain, and of every update in a loop whose entry value is proven
 unique. The in-place branch is present at every opt level, as it is for the
-sorts and `List.keep_if`.
+sorts and `List.keep_if`. The ownership match produces the updated list and
+`Ok` wraps it afterwards, so each normal return assigns its tag immediately
+before the jump to the procedure's `ret`. That is the shape the initial closed
+outcome-restitution capability accepts, so an out-of-bounds update hands the
+caller's list back instead of making the caller retain it around the call.
 
 `list_map_can_reuse` is not a uniqueness-inference site. Its answer also
 depends on the layout decision below, and `List.map` asks it once per call

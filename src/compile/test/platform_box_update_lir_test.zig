@@ -168,8 +168,10 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     try std.testing.expectEqual(@as(usize, 0), total.owned_unbox);
     try std.testing.expectEqual(@as(usize, 6), total.borrowed_unbox);
     try std.testing.expectEqual(@as(usize, 6), total.box_release);
-    try std.testing.expectEqual(@as(usize, 5), total.list_set);
-    try std.testing.expectEqual(@as(usize, 2), total.list_replace);
+    // `List.update`'s shared path is a checked set, so `List.replace` holds
+    // the only replace.
+    try std.testing.expectEqual(@as(usize, 6), total.list_set);
+    try std.testing.expectEqual(@as(usize, 1), total.list_replace);
     // Both platform appends call the shared `List.append`, which holds one
     // append; `List.repeat` holds the other.
     try std.testing.expectEqual(@as(usize, 2), total.list_append);
