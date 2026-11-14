@@ -18,7 +18,8 @@ pub const Ownership = union(enum) {
     /// The target borrows from `source` (a component address or a load of a
     /// component's bytes).
     borrow_component: LocalId,
-    /// The target is an alias of `source`'s value.
+    /// The target carries `source`'s whole ownership unit: a `copy`, or a
+    /// tag's only payload (`tag_payload_addr.whole`).
     alias: LocalId,
     /// The value operands are consumed into the owned target.
     construct,
@@ -43,7 +44,8 @@ pub fn ownership(op: DynOp) Ownership {
         .field_addr => |field| .{ .borrow_component = field.base },
         .list_item_addr => |elem| .{ .borrow_component = elem.list },
         .box_payload_addr => |payload| .{ .borrow_component = payload.box },
-        .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
+        // A tag's only payload holds the union's whole ownership unit.
+        .tag_payload_addr => |payload| if (payload.whole) .{ .alias = payload.base } else .{ .borrow_component = payload.base },
         .view => |view| .{ .borrow_component = view.owner orelse view.address },
         .tag_discriminant, .eq, .hash, .inspect, .adapt => .borrow_operands,
         .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .closure => .construct,
@@ -267,6 +269,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .base = try Remap.one(context, payload.base),
             .desc = try Remap.one(context, payload.desc),
             .payload_index = payload.payload_index,
+            .whole = payload.whole,
         } },
         .record => |record| .{ .record = .{ .desc = try Remap.one(context, record.desc), .fields = try Remap.span(store, context, record.fields) } },
         .slot_alloc => |slot| .{ .slot_alloc = .{ .desc = try Remap.one(context, slot.desc) } },

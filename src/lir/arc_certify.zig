@@ -6584,6 +6584,13 @@ const Certifier = struct {
                     return;
                 }
                 try self.bindSameValue(state, defined, source);
+                // A whole tag payload carries its union's unit, and its own
+                // layout or product shape describes that unit's contents on
+                // this path: field reads through the value use that shape.
+                if (op == .tag_payload_addr) {
+                    const value = state.valueOf(defined);
+                    if (value != no_value) self.values.items[value].origin = defined;
+                }
             },
             .construct => try self.applyAggregate(state, target.?, self.dyn_operands.items),
             .borrow_operands => {

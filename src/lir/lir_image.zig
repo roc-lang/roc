@@ -80,7 +80,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      the v69-v71 changes.
 /// v73: erased calls carry `result_reuse`, `erased_capture_load_borrowed`
 ///      renumbers later LowLevel ops, RC reasons name dead-lender reads,
-///      and procedure shapes widen to 32 bits.
+///      procedure shapes widen to 32 bits, and dynamic tag payload reads
+///      carry `whole`.
 pub const FORMAT_VERSION: u32 = 73;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 

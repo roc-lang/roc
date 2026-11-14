@@ -22141,6 +22141,23 @@ from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
 
+A dynamic tag union's payload read (`dyn.tag_payload_addr`) of a tag with
+exactly one payload, into a local whose layout can hold refcounted data, is
+marked `whole` by Boxy lowering, which knows the tag's payload count from its
+checked type. On every path that reads it, that
+payload's refcounted contents are exactly the union's, so the read is an
+ownership alias of the union, as a `copy` is: it carries the union's one
+unit, ownership demands flow through it to the union, and a dying union's
+payload moves into a consumer without a retain. A `Dict`, `Set` or other
+single-tag nominal handed to a call that mutates its payload is therefore
+moved, not shared. A payload of a tag with several payloads is a component
+borrowed from the union. The union's unit has no enumerated shape, so field
+takes and complete projections never address it through a whole payload:
+a read of a whole payload's field is a borrow (dismantling needs a container
+whose unit has the shape its reads address), and the certifier, which binds
+the payload to the union's value, describes that value by the payload's
+shape on the path that read it.
+
 An erased argument product's recorded slot boundaries are authoritative for
 both the start and width of each field read. Its non-owning prefix and scalar
 fields may occupy zero slots; their standalone layouts cannot supply widths in

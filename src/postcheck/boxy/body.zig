@@ -738,6 +738,13 @@ pub const Builder = struct {
         return self.addLocal(.{ .layout_idx = layout_idx });
     }
 
+    /// Whether `local`'s layout can hold refcounted data: a dynamic local
+    /// always can, since its descriptor decides at runtime.
+    pub fn holdsRefcounted(self: *Builder, local: LocalId) bool {
+        const layouts = &self.program.result.layouts;
+        return layouts.layoutContainsRefcounted(layouts.getLayout(self.store.getLocal(local).layout_idx));
+    }
+
     /// A local holding a value of `ty`: an ordinary local of its committed
     /// layout when `ty` is closed, otherwise a dynamic local of `storage`.
     pub fn localOf(self: *Builder, ty: TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
@@ -9884,7 +9891,7 @@ pub const Builder = struct {
         } else invariant("a tag pattern's tag is absent from its type");
         for (args, payload_types, 0..) |arg, payload_ty, index| {
             const local = try self.localOf(payload_ty, .view);
-            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = desc, .payload_index = @intCast(index) } });
+            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = desc, .payload_index = @intCast(index), .whole = payload_types.len == 1 and self.holdsRefcounted(local) } });
             try pending.append(self.allocator, .{ .pattern = arg, .value = local, .ty = payload_ty });
         }
     }
@@ -10641,11 +10648,12 @@ pub const Builder = struct {
         const ty = try self.structuralType(raw_ty);
         if (!try self.closed(ty)) {
             const union_ty = self.program.store.get(ty).tag_union;
-            const payload_ty = for (self.program.store.tagSpan(union_ty.tags)) |tag| {
-                if (tag.name == name) break self.program.store.span(tag.payloads)[index];
+            const payloads = for (self.program.store.tagSpan(union_ty.tags)) |tag| {
+                if (tag.name == name) break self.program.store.span(tag.payloads);
             } else invariant("a tag payload's tag is absent from its type");
+            const payload_ty = payloads[index];
             const local = try self.localOf(payload_ty, .view);
-            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = try self.descOf(ty), .payload_index = index } });
+            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = try self.descOf(ty), .payload_index = index, .whole = payloads.len == 1 and self.holdsRefcounted(local) } });
             return .{ .value = local, .ty = payload_ty };
         }
         const variant = try self.closedVariant(ty, name);
