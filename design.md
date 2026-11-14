@@ -5221,9 +5221,11 @@ would enter inside one at `Rank.deepest` gets no rank of its own
 (`VarPool.pushRank`): the module reports once that its definitions are nested
 too deeply to generalize, pointing at the definition or expression whose scope
 first went past the limit, and checking continues with the scope at the
-enclosing rank, not generalized when it ends. That continuation is diagnostic
-recovery on an already-reported error, so it is a mechanism (Solver-Mutating
-Rewrites). The limit is a property of the descriptor's representation, not of
+enclosing rank, not generalized when it ends. The scope's value (each member
+of a recursive group) is retired to an erroneous value expression, so
+publication and lowering never read a definition that should have been
+generalized and was not. That continuation is diagnostic recovery on an
+already-reported error, so it is a mechanism (Solver-Mutating Rewrites). The limit is a property of the descriptor's representation, not of
 any walk's storage (Stack Safety): no stage's call depth or storage depends on
 it.
 

@@ -1703,6 +1703,9 @@ commit_probe_active: bool = false,
 /// destructive side-table transition and is forbidden while any probe can
 /// still roll the type store back.
 probe_depth: u32 = 0,
+/// Scratch for the values of a recursive group entering its generalization
+/// scope (`pushGeneralizationScope`).
+scratch_group_values: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// Where the module first nested a generalization scope inside one at the
 /// deepest rank (`pushGeneralizationScope`), once that is reported. The
 /// module reports it once, however many scopes nest past the limit.
@@ -2168,6 +2171,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .probe_var_pool_lens = .scratch,
     .commit_probe_active = .lexical,
     .probe_depth = .lexical,
+    .scratch_group_values = .scratch,
     .generalization_nesting_limit_region = .keyed,
 });
 
@@ -6012,16 +6016,20 @@ fn generalizeRank(self: *Self, env: *Env) Allocator.Error!void {
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
 }
 
-/// Enter a nested generalization scope for the source at `region`. Inside a
-/// scope at the deepest rank the new scope gets no rank of its own
-/// (`VarPool.pushRank`): the module reports, once, that its definitions nest
-/// too deeply to generalize, and the scope is checked at the enclosing rank
-/// without being generalized. That continuation is diagnostic recovery on
-/// the reported error (design.md "Solver-Mutating Rewrites").
-fn pushGeneralizationScope(self: *Self, env: *Env, region: Region) Allocator.Error!void {
+/// Enter a nested generalization scope for the source at `region`, whose
+/// value is each of `values`. Inside a scope at the deepest rank the new
+/// scope gets no rank of its own (`VarPool.pushRank`): the module reports,
+/// once, that its definitions nest too deeply to generalize, the scope is
+/// checked at the enclosing rank without being generalized, and its values
+/// are retired to erroneous value expressions, so no later stage reads a
+/// definition that should have been generalized and was not. That
+/// continuation is diagnostic recovery on the reported error (design.md
+/// "Solver-Mutating Rewrites").
+fn pushGeneralizationScope(self: *Self, env: *Env, region: Region, values: []const CIR.Expr.Idx) Allocator.Error!void {
     try env.var_pool.pushRank();
-    if (env.var_pool.generalizesInnermostScope() or self.generalization_nesting_limit_region != null) return;
-    try self.reportGeneralizationNestingLimit(region);
+    if (env.var_pool.generalizesInnermostScope()) return;
+    for (values) |value| try self.markErroneousValueExpr(value);
+    if (self.generalization_nesting_limit_region == null) try self.reportGeneralizationNestingLimit(region);
 }
 
 fn reportGeneralizationNestingLimit(self: *Self, region: Region) Allocator.Error!void {
@@ -21772,7 +21780,7 @@ fn predeclareAnnotationSchemeHelp(
     const snapshots_mark = self.snapshots.mark();
     const nesting_limit_reported = self.generalization_nesting_limit_region != null;
 
-    try self.pushGeneralizationScope(env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(annotation_idx)));
+    try self.pushGeneralizationScope(env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(annotation_idx)), &.{});
     const saved_predeclaring = self.predeclaring_annotation;
     const saved_active_scheme_root = self.active_scheme_root;
     self.predeclaring_annotation = true;
@@ -22978,7 +22986,16 @@ fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.E
         return .{ .push = .{ .def = .{ .def_idx = scc.defs[0] } } };
     }
 
-    try self.pushGeneralizationScope(env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(scc.defs[0])));
+    {
+        const values_top = self.scratch_group_values.items.len;
+        defer self.scratch_group_values.shrinkRetainingCapacity(values_top);
+        for (scc.defs) |member| try self.scratch_group_values.append(self.gpa, self.cir.store.getDef(member).expr);
+        try self.pushGeneralizationScope(
+            env,
+            self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(scc.defs[0])),
+            self.scratch_group_values.items[values_top..],
+        );
+    }
     state.frame_rank = env.rank();
 
     // Rank every member's def/pattern vars in the shared frame first, so
@@ -30875,7 +30892,7 @@ fn beginExprCheckFrame(
     if (frame.should_generalize) try self.activateSchemeOwner(expr_var_raw);
 
     if (frame.should_generalize) {
-        try self.pushGeneralizationScope(env, expr_region);
+        try self.pushGeneralizationScope(env, expr_region, &.{expr_idx});
         frame.rank_pushed = true;
     }
 
@@ -33128,7 +33145,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
 
             const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
             if (decl.decl_fn_frame) {
-                try self.pushGeneralizationScope(env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx)));
+                try self.pushGeneralizationScope(env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx)), &.{decl_stmt.expr});
                 const fixpoint = try self.pushTryRowFixpoint(env.rank());
                 decl.try_row_fixpoint = fixpoint;
                 try self.addTryRowFixpointLink(fixpoint, decl_pattern_var);

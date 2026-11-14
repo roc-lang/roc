@@ -9,6 +9,7 @@ const types = @import("types");
 const TestEnv = @import("./TestEnv.zig");
 
 const Rank = types.Rank;
+const testing = std.testing;
 
 const nested_functions =
     \\f0 = |_| {
@@ -65,4 +66,37 @@ test "generalization nesting limit: nesting within the deepest rank reports noth
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
+}
+
+test "generalization nesting limit: a definition past the limit is retired with everything nested in it" {
+    var test_env = try TestEnv.initWithDeepestRank("Test", nested_functions, rankAt(3));
+    defer test_env.deinit();
+
+    // Walk down the chain of nested definitions from `f0`. The first one past
+    // the limit is an erroneous value, so no later stage reads a definition
+    // that was checked without being generalized; the ones around it are
+    // still functions.
+    const store = &test_env.module_env.store;
+    var function = try test_env.defExpr("f0");
+    var functions_kept: usize = 0;
+    const retired = while (functions_kept < 5) {
+        const expr = store.getExpr(function);
+        if (expr == .e_runtime_error) break true;
+        const lambda = if (expr == .e_closure)
+            store.getExpr(expr.e_closure.lambda_idx).e_lambda
+        else if (expr == .e_lambda)
+            expr.e_lambda
+        else
+            break false;
+        functions_kept += 1;
+        const body = store.getExpr(lambda.body);
+        if (body != .e_block) break false;
+        const statements = store.sliceStatements(body.e_block.stmts);
+        if (statements.len == 0) break false;
+        const nested = store.getStatement(statements[0]);
+        if (nested != .s_decl) break false;
+        function = nested.s_decl.expr;
+    } else false;
+    try testing.expect(retired);
+    try testing.expect(functions_kept >= 1 and functions_kept < 5);
 }
