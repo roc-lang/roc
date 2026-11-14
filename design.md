@@ -9915,7 +9915,11 @@ substituted checked wrappers of `.wrappers` mode produce exactly this shape at
 every call site (a `Try` built on each arm and matched at once by the caller),
 as does the iterator-fusion clone of `.none`. A producer edge may release
 values it has finished with between building the tag and jumping; those
-releases are carried onto the redirected edge. An arm may release the union
+releases are carried onto the redirected edge. The join's body may begin with
+straight-line definitions that do not read the union, ahead of its match: an
+inlined call computes its other arguments there. They run whichever variant
+arrives, so each variant's continuation begins with its own copy of them,
+defining the same locals; nothing moves across a producer or an arm. An arm may release the union
 itself; the fused arm releases that variant's payload instead, or nothing when
 the variant owns nothing. A fused arm copies exactly the statements its
 variant rewrite changes, together with what copying them forces: their
@@ -20197,7 +20201,10 @@ statement that consumes the result, so every path through a value-position join
 arrives by an explicit jump that tag-case fusion can see as a producer. A
 `match`, `if`, initialized-payload switch, or callable dispatch whose continuation
 is that jump delivers through the consumer rather than declaring a join of its
-own. A loop's `break`s all continue at the statement after the loop, so a join
+own. The join a `match` or `if` declares for its own result is a consumer in the
+same sense while its branches are lowered, so a `match` or `if` that ends one
+of those branches jumps to it directly; a branch that is itself a branch never
+adds a join that only forwards the result outward. A loop's `break`s all continue at the statement after the loop, so a join
 declared for one `break`'s value and another `break` may enter one LIR
 statement: LIR consumers treat such a statement as a merge of every edge into
 it, not as a body entered only through one join's jumps. These forms express
