@@ -375,9 +375,11 @@ pub const Constants = struct {
     /// 190: type tags record whether they are in their row only because `match`
     ///      branch patterns asked for them.
     /// 191: combines the independent 189 and 190 entry changes.
-    /// 192: a `return` in its function's result position canonicalizes to its
+    /// 192: literal argument roots record their edge owner as their own root
+    ///      source and hold no expression.
+    /// 193: a `return` in its function's result position canonicalizes to its
     ///      operand rather than to a return node.
-    pub const CACHE_VERSION = 192;
+    pub const CACHE_VERSION = 193;
 };
 
 /// Configuration for the Roc cache system.
