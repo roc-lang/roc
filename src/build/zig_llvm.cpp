@@ -574,8 +574,11 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
         auto os = raw_string_ostream(out_str);
         TimerGroup::printAll(os);
         TimerGroup::clearAll();
+        // On allocation failure the report stays null, which the caller reports as out of memory.
         auto c_str = (char *)malloc(out_str.length() + 1);
-        strcpy(c_str, out_str.c_str());
+        if (c_str != nullptr) {
+            strcpy(c_str, out_str.c_str());
+        }
         *options->time_report_out = c_str;
     }
     return false;
