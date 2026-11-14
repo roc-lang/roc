@@ -1638,7 +1638,14 @@ checker recovery. The recovery rules:
   `instantiated_literal_conversion_uses` for literal conversions (numeral,
   quote, and interpolation), each keyed by the copy's own callable var. A
   failure of the copy makes that use a runtime error and leaves the scheme's
-  body, which stays valid for every other use, intact.
+  body, which stays valid for every other use, intact. An ambiguity verdict on
+  a copied where-clause requirement whose receiver no relation determines is
+  such a failure too, even when a dispatch in the scheme's body uses the
+  requirement: the report and the runtime error go to the instantiating use
+  (`applyInstantiationAmbiguityVerdict`), never to that body dispatch, so in
+  `apply : p -> Str where [p.to_str : p -> Str]` a use `apply(crash "boom")`
+  that leaves `p` undetermined is the crash while `apply(5.U8)` elsewhere
+  still runs `apply`'s body.
 - Rejecting a static-dispatch constraint never writes `.err` into the
   receiver's solved class. A concrete receiver's class is shared with every
   expression and definition that mentions its type, so the rejection marks the

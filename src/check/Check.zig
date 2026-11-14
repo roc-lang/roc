@@ -18722,9 +18722,12 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     const body_forced = selection.body_forced;
     const where_dispatch_use = selection.where_dispatch_use;
 
-    // Locate the call site that left this receiver undetermined. Instantiated
-    // where-clause contracts carry exact dispatch-expression metadata, so
-    // they can report directly at that call. Ordinary hidden dispatches need
+    // Locate the call site that left this receiver undetermined. An
+    // instantiated where-clause contract that a dispatch in the scheme's body
+    // uses, or that its body provably requires, belongs to the use that
+    // instantiated it (design.md "Every Rejection Is Explicit Recovery"): the
+    // report and the runtime error go to that use, and the scheme's body,
+    // which every other use shares, stays intact. Ordinary hidden dispatches need
     // the structural scan: the receiver var is internal to the instantiated
     // callee type, so no expression's own type IS the receiver. Instead it
     // flows into one of a call's ARGUMENTS, whose type structurally CONTAINS
@@ -18740,24 +18743,13 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     var primary: ?Region = null;
     var secondary: ?Region = null;
     var runtime_error_inserted = false;
-    if (is_instantiated_where_clause and where_dispatch_use != null) {
-        const dispatch_use = where_dispatch_use.?;
-        primary = dispatch_use.region;
-        runtime_error_inserted = true;
-
-        if (self.cir.store.getExpr(dispatch_use.expr_idx) != .e_runtime_error) {
-            const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-                .region = dispatch_use.region,
-            } });
-            try self.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
-        }
-    } else if (body_forced) {
-        // A body-forced where-clause with no in-module dispatch use (the
-        // unpinned receiver lives only in the instantiating call's result
-        // type, e.g. the `Dict(x, y)` returned by `Dict.join_map(...)`). The
-        // candidate recorded the exact expression whose instantiation created
-        // the obligation, so report there and mark it a runtime error—codegen
-        // then emits a crash instead of reaching the ownerless dispatch.
+    if ((is_instantiated_where_clause and where_dispatch_use != null) or body_forced) {
+        // The candidate recorded the exact expression whose instantiation
+        // created the obligation (for a body-forced contract with no dispatch
+        // use, the unpinned receiver lives only in the instantiating call's
+        // result type, e.g. the `Dict(x, y)` returned by `Dict.join_map(...)`),
+        // so report there and mark it a runtime error—codegen then emits a
+        // crash instead of reaching the ownerless dispatch.
         if (verdict.instantiation_expr.get()) |inst_expr| {
             primary = self.cir.store.getExprRegion(inst_expr);
             runtime_error_inserted = true;
