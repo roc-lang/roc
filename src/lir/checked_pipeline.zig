@@ -1821,17 +1821,6 @@ fn finishLoweredOutput(
         if (pass_target.lir_pass_parallel_metrics_out) |metrics| timing.addLirPassParallel(metrics.*);
     };
 
-    // A `.boxy` body's owned erased calls name their closure as their
-    // ownership source; the allocation's root is reached through the
-    // representation-transparent aliases lowering emitted (design.md
-    // "Destination-Passing Results and Allocation Reuse").
-    if (target.specialization_strategy != .lss) {
-        const store = &lowered.lir_result.store;
-        for (0..store.procSpecCount()) |index| {
-            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
-            try ErasedOwner.resolveProcReuseSources(allocator, store, &lowered.lir_result.layouts, proc_id);
-        }
-    }
     // Branch expectations are read off the lowered switches before any
     // rewrite reshapes them.
     try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation);
@@ -1876,6 +1865,19 @@ fn finishLoweredOutput(
         try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
     } else {
         try ReachableProcs.run(&lowered.lir_result);
+    }
+    // Every erased call names the allocation root its closure's unit belongs
+    // to, reached through the representation-transparent aliases of the
+    // final body: rewrites above (inlining, join forwarding and pruning) can
+    // change those aliases, so the roots are resolved once they have all run
+    // (design.md "Destination-Passing Results and Allocation Reuse").
+    {
+        const store = &lowered.lir_result.store;
+        for (0..store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+            if (!store.getProcSpecImmediate(proc_id).shapes.erased_call) continue;
+            try ErasedOwner.resolveProcReuseSources(allocator, store, &lowered.lir_result.layouts, proc_id);
+        }
     }
     lir_passes_timing_scope.end();
 

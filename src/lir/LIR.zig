@@ -347,7 +347,8 @@ pub const RcReason = enum(u8) {
     /// signature (`RcSig` param mode owned) demands ownership of an argument
     /// that stays live after the call.
     owned_param_demand,
-    /// `ArcPlanStep.pre_retain` of the closure when `reuse_closure` is false.
+    /// `ArcPlanStep.pre_retain` of the closure of a deferred erased call that
+    /// does not transfer it: the pending call's own reference.
     closure_call_capture,
     /// `ArcPlanStep.pre_retain` of a reuse source that must survive
     /// (`preserve_reuse_source` / `transfer.preserve_reuse`).
@@ -359,9 +360,10 @@ pub const RcReason = enum(u8) {
     low_level_arg_effect,
     /// `LowLevel.RcEffect.retain_result` without `skip_result_retain`.
     low_level_result_effect,
-    /// `box_unbox` normalization to `box_unbox_borrowed`: the payload retain
-    /// paired with the `consumed_box` release of the outer box.
-    box_unbox_normalize,
+    /// Dead-lender read normalization (`box_unbox` to `box_unbox_borrowed`,
+    /// `erased_capture_load` to `erased_capture_load_borrowed`): the result
+    /// retain paired with the `consumed_lender` release of the allocation.
+    dead_lender_normalize,
     /// `transfer_mask`/`transfer_positions` complement: an element stored into
     /// a newly built list, struct, or tag while still owned elsewhere.
     stored_in_aggregate,
@@ -384,11 +386,10 @@ pub const RcReason = enum(u8) {
     /// `ArcPlanStep.pre_release_extra` (`releaseTailCallerFrame`): owned state
     /// of a frame that a tail call replaces.
     tail_call_frame,
-    /// Closure released after a call that did not reuse it (`reuse_closure`
-    /// false).
-    closure_after_call,
-    /// Boxed value released after a consuming unbox.
-    consumed_box,
+    /// The allocation a consuming dead-lender read takes its result out of:
+    /// the box of a consuming unbox, the reuse argument of a consuming
+    /// capture load.
+    consumed_lender,
     /// `ArcPlanTerminal.stop.releases`: owned state minus the switch
     /// summary's common keep set.
     switch_branch_balance,
@@ -1315,19 +1316,26 @@ pub const ErasedCallData = struct {
     closure: LocalId,
     args: LocalSpan,
     arg_plan: ErasedCallArgsPlanId,
-    /// Consume the allocation denoted by `closure` as the destination for
-    /// an erased-callable result.
-    /// The erased callee may repack it when the returned capture payload has
-    /// the same committed size and alignment; otherwise it releases the
-    /// consumed allocation and returns a fresh one. At the machine ABI this
-    /// passes the callable data pointer as the nullable fifth argument.
+    /// Set by ARC emission, never by lowering: the call transfers one owned
+    /// unit of the allocation denoted by `closure` to the callee, because
+    /// that unit dies at the call (design.md "Destination-Passing Results
+    /// and Allocation Reuse"). The callee reads its captures out of the
+    /// transferred allocation, may repack it as an erased-callable result,
+    /// and otherwise releases it. At the machine ABI this passes the callable
+    /// data pointer as the nullable fifth argument. Without it the call
+    /// borrows `closure` and passes null.
     reuse_closure: bool = false,
-    /// Ownership source consumed by `reuse_closure`. This may be an outer
+    /// The local whose ownership unit a transfer moves. This may be an outer
     /// transparent nominal/tag wrapper of `closure`; both must denote the
     /// same erased-callable allocation, while this local carries its owned
     /// unit. Debug certification proves that allocation identity through
-    /// the exact representation-transparent producer chain.
+    /// the exact representation-transparent producer chain. Null names
+    /// `closure` itself.
     reuse_source: ?LocalId = null,
+    /// The call's result holds exactly one erased-callable slot, so the
+    /// callee can repack a transferred allocation as its result. Such a call
+    /// is solved as demanding its closure's unit.
+    result_reuse: bool = false,
     /// Set by ARC emission on an erased call whose value the procedure
     /// returns: the call is left pending instead of made. The pending call owns the
     /// reference to `closure` this statement was given, and whoever runs
@@ -1472,18 +1480,21 @@ pub const DynOp = union(enum) {
     call_erased: struct {
         closure: LocalId,
         args: ?LocalId,
-        /// The call transfers one ownership unit of `closure`'s allocation
-        /// to the callee through the erased ABI's reuse channel, which
-        /// consumes it: an owned erased call (design.md "Destination-Passing
-        /// Results and Allocation Reuse"). Boxy lowering sets it when the
-        /// call's result type holds one erased-callable slot; ARC moves the
-        /// unit when `closure` dies at the call and retains it otherwise. A
-        /// deferred owned call's pending record transfers the unit when the
-        /// call is driven.
+        /// Set by ARC emission, never by lowering: the call transfers one
+        /// ownership unit of `closure`'s allocation to the callee through the
+        /// erased ABI's reuse channel, because that unit dies at the call
+        /// (design.md "Destination-Passing Results and Allocation Reuse").
+        /// A deferred transferring call's pending record transfers the unit
+        /// when the call is driven.
         reuse_closure: bool = false,
-        /// The local whose ownership unit `reuse_closure` transfers, which
-        /// denotes `closure`'s allocation (`lir/erased_owner.zig`).
+        /// The local whose ownership unit a transfer moves, which denotes
+        /// `closure`'s allocation (`lir/erased_owner.zig`). Null names
+        /// `closure` itself.
         reuse_source: ?LocalId = null,
+        /// The call's result holds exactly one erased-callable slot, so the
+        /// callee can repack a transferred allocation as its result. Such a
+        /// call is solved as demanding its closure's unit.
+        result_reuse: bool = false,
         /// Set by ARC emission on a call whose value the procedure returns:
         /// the call is left pending instead of made, owning one reference to
         /// `closure` and the argument record (design.md "Deferred Erased
@@ -1802,10 +1813,10 @@ pub const FailureMeaning = union(enum) {
     },
 };
 
-/// Return whether an erased call's reuse flag and consumed ownership source
-/// describe the same optional reuse operation.
-pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
-    return assign.reuse_closure == (assign.reuse_source != null);
+/// The local whose ownership unit an erased call transfers when its closure
+/// dies at the call: the explicit reuse source, or the closure itself.
+pub fn erasedCallOwner(assign: anytype) LocalId {
+    return assign.reuse_source orelse assign.closure;
 }
 
 /// What a procedure body contains, recorded by whoever emitted its statements.
@@ -1819,7 +1830,7 @@ pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
 /// introduces a shape into a body it rewrites sets that shape's flag itself.
 /// Debug builds verify the superset property by also running each pass on
 /// the procedures its shapes excluded.
-pub const ProcShapes = packed struct(u16) {
+pub const ProcShapes = packed struct(u32) {
     /// A direct call to the procedure itself, in any position.
     self_call: bool = false,
     /// A loop: a join reached again by a back edge, whether lowered from a
@@ -1858,9 +1869,13 @@ pub const ProcShapes = packed struct(u16) {
     checked_division: bool = false,
     /// A local assigned a string literal.
     str_literal: bool = false,
+    /// An erased call, whose reuse source is resolved once every rewrite
+    /// before ARC has run.
+    erased_call: bool = false,
+    reserved: u15 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
-        return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
+        return @bitCast(@as(u32, @bitCast(self)) | @as(u32, @bitCast(other)));
     }
 };
 
