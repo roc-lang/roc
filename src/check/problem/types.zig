@@ -671,6 +671,17 @@ pub const RecordTailRefusal = struct {
     /// so a nominal record pattern for it must end with `..`
     /// (`padded_nominal`).
     omits_omittable_field: bool = false,
+    /// Which side of the relation was the plain record or tag union
+    /// (`plain_record`, `plain_tag_union`).
+    plain_side: PlainSide = .expected,
+    /// The nominal type declares unnamed fields (`plain_record`).
+    nominal_padded: bool = false,
+    /// The nominal type is opaque outside its module and this module is not
+    /// its module, so its values can be neither built nor taken apart here
+    /// (`plain_record`, `plain_tag_union`).
+    nominal_opaque: bool = false,
+
+    pub const PlainSide = enum { expected, actual };
 
     pub const Kind = enum {
         /// The nominal type declares unnamed fields, so its values are not
@@ -685,6 +696,13 @@ pub const RecordTailRefusal = struct {
         /// The binding compared or hashed the tag union as a plain one, so it
         /// stays one.
         compared_plain_tags,
+        /// A nominal type over a record met a committed plain record (one an
+        /// annotation wrote, or one committed after it was built): a plain
+        /// record never becomes a nominal type, and a nominal type is never
+        /// a plain record.
+        plain_record,
+        /// A nominal type over a tag union met a committed plain tag union.
+        plain_tag_union,
     };
 };
 
