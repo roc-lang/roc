@@ -9655,7 +9655,13 @@ closed type; Polymorphic Recursion rejects the rest) remains a fresh
 specialization. Every draft function and globally reserved root records
 the owner that created it, forming an explicit active ownership tree, and the
 reference names the in-progress specialization of the same procedure, with the
-same evidence, on that chain. Every other request—a non-recursive scheme
+same evidence, on that chain. The procedure is named by its declaration (a
+template, or a nested site with its owner and context function digest), not by
+the checked root the reference reads: inside a generalized procedure, a
+recursive reference reads the declaration at its monomorphic in-body type while
+the request that began the active specialization read an instantiation. A
+nested specialization's draft function records the specialization it lowers, so
+the reference finds it by walking its own ownership chain. Every other request—a non-recursive scheme
 instantiation, a dispatch plan, a generated codec's component call, or a
 compiler-generated component edge—is a fresh instantiation; it identifies with
 an existing specialization only through an exact interface and otherwise
@@ -13585,14 +13591,28 @@ deferred at lowering; the checked module and lowering are both complete):
   dedicated field-kind cell plus distinct source-value and runtime-slot
   cells; row unification resolves the kind and relates value-to-value and
   slot-to-slot. Construction consumes the resolved graph kind, never the
-  generalized scheme or a reconstructed slot shape; when the construction
-  itself is the first required-kind evidence, it explicitly relates that
-  field's runtime-slot cell to its source-value cell at the same time.
+  generalized scheme or a reconstructed slot shape.
   Every field-kind cell also records that exact source-value/runtime-slot
-  pair when it is instantiated. After all interface and body relations for
+  pair when it is instantiated. A field-kind class keeps every member's
+  cells: each field kind keeps its own pair, and the class's members form a
+  circular list, so joining two classes splices their circles in constant
+  time. The moment a class first selects an inline kind (`required` or
+  `defaulted`), whether from row unification, a required access, a
+  construction, or relation freeze, every member's runtime-slot cell is
+  related to its own source-value cell on the same unification worklist, so
+  each pair is committed exactly once and an inline field's slot is its value
+  from then on. A sealed (finished Monotype) field is explicit kind evidence
+  when it meets an undetermined one: a default identity is `defaulted`, a
+  separate source value is `optional`, and an inline source value is
+  `required`. Relations that keep their two sides' cells distinct, such as the
+  opaque interface relation between a checked public interface and a
+  generated-private request, therefore relate an inline field's slot only
+  after its kind relation has made the slot the field's value. After all
+  interface and body relations for
   one Monotype specialization have been produced, relation freeze commits
-  each still-undetermined field-kind class to `required` and unifies its
-  recorded runtime-slot cell with its recorded source-value cell. This is the
+  each still-undetermined field-kind class to `required` through the same
+  selection, relating every member's recorded runtime-slot cell to its
+  recorded source-value cell. This is the
   specialization-time defaulting rule for a generalized scheme with no
   optional/defaulted evidence in that specialization; it is not recovery from
   a slot shape, and no unresolved kind or placeholder slot can cross the

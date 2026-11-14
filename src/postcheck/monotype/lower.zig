@@ -3251,7 +3251,7 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                 try pending.append(graph.allocator, .{ .at = .{ .checked_node = checked_root, .request_node = request_root } });
             },
             .relate_named => |pair| try graph.relateNamedInstances(pair.checked_node, pair.request_node),
-            .field_kind => |fields| graph.relateRecordFieldKind(fields.checked, fields.request),
+            .field_kind => |fields| try graph.relateRecordFieldKind(fields.checked, fields.request),
         }
         std.mem.reverse(DeferredConstructorStep, pending.items[start..]);
     }
@@ -3907,7 +3907,7 @@ fn relateCheckedMonoRequestNodeAt(
         frame.next += 1;
         switch (op) {
             .relate => |pair| try beginCheckedMonoRequestPair(graph, pair.checked, pair.request, row_width, true, seen, &ops, &frames),
-            .field_kind => |fields| graph.relateRecordFieldKind(fields.checked, fields.request),
+            .field_kind => |fields| try graph.relateRecordFieldKind(fields.checked, fields.request),
             .join_container => |pair| try graph.joinRelatedRequestContainer(pair.checked, pair.request),
             .named_instances => |pair| try graph.relateNamedInstances(pair.checked, pair.request),
             .unify => |pair| switch (row_width) {
@@ -13755,27 +13755,41 @@ const Builder = struct {
         }
         // A checked recursive reference whose fresh cells have not yet joined
         // any interface class above names the in-progress specialization of
-        // the same site on its own ownership chain.
-        if (family_exists and selection.selected() == null and recursive_reference) {
-            for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
+        // the same declaration on its own ownership chain. The reference may
+        // read the declaration at a different checked root than the request
+        // that began that specialization (inside a generalized local
+        // procedure, the recursive reference is monomorphic), so the source
+        // function key does not take part (`sameRecursiveCallable`); the live
+        // interface decides whether the reference joins it.
+        if (selection.selected() == null and recursive_reference) {
+            var cursor = request_owner;
+            var remaining = source_ctx.draft.fns.items.len + 1;
+            while (remaining > 0) : (remaining -= 1) {
+                const owner_fn = switch (cursor) {
+                    .root, .reserved_fn => break,
+                    .draft_fn => |owner_fn| owner_fn,
+                };
+                const owner_raw = @backingInt(owner_fn);
+                if (owner_raw >= source_ctx.draft.fns.items.len) {
+                    Common.invariant("draft owner ancestry referenced an unknown function");
+                }
+                const owner_draft_fn = &source_ctx.draft.fns.items[owner_raw];
+                cursor = owner_draft_fn.parent_owner;
+                const raw_spec = owner_draft_fn.nested_spec.get() orelse continue;
+                const spec = &source_ctx.draft.nested_specs.items[raw_spec];
+                if (spec.fn_id != owner_fn) Common.invariant("draft function named a nested specialization of another function");
                 if (spec.state != .lowering) continue;
                 if (spec.request_fn_ty != .none) continue;
-                if (signature_relation == .exact_graph and
-                    source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
-                {
-                    continue;
-                }
-                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.source_fn_key), family)) continue;
+                if (signature_relation == .exact_graph and owner_draft_fn.signature_relation != .exact_graph) continue;
+                if (!DraftNestedFamilyAddress.init(spec.nested, spec.source_fn_key).sameRecursiveCallable(family)) continue;
                 if (!try evidenceChainEql(self.allocator, spec.evidence, requested_evidence)) continue;
                 if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
                 if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                 if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
-                if (!source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id)) continue;
-                const raw_spec: u32 = @intCast(raw_spec_usize);
                 if (!selection.add(raw_spec, false)) {
                     Common.invariant("checked recursive nested reference matched more than one in-progress specialization on its ownership chain");
                 }
-            }
+            } else Common.invariant("draft function ownership ancestry contained a cycle");
         }
         if (selection.selected()) |raw_spec| {
             self.count("nested_hits");
@@ -13862,6 +13876,7 @@ const Builder = struct {
             .fn_id = fn_id,
             .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
         });
+        source_ctx.draft.fns.items[@backingInt(fn_id)].nested_spec = .of(@intCast(spec_index));
         var indexed_nodes = collections.DenseMap(NodeId, void).init(self.allocator);
         defer indexed_nodes.deinit();
         var spec_interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
@@ -17013,6 +17028,10 @@ const DraftFn = struct {
     source: DraftFnTemplate,
     signature_relation: Ast.SignatureRelation = .independent_roots,
     parent_owner: DraftOwner = .root,
+    /// The index in `BodyDraftStore.nested_specs` of the nested
+    /// specialization this function's body lowers, when it is one. Recursive
+    /// nested references walk the ownership chain through this.
+    nested_spec: collections.OptionalU32 = .none,
 };
 
 const DraftLocal = struct {
@@ -17859,6 +17878,22 @@ const DraftNestedFamilyAddress = struct {
             .default_root_module = if (nested.default_root) |identity| identity.bytes else @splat(0),
             .source_fn_key = source_fn_key.bytes,
         };
+    }
+
+    /// Whether a recursive reference to `other` names the declaration this
+    /// family belongs to. A recursive reference may read the declaration at
+    /// a different checked root than the request that began its active
+    /// specialization, so the source function key does not take part; the
+    /// complete live function interface decides whether the reference
+    /// belongs to that specialization.
+    fn sameRecursiveCallable(self: DraftNestedFamilyAddress, other: DraftNestedFamilyAddress) bool {
+        return std.mem.eql(u8, self.module[0..], other.module[0..]) and
+            self.owner_proc_base == other.owner_proc_base and
+            self.owner_template == other.owner_template and
+            std.mem.eql(u8, self.owner_fn_key[0..], other.owner_fn_key[0..]) and
+            self.site == other.site and
+            self.default_root == other.default_root and
+            std.mem.eql(u8, self.default_root_module[0..], other.default_root_module[0..]);
     }
 };
 
