@@ -56,7 +56,9 @@ pub fn main(init: std.process.Init) MainError!void {
     const io = init.io;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len == 5 and std.mem.eql(u8, args[1], "--verify")) {
-        return verify(gpa, io, args[2], try parseTarget(args[3]), args[4]);
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        return verify(gpa, io, compile.CoreCtx.os(gpa, arena.allocator(), io), args[2], try parseTarget(args[3]), args[4]);
     }
     if (args.len != 3) return error.ExpectedArguments;
     const target = try parseTarget(args[2]);
@@ -157,7 +159,7 @@ fn builtinUnitTable(gpa: std.mem.Allocator, io: std.Io, target: RocTarget) MainE
 /// Build the Builtin's unit for `target` through the run-time path into a
 /// cache at `cache_dir`, and require the entry it files to be the entry the
 /// table at `table_path` serves for the same key.
-fn verify(gpa: std.mem.Allocator, io: std.Io, table_path: []const u8, target: RocTarget, cache_dir: []const u8) MainError!void {
+fn verify(gpa: std.mem.Allocator, io: std.Io, roc_ctx: compile.CoreCtx, table_path: []const u8, target: RocTarget, cache_dir: []const u8) MainError!void {
     const read = try std.Io.Dir.cwd().readFileAlloc(io, table_path, gpa, .unlimited);
     defer gpa.free(read);
     const table = try gpa.alignedAlloc(u8, .fromByteUnits(embedded_units.alignment), read.len);
@@ -177,9 +179,7 @@ fn verify(gpa: std.mem.Allocator, io: std.Io, table_path: []const u8, target: Ro
         return error.EmbeddedEntryDiffers;
     };
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    var manager = compile.CacheManager.init(gpa, .{ .enabled = true, .cache_dir = cache_dir }, compile.CoreCtx.os(gpa, arena.allocator(), io));
+    var manager = compile.CacheManager.init(gpa, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
     defer manager.deinit();
     var unit = builtin_unit.unit(gpa, key);
     unit.cache_manager = &manager;

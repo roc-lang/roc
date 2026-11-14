@@ -3,7 +3,6 @@
 //! evaluation, and the build-time Builtin unit (src/build/builtin_unit.zig)
 //! use, so a lowering option lands in all of them at once.
 
-const std = @import("std");
 const base = @import("base");
 const check = @import("check");
 const lir = @import("lir");
