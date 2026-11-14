@@ -75,9 +75,13 @@ pub fn forEachStaticDispatchTypeRoot(module_env: *const ModuleEnv, expr_idx: CIR
     } else if (expr == .e_interpolation) {
         const interpolation = expr.e_interpolation;
         try visitor.visit(ModuleEnv.varFrom(expr_idx));
-        try visitor.visitRequired(interpolation.dispatcher_var, "checked interpolation expression had no static dispatch dispatcher type");
-        try visitor.visitRequired(interpolation.constraint_fn_var, "checked interpolation expression had no static dispatch constraint type");
-        try visitor.visitRequired(interpolation.assembler_fn_var, "checked interpolation expression had no assembler function type");
+        // An interpolation introduced as the builtin `Str` has no dispatch
+        // (design.md "Concrete Builtin Interpolation Introduction").
+        if (interpolation.constraint_fn_var != null) {
+            try visitor.visitRequired(interpolation.dispatcher_var, "checked interpolation expression had no static dispatch dispatcher type");
+            try visitor.visitRequired(interpolation.constraint_fn_var, "checked interpolation expression had no static dispatch constraint type");
+            try visitor.visitRequired(interpolation.assembler_fn_var, "checked interpolation expression had no assembler function type");
+        }
     } else if (expr == .e_type_dispatch_call) {
         try visitor.visit(typeDispatchCallDispatcherVar(&module_env.store, expr.e_type_dispatch_call.owner));
         try visitor.visit(expr.e_type_dispatch_call.constraint_fn_var);

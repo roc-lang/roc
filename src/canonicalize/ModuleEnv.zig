@@ -1126,6 +1126,11 @@ module_identity_displays: collections.SafeList(Ident.Idx),
 /// content identity has been computed (after import resolution, before
 /// type-checking).
 self_module_identity: base.ModuleIdentity.Idx,
+/// The digest of `common.source`, taken once where the source bytes were
+/// first in hand. Every identity and cache key that depends on the source
+/// text reads this instead of hashing the text: the content identity above,
+/// the checked-module key, the typing key, and stored diagnostic provenance.
+source_digest: base.SourceDigest,
 /// Diagnostics collected during canonicalization (optional)
 diagnostics: CIR.Diagnostic.Span,
 /// Stores the raw nodes which represent the intermediate representation
@@ -1306,7 +1311,8 @@ pub const RequiredType = struct {
 };
 
 /// File import dependency state for watch mode and checked-cache identity.
-/// The content hash is meaningful only when the state is `present`.
+/// The content hash is meaningful only when the state is `present`, where it
+/// is the `base.SourceDigest` of the file's bytes, taken when they were read.
 pub const FileDependencyState = enum(u8) {
     pending,
     missing,
@@ -1564,8 +1570,20 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.runtime_prepared = false;
 }
 
-/// Initialize the module environment with capacity heuristics based on source size.
+/// Initialize the module environment with capacity heuristics based on source
+/// size. This digests `source`; a caller that already holds the digest of
+/// these bytes uses `initWithSourceDigest` so the source is hashed once.
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
+    return initWithSourceDigest(gpa, source, base.SourceDigest.of(source));
+}
+
+/// Initialize the module environment for `source`, whose digest the caller
+/// already computed where it read the bytes.
+pub fn initWithSourceDigest(
+    gpa: std.mem.Allocator,
+    source: []const u8,
+    source_digest: base.SourceDigest,
+) std.mem.Allocator.Error!Self {
     var common = try CommonEnv.init(gpa, source);
     const idents = try CommonIdents.insert(gpa, &common);
 
@@ -1607,6 +1625,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_identities = .{},
         .module_identity_displays = .{},
         .self_module_identity = base.ModuleIdentity.Idx.NONE,
+        .source_digest = source_digest,
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
         .top_level_demand_dependencies = .{},
@@ -4076,6 +4095,10 @@ pub const Serialized = extern struct {
     module_identity_displays: collections.SafeList(Ident.Idx).Serialized,
     self_module_identity_reserved: u32,
     self_module_identity_padding: u32 = 0,
+    /// The digest of the source this env was built from. A loader supplies
+    /// the source bytes themselves, and an entry is only ever loaded for
+    /// bytes with this digest, because every key that admits it hashes it.
+    source_digest: [32]u8,
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     top_level_demand_dependencies: DependencyGraph.Dependency.SafeList.Serialized,
@@ -4207,6 +4230,7 @@ pub const Serialized = extern struct {
         try self.module_identity_displays.serialize(&env.module_identity_displays, allocator, writer);
         self.self_module_identity_reserved = @backingInt(env.self_module_identity);
         self.self_module_identity_padding = 0;
+        self.source_digest = env.source_digest.bytes;
         self.top_level_demand_dependencies_ready = env.top_level_demand_dependencies_ready;
         self.runtime_prepared = env.module_role == .builtin and env.runtime_prepared;
         self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0 };
@@ -4326,6 +4350,7 @@ pub const Serialized = extern struct {
             .module_identities = self.module_identities.deserialize(base_addr),
             .module_identity_displays = self.module_identity_displays.deserializeInto(base_addr),
             .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
+            .source_digest = .{ .bytes = self.source_digest },
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
@@ -5646,7 +5671,7 @@ pub fn setContentIdentity(self: *Self, hash: base.ModuleIdentity.Hash) std.mem.A
 }
 
 /// Compute and record this module's deep content identity from its resolved
-/// direct imports: H(module name, source bytes, import identity hashes).
+/// direct imports: H(module name, source digest, import identity hashes).
 /// Idempotent. Every imported env must already be finalized—imports are
 /// checked (or at least identity-finalized) before their dependents.
 pub fn ensureContentIdentity(
@@ -5671,7 +5696,7 @@ pub fn ensureContentIdentity(
     const hash = try base.ModuleIdentity.computeDeep(
         self.gpa,
         self.module_name,
-        self.common.source,
+        self.source_digest,
         import_hashes.items,
     );
     try self.setContentIdentity(hash);

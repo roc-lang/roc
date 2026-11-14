@@ -33,7 +33,7 @@ test "LIR pass workers deterministically forward generated iterator joins in non
     try harness.expectLirPassParallelismDeterministicLir(.{ .app_body =
         \\main! : List(Str) => Try({}, [Exit(I8), ..])
         \\main! = |args| {
-        \\    total = 0.U64.until(List.len(args)).map(|n| n * 2).fold(0, |sum, n| sum + n)
+        \\    total = 0.U64.until(List.len(args)).map(|n| n * 2).fold(0.U64, |sum, n| sum + n)
         \\    echo!(Str.inspect(total))
         \\    Ok({})
         \\}

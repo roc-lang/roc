@@ -103,15 +103,12 @@ test "check type - i64 annotation with fractional literal fails type checking" {
 }
 
 test "check type - string plus number should fail" {
-    // String literal + number: the `+` operator desugars to calling the
-    // `.plus` method on the left operand. Nothing determines the string
-    // literal's type and its default has no `plus` method, so the
-    // undetermined string type is reported before the number literal's own
-    // conversion is checked.
+    // Both operands of `+` are one type, and nothing determines a type that
+    // is both a string literal's and a number literal's.
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail_first, "Missing Method");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - string plus string should fail (no plus method)" {
@@ -171,7 +168,7 @@ fn checkLargeBooleanChain(first_term: []const u8, remaining_term: []const u8) Te
 // var unreachable from the enclosing def's signature. Instantiation copies only
 // signature-reachable vars, so that literal var would be shared by every caller
 // and can never adapt per call site. At the generalization boundary it is
-// defaulted (first-satisfier order), the deferred dispatches cascade into the
+// defaulted to Dec, the deferred dispatches cascade into the
 // signature (pinning `x`, `y`, and the return to Dec), and a LITERAL DEFAULTED
 // warning fires per literal—the Haskell §4.3.4 / `-Wtype-defaults` analogue.
 // A signature-reachable literal (binop form `|x| 5 + x`) stays open instead—
@@ -206,102 +203,84 @@ test "check type - literal receiver of method call defaults at generalization bo
 }
 
 test "check type - literal binop receiver stays polymorphic (no boundary defaulting)" {
-    // Guard against over-eager boundary defaulting: the binop form collapses
-    // literal, receiver, and result into the signature's return var
-    // (`ret = lhs`), so the literal IS reachable from the def's type via its
-    // constraint chain and must stay open and polymorphic—no warning.
+    // Guard against over-eager boundary defaulting: an arithmetic operator's
+    // operands and result are one type, so the literal's type is the
+    // parameter's and the result's. It is reachable from the def's type and
+    // must stay open and polymorphic, with no warning.
     const source =
         \\five_plus_binop = |x| 5 + x
     ;
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a -> b\n" ++
+        "a -> a\n" ++
             "  where [\n" ++
-            "    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),\n" ++
-            "    b.plus : b, a -> b,\n" ++
+            "    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),\n" ++
+            "    a.plus : a, a -> a,\n" ++
             "  ]",
     );
 }
 
-// SURVIVOR-MATRIX GUARD for `numeralCandidateStructurallyRefuted`
-// (src/check/Check.zig): each of the 13 defaulting candidates (canonical order
-// `numeral_default_candidates`) becomes the FIRST satisfier exactly once. `f`
-// stays polymorphic (its literal is signature-reachable, see the binop guard
-// test above), so `y = f(my_val)` probes the literal's candidates against the
-// concrete T pinned by `my_val`—only T survives. A wrong refutation
-// (soundness drift in the pre-filter) flips `y`'s inferred type here;
-// safety-checked builds also crash on the witness probe in
-// `commitLiteralDefault`. Asserts `y` only; every shape type-checks with zero
-// problems (the literal resolves via the pinned argument—like the existing u8
-// shape, which produced no LITERAL DEFAULTED warning).
-test "check type - numeral defaulting survivor matrix - every candidate as first satisfier" {
-    // Same order as `numeral_default_candidates` in src/check/Check.zig.
-    const candidate_type_names = [_][]const u8{
-        "Dec", "I64", "U64", "I128", "U128", "I32", "U32", "I16", "U16", "I8", "U8", "F64", "F32",
-    };
-    inline for (candidate_type_names) |type_name| {
-        const source =
-            "my_val : " ++ type_name ++ "\n" ++
-            "my_val = 7\n" ++
-            "f = |x| 5 + x\n" ++
-            "y = f(my_val)";
-        var test_env = try TestEnv.init("Test", source);
-        defer test_env.deinit();
-        try test_env.assertDefType("y", type_name);
-    }
+// DEC-ONLY DEFAULTING: a number literal nothing else decides becomes `Dec`.
+// No other builtin number type is tried, so a literal whose uses `Dec` cannot
+// satisfy is an error asking for a suffix or an annotation.
+
+test "check type - numeral defaulting - literal with no requirements is Dec" {
+    const source =
+        \\x = 5
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Dec");
 }
 
-// REFUTED-COUNT GUARD (completeness direction) for
-// `numeralCandidateStructurallyRefuted` (src/check/Check.zig): the survivor
-// matrix above catches UNSOUND refutations, but a pre-filter that refutes
-// NOTHING (e.g. an early `return false` regression) is observably identical
-// except for probe cost. So pin the counts: a U8-pinned method-call receiver
-// must refute the 10 candidates before `u8` structurally (dispatcher-position
-// mismatch against the concrete U8 argument) and attempt exactly one probe (the
-// `u8` commit; `f64`/`f32` are never reached). The count is mechanical: 10 =
-// candidates before `u8` in `numeral_default_candidates` (src/check/Check.zig:
-// dec, i64, u64, i128, u128, i32, u32, i16, u16, i8—then u8). Editing that
-// list must update this count to u8's new index.
-// `bench_probe_attempts`/`bench_probe_refuted` are per-instance debug-only fields
-// on the Check struct, compiled out entirely in release builds. A fresh Check
-// instance starts at 0, so no reset is needed.
-test "check type - numeral defaulting pre-filter refutes provably-failing candidates" {
+test "check type - an arithmetic operator gives a literal operand the other operand's type" {
+    // `index` is a `U64`, and both operands of `+` are one type, so the
+    // elements are `U64` with no defaulting involved.
     const source =
-        \\my_u8 : U8
-        \\my_u8 = 7
-        \\h = (5).plus(my_u8)
+        \\result = List.map_with_index([10, 20, 30], |num, index| num + index)
     ;
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-    // The pinned U8 argument admits exactly one candidate, so the literal
-    // receiver resolves to U8 with zero problems (no LITERAL DEFAULTED warning—
-    // unlike the open `(5).plus(x)` shape above, nothing here falls back to the
-    // canonical default).
-    try test_env.assertDefType("h", "U8");
-
-    if (comptime std.debug.runtime_safety) {
-        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_probe_attempts);
-        try testing.expectEqual(@as(usize, 10), test_env.checker.bench_probe_refuted);
-    }
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64)");
 }
 
-// CANDIDATE-ORDER PIN for `numeral_default_candidates` (src/check/Check.zig):
-// `bitwise_and` exists on all 10 builtin integer types but NOT on Dec/F64/F32,
-// and neither argument pins a width—so the boundary-defaulted receiver
-// literal has MULTIPLE surviving candidates and must commit the FIRST integer
-// in canonical order, I64 (Dec is refuted by the method-lookup miss). Compare
-// the `(5).plus(x)` shape above, which commits Dec. Inferring some other integer
-// type here means the candidate order (or the pre-filter's interaction with it)
-// changed.
-test "check type - numeral defaulting candidate order - integer-only method commits I64" {
+test "check type - numeral defaulting - suffix decides the literal needing plus with a U64" {
     const source =
-        \\g = |x| (5).bitwise_and(x)
+        \\result = List.map_with_index([10.U64, 20, 30], |num, index| num + index)
     ;
-    try checkTypesModule(source, .{ .pass_with_warnings = .{
-        .def = .last_def,
-        .warnings = &.{"Literal Defaulted"},
-    } }, "I64 -> I64");
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64)");
+}
+
+test "check type - numeral defaulting - method call on a bare literal does not take its argument's type" {
+    // The receiver's only requirement is `plus` taking a `U8`, which `Dec`
+    // does not satisfy.
+    const source =
+        \\some_u8 : U8
+        \\some_u8 = 7
+        \\x = (5).plus(some_u8)
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**Missing Method**
+        \\This number's type never resolved to a concrete type, so it has no `plus` method.
+        \\```roc
+        \\x = (5).plus(some_u8)
+        \\```
+        \\     ^
+        \\
+        \\Its type needs all of these:
+        \\
+        \\    a where [a.plus : a, U8 -> _ret]
+        \\
+        \\Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.
+        \\
+        \\
+    );
+}
+
+test "check type - numeral defaulting - binop literal takes its concrete operand's type" {
+    const source =
+        \\some_u8 : U8
+        \\some_u8 = 7
+        \\x = 5 + some_u8
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
 }
 
 test "issue 10296: single quote literals do not emit defaulted warning" {
@@ -7514,20 +7493,21 @@ test "check type - range inferred" {
         \\  $answer
         \\}
     ;
-    // The literal `1` must remain overloaded in this generalized helper. Builtin
-    // integer range methods reuse this shape for U8, I8, I16, etc.; defaulting
-    // it once at the template level would make later instantiations invalid.
+    // The literal `1` has the bounds' type and must remain overloaded in this
+    // generalized helper. Builtin integer range methods reuse this shape for
+    // U8, I8, I16, etc.; defaulting it once at the template level would make
+    // later instantiations invalid.
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
         \\a, a -> List(a)
         \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    a.is_lt : a, a -> Bool,
         \\    a.is_lte : a, a -> Bool,
         \\    a.minus : a, a -> a,
-        \\    a.plus : a, b -> a,
+        \\    a.plus : a, a -> a,
         \\    a.to_u64 : a -> U64,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -8336,21 +8316,6 @@ test "check type - mutually recursive functions - is_even and is_odd" {
 }
 
 // self recursive functions - additional //
-
-// A binop whose lhs is a literal and whose rhs is pinned to a concrete type only
-// LATER, through a builtin signature (`index : U64` from
-// `List.map_with_index`'s callback)—the real-world pattern speculative peer
-// resolution used to serve. First-satisfier defaulting keeps it passing: at
-// finalize, the literal's own `plus : (a, U64) -> a` constraint refutes `Dec`
-// and `U64` is the first candidate that satisfies it. (Unconditionally unifying
-// lhs == rhs was tried and refuted—it breaks heterogeneous methods like
-// `times : Duration, I64 -> Duration`; see the custom Num type tests.)
-test "check type - binop literal lhs with signature-pinned rhs - U64 index" {
-    const source =
-        \\result = List.map_with_index([10, 20, 30], |num, index| num + index)
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64)");
-}
 
 test "check type - self recursive function - returning record" {
     const source =
@@ -12061,19 +12026,33 @@ test "static dispatch - deep finite nested requirement chain stays within resour
 
 // DEF-ORDER INDEPENDENCE PINS for `finalizeLiteralDefaults` (src/check/Check.zig).
 // Hard requirement: top-level def order must NEVER affect whether a program
-// type-checks or which types are inferred. The open-literal worklist is
-// registered in def order, so these tests pin the interference-component
-// machinery that makes defaulting commit the same types regardless of that
-// order. Before it, the first-registered literal's probe could "satisfy" a
-// constraint by speculatively pinning a still-open peer literal while ignoring
-// the peer's own constraints, so exactly one of each pair below type-checked.
+// type-checks, which types are inferred, or which problems are reported. The
+// open-literal worklist is registered in def order, so these tests pin the
+// interference-component machinery that makes defaulting reach the same
+// outcome regardless of that order.
 
-// Repro A: `a` and `b` are mutually constrained open literals (`d = b.plus(a)`
-// links them; `c = a.plus(u8val)` pins the group to U8). Both def orders must
-// accept with identical types. Before the fix, the `b`/`d`-first order committed
-// `b` (and transitively `a`) to Dec before `a`'s U8 constraint was consulted,
-// rejecting the program.
-test "check type - def order independence - cross-literal constraint group (pinning def first)" {
+// `a` and `b` are mutually constrained open literals (`d = b.plus(a)` links
+// them; `c = a.plus(u8val)` requires `a` to have `plus` taking a `U8`). `Dec`
+// does not satisfy that, so both def orders must reject the program with the
+// identical report on `a`, and no report on `b`.
+const cross_literal_group_report =
+    \\**Missing Method**
+    \\This number's type never resolved to a concrete type, so it has no `plus` method.
+    \\```roc
+    \\a = id(1)
+    \\```
+    \\       ^
+    \\
+    \\Its type needs all of these:
+    \\
+    \\    e where [e.plus : e, U8 -> _ret]
+    \\
+    \\Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.
+    \\
+    \\
+;
+
+test "check type - def order independence - cross-literal constraint group (constraining def first)" {
     const source =
         \\id = |x| x
         \\u8val : U8
@@ -12083,15 +12062,10 @@ test "check type - def order independence - cross-literal constraint group (pinn
         \\b = id(5)
         \\d = b.plus(a)
     ;
-    try checkTypesModuleDefs(source, &.{
-        .{ .def = "a", .expected = "U8" },
-        .{ .def = "b", .expected = "U8" },
-        .{ .def = "c", .expected = "U8" },
-        .{ .def = "d", .expected = "U8" },
-    });
+    try checkTypesModule(source, .fail_with, cross_literal_group_report);
 }
 
-test "check type - def order independence - cross-literal constraint group (pinning def last)" {
+test "check type - def order independence - cross-literal constraint group (constraining def last)" {
     const source =
         \\id = |x| x
         \\u8val : U8
@@ -12101,35 +12075,44 @@ test "check type - def order independence - cross-literal constraint group (pinn
         \\a = id(1)
         \\c = a.plus(u8val)
     ;
-    try checkTypesModuleDefs(source, &.{
-        .{ .def = "a", .expected = "U8" },
-        .{ .def = "b", .expected = "U8" },
-        .{ .def = "c", .expected = "U8" },
-        .{ .def = "d", .expected = "U8" },
-    });
+    try checkTypesModule(source, .fail_with, cross_literal_group_report);
 }
 
-// Repro B: the annotation pins the dispatch return to U8, which must flow
-// through the receiver literal's first-satisfier probe into the ARGUMENT
-// literal—the argument must not be finalized to Dec while the dispatch that
-// would pin it is still in flight.
-test "check type - annotated method-call return pins both receiver and argument literals" {
+// An annotation on a method call's result does not decide the call's receiver
+// literal: the receiver's requirement is `plus` returning `U8`, which `Dec`
+// does not satisfy.
+test "check type - annotated method-call return does not decide the receiver literal" {
     const source =
         \\r : U8
         \\r = (5).plus(1)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
+    try checkTypesModule(source, .fail_with,
+        \\**Missing Method**
+        \\This number's type never resolved to a concrete type, so it has no `plus` method.
+        \\```roc
+        \\r = (5).plus(1)
+        \\```
+        \\     ^
+        \\
+        \\Its type needs all of these:
+        \\
+        \\    a where [a.plus : a, b -> U8]
+        \\
+        \\Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.
+        \\
+        \\
+    );
 }
 
-// Repro B's def-order spelling: the argument literal lives in its own def, so
-// its worklist registration moves with def order. Both placements must accept
-// with `one : U8`. Before the fix, the `one`-first order head-committed `one` to
-// Dec before `r`'s receiver probe (which needs a U8 argument) ran.
+// The argument literal lives in its own def, so its worklist registration
+// moves with def order. `U8.plus : U8, U8 -> U8` pins it through the
+// receiver, and both placements must accept with `one : U8`: the argument
+// must not be finalized to Dec ahead of the dispatch that decides it.
 test "check type - def order independence - passive literal def before its constraining dispatch" {
     const source =
         \\one = 1
         \\r : U8
-        \\r = (5).plus(one)
+        \\r = (5.U8).plus(one)
     ;
     try checkTypesModuleDefs(source, &.{
         .{ .def = "one", .expected = "U8" },
@@ -12140,7 +12123,7 @@ test "check type - def order independence - passive literal def before its const
 test "check type - def order independence - passive literal def after its constraining dispatch" {
     const source =
         \\r : U8
-        \\r = (5).plus(one)
+        \\r = (5.U8).plus(one)
         \\one = 1
     ;
     try checkTypesModuleDefs(source, &.{
@@ -12150,43 +12133,37 @@ test "check type - def order independence - passive literal def after its constr
 }
 
 // Heterogeneous multi-driver group: two open literals constrained through
-// DIFFERENT integer-only methods share a component (`a`'s `bitwise_and` mentions
-// `b`). The group policy must (1) pick one candidate for the whole group—Dec
-// is refuted by the method-lookup miss, so the first surviving integer, I64,
-// wins—and (2) exempt passives from the forced assignment: `shl_wrap : T,
-// U8 -> T` pins the shift-amount literal `3` to U8 via the method signature;
-// force-assigning it the group candidate (I64) would fail every candidate and
-// head-default the drivers to Dec, erroring. Both def orders must accept with
-// identical types.
+// DIFFERENT methods share a component (`a`'s `plus` mentions `b`). Both
+// drivers default to Dec, whose `times : Dec, Dec -> Dec` pins the passive
+// literal `3`. Both def orders must accept with identical types.
 test "check type - def order independence - heterogeneous multi-driver group (linking def first)" {
     const source =
-        \\a = (1).bitwise_and(b)
-        \\b = (2).shl_wrap(3)
+        \\a = (1).plus(b)
+        \\b = (2).times(3)
     ;
     try checkTypesModuleDefs(source, &.{
-        .{ .def = "a", .expected = "I64" },
-        .{ .def = "b", .expected = "I64" },
+        .{ .def = "a", .expected = "Dec" },
+        .{ .def = "b", .expected = "Dec" },
     });
 }
 
 test "check type - def order independence - heterogeneous multi-driver group (linking def last)" {
     const source =
-        \\b = (2).shl_wrap(3)
-        \\a = (1).bitwise_and(b)
+        \\b = (2).times(3)
+        \\a = (1).plus(b)
     ;
     try checkTypesModuleDefs(source, &.{
-        .{ .def = "a", .expected = "I64" },
-        .{ .def = "b", .expected = "I64" },
+        .{ .def = "a", .expected = "Dec" },
+        .{ .def = "b", .expected = "Dec" },
     });
 }
 
 // MIXED-KIND multi-driver group: a quote driver and a numeral driver share a
 // component. `"x"`'s `concat` signature mentions `b` (the still-flex result of
 // `(1).to_str()`), and `1`'s `to_str` signature mentions `b` too, so the two
-// drivers interfere. The group policy assigns the quote driver its single
-// candidate (Str) on every attempt while the numeral scan iterates—the head
-// candidate Dec already satisfies the group (`Str.concat` pins `b` to Str;
-// `Dec.to_str : Dec -> Str` agrees), so the group commits on the first attempt.
+// drivers interfere. The group policy assigns the quote driver Str and the
+// numeral driver Dec, which satisfy the group (`Str.concat` pins `b` to Str;
+// `Dec.to_str : Dec -> Str` agrees), so the group commits.
 // Both def orders must accept with identical types.
 test "check type - def order independence - mixed quote+numeral multi-driver group (quote def first)" {
     const source =
@@ -12212,20 +12189,15 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 
 // BOUNDARY GROUP DEFAULTING: the same interference-component machinery must run
 // at a def's generalization boundary, not just at module finalize.
-// `(5).plus((2).shl_wrap(3))` puts two DRIVER literals in one component
+// `(5).plus((2).times(3))` puts two DRIVER literals in one component
 // (`5`'s `plus` signature reaches the inner dispatch's return—`2`'s constraint
 // signature's return). At top level this resolves via `finalizeLiteralDefaults`'
-// group policy (Dec refuted by the `shl_wrap` lookup miss; first surviving
-// integer, I64, wins). Wrapped in a function, the literals are NOT
+// group policy. Wrapped in a function, the literals are NOT
 // signature-reachable, so the BOUNDARY must default them—using the same group
-// policy. Before the boundary shared this machinery, it committed literals
-// one-by-one in var-pool order: `5`'s Dec probe speculatively pinned the inner
-// dispatch's return before `2`'s integer-only constraint was consulted, so the
-// def erred (MISSING METHOD `shl_wrap` on Dec) while the identical
-// top-level expression type-checked. Exactly one LITERAL DEFAULTED warning:
+// policy. Exactly one LITERAL DEFAULTED warning:
 // `5`'s `plus` signature reaches the def's return type (the leak), while `2`'s
-// `shl_wrap` signature touches nothing signature-reachable (def-local
-// default, silent) and `3` is a passive pinned to U8 by the fired signature
+// `times` signature touches nothing signature-reachable (def-local
+// default, silent) and `3` is a passive pinned to Dec by the fired signature
 // (never warned).
 //
 // (No within-def STATEMENT-order pair exists for this shape: block locals cannot
@@ -12234,12 +12206,12 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 // literal group never spans local statements.)
 test "check type - boundary defaulting - heterogeneous multi-driver group inside a function" {
     const source =
-        \\g = |_x| (5).plus((2).shl_wrap(3))
+        \\g = |_x| (5).plus((2).times(3))
     ;
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
         .warnings = &.{"Literal Defaulted"},
-    } }, "_arg -> I64");
+    } }, "_arg -> Dec");
 }
 
 // Top-level analogue of the boundary group test above, pinned here so the pair
@@ -12247,9 +12219,9 @@ test "check type - boundary defaulting - heterogeneous multi-driver group inside
 // outcome (modulo the boundary's leak warning).
 test "check type - finalize defaulting - heterogeneous multi-driver group at top level" {
     const source =
-        \\top = (5).plus((2).shl_wrap(3))
+        \\top = (5).plus((2).times(3))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Dec");
 }
 
 test "issue 12970: returned callback preserves captured method requirements across a where use" {
@@ -12678,7 +12650,9 @@ test "check type - principality - literal-constrained lambda parameter remains p
         \\    f = if condition |x| x + offset else |x| x * 2
         \\    f(10)
         \\}
+        \\as_u8 : U8
         \\as_u8 = func(10.U8)
+        \\as_i64 : I64
         \\as_i64 = func(10.I64)
     ;
     try checkTypesModuleDefs(source, &.{
@@ -14026,63 +14000,77 @@ test "check type - dispatch - cap-free generational discharge across pending sch
     try testing.expect(scheme_requirement_dispatchers >= hops);
 }
 
-// CONFLICTED-DEFAULT RECORDING DISCIPLINE. A literal joins
-// `conflicted_default_literal_vars` only when validation REJECTED its head
-// default (every numeral candidate failed, or Str failed the quote predicate
-// probe)—the list routes the dispatch pass's failure path through
-// probed-rollback semantics, so a satisfied receiver on it would make every
-// SUCCESSFUL dispatch on that class pay the savepoint bracket and would leave
-// the resolved-root matching exposed to unrelated later merges. The list
-// itself is scoped to the defaulting-rounds invocation that recorded it, so
-// these tests observe the debug-only monotone recording counter.
+// A LITERAL WAITS FOR THE LITERALS WHOSE METHODS REACH IT. A literal defaults
+// only once no other open literal's method signatures reach it, so the methods
+// those literals' defaults select type it first.
 
-test "check type - satisfied quote method constraint records no conflicted default" {
+test "check type - a number literal takes the type a defaulted number's method chain gives it" {
+    // `5` and `1.5` default to Dec, `to_str` gives Str, and `count_utf8_bytes`
+    // gives U64. The `1` and the `0` are the other operand of an operator on
+    // that U64, so they are U64 too, not Dec.
     const source =
-        \\weak = "a,b,c"
-        \\parts = weak.split_on(",")
+        \\c = 5.to_str().count_utf8_bytes() + 1
+        \\b = 1.5.to_str().count_utf8_bytes() > 0
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
-    if (comptime std.debug.runtime_safety) {
-        try testing.expectEqual(@as(usize, 0), test_env.checker.bench_conflicted_default_records);
-    }
+    try test_env.assertDefType("c", "U64");
+    try test_env.assertDefType("b", "Bool");
 }
 
-test "check type - rejected quote default is recorded once and scoped to its defaulting rounds" {
-    // Same module as "rejected quote default target leaves merged weak
-    // argument polymorphic": Str.concat's return cannot unify with the
-    // Dec-pinned relation, so validation rejects the quote default and the
-    // literal is recorded exactly once. After checking, the list is empty
-    // again—entries live only until the recording rounds' cascade has
-    // consumed them, so a var merging into the (by then concrete) class later
-    // keeps ordinary poison semantics.
+test "check type - a number literal takes the type an interpolated string's method chain gives it" {
+    // The interpolated strings default to Str. `repeat` takes a U64, and
+    // `count_utf8_bytes` returns one, so the `3` and the `0` are U64.
     const source =
-        \\poly : {} -> a
-        \\poly = |_| crash "n"
-        \\helper : c, d -> d where [c.wobble : c -> c]
-        \\helper = |_x, y| y
-        \\weakarg = poly({})
-        \\linked = helper(weakarg, 0)
-        \\r : Dec
-        \\r = ("t").concat(weakarg)
+        \\x = "w"
+        \\s = "a${x}b".repeat(3)
+        \\f = |a| {
+        \\    i = "x${a}"
+        \\    i.count_utf8_bytes() > 0
+        \\}
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    if (comptime std.debug.runtime_safety) {
-        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
-    }
-    try testing.expectEqual(@as(usize, 0), test_env.checker.conflicted_default_literal_vars.items.len);
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("s", "Str");
 }
 
-test "check type - failed group default records only the rejected driver" {
-    // The quote driver ("az", whose concat obligation Str satisfies) and the
-    // numeral driver (5, whose plus relation is return-pinned to Str so every
-    // numeric candidate fails) interfere through the concat return var, so
-    // they default as one group and the group scan fails. Only the numeral
-    // driver's head default was actually rejected: the quote driver must stay
-    // off the conflicted list and its concat dispatch discharges normally
-    // against Str.
+test "check type - a number literal a method chain types rejects a value that type cannot hold" {
+    // The `1.5` is the other operand of `+` on the U64 `count_utf8_bytes`
+    // returns. It is that U64 rather than a Dec, so its fraction is an error.
+    const source =
+        \\c = 5.to_str().count_utf8_bytes() + 1.5
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try testing.expect(try test_env.typeProblemCount() >= 1);
+}
+
+test "check type - literals whose methods reach each other default together" {
+    // `x`'s `plus` names `y` and `y`'s names `x`, so neither waits for the
+    // other and both default to Dec in the same round.
+    const source =
+        \\x = 1
+        \\y = 2
+        \\a = x + y
+        \\b = y + x
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("x", "Dec");
+    try test_env.assertDefType("y", "Dec");
+    try test_env.assertDefType("a", "Dec");
+    try test_env.assertDefType("b", "Dec");
+}
+
+test "check type - literals defaulted together report only the one whose default is rejected" {
+    // The string literal "az", whose concat obligation Str satisfies, and the
+    // number literal 5, whose plus relation is return-pinned to Str so Dec
+    // rejects it, reach each other through the concat return var and default
+    // in the same round. Only the number literal's default is rejected: the
+    // string literal's concat dispatch discharges normally against Str.
     const source =
         \\poly : {} -> a
         \\poly = |_| crash "n"
@@ -14092,10 +14080,7 @@ test "check type - failed group default records only the rejected driver" {
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    if (comptime std.debug.runtime_safety) {
-        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
-    }
-    // Only the rejected numeral driver is reported: its type was never
+    // Only the rejected number literal is reported: its type was never
     // determined, so it is reported as undetermined rather than as a mismatch
     // against the default it was given.
     var mismatch_count: usize = 0;

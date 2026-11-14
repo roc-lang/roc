@@ -98,7 +98,7 @@ NO CHANGE
 							(e-lookup-local
 								(p-assign (ident "value"))))
 						(args))
-					(e-dispatch-call (method "convert") (constraint-fn-var 226)
+					(e-dispatch-call (method "convert") (constraint-fn-var 219)
 						(receiver
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(args

@@ -60,11 +60,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 297)
-	(e-call (constraint-fn-var 289)
-		(e-call (constraint-fn-var 281)
-			(e-call (constraint-fn-var 273)
-				(e-call (constraint-fn-var 265)
+(e-call (constraint-fn-var 262)
+	(e-call (constraint-fn-var 261)
+		(e-call (constraint-fn-var 260)
+			(e-call (constraint-fn-var 259)
+				(e-call (constraint-fn-var 258)
 					(e-lambda
 						(args
 							(p-assign (ident "a")))

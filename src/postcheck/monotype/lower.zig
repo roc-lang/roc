@@ -11692,15 +11692,24 @@ const Builder = struct {
                     },
                     .field => |field| {
                         const value_ty = type_run.results.pop().?;
+                        const optional = switch (field.kind.tag) {
+                            .required, .defaulted => false,
+                            .optional => true,
+                            // This lowering gives each variable its one
+                            // instantiation, which for a kind variable is
+                            // `required`.
+                            .undetermined => switch (checkedPayload(frame.view, field.kind.undeterminedVariable() orelse
+                                Common.invariant("undetermined checked field kind carried no presence variable"))) {
+                                .flex, .rigid => false,
+                                .field_kind => |committed| committed == .optional,
+                                .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("undetermined checked field kind named no kind in direct record-row lowering"),
+                            },
+                            .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
+                        };
                         try type_run.fields.append(self.allocator, .{
                             .name = try recordFieldName(self.activeNameStore(), frame.view, field.name),
-                            .ty = switch (field.kind.tag) {
-                                .required, .defaulted => value_ty,
-                                .optional => try self.optionalSlotType(value_ty),
-                                .undetermined => Common.invariant("undetermined checked field kind reached direct record-row lowering"),
-                                .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
-                            },
-                            .value_ty = .of(if (field.kind.tag == .optional) value_ty else null),
+                            .ty = if (optional) try self.optionalSlotType(value_ty) else value_ty,
+                            .value_ty = .of(if (optional) value_ty else null),
                             .default = .of(try self.monoFieldDefault(frame.view, field)),
                         });
                     },
@@ -47552,11 +47561,12 @@ const BodyContext = struct {
     }
 
     /// Whether lowering `ty` takes no input from the enclosing specialization:
-    /// it is closed by digest, or every variable it reaches seals to its row
-    /// default (`CheckedTypePayload.variableSealsToRowDefault`, the same
-    /// variable decision the checked artifact's direct-dispatch classification
-    /// makes). This is the sealing half of the `direct_closed` rule (design.md
-    /// "Static Dispatch In Monotype").
+    /// it is closed by digest, or every variable it reaches seals without
+    /// specialization (`CheckedTypePayload.variableSealsWithoutSpecialization`,
+    /// the same variable decision the checked artifact's direct-dispatch
+    /// classification makes), an undetermined field kind's variable among
+    /// them. This is the sealing half of the `direct_closed` rule (design.md
+    /// "Decided Variables").
     ///
     /// Trust boundary: the quantification half is not checked here. It is
     /// guaranteed by the two sealed-cell producers—`beginPatternStatementValue`
@@ -47583,7 +47593,7 @@ const BodyContext = struct {
             switch (payload) {
                 .pending => Common.invariant("pending checked type reached Monotype sealing scan"),
                 .field_kind, .err, .empty_record, .empty_tag_union => {},
-                .flex, .rigid => if (!payload.variableSealsToRowDefault()) return false,
+                .flex, .rigid => if (!payload.variableSealsWithoutSpecialization()) return false,
                 .alias => |alias| {
                     try pending.appendSlice(self.allocator, alias.args);
                     try pending.append(self.allocator, alias.backing);

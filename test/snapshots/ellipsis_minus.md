@@ -201,7 +201,7 @@ subtract_negated = |a| a - -...
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-dispatch-call (method "minus") (constraint-fn-var 287)
+			(e-dispatch-call (method "minus") (constraint-fn-var 280)
 				(receiver
 					(e-not-implemented))
 				(args
@@ -238,18 +238,18 @@ subtract_negated = |a| a - -...
 		(patt (type "_arg -> b where [b.negate : b -> b]"))
 		(patt (type "_arg -> List(b) where [b.negate : b -> b]"))
 		(patt (type "_arg -> b where [b.negate : b -> b]"))
-		(patt (type "b -> b where [b.minus : b, c -> b]"))
-		(patt (type "b -> b where [b.minus : b, c -> b]"))
-		(patt (type "_arg -> b where [b.minus : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> b where [b.minus : b, _arg2 -> b]"))
-		(patt (type "b -> b where [b.minus : b, c -> b, c.negate : c -> c]")))
+		(patt (type "b -> b where [b.minus : b, b -> b]"))
+		(patt (type "b -> b where [b.minus : b, b -> b]"))
+		(patt (type "_arg -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.minus : b, b -> b]"))
+		(patt (type "_arg -> b where [b.minus : b, b -> b]"))
+		(patt (type "b -> b where [b.minus : b, b -> b, b.negate : b -> b]")))
 	(expressions
 		(expr (type "_arg -> b where [b.negate : b -> b]"))
 		(expr (type "_arg -> List(b) where [b.negate : b -> b]"))
 		(expr (type "_arg -> b where [b.negate : b -> b]"))
-		(expr (type "b -> b where [b.minus : b, c -> b]"))
-		(expr (type "b -> b where [b.minus : b, c -> b]"))
-		(expr (type "_arg -> b where [b.minus : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> b where [b.minus : b, _arg2 -> b]"))
-		(expr (type "b -> b where [b.minus : b, c -> b, c.negate : c -> c]"))))
+		(expr (type "b -> b where [b.minus : b, b -> b]"))
+		(expr (type "b -> b where [b.minus : b, b -> b]"))
+		(expr (type "_arg -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.minus : b, b -> b]"))
+		(expr (type "_arg -> b where [b.minus : b, b -> b]"))
+		(expr (type "b -> b where [b.minus : b, b -> b, b.negate : b -> b]"))))
 ~~~

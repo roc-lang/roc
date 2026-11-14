@@ -151,7 +151,7 @@ main = 123.Foo
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "I64, U8 -> Foo"))
 		(patt (type "Foo")))
 	(type_decls
 		(nominal (type "Foo")

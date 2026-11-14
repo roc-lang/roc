@@ -208,7 +208,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "number")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 284)
+			(e-dispatch-call (method "plus") (constraint-fn-var 277)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "number"))))
@@ -222,33 +222,33 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "a"))
-					(e-call (constraint-fn-var 300)
+					(e-call (constraint-fn-var 293)
 						(e-lookup-local
 							(p-assign (ident "unused_regular")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "b"))
-					(e-call (constraint-fn-var 310)
+					(e-call (constraint-fn-var 296)
 						(e-lookup-local
 							(p-assign (ident "used_underscore")))
 						(e-num (value "10"))))
 				(s-let
 					(p-assign (ident "c"))
-					(e-call (constraint-fn-var 325)
+					(e-call (constraint-fn-var 304)
 						(e-lookup-local
 							(p-assign (ident "unused_underscore")))
 						(e-num (value "15"))))
 				(s-let
 					(p-assign (ident "d"))
-					(e-call (constraint-fn-var 341)
+					(e-call (constraint-fn-var 312)
 						(e-lookup-local
 							(p-assign (ident "used_regular")))
 						(e-num (value "20"))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 346)
+				(e-dispatch-call (method "plus") (constraint-fn-var 317)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 344)
+						(e-dispatch-call (method "plus") (constraint-fn-var 315)
 							(receiver
-								(e-dispatch-call (method "plus") (constraint-fn-var 342)
+								(e-dispatch-call (method "plus") (constraint-fn-var 313)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "a"))))
@@ -269,12 +269,12 @@ main! = |_| {
 		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e -> e"))
 		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e -> e where [e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.plus : f, g -> f, g.from_numeral : Numeral -> Try(g, [InvalidNumeral(Str)])]")))
+		(patt (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))
+		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]")))
 	(expressions
 		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e -> e"))
 		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e -> e where [e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.plus : f, g -> f, g.from_numeral : Numeral -> Try(g, [InvalidNumeral(Str)])]"))))
+		(expr (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))
+		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))))
 ~~~

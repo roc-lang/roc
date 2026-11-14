@@ -31,5 +31,5 @@ expect fn_alias({}) == 43
 
 expect {
     local = |x| x + answer
-    local(1) == 43
+    local(1.I64) == 43
 }

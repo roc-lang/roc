@@ -120,7 +120,7 @@ EndOfFile,
 									(e-lambda
 										(args
 											(p-assign (ident "x")))
-										(e-dispatch-call (method "plus") (constraint-fn-var 253)
+										(e-dispatch-call (method "plus") (constraint-fn-var 246)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
@@ -131,19 +131,19 @@ EndOfFile,
 							(e-lambda
 								(args
 									(p-assign (ident "x")))
-								(e-dispatch-call (method "times") (constraint-fn-var 262)
+								(e-dispatch-call (method "times") (constraint-fn-var 248)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))
 									(args
 										(e-num (value "2"))))))))
-				(e-call (constraint-fn-var 271)
+				(e-call (constraint-fn-var 250)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 299)
+		(e-call (constraint-fn-var 282)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "1")))))
@@ -152,9 +152,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.plus : a, a -> a, a.times : a, a -> a]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.plus : a, a -> a, a.times : a, a -> a]"))
 		(expr (type "Dec"))))
 ~~~

@@ -234,7 +234,7 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[LocalStatus]")
+			(text "[Complete, LocalStatus]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -265,7 +265,7 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[LocalStatus]")
+			(text "[Complete, LocalStatus]")
 			(annotation-end)
 			(line-break)
 			(line-break)

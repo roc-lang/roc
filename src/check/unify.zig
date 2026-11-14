@@ -759,10 +759,6 @@ const Unifier = struct {
     /// the "actual" type from the user's code, while a represents the "expected" type
     /// (e.g., from a function signature). When constraints aren't satisfied, we want
     /// to highlight where the user's code is, not the constraint's origin.
-    /// NOTE: if flex-side dispatch constraints ever start FIRING mid-unify
-    /// instead of deferring here, revisit `structurallyIncompatiblePair` (bottom
-    /// of this module)—the defaulting pre-filter's soundness fence relies on
-    /// this deferral.
     fn recordDeferredConstraint(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -1169,6 +1165,22 @@ const Unifier = struct {
         return error.TypeMismatch;
     }
 
+    /// The deferred-literal marker of `content`, which only a flex carries.
+    fn flexLiteral(content: Content) Flex.Literal {
+        return switch (content) {
+            .flex => |flex| flex.literal,
+            .rigid, .alias, .structure, .field_presence, .err => .none,
+        };
+    }
+
+    /// Whether a flex states a requirement of its own: a constraint, or the
+    /// conversion a deferred literal's marker stands for (design.md "Deferred
+    /// Literal Conversion"). An erroneous type relates to such a variable
+    /// without replacing it.
+    fn flexStatesRequirement(flex: Flex) bool {
+        return flex.constraints.len() != 0 or flex.literal != .none;
+    }
+
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -1184,6 +1196,15 @@ const Unifier = struct {
 
         try self.refuseTagsIntoBoundedExt(vars.a, vars.b.var_);
         try self.refuseTagsIntoBoundedExt(vars.b, vars.a.var_);
+
+        // An erroneous type determines nothing: it leaves a marked variable
+        // as it is.
+        if (flexLiteral(vars.a.desc.content) != flexLiteral(vars.b.desc.content) and
+            (vars.a.desc.content != .flex or vars.b.desc.content != .flex) and
+            vars.a.desc.content != .err and vars.b.desc.content != .err)
+        {
+            _ = try self.scratch.determined_literals.append(self.scratch.gpa, self.unresolved_b orelse vars.b.var_);
+        }
 
         switch (vars.a.desc.content) {
             .flex => |flex| {
@@ -1203,7 +1224,7 @@ const Unifier = struct {
             },
             .err => switch (vars.b.desc.content) {
                 .flex => |b_flex| {
-                    if (b_flex.constraints.len() != 0) return error.ErroneousType;
+                    if (flexStatesRequirement(b_flex)) return error.ErroneousType;
                     try self.merge(vars, .err);
                 },
                 .rigid, .alias, .field_presence, .structure, .err => return error.ErroneousType,
@@ -1289,6 +1310,7 @@ const Unifier = struct {
                 try self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
+                    .literal = a_flex.literal.merged(b_flex.literal),
                 } });
             },
             .rigid => |b_rigid| {
@@ -1316,7 +1338,7 @@ const Unifier = struct {
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
             },
             .err => {
-                if (a_flex.constraints.len() != 0) return error.ErroneousType;
+                if (flexStatesRequirement(a_flex)) return error.ErroneousType;
                 try self.merge(vars, .err);
             },
         }
@@ -1506,11 +1528,8 @@ const Unifier = struct {
                 }
             },
             .nominal_type => |a_type| {
-                // NOTE: this arm short-circuits applications of INVALID
-                // declarations to a SUCCESSFUL `.err` merge (the declaration
-                // error was already reported); if that changes, revisit
-                // `structurallyIncompatiblePair` (bottom of this module)—the
-                // defaulting pre-filter's soundness fence encodes it.
+                // An application of an invalid declaration merges to `.err`
+                // successfully: the declaration error was already reported.
                 if (self.types_store.nominalDeclIsInvalid(a_type)) {
                     try self.merge(vars, .err);
                     return;
@@ -1779,10 +1798,6 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // NOTE: if distinct nominal identities ever start unifying (e.g.
-        // implicit numeric coercion), revisit `structurallyIncompatiblePair`
-        // (bottom of this module)—its refutation theorem is exactly this
-        // check.
         if (!sameNominalIdentity(a_type, b_type)) {
             return error.TypeMismatch;
         }
@@ -4443,6 +4458,11 @@ pub const Scratch = struct {
 
     // constraints
     deferred_constraints: DeferredConstraintCheck.SafeList,
+    /// For each type this unification determined that was a deferred
+    /// literal's (`Flex.literal`), the variable a conversion constraint on
+    /// the literal would have been deferred on. The literal can now be
+    /// decided.
+    determined_literals: VarSafeList,
     only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
@@ -4601,6 +4621,7 @@ pub const Scratch = struct {
         return .{
             .gpa = gpa,
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),
+            .determined_literals = try VarSafeList.initCapacity(gpa, 2),
             .effect_dependency_seen = collections.DenseMap(Var, void).init(gpa),
             .unify_work_stack = try WorkFrame.SafeList.initCapacity(gpa, 32),
             .mismatch_flags = try MkSafeList(bool).initCapacity(gpa, 8),
@@ -4640,6 +4661,7 @@ pub const Scratch = struct {
     /// Deinit scratch
     pub fn deinit(self: *Self) void {
         self.fresh_vars.deinit(self.gpa);
+        self.determined_literals.deinit(self.gpa);
         self.effect_dependency_seen.deinit();
         self.effect_dependencies.deinit(self.gpa);
         self.pure_demands.deinit(self.gpa);
@@ -4698,6 +4720,7 @@ pub const Scratch = struct {
         self.only_in_b_tags.clearRetainingCapacity();
         self.in_both_tags.clearRetainingCapacity();
         self.deferred_constraints.clearRetainingCapacity();
+        self.determined_literals.clearRetainingCapacity();
         self.only_in_a_static_dispatch_constraints.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.clearRetainingCapacity();
@@ -4843,7 +4866,10 @@ fn sameAliasIdentity(a: Alias, b: Alias) bool {
     return a.ident.ident_idx.eql(b.ident.ident_idx);
 }
 
-fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
+/// Whether two nominal types name one declaration: the same origin module
+/// and the same declaring statement, or the same name when neither records a
+/// statement.
+pub fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
     if (a.origin_module != b.origin_module) return false;
     const a_source_decl = a.sourceDecl();
     const b_source_decl = b.sourceDecl();
@@ -4871,144 +4897,6 @@ fn inPlaceMergeRow(comptime Entry: type, items: []Entry, left_len: usize, ident_
             j -= 1;
         }
         items[j] = key;
-    }
-}
-
-// Structural pre-filter pair classification (numeral defaulting) //
-//
-// This lives in THIS module because it is a theorem about this module's
-// behavior: any change to the err short-circuits, the `sameNominalIdentity`
-// requirement, the no-backing-unification rule, or flex-side constraint
-// deferral must land in the same review diff as this classifier. Each such
-// unify internal carries a pointer comment back here. Called from
-// `numeralCandidateStructurallyRefuted` in Check.zig.
-
-/// Classification of one (method position, constraint position) pair by
-/// `structurallyIncompatiblePair`.
-pub const StructuralPairInspection = enum {
-    /// This pair proves the probe's method unify must fail.
-    refuting,
-    /// This pair cannot soften another pair's refutation (it either fails—
-    /// which also fails the probe—or merges without spreading `.err`), but
-    /// proves nothing by itself.
-    safe,
-    /// Outside the closed world the soundness argument covers; the whole
-    /// candidate must fall through to the full probe.
-    uninspectable,
-};
-
-/// Classify one (method signature position, dispatch-constraint position)
-/// pair for the numeral-defaulting structural pre-filter. Pure and read-only:
-/// resolves vars in `method_types` and `constraint_types` respectively,
-/// mutating neither; no Check or Unifier state is consulted.
-///
-/// CONTRACT: returns `.refuting` only when `unify` on this pair MUST fail,
-/// given the fence conditions hold across the whole constraint range—see
-/// `numeralCandidateStructurallyRefuted` in Check.zig for the range-wide
-/// fence (it classifies every argument/return position of EVERY constraint in
-/// the range, requires matching arities, and abandons refutation for the
-/// whole candidate on any `.uninspectable`).
-///
-/// The refutation core is ONE theorem about this module: distinct zero-arg
-/// builtin nominal identities never unify (`unifyNominalType` requires
-/// `sameNominalIdentity`, and there is no implicit numeric coercion). A
-/// `.refuting` pair is a dispatcher position—the method side is the
-/// candidate's own concrete builtin nominal—whose constraint side is a
-/// CONCRETE builtin numeric nominal with a different source decl, so that
-/// position's unify must throw and the probe cannot succeed.
-///
-/// SOUNDNESS FENCE: the theorem is decisive only if no successful earlier
-/// unify in the probe can soften the mismatching pair by merging `.err` into
-/// either side (this module short-circuits applications of INVALID
-/// declarations to a SUCCESSFUL err merge—see the `.nominal_type` arms of
-/// `unifyFlatType`). The method side is freshly instantiated per
-/// constraint, so its only err sources are its own positions; the constraint
-/// side shares vars across the range. Both are closed off by requiring, for
-/// every pair across the range, that
-///   - every method position is exactly a builtin numeric nominal: builtin
-///     origin, ZERO type args (so a same-identity merge unifies no argument
-///     pairs), and a VALID declaration (declaration validity is fixed before
-///     value checking begins and cannot change mid-probe; applications carry
-///     no backing at all, so nothing else about the position can soften);
-///   - every constraint position resolves to a flex var, a rigid var, or a
-///     nominal whose declaration is valid (terminal-or-failing shapes
-///     whose pairwise unifies either fail outright—which also fails the
-///     probe, consistent with refutation—or merge without creating or
-///     spreading err; flex-side dispatch constraints are deferred by
-///     `recordDeferredConstraint`, never fired mid-unify);
-///   - arities match (so every pair above is actually the pair `unifyFunc`
-///     visits)—enforced by the range-wide caller.
-/// Any deviation—aliases, records, tag unions, tuples, err content,
-/// polymorphic method positions, non-fn shapes—returns `.uninspectable`,
-/// making the whole candidate fall through to the probe rather than weakening
-/// soundness.
-pub fn structurallyIncompatiblePair(
-    method_types: *const types_mod.Store,
-    constraint_types: *const types_mod.Store,
-    candidate_source_decl: u32,
-    method_pos_var: Var,
-    constraint_pos_var: Var,
-) StructuralPairInspection {
-    // Method side: exactly a builtin numeric nominal (builtin origin, no type
-    // args, backing root not `.err`). The dispatcher-position check below is
-    // made per position, not assumed—but the pre-filter's EFFECTIVENESS
-    // comes from builtin numeric methods being homogeneous (`T, T -> T`, e.g.
-    // `Dec.plus : Dec, Dec -> Dec`): every position of such a method IS the
-    // dispatcher type, so a concrete mismatch at any position refutes the
-    // candidate.
-    const method_content = method_types.resolveVar(method_pos_var).desc.content;
-    const method_nominal = method_content.unwrapNominalType() orelse return .uninspectable;
-    if (!method_nominal.originIsBuiltin()) return .uninspectable;
-    const method_decl = method_nominal.sourceDeclOptional() orelse return .uninspectable;
-    if (method_types.sliceNominalArgs(method_nominal).len != 0) return .uninspectable;
-    if (method_types.nominalDeclIsInvalid(method_nominal)) return .uninspectable;
-
-    // Whether this method position IS the dispatcher type C: source-decl
-    // equality alone, no origin-module comparison. Both sides are
-    // builtin-origin nominals (the method via the `originIsBuiltin` gate
-    // above, the candidate by construction in
-    // `numeralCandidateStructurallyRefuted`), there is exactly one builtin
-    // module, and every builtin-origin source decl is a statement index into
-    // that single module's store—so equal decls name the same declaration.
-    // `copyVar` and instantiation preserve the packed source bits verbatim,
-    // making this exactly the `source_decl.eql` the post-copy
-    // `sameNominalIdentity` evaluates for present decls. Soundness never
-    // rested on origin modules anyway: `.refuting` below also requires
-    // `constraint_decl != candidate_source_decl`, hence method_decl !=
-    // constraint_decl (both present, both builtin), which already forces
-    // `sameNominalIdentity`—and therefore `unifyNominalType`—to fail
-    // regardless of the origin idents.
-    const is_dispatcher_pos = method_decl == candidate_source_decl;
-
-    const constraint_content = constraint_types.resolveVar(constraint_pos_var).desc.content;
-    switch (constraint_content) {
-        // Flex merges with the concrete method position (its dispatch
-        // constraints are deferred, not fired mid-probe); rigid vs concrete
-        // fails the probe outright. Neither can spread `.err`.
-        .flex, .rigid => return .safe,
-        .structure => |flat| switch (flat) {
-            .nominal_type => |constraint_nominal| {
-                // An application of an invalid declaration unifies
-                // SUCCESSFULLY into `.err` and can contaminate shared vars—
-                // outside the closed world.
-                if (constraint_types.nominalDeclIsInvalid(constraint_nominal)) return .uninspectable;
-                if (!is_dispatcher_pos) return .safe;
-                if (!constraint_nominal.originIsBuiltin()) return .safe;
-                const constraint_decl = constraint_nominal.sourceDeclOptional() orelse return .safe;
-                if (constraint_decl != candidate_source_decl) return .refuting;
-                return .safe;
-            },
-            .record,
-            .tuple,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => return .uninspectable,
-        },
-        .alias, .field_presence, .err => return .uninspectable,
     }
 }
 

@@ -44,7 +44,7 @@ const twice_app = forwarding_methods ++
 
 const loops_app = forwarding_methods ++
     \\total = |xs| {
-    \\    var $sum = 0
+    \\    var $sum = 0.U64
     \\    for x in xs {
     \\        $sum = $sum + x
     \\    }
@@ -52,7 +52,7 @@ const loops_app = forwarding_methods ++
     \\}
     \\
     \\both = |xs| {
-    \\    var $sum = 0
+    \\    var $sum = 0.U64
     \\    for x in xs {
     \\        $sum = $sum + x
     \\    }

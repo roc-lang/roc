@@ -532,7 +532,7 @@ nested = |v|
 (can-ir
 	(d-let
 		(p-assign (ident "labels"))
-		(e-call (constraint-fn-var 438)
+		(e-call (constraint-fn-var 414)
 			(e-lookup-external
 				(builtin))
 			(e-list
@@ -575,14 +575,14 @@ nested = |v|
 			(args
 				(p-assign (ident "f"))
 				(p-assign (ident "v")))
-			(e-call (constraint-fn-var 442)
+			(e-call (constraint-fn-var 418)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-lookup-local
 					(p-assign (ident "v"))))))
 	(d-let
 		(p-assign (ident "applied"))
-		(e-call (constraint-fn-var 471)
+		(e-call (constraint-fn-var 433)
 			(e-lookup-local
 				(p-assign (ident "apply")))
 			(e-lambda
@@ -612,13 +612,13 @@ nested = |v|
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 476)
+			(e-call (constraint-fn-var 438)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-tag (name "C")))))
 	(d-let
 		(p-assign (ident "fed"))
-		(e-call (constraint-fn-var 505)
+		(e-call (constraint-fn-var 453)
 			(e-lookup-local
 				(p-assign (ident "feed_c")))
 			(e-lambda
@@ -647,7 +647,7 @@ nested = |v|
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 516)
+			(e-call (constraint-fn-var 464)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-tag (name "A"))))
@@ -662,7 +662,7 @@ nested = |v|
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "from_annotation"))
-		(e-call (constraint-fn-var 543)
+		(e-call (constraint-fn-var 477)
 			(e-lookup-local
 				(p-assign (ident "annotated")))
 			(e-lambda
@@ -691,7 +691,7 @@ nested = |v|
 		(e-lambda
 			(args
 				(p-assign (ident "items")))
-			(e-call (constraint-fn-var 572)
+			(e-call (constraint-fn-var 492)
 				(e-lookup-external
 					(builtin))
 				(e-lookup-local
@@ -729,7 +729,7 @@ nested = |v|
 						(elems
 							(e-tag (name "A"))
 							(e-tag (name "B")))))
-				(e-dispatch-call (method "map") (constraint-fn-var 580)
+				(e-dispatch-call (method "map") (constraint-fn-var 514)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "xs"))))
@@ -760,7 +760,7 @@ nested = |v|
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-call (constraint-fn-var 634)
+			(e-call (constraint-fn-var 554)
 				(e-lookup-local
 					(p-assign (ident "apply")))
 				(e-lambda

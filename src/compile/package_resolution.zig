@@ -48,7 +48,6 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const can = @import("can");
 const CoreCtx = @import("ctx").CoreCtx;
 const threading = @import("threading.zig");
 const compiler_platforms = @import("compiler_platforms.zig");
@@ -57,7 +56,6 @@ const reporting = @import("reporting");
 const Allocator = std.mem.Allocator;
 const Version = base.url.Version;
 const line_record = base.line_record;
-const ModuleEnv = can.ModuleEnv;
 pub const CompilerOwnedPlatform = compiler_platforms.CompilerOwnedPlatform;
 
 const is_freestanding = threading.is_freestanding;
@@ -163,8 +161,13 @@ pub const FetchedPackage = struct {
     root_file: []const u8,
     /// Absolute path of the directory containing the root file.
     root_dir: []const u8,
-    /// Hash of the normalized root source bytes consumed while scanning the header.
-    root_source_hash: [32]u8,
+    /// The `base.SourceDigest` of a URL package's normalized root source
+    /// bytes: the root file's watch-mode state, recorded in the package's
+    /// sidecar so a cached package supplies it without being read. Null for
+    /// every other package. A header scan reads a root file only for its
+    /// header and does not hash it; the module's one source digest is taken
+    /// when the build reads the file to compile it.
+    root_source_hash: ?[32]u8,
     /// Combined size of the bundle's extracted files in bytes (0 for local
     /// packages, which are not downloaded and not size-limited).
     content_bytes: u64,
@@ -291,7 +294,9 @@ pub const Resolved = struct {
         identity: []const u8,
         root_file: []const u8,
         root_dir: []const u8,
-        root_source_hash: [32]u8,
+        /// Present iff this package came from a URL; see
+        /// `FetchedPackage.root_source_hash`.
+        root_source_hash: ?[32]u8,
         /// Present iff this package came from a URL.
         url: ?UrlInfo,
         /// Present iff this package came from embedded compiler-owned sources.
@@ -395,11 +400,12 @@ pub const Sidecar = struct {
     /// tally. Derivable from the extracted bundle alone, so cache deletion
     /// can never change the tally.
     content_bytes: u64,
-    /// Hash of the normalized root source bytes consumed while scanning this bundle.
+    /// The `base.SourceDigest` of the normalized root source bytes consumed
+    /// while scanning this bundle.
     root_source_hash: [32]u8,
     deps: []const ScannedDep,
 
-    pub const current_format: u32 = 5;
+    pub const current_format: u32 = 6;
     /// Appended to the package directory's path to name its sidecar.
     pub const file_suffix = ".deps";
     /// Suffix of sidecars in the JSON format, which nothing reads; the
@@ -2159,11 +2165,11 @@ pub fn scanHeaderSource(
     src: []const u8,
     rejection_reports: *HeaderReports,
 ) error{ OutOfMemory, HeaderParseFailed }!FetchedPackage {
-    var env = try ModuleEnv.init(gpa, src);
-    defer env.deinit();
-    try env.common.calcLineStarts(gpa);
+    var env = try base.CommonEnv.init(gpa, src);
+    defer env.deinit(gpa);
+    try env.calcLineStarts(gpa);
 
-    const ast = try parse.header(gpa, &env.common);
+    const ast = try parse.header(gpa, &env);
     defer ast.deinit();
 
     const header = ast.store.getHeader(@fromBackingInt(@intCast(ast.root_node_idx)));
@@ -2181,13 +2187,13 @@ pub fn scanHeaderSource(
         try rejection_reports.append(report);
     }
     for (ast.parse_diagnostics.items) |diagnostic| {
-        var report = try ast.parseDiagnosticToReport(&env.common, diagnostic, gpa, root_file_abs);
+        var report = try ast.parseDiagnosticToReport(&env, diagnostic, gpa, root_file_abs);
         errdefer report.deinit();
         try rejection_reports.append(report);
     }
     if (rejected) return error.HeaderParseFailed;
 
-    return scanParsedHeader(allocator, root_file_abs, src, ast, header);
+    return scanParsedHeader(allocator, root_file_abs, ast, header);
 }
 
 /// Extract dependency-resolution input from an already parsed Roc header.
@@ -2200,7 +2206,6 @@ pub fn scanHeaderSource(
 pub fn scanParsedHeader(
     allocator: Allocator,
     root_file_abs: []const u8,
-    src: []const u8,
     ast: *parse.AST,
     header: parse.AST.Header,
 ) Allocator.Error!FetchedPackage {
@@ -2247,17 +2252,11 @@ pub fn scanParsedHeader(
         .kind = kind,
         .root_file = root_file,
         .root_dir = root_dir,
-        .root_source_hash = sha256Bytes(src),
+        .root_source_hash = null,
         .content_bytes = 0,
         .compiler_owned_platform = null,
         .deps = try deps.toOwnedSlice(allocator),
     };
-}
-
-fn sha256Bytes(bytes: []const u8) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    hasher.update(bytes);
-    return hasher.finalResult();
 }
 
 /// Record a header's platform field as its platform edge: a path or URL
@@ -2558,6 +2557,10 @@ pub const CtxFetcher = struct {
 
         const src = try self.readNormalizedSource(allocator, root_file);
         var scanned = try scanHeaderSource(allocator, self.gpa, root_file, src, rejection_reports);
+        // The sidecar written below records this digest, so later builds
+        // learn the cached root file's watch-mode state without reading it.
+        const root_source_digest = base.SourceDigest.of(src);
+        scanned.root_source_hash = root_source_digest.bytes;
         scanned.content_bytes = try self.measureContentBytes(allocator, package_dir, hash);
 
         // When the bundle was already extracted but had no sidecar, the tar
@@ -2567,7 +2570,7 @@ pub const CtxFetcher = struct {
             if (recorded_expanded > max) return error.ExpandedSizeLimitExceeded;
         }
 
-        self.writeSidecar(allocator, sidecar_path, scanned, recorded_expanded) catch |err| switch (err) {
+        self.writeSidecar(allocator, sidecar_path, scanned, root_source_digest, recorded_expanded) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // A missing sidecar only costs a rescan next build.
             else => {},
@@ -2720,13 +2723,14 @@ pub const CtxFetcher = struct {
         allocator: Allocator,
         sidecar_path: []const u8,
         scanned: FetchedPackage,
+        root_source_digest: base.SourceDigest,
         expanded_bytes: u64,
     ) (Allocator.Error || CoreCtx.WriteError || CoreCtx.RenameError)!void {
         const sidecar = Sidecar{
             .kind = scanned.kind,
             .expanded_bytes = expanded_bytes,
             .content_bytes = scanned.content_bytes,
-            .root_source_hash = scanned.root_source_hash,
+            .root_source_hash = root_source_digest.bytes,
             .deps = scanned.deps,
         };
         const sidecar_bytes = try sidecar.encode(allocator);
@@ -2957,7 +2961,7 @@ const TestRegistry = struct {
             .kind = package.kind,
             .root_file = try allocator.dupe(u8, root_file),
             .root_dir = try allocator.dupe(u8, std.fs.path.dirname(root_file) orelse "/"),
-            .root_source_hash = sha256Bytes(root_file),
+            .root_source_hash = base.SourceDigest.of(root_file).bytes,
             .content_bytes = package.content_bytes,
             .compiler_owned_platform = null,
             .deps = deps,
@@ -5283,7 +5287,7 @@ test "a sidecar is written in the documented line format" {
     const bytes = try sidecar.encode(gpa);
     defer gpa.free(bytes);
     try std.testing.expectEqualStrings(
-        "roc-package-deps 5\n" ++
+        "roc-package-deps 6\n" ++
             "kind package\n" ++
             "expanded_bytes 1234\n" ++
             "content_bytes 567\n" ++
@@ -5298,7 +5302,7 @@ test "a sidecar is written in the documented line format" {
 test "a sidecar that does not match the format exactly is rejected" {
     const gpa = std.testing.allocator;
     const hash_line = "root_source_hash " ++ "0000000000000000000000000000000000000000000000000000000000000000" ++ "\n";
-    const prefix = "roc-package-deps 5\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line;
+    const prefix = "roc-package-deps 6\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line;
     const valid = prefix ++ "deps 1\ndep 0 - 1:a 3:b c\n";
 
     // The baseline the malformed cases below are variations of.
@@ -5309,17 +5313,17 @@ test "a sidecar that does not match the format exactly is rejected" {
         "",
         "{\"format\":4}",
         // Unknown and non-canonical format numbers.
-        "roc-package-deps 4\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 6\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 05\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps +5\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 5\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 7\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 06\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps +6\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
         // Bad scalar fields.
-        "roc-package-deps 5\nkind library\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 5\nkind package\nexpanded_bytes 1_0\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 5\nkind package\nexpanded_bytes 18446744073709551616\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 5\nkind package\nexpanded_bytes \ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 5\nkind package\ncontent_bytes 20\nexpanded_bytes 10\n" ++ hash_line ++ "deps 0\n",
-        "roc-package-deps 5\nkind  package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 6\nkind library\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 6\nkind package\nexpanded_bytes 1_0\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 6\nkind package\nexpanded_bytes 18446744073709551616\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 6\nkind package\nexpanded_bytes \ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 6\nkind package\ncontent_bytes 20\nexpanded_bytes 10\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 6\nkind  package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
         prefix[0 .. prefix.len - hash_line.len] ++ "root_source_hash " ++ "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB" ++ "\ndeps 0\n",
         prefix[0 .. prefix.len - hash_line.len] ++ "root_source_hash " ++ "00000000000000000000000000000000000000000000000000000000000000" ++ "\ndeps 0\n",
         prefix[0 .. prefix.len - hash_line.len] ++ "root_source_hash " ++ "000000000000000000000000000000000000000000000000000000000000000000" ++ "\ndeps 0\n",
@@ -5362,7 +5366,7 @@ test "a malformed sidecar is regenerated from the extracted bundle" {
     const sidecar_name = CacheTestHarness.hash ++ Sidecar.file_suffix;
     const generated = try harness.tmp.dir.readFileAlloc(io, sidecar_name, gpa, .limited(1024 * 1024));
 
-    try harness.tmp.dir.writeFile(io, .{ .sub_path = sidecar_name, .data = "roc-package-deps 5\nkind package\n" });
+    try harness.tmp.dir.writeFile(io, .{ .sub_path = sidecar_name, .data = "roc-package-deps 6\nkind package\n" });
     const fetched = try harness.fetch(gpa);
 
     try std.testing.expectEqual(HeaderKind.package, fetched.kind);

@@ -259,8 +259,8 @@ const CliBuildEnvOptions = struct {
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
-    /// The strategy whose compile-time evaluator completes every module's
-    /// compile-time roots, part of each checked module's cache identity.
+    /// The strategy the command's runtime program lowers under
+    /// (`Coordinator.specialization_strategy`).
     specialization_strategy: base.SpecializationStrategy = .lss,
     /// The bundle URL a URL/installed root came from; becomes the root's
     /// package identity in place of the extracted path.
@@ -2643,7 +2643,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         // shim is the run mechanism where the default platform runtime
         // exists (Linux native, or any cross-target run); elsewhere we use
         // the plain run-once path.
-        if (args.opt == .dev and currentRuntimeSpecializationStrategy(args.specialization_strategy) == .boxy) {
+        if (args.opt == .dev and currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt) == .boxy) {
             owned_staged.deinit(ctx.gpa);
             return rocRunBuildAndExec(ctx, args, arg0);
         }
@@ -2725,7 +2725,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
             .enable_checked_cache = !args.no_cache,
             .reporter = &reporter,
-            .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
+            .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt),
         });
         defer build_env.deinit();
         try discoverRunDependencies(ctx, &build_env, args.path, args.path, &reporter);
@@ -2735,7 +2735,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         build_env.setTarget(selected.target);
         build_env.setValidateTargetFilesForSelectedTarget(true);
 
-        const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+        const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt);
         switch (args.opt) {
             .dev => if (unitImageRunApplies(args.opt, args.no_cache, specialization_strategy, selected.target)) {
                 run_tables = RunUnitTables.init(ctx);
@@ -3237,7 +3237,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, staged: *default_app.S
         SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         args.max_threads,
         args.opt,
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt),
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         &reporter,
@@ -3332,7 +3332,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         args.max_threads,
         args.opt,
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt),
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         &reporter,
@@ -3953,7 +3953,7 @@ fn buildHotReloadChildArgv(
         &argv,
         &owned,
         "--specialization-strategy={s}",
-        .{@tagName(currentRuntimeSpecializationStrategy(args.specialization_strategy))},
+        .{@tagName(currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt))},
     );
     if (source_rewrite) |rewrite| {
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--synthetic-source={s}", .{rewrite.source_path});
@@ -5846,7 +5846,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         break :blk null;
     };
 
-    if (source_rewrite == null and unitImageRunApplies(.dev, args.no_cache, currentRuntimeSpecializationStrategy(args.specialization_strategy), selected_target)) {
+    if (source_rewrite == null and unitImageRunApplies(.dev, args.no_cache, args.specialization_strategy, selected_target)) {
         return rebuildComposedRunImage(ctx, args, &shm, selected_target);
     }
 
@@ -10172,7 +10172,7 @@ fn initBuildCommandEnv(ctx: *CliCtx, args: cli_args.BuildArgs) InitCliBuildEnvEr
         .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
-        .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt),
         .source_dir_override = args.source_dir_override,
         .root_source_url = args.root_source_url,
     });
@@ -10979,7 +10979,7 @@ fn lowerBuildCommandToLir(
     proc_debug_names: bool,
     boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt);
     reporter.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (args.timings) spec_timing.enableDetailedMonotypeBody();
@@ -11105,7 +11105,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
         .linked_output,
         args.opt,
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt),
         target,
         args.synthetic_default_platform,
     ));
@@ -11293,7 +11293,7 @@ fn fastDevLinkFormat(target: RocTarget) ?fast_dev_link.Format {
 /// link writes through the host's own system calls. Every other combination
 /// composes a program object and links it with LLD.
 fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args: cli_args.BuildArgs) bool {
-    if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
+    if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt) != .boxy) return false;
     if (fastDevLinkFormat(target) == null) return false;
     return switch (link_type) {
         .exe, .shared => true,
@@ -11308,7 +11308,7 @@ fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args:
 /// two units per module: the native one compile-time evaluation runs and
 /// the wasm one for the link.
 fn wasmUnitsApply(target: RocTarget, args: cli_args.BuildArgs) bool {
-    if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
+    if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt) != .boxy) return false;
     return compile.boxy_unit.imageKind(target) == .wasm;
 }
 
@@ -12180,7 +12180,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer if (wasm_fast_link) |fast| fast.deinit(ctx.gpa);
 
     build_env.setTarget(target);
-    const runtime_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const runtime_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt);
     var runtime_lowering = checkedRuntimeLoweringConfig(
         .linked_output,
         args.opt,
@@ -12625,7 +12625,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
         .{ .platform_entrypoints = .lir_image },
         args.opt,
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt),
         target,
         false,
     ));
@@ -13800,10 +13800,16 @@ fn cliTestExecutionMode(opt: cli_args.OptLevel) CliTestExecutionMode {
     };
 }
 
+/// The strategy a command's runtime program lowers under: the explicit
+/// `--specialize` choice, or the default of its optimization level.
 fn currentRuntimeSpecializationStrategy(
     explicit: ?base.SpecializationStrategy,
+    opt: cli_args.OptLevel,
 ) base.SpecializationStrategy {
-    return explicit orelse .lss;
+    return explicit orelse switch (opt) {
+        .speed => .lss,
+        .dev, .interpreter, .size => .boxy,
+    };
 }
 
 fn loweringProgressLabel(strategy: base.SpecializationStrategy) []const u8 {
@@ -13814,9 +13820,14 @@ fn loweringProgressLabel(strategy: base.SpecializationStrategy) []const u8 {
 }
 
 test "runtime specialization strategy helpers" {
-    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(null));
-    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.lss));
-    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.boxy));
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(null, .speed));
+    for ([_]cli_args.OptLevel{ .dev, .interpreter, .size }) |opt| {
+        try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(null, opt));
+    }
+    for (std.enums.values(cli_args.OptLevel)) |opt| {
+        try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.lss, opt));
+        try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.boxy, opt));
+    }
     try std.testing.expectEqualStrings("Specializing", loweringProgressLabel(.lss));
     try std.testing.expectEqualStrings("Lowering", loweringProgressLabel(.boxy));
 }
@@ -16750,9 +16761,9 @@ fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFi
     };
     defer ctx.gpa.free(bytes);
 
-    var hasher = base.Sha256.init(.{});
-    hasher.update(bytes);
-    return .{ .hash = hasher.finalResult() };
+    // The same digest the compiler records for a file it read
+    // (`compile.watch_inputs.State.hash`).
+    return .{ .hash = base.SourceDigest.of(bytes).bytes };
 }
 
 fn computeWatchSnapshot(ctx: *CliCtx, paths: []const []const u8) WatchSnapshotError![]WatchSnapshotEntry {
@@ -17238,7 +17249,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
         .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
-        .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt),
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
         // `roc test` never links a program, so it publishes no executable
@@ -17318,7 +17329,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     var test_plan = try buildCliTestPlan(ctx, modules, &module_results);
     defer test_plan.deinit(ctx.gpa);
 
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt);
 
     // A root whose module's outcome file records what running it observed
     // under these exact checked sources and this execution mode observes
@@ -18557,7 +18568,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
         ctx.gpa,
         ctx.coreCtx(),
         backend_kind,
-        currentRuntimeSpecializationStrategy(repl_args.specialization_strategy),
+        currentRuntimeSpecializationStrategy(repl_args.specialization_strategy, repl_args.opt),
     );
     defer session.deinit();
 
@@ -18724,7 +18735,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
     // instead of compiling a plugin on the fly.
     var glue_spec = args.glue_spec;
     var installed_plugin_path: ?[]const u8 = null;
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy, args.opt);
     switch (install_store.classifySourceRef(args.glue_spec)) {
         .local_path => {},
         .url => glue_spec = (try resolveUrlBundle(ctx, args.glue_spec)).source_path,
@@ -20293,7 +20304,6 @@ fn checkFileWithBuildEnvPreserved(
     track_watch_inputs: bool,
     synthetic_default_app: ?SyntheticDefaultAppMapping,
     reporter: ?*progress.Reporter,
-    specialization_strategy: base.SpecializationStrategy,
 ) CheckFileWithBuildEnvPreservedError!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -20307,7 +20317,8 @@ fn checkFileWithBuildEnvPreserved(
         .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
-        .specialization_strategy = specialization_strategy,
+        // A check has no runtime consumer.
+        .specialization_strategy = .boxy,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
@@ -20344,7 +20355,6 @@ fn checkFileWithBuildEnv(
     source_dir_override: ?[]const u8,
     synthetic_default_app: ?SyntheticDefaultAppMapping,
     reporter: ?*progress.Reporter,
-    specialization_strategy: base.SpecializationStrategy,
 ) CheckFileWithBuildEnvPreservedError!CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -20355,7 +20365,8 @@ fn checkFileWithBuildEnv(
         .verbose_cache = cache_config.verbose,
         .timings = timings,
         .resolution_config = resolution_config,
-        .specialization_strategy = specialization_strategy,
+        // A check has no runtime consumer.
+        .specialization_strategy = .boxy,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
@@ -20526,7 +20537,6 @@ fn rocCheckDefaultApp(
         original_source_dir,
         SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         reporter,
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
     );
     errdefer check_result.deinit(ctx.gpa);
 
@@ -20574,7 +20584,6 @@ fn rocCheckDefaultAppPreserved(
         track_watch_inputs,
         SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         reporter,
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
     );
     errdefer result_with_env.deinit(ctx.gpa);
 
@@ -20675,7 +20684,6 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             true,
             null,
             &reporter,
-            currentRuntimeSpecializationStrategy(args.specialization_strategy),
         ) catch |err| {
             reporter.fail();
             try writeWatchInputsFile(ctx, file_path, null, extra_paths);
@@ -20715,7 +20723,6 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             null,
             null,
             &reporter,
-            currentRuntimeSpecializationStrategy(args.specialization_strategy),
         ) catch |err| {
             reporter.fail();
             return handleProcessFileError(err, stderr, args.path);
@@ -21116,7 +21123,6 @@ fn bumpCheckSide(
         false,
         null,
         null,
-        .lss,
     ) catch |err| {
         try handleProcessFileError(err, stderr, path);
         return error.CliError;
@@ -21667,7 +21673,6 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         false,
         null,
         null,
-        .lss,
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
     };

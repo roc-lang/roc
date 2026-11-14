@@ -212,6 +212,10 @@ pub const StaticDescs = struct {
     pub fn wordSlot(self: *StaticDescs, word: CaptureWord) Allocator.Error!LIR.StaticDataId {
         if (self.word_slots.get(word)) |known| return known;
         const slot = try self.addSlot();
+        // A callable word is an erased callable, and every read of its slot
+        // has that layout: the one that takes the word and any later read
+        // of a stored value the callable is (`Builder.staticRead`).
+        if (word == .callable) self.result.static_data_values.items[@backingInt(slot)].layout_idx = try self.result.layouts.insertErasedCallable();
         const slot_export = try self.addExport(try LirProgram.staticDataSymbolName(self.allocator, slot), self.ptrSize(), self.ptrSize(), slot);
         if (try self.wordTarget(word)) |target| {
             try self.setRelocations(slot_export, &.{.{ .offset = 0, .target = target.node, .addend = target.addend }});

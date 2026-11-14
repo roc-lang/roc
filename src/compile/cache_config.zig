@@ -370,14 +370,23 @@ pub const Constants = struct {
     /// 187: CIR external nominal construction and pattern nodes record which
     ///      index space their module refers to, and a reserved-module-name
     ///      diagnostic node is added.
+    /// 188: a serialized module env records the BLAKE3 digest of its source,
+    ///      and module identities, cache keys and file-dependency content
+    ///      hashes are computed from source digests; a flex variable records
+    ///      whether it is a deferred literal's type. Includes the 187 changes.
     /// 189: checked artifacts store their type, scheme, blob and proc-base
     ///      interning tables; combines with the independent 187 entry change.
     /// 190: type tags record whether they are in their row only because `match`
     ///      branch patterns asked for them.
+    /// 191: includes both the 188 changes (source digests, deferred-literal
+    ///      flex variables) and the 190 changes (pattern-only type tags).
     /// 191: combines the independent 189 and 190 entry changes.
+    /// 192: combines the two independent 191 entries, so it includes the 188,
+    ///      189 and 190 changes.
     /// 192: literal argument roots record their edge owner as their own root
     ///      source and hold no expression.
-    pub const CACHE_VERSION = 192;
+    /// 193: combines the two independent 192 entries.
+    pub const CACHE_VERSION = 193;
 };
 
 /// Configuration for the Roc cache system.

@@ -415,5 +415,5 @@ since the platform is compiled separately and the compiler can't see what it doe
 Those are stored as a heap allocation that holds a pointer to the function along with its
 captured values.
 
-> Note that with `roc build --specialize=no`, all function values are stored this way
-> instead. See the [types performance section](types#performance) for more on that option.
+> Note that in a build without monomorphization, all function values are stored this way
+> instead. See the [types performance section](types#performance) for which builds those are.

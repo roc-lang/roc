@@ -184,11 +184,30 @@ pub const Task = union(enum) {
     /// table at `inputs` (`stored_fn.zig`).
     finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, inputs: []const Word, capture_types: []const TypeId, capture_descs: []const Word },
     finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const Word, dicts: []const Word, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
+    /// Restore stored constant `node` at `ty` as static data alone: push
+    /// its slot on `Builder.static_parts` and read nothing. A stored value
+    /// built from parts is restored this way, so the body holds one read of
+    /// the whole value however many parts it has.
+    restore_part: struct { source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId },
+    /// Pop a restored value and push the static data slot it reads.
+    value_part,
+    /// Pop a static data slot and push a read of it.
+    read_static_part,
+    /// Pop the static data slot of a stored discriminant-only tag `name` of
+    /// `ty` and push the tag's construction (`Builder.enumConstant`).
+    read_static_enum: struct { ty: TypeId, name: types.NameId },
+    /// Pop the slots of a stored product's parts and push the product's.
     finish_restore_struct: struct { ty: TypeId, count: u32 },
+    /// Pop the slots of a stored tag's payloads and push the tag's.
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
+    /// Pop the slots of a stored list's items and push the list's.
     finish_static_list: struct { ty: TypeId, count: u32, capacity: u64 },
+    /// Pop the slot of a stored box's payload and push the box's.
     finish_static_box: struct { ty: TypeId, sequence_step_offset: ?u32 = null },
     remember_static_value: lower.Program.StoredValueKey,
+    /// Record the slot on top of `Builder.static_parts` as the stored
+    /// value's, leaving it there.
+    remember_static_part: lower.Program.StoredValueKey,
     /// Push a value of `ty` for an expression whose evaluation diverged.
     unreachable_value: TypeId,
     /// Push the `{}` value of a construct whose value nothing reads.
@@ -579,6 +598,14 @@ pub const Builder = struct {
     /// The destination each row-coerced result's own value is built at: the
     /// type its coercion produces (`lowerRowCoercion`).
     coerced_destinations: collections.DenseMapUnmanaged(ExprId, TypeId) = .empty,
+    /// The join value parameter each branch value of a joined construct
+    /// flows to. A tag expression in that position is constructed in the
+    /// parameter itself, so the parameter's definition on that path is the
+    /// tag construction (design.md "Outcome-Conditioned Argument
+    /// Restitution" reads a result discriminant from exactly that shape).
+    /// An expression whose value is converted on its way to the join has no
+    /// entry.
+    value_destinations: collections.DenseMapUnmanaged(ExprId, LocalId) = .empty,
     /// The expressions whose value is the procedure's result, as their
     /// parents read them.
     tail_exprs: collections.DenseMapUnmanaged(ExprId, void) = .empty,
@@ -599,6 +626,9 @@ pub const Builder = struct {
     loops: std.ArrayList(LoopExit) = .empty,
     next_join: u32 = 0,
     values: std.ArrayList(LocalId) = .empty,
+    /// The static data slots of the stored values being restored as parts
+    /// (`Task.restore_part`), which no statement of the body reads.
+    static_parts: std.ArrayList(LIR.StaticDataId) = .empty,
     tasks: std.ArrayList(Task) = .empty,
     region: base.Region = base.Region.zero(),
     result_local: ?LocalId = null,
@@ -687,6 +717,7 @@ pub const Builder = struct {
         self.type_descs.deinit(self.allocator);
         self.product_shapes.deinit(self.allocator);
         self.constant_slots.deinit(self.allocator);
+        self.static_parts.deinit(self.allocator);
         self.recipes.deinit();
         self.recipe_locals.deinit(self.allocator);
         self.static_word_locals.deinit(self.allocator);
@@ -702,6 +733,7 @@ pub const Builder = struct {
         self.join_infos.deinit(self.allocator);
         self.destination_types.deinit(self.allocator);
         self.coerced_destinations.deinit(self.allocator);
+        self.value_destinations.deinit(self.allocator);
         self.tail_exprs.deinit(self.allocator);
         self.tail_calls.deinit();
         self.merges.deinit(self.allocator);
@@ -852,6 +884,45 @@ pub const Builder = struct {
     pub fn isTail(self: *Builder, expr: ExprId) bool {
         if (self.bodies().rowCoercion(expr) != null) return false;
         return self.tail_exprs.contains(expr);
+    }
+
+    /// Whether tail `if` or `match` expression `construct` returns a closed
+    /// tag that every one of its branches constructs. Such a construct joins
+    /// its branches and returns the join's value parameter, as `.lss` lowers
+    /// it, so the procedure returns one local whose definition on each path
+    /// is that path's tag construction (design.md "Outcome-Conditioned
+    /// Argument Restitution"). No branch ends in a call, so no tail call is
+    /// given up.
+    fn returnsConstructedTag(self: *Builder, construct: ExprId) Allocator.Error!bool {
+        if (self.result_local != null) return false;
+        switch (self.bodies().exprData(construct)) {
+            .if_ => |if_| {
+                for (if_.branches) |branch| if (!self.constructsTag(self.bodies().ifBranch(branch).body)) return false;
+                if (!self.constructsTag(if_.final_else)) return false;
+            },
+            .match_ => |match| for (match.branches) |branch| {
+                if (!self.constructsTag(self.bodies().matchBranch(branch).value)) return false;
+            },
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only an `if` or a `match` asks how its branches return
+        }
+        const ty = try self.exprType(construct);
+        if (!try self.closed(ty)) return false;
+        return self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty)).tag == .tag_union;
+    }
+
+    /// Whether the value of `expr` is a tag expression's own construction:
+    /// a tag, a nominal constructed from one, or a block ending in either.
+    fn constructsTag(self: *Builder, expr: ExprId) bool {
+        var current = expr;
+        while (true) switch (self.bodies().exprData(current)) {
+            .tag, .zero_argument_tag => return true,
+            .block => |block| current = block.final_expr,
+            .nominal => |nominal| return switch (self.bodies().exprData(nominal.backing_expr)) {
+                .tag, .zero_argument_tag => true,
+                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+            },
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+        };
     }
 
     /// The destination a value of expression `expr` (of its own type `own`)
@@ -1140,7 +1211,9 @@ pub const Builder = struct {
         const info: JoinInfo = if (index < self.join_infos.items.len) self.join_infos.items[index] else .{ .value = .none, .merge = .none };
         if (info.value.get()) |param| {
             const source = value orelse invariant("a jump to a value join carried no value");
-            try self.emitLinear(.{ .set_local = .{ .target = param, .value = source, .mode = .initialize_join_param, .next = undefined } });
+            // A value constructed in the parameter itself is already there
+            // (`value_destinations`).
+            if (source != param) try self.emitLinear(.{ .set_local = .{ .target = param, .value = source, .mode = .initialize_join_param, .next = undefined } });
         }
         if (info.merge.get()) |merge| {
             const m = self.merges.items[merge];
@@ -2910,6 +2983,7 @@ pub const Builder = struct {
     pub fn run(self: *Builder) Allocator.Error!void {
         while (self.tasks.pop()) |task| try self.step(task);
         if (self.values.items.len != 0) invariant("body lowering left values on its value stack");
+        if (self.static_parts.items.len != 0) invariant("body lowering left static data slots on its parts stack");
     }
 
     pub fn push(self: *Builder, task: Task) Allocator.Error!void {
@@ -3169,20 +3243,18 @@ pub const Builder = struct {
                 const packed_closure = try self.staticClosure(closure.worker, values, closure.capture_types, inputs, !try self.allClosed(worker.capture_types), null);
                 try self.pushValue(try self.adaptValue(packed_closure, closure.worker_ty, closure.ty));
             },
-            .finish_restore_struct => |restore| {
-                const values = try self.popValues(restore.count);
-                defer self.allocator.free(values);
-                try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .product, values));
-            },
+            .restore_part => |restore| try self.restorePartStep(restore.source, restore.node, restore.ty),
+            .value_part => try self.static_parts.append(self.allocator, try self.constantSlot(self.popValue())),
+            .read_static_part => try self.pushValue(try self.staticRead(self.popStaticPart())),
+            .read_static_enum => |read| try self.pushValue(try self.enumConstant(read.ty, read.name, self.popStaticPart())),
+            .finish_restore_struct => |restore| try self.finishStaticParts(restore.ty, restore.count, .product),
             .finish_restore_tag => |restore| {
-                const values = try self.popValues(restore.count);
-                defer self.allocator.free(values);
                 const structural = try self.structuralType(restore.ty);
                 const tags = self.program.store.tagSpan(self.program.store.get(structural).tag_union.tags);
                 const variant = for (tags, 0..) |tag, index| {
                     if (tag.name == restore.name) break index;
                 } else invariant("a stored tag has no declared variant");
-                try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .{ .tag = @intCast(variant) }, values));
+                try self.finishStaticParts(restore.ty, restore.count, .{ .tag = @intCast(variant) });
             },
             .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .{ .list = value.capacity }),
             .finish_static_box => |value| try self.finishStaticParts(value.ty, 1, if (value.sequence_step_offset) |offset| .{ .boxed_sequence = offset } else .box),
@@ -3190,6 +3262,11 @@ pub const Builder = struct {
                 const value = self.popValue();
                 try self.program.stored_value_slots.put(self.allocator, key, try self.constantSlot(value));
                 try self.pushValue(value);
+            },
+            .remember_static_part => |key| {
+                const parts = self.static_parts.items;
+                if (parts.len == 0) invariant("a stored value's restore left no static data slot to remember");
+                try self.program.stored_value_slots.put(self.allocator, key, parts[parts.len - 1]);
             },
             .finish_field_access => |expr| try self.finishFieldAccess(expr),
             .finish_discriminant_eq => |eq| try self.finishDiscriminantEq(eq.value_ty, eq.tag, eq.negated),
@@ -3274,7 +3351,14 @@ pub const Builder = struct {
     }
 
     pub fn boolValue(self: *Builder, value: bool) Allocator.Error!LocalId {
-        const local = try self.closedLocal(.bool);
+        return self.boolValueInto(value, null);
+    }
+
+    /// `boolValue` constructed in `into` when given, a `Bool` local this
+    /// construction defines.
+    fn boolValueInto(self: *Builder, value: bool, into: ?LocalId) Allocator.Error!LocalId {
+        const local = into orelse try self.closedLocal(.bool);
+        if (self.store.getLocal(local).layout_idx != .bool) invariant("a Bool is constructed in a local of another layout");
         const discriminant = @import("../common.zig").boolDiscriminant(value);
         try self.emitLinear(.{ .assign_tag = .{ .target = local, .variant_index = discriminant, .discriminant = discriminant, .payload = null, .next = undefined } });
         return local;
@@ -3406,7 +3490,10 @@ pub const Builder = struct {
         self.region = self.nodeRegion(@backingInt(expr_id));
         if (self.destination_types.get(expr_id)) |destination| if (!try self.program.hasError(self.module, wide)) {
             const own = try self.convert(wide);
-            if (try self.retagInto(own, destination)) |to| try self.push(.{ .retag = .{ .from = own, .to = to } });
+            if (try self.retagInto(own, destination)) |to| {
+                _ = self.value_destinations.remove(expr_id);
+                try self.push(.{ .retag = .{ .from = own, .to = to } });
+            }
         };
         try self.coerced_destinations.put(self.allocator, expr_id, try self.valueType(expr_id));
         try self.push(.{ .own_expr = expr_id });
@@ -3418,7 +3505,10 @@ pub const Builder = struct {
         self.region = expr.source_region;
         if (self.ownDestination(expr_id) != null and !try self.program.hasError(self.module, expr.ty)) {
             const own = try self.convert(expr.ty);
-            if (try self.retagTarget(expr_id, own)) |destination| try self.push(.{ .retag = .{ .from = own, .to = destination } });
+            if (try self.retagTarget(expr_id, own)) |destination| {
+                _ = self.value_destinations.remove(expr_id);
+                try self.push(.{ .retag = .{ .from = own, .to = destination } });
+            }
         }
         // An expression compile-time evaluation hoisted and stored is read
         // (design.md "Runtime Programs Read Stored Values").
@@ -3439,6 +3529,7 @@ pub const Builder = struct {
             .lookup_required => try self.lowerLookupExternal(expr_id, self.bodies().resolvedRef(expr_id) orelse invariant("a platform requirement lookup had no resolved reference")),
             .block => |block| {
                 if (self.isTail(expr_id)) try self.tail_exprs.put(self.allocator, block.final_expr, {});
+                if (self.value_destinations.get(expr_id)) |into| try self.value_destinations.put(self.allocator, block.final_expr, into);
                 // A divergent statement leaves the rest of the block
                 // unreachable: nothing after it is lowered, and the block's
                 // value is never produced.
@@ -3513,10 +3604,14 @@ pub const Builder = struct {
                     .tag => |tag| {
                         const nominal_ty = try self.exprType(expr_id);
                         try self.passDestination(backing, nominal_ty);
+                        if (self.value_destinations.get(expr_id)) |into| try self.value_destinations.put(self.allocator, nominal.backing_expr, into);
                         try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = nominal_ty } });
                         try self.pushExprsReversed(tag.args);
                     },
-                    .zero_argument_tag => try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } }),
+                    .zero_argument_tag => {
+                        if (self.value_destinations.get(expr_id)) |into| try self.value_destinations.put(self.allocator, nominal.backing_expr, into);
+                        try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } });
+                    },
                     .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
                         // The operand is the nominal's own backing, which a
                         // padded declaration lays out differently from the
@@ -3538,9 +3633,14 @@ pub const Builder = struct {
                 try self.push(.{ .expr = eq.rhs });
                 try self.push(.{ .expr = eq.lhs });
             },
-            .expect => |cond| {
-                try self.push(.{ .finish_expect = expr_id });
-                try self.push(.{ .expr = cond });
+            // An omitted inline expect evaluates nothing: its condition is
+            // never lowered, and the expression is `{}`.
+            .expect => |cond| switch (self.inlineExpectMode()) {
+                .run => {
+                    try self.push(.{ .finish_expect = expr_id });
+                    try self.push(.{ .expr = cond });
+                },
+                .omit => try self.pushValue(try self.unitValue()),
             },
             .crash => |literal| try self.crashValue(self.bodies().text(literal), try self.exprType(expr_id)),
             .runtime_error => |runtime_error| {
@@ -3557,7 +3657,7 @@ pub const Builder = struct {
             },
             .if_ => |if_| {
                 const first_cond = self.bodies().ifBranch(if_.branches[0]).cond;
-                if (self.isTail(expr_id)) {
+                if (self.isTail(expr_id) and !try self.returnsConstructedTag(expr_id)) {
                     for (if_.branches) |branch| try self.tail_exprs.put(self.allocator, self.bodies().ifBranch(branch).body, {});
                     try self.tail_exprs.put(self.allocator, if_.final_else, {});
                     // Each branch returns; nothing reads the construct's
@@ -3574,6 +3674,8 @@ pub const Builder = struct {
                 const join = self.freshJoin();
                 const merge = try self.beginMerge(try self.bodies().stateMergeBinders(expr_id), .joined);
                 const after = try self.declareMergeJoin(join, result, merge);
+                for (if_.branches) |branch| try self.value_destinations.put(self.allocator, self.bodies().ifBranch(branch).body, result);
+                try self.value_destinations.put(self.allocator, if_.final_else, result);
                 try self.push(.{ .push_value = result });
                 if (merge) |m| try self.push(.{ .enter_merge = m });
                 try self.push(.{ .resume_at = after });
@@ -4209,9 +4311,29 @@ pub const Builder = struct {
     /// Arguments"). An interpolation's argument produces its assembler.
     pub fn lowerInstanceLiteral(self: *Builder, node: u32, lit_ty: TypeId) Allocator.Error!void {
         const index = self.ownLiteralRequirementIndex(node) orelse invariantFmt("a literal whose conversion depends on its instance has no literal_requirement in its scope (worker {s} #{d}, module {d}, expr {d}, alias scopes {d}, foreign {?}, literal scopes {d}, frames {?})", .{ @tagName(self.currentWorker().key), @backingInt(self.worker_id), @backingInt(self.module), node, self.alias_scopes.items.len, self.foreign_scopes, self.currentWorker().literal_scopes.len, self.thunk_frames });
-        const thunk = try self.materialize(try self.scopeLiteral(.{ .depth = 0, .index = index }));
+        const thunk = try self.literalThunkLocal(try self.scopeLiteral(.{ .depth = 0, .index = index }));
         const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = lit_ty, .effectful = false } });
         try self.pushValue(try self.emitErasedCall(thunk, fn_ty, &.{}, lit_ty));
+    }
+
+    /// The local holding `word`, the thunk of the literal being lowered. A
+    /// literal argument of this worker is read from its type table where its
+    /// literal is, not in the entry chain: only that literal reads it, so
+    /// the body holds each of its literal arguments only across the call
+    /// that converts it, however many it takes (design.md "Literal
+    /// Arguments").
+    fn literalThunkLocal(self: *Builder, word: Word) Allocator.Error!LocalId {
+        const index = switch (word) {
+            .static => return try self.materialize(word),
+            .recipe => |named| switch (self.recipes.get(self.recipes.resolve(named))) {
+                .input => |index| index,
+                .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => return try self.materialize(word),
+            },
+        };
+        const table = self.table_local orelse invariant("a worker without a type table read a literal argument");
+        const local = try self.closedLocal(try self.erasedLayout());
+        try self.emitDyn(local, .{ .table_entry = .{ .table = table, .index = index } });
+        return local;
     }
 
     /// The literal requirement of the innermost scope whose literal is at
@@ -5700,8 +5822,19 @@ pub const Builder = struct {
         const ty = try self.structuralType(raw_ty);
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
         const data = const_store.get(node);
-        if (data != .scalar) if (self.program.stored_value_slots.get(key)) |slot| return self.pushValue(try self.staticRead(slot));
-        if (data != .crash and data != .checked_error) try self.push(.{ .remember_static_value = key });
+        // A discriminant-only tag is a scalar value: its read is its
+        // construction (design.md "Compile-Time Evaluation").
+        const enum_tag = try self.storedEnumTag(source, node, raw_ty);
+        if (data != .scalar) if (self.program.stored_value_slots.get(key)) |slot| {
+            return self.pushValue(if (enum_tag) |name| try self.enumConstant(raw_ty, name, slot) else try self.staticRead(slot));
+        };
+        // A value built from parts is remembered where its parts are
+        // restored (`restorePartStep`), and a failed value has no slot.
+        const remembered_here = switch (data) {
+            .scalar, .zst, .str, .boxy_fn, .nominal, .fn_value => true,
+            .pending, .crash, .checked_error, .box, .tuple, .record, .tag, .list => false,
+        };
+        if (remembered_here) try self.push(.{ .remember_static_value = key });
         switch (data) {
             .pending => invariant("a stored constant was never filled"),
             .scalar => |scalar| {
@@ -5745,6 +5878,68 @@ pub const Builder = struct {
             },
             .boxy_fn => |function| try self.restoreStoredFn(source, const_store.strBytes(function.recipe), function.captures),
             .nominal => |nominal| try self.push(.{ .restore = .{ .source = source, .node = nominal.backing, .ty = ty } }),
+            // The body reads the whole value once: its parts are static
+            // data, never values of this body.
+            .box, .tuple, .record, .tag, .list => {
+                try self.push(if (enum_tag) |name| .{ .read_static_enum = .{ .ty = raw_ty, .name = name } } else .read_static_part);
+                try self.restorePartStep(source, node, raw_ty);
+            },
+            .fn_value => |fn_id| try self.restoreFn(source, fn_id, raw_ty),
+        }
+    }
+
+    /// The tag name of stored constant `node` when it is a payload-free tag,
+    /// possibly inside nominal wrappers, of a closed `ty` whose committed
+    /// tag union stores its discriminant alone.
+    fn storedEnumTag(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!?types.NameId {
+        const const_store = self.program.constStore(source);
+        var current = node;
+        const tag = while (true) switch (const_store.get(current)) {
+            .nominal => |nominal| current = nominal.backing,
+            .tag => |tag| break tag,
+            .pending, .scalar, .zst, .str, .boxy_fn, .fn_value, .crash, .checked_error, .box, .tuple, .record, .list => return null,
+        };
+        if (tag.payloads.len != 0) return null;
+        const layouts = &self.program.result.layouts;
+        const committed = layouts.getLayout(try self.program.layouts.layoutOf(ty));
+        if (committed.tag != .tag_union or layouts.getTagUnionInfo(committed).discriminant_offset != 0) return null;
+        return try self.program.store.internName(tag.tag_name);
+    }
+
+    /// The stored discriminant-only tag `name` of `ty` as its construction,
+    /// which keeps the constant visible to the passes that read a tag's
+    /// discriminant; `slot` is the value's immutable data for a use that
+    /// stores it in other static data.
+    fn enumConstant(self: *Builder, ty: TypeId, name: types.NameId, slot: LIR.StaticDataId) Allocator.Error!LocalId {
+        const local = try self.buildTag(ty, name, &.{});
+        try self.constant_slots.put(self.allocator, local, slot);
+        return local;
+    }
+
+    /// Restore stored constant `node` of `source` at `raw_ty` as static data
+    /// alone (`Task.restore_part`): push its slot on `static_parts`, with
+    /// tasks for its parts first, and emit no statement for it.
+    fn restorePartStep(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, raw_ty: TypeId) Allocator.Error!void {
+        const const_store = self.program.constStore(source);
+        const store = &self.program.store;
+        if (!store.isClosed(raw_ty)) invariant("a stored value is restored at an open type");
+        const ty = try self.structuralType(raw_ty);
+        const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
+        if (self.program.stored_value_slots.get(key)) |slot| return try self.static_parts.append(self.allocator, slot);
+        switch (const_store.get(node)) {
+            .pending => invariant("a stored constant was never filled"),
+            .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
+            // A function value is built by its own restore, and a failed
+            // value fails where it is restored: each is restored as a value,
+            // whose slot is the part.
+            .crash, .checked_error, .boxy_fn, .fn_value => {
+                try self.push(.value_part);
+                try self.push(.{ .restore = .{ .source = source, .node = node, .ty = raw_ty } });
+            },
+            .nominal => |nominal| {
+                try self.push(.{ .remember_static_part = key });
+                try self.push(.{ .restore_part = .{ .source = source, .node = nominal.backing, .ty = ty } });
+            },
             .box => |child| {
                 const payload = switch (store.get(ty)) {
                     .box => |payload| payload,
@@ -5755,8 +5950,9 @@ pub const Builder = struct {
                     const layouts = &self.program.result.layouts;
                     break :blk layouts.getStructFieldOffsetByOriginalIndex(layouts.getLayout(payload_layout).getStruct().idx, 1);
                 } else null;
+                try self.push(.{ .remember_static_part = key });
                 try self.push(.{ .finish_static_box = .{ .ty = raw_ty, .sequence_step_offset = sequence_step_offset } });
-                try self.push(.{ .restore = .{ .source = source, .node = child, .ty = payload } });
+                try self.push(.{ .restore_part = .{ .source = source, .node = child, .ty = payload } });
             },
             .tuple, .record => |children| {
                 const component_types: []const TypeId = switch (store.get(ty)) {
@@ -5773,11 +5969,12 @@ pub const Builder = struct {
                     .primitive, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a stored product restored at a non-product type"),
                 };
                 if (component_types.len != children.len) invariant("a stored product's arity differs from its type");
+                try self.push(.{ .remember_static_part = key });
                 try self.push(.{ .finish_restore_struct = .{ .ty = raw_ty, .count = @intCast(children.len) } });
                 var index = children.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .restore = .{ .source = source, .node = children[index], .ty = component_types[index] } });
+                    try self.push(.{ .restore_part = .{ .source = source, .node = children[index], .ty = component_types[index] } });
                 }
             },
             .tag => |tag| {
@@ -5791,11 +5988,12 @@ pub const Builder = struct {
                     if (candidate.name == name and candidate.payloads.len == tag.payloads.len) break index;
                 } else invariant("a stored tag is absent from its type");
                 const payload_types = store.span(tags[variant].payloads);
+                try self.push(.{ .remember_static_part = key });
                 try self.push(.{ .finish_restore_tag = .{ .ty = raw_ty, .name = name, .count = @intCast(tag.payloads.len) } });
                 var index = tag.payloads.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .restore = .{ .source = source, .node = tag.payloads[index], .ty = payload_types[index] } });
+                    try self.push(.{ .restore_part = .{ .source = source, .node = tag.payloads[index], .ty = payload_types[index] } });
                 }
             },
             .list => |list| {
@@ -5805,18 +6003,27 @@ pub const Builder = struct {
                 };
                 switch (list.items) {
                     .nodes => |nodes| {
+                        try self.push(.{ .remember_static_part = key });
                         try self.push(.{ .finish_static_list = .{ .ty = raw_ty, .count = @intCast(nodes.len), .capacity = list.capacity } });
+                        try self.tasks.ensureUnusedCapacity(self.allocator, nodes.len);
                         var index = nodes.len;
                         while (index > 0) {
                             index -= 1;
-                            try self.push(.{ .restore = .{ .source = source, .node = nodes[index], .ty = elem } });
+                            self.tasks.appendAssumeCapacity(.{ .restore_part = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
-                    .empty, .packed_bytes => try self.pushValue(try self.storedDataLocal(source, node, raw_ty)),
+                    .empty, .packed_bytes => try self.pushStoredDataPart(source, node, raw_ty),
                 }
             },
-            .fn_value => |fn_id| try self.restoreFn(source, fn_id, raw_ty),
         }
+    }
+
+    /// Push the slot of stored constant `node`, which static data holds as
+    /// it is stored, and remember it as the value's.
+    fn pushStoredDataPart(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!void {
+        const slot = try self.storedDataSlot(source, node, ty);
+        try self.program.stored_value_slots.put(self.allocator, .{ .module = source.module, .node = node, .ty = ty }, slot);
+        try self.static_parts.append(self.allocator, slot);
     }
 
     /// Restore stored function value `fn_id` of `module`'s const store as
@@ -6377,30 +6584,40 @@ pub const Builder = struct {
         invariant("a completed compile-time value has no immutable data slot");
     }
 
-    pub fn staticPartsLocal(self: *Builder, value_layout: layout.Idx, kind: @FieldType(lir_core.Program.StaticDataParts, "kind"), values: []const LocalId) Allocator.Error!LocalId {
-        const children = try self.allocator.alloc(LIR.StaticDataId, values.len);
-        errdefer self.allocator.free(children);
-        for (values, children) |value, *child| child.* = try self.constantSlot(value);
+    /// The static data slot of a value of `value_layout` built from the
+    /// parts `children`. Nothing reads the slot until a statement does
+    /// (`staticRead`), so a part of a larger static value costs the body no
+    /// statement.
+    fn staticPartsSlot(self: *Builder, value_layout: layout.Idx, kind: @FieldType(lir_core.Program.StaticDataParts, "kind"), children: []const LIR.StaticDataId) Allocator.Error!LIR.StaticDataId {
+        const owned = try self.allocator.dupe(LIR.StaticDataId, children);
+        errdefer self.allocator.free(owned);
         const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.program.result.static_data_values.items.len));
         try self.program.result.static_data_values.append(self.allocator, .{
             .initializer = .none,
             .layout_idx = value_layout,
-            .parts = .{ .kind = kind, .children = children },
+            .parts = .{ .kind = kind, .children = owned },
         });
-        return self.staticRead(slot);
+        return slot;
     }
 
+    fn popStaticPart(self: *Builder) LIR.StaticDataId {
+        return self.static_parts.pop() orelse invariant("body lowering popped an empty static parts stack");
+    }
+
+    /// Pop the slots of the `count` restored parts of a stored value of
+    /// `ty` and push the value's own slot.
     fn finishStaticParts(self: *Builder, ty: TypeId, count: u32, kind: @FieldType(lir_core.Program.StaticDataParts, "kind")) Allocator.Error!void {
-        const values = try self.popValues(count);
-        defer self.allocator.free(values);
+        const parts = self.static_parts.items;
+        if (parts.len < count) invariant("a stored value's restore left fewer static data slots than the value has parts");
+        const first = parts.len - count;
         const value_layout = try self.program.layouts.layoutOf(ty);
         // Box(function) has the callable's own representation, with no
-        // second allocation or pointer around it.
-        if (kind == .box and self.program.result.layouts.getLayout(value_layout).tag == .erased_callable) {
-            try self.pushValue(values[0]);
-            return;
-        }
-        try self.pushValue(try self.staticPartsLocal(value_layout, kind, values));
+        // second allocation or pointer around it: the box's slot is its
+        // payload's.
+        if (kind == .box and self.program.result.layouts.getLayout(value_layout).tag == .erased_callable) return;
+        const slot = try self.staticPartsSlot(value_layout, kind, parts[first..]);
+        self.static_parts.shrinkRetainingCapacity(first);
+        try self.static_parts.append(self.allocator, slot);
     }
 
     /// What a procedure use calls: a template's worker, the worker an exact
@@ -6887,7 +7104,24 @@ pub const Builder = struct {
     pub fn dictionaryOfAt(self: *Builder, evidence: static_dispatch.CheckedEvidence, interface: ?TypeId) Allocator.Error!Word {
         const table = self.view.view.static_dispatch_plans;
         switch (evidence.resolution) {
-            .constraint => |constraint| return try self.scopeDictionary(constraint.index),
+            // A dictionary of this worker's scopes has the storage of the
+            // interface its own requirement names (`scopeInterface`), at
+            // the types this edge fixes its row tails to
+            // (`Program.dictionaryTypeAtEdge`). A consumer whose requirement
+            // names another storage of that signature (a result row the
+            // consumer's instantiation widens, a record whose fields it
+            // stores in presence slots) takes it adapted, as it takes any
+            // other method (design.md "Sealed Result Rows"); a consumer
+            // whose requirement names the same storage takes the dictionary
+            // itself, so forwarding one, to another worker or around a
+            // recursive call, builds nothing.
+            .constraint => |constraint| {
+                const dictionary = try self.scopeDictionary(constraint.index);
+                const expected = interface orelse return dictionary;
+                const declared = (try self.scopeInterface(constraint.index)) orelse return dictionary;
+                const own = try self.program.dictionaryTypeAtEdge(self.allocator, declared, expected);
+                return try self.adaptDictionary(dictionary, own, expected);
+            },
             .direct => |node_id| {
                 const node = table.evidenceNode(node_id);
                 if (node.target.kind == .local_proc) {
@@ -8814,11 +9048,14 @@ pub const Builder = struct {
                     break :value try self.foldWord(id);
                 },
             };
-            break :table try self.staticRead(try self.program.static_descs.wordSlot(static));
+            break :table try self.program.static_descs.wordSlot(static);
         };
         const table_count: usize = @intFromBool(table != null);
-        var fields: std.ArrayList(LocalId) = .empty;
+        // The callable's parts are static data slots: the body reads the
+        // callable alone.
+        var fields: std.ArrayList(LIR.StaticDataId) = .empty;
         defer fields.deinit(self.allocator);
+        try fields.ensureTotalCapacity(self.allocator, capture_record_leading_words + table_count + captured.len);
         var record_layout: layout.Idx = .zst;
         if (dynamic) {
             const count = capture_record_leading_words + table_count + captured.len;
@@ -8829,25 +9066,25 @@ pub const Builder = struct {
                 field.* = .{ .index = @intCast(i), .layout = if (i < words) .opaque_ptr else try self.program.layouts.layoutOf(capture_types[i - words]) };
             }
             record_layout = try self.program.result.layouts.putNominalStructFields(layouts);
-            const record_desc = try self.captureRecordDesc(@intCast(words), capture_descs orelse try self.descWords(capture_types));
-            const capacity = try self.staticPartsLocal(.opaque_ptr, .{ .word = self.program.result.layouts.layoutSize(self.program.result.layouts.getLayout(record_layout)) }, &.{});
-            try fields.appendSlice(self.allocator, &.{ record_desc, capacity });
-            if (table) |local| try fields.append(self.allocator, local);
-            try fields.appendSlice(self.allocator, captured);
+            const record_desc = try self.constantSlot(try self.captureRecordDesc(@intCast(words), capture_descs orelse try self.descWords(capture_types)));
+            const capacity = try self.staticPartsSlot(.opaque_ptr, .{ .word = self.program.result.layouts.layoutSize(self.program.result.layouts.getLayout(record_layout)) }, &.{});
+            fields.appendSliceAssumeCapacity(&.{ record_desc, capacity });
+            if (table) |slot| fields.appendAssumeCapacity(slot);
+            for (captured) |value| fields.appendAssumeCapacity(try self.constantSlot(value));
         } else {
             record_layout = try self.captureLayout(capture_types, table_count);
-            try fields.appendSlice(self.allocator, captured);
-            if (table) |local| try fields.append(self.allocator, local);
+            for (captured) |value| fields.appendAssumeCapacity(try self.constantSlot(value));
+            if (table) |slot| fields.appendAssumeCapacity(slot);
         }
         const proc = self.program.worker(worker).proc;
-        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc } }, &.{});
-        const record = try self.staticPartsLocal(record_layout, .product, fields.items);
+        if (fields.items.len == 0) return self.staticRead(try self.staticPartsSlot(try self.erasedLayout(), .{ .callable = .{ .proc = proc } }, &.{}));
+        const record = try self.staticPartsSlot(record_layout, .product, fields.items);
         const layouts = &self.program.result.layouts;
         const on_drop: LIR.ErasedCallableOnDrop = if (layouts.layoutContainsRefcounted(layouts.getLayout(record_layout)))
             .{ .rc_helper = .{ .op = .host_drop, .layout_idx = try layouts.putPrefixedCaptureLayout(record_layout, self.program.result.erased_capture_prefix) } }
         else
             .none;
-        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{record});
+        return self.staticRead(try self.staticPartsSlot(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{record}));
     }
 
     /// Pop a function value's arguments and the function value, and call it
@@ -9107,12 +9344,18 @@ pub const Builder = struct {
         const values = try self.popValues(@intCast(arg_count));
         defer self.allocator.free(values);
         const name = try self.program.store.internName(self.view.nameStore().tagLabelText(self.bodies().tagLabel(label)));
-        try self.pushValue(try self.buildTag(ty, name, values));
+        try self.pushValue(try self.buildTagInto(ty, name, values, self.value_destinations.get(expr_id)));
     }
 
     /// The tag `name` of the tag union `ty` (through nominal wrappers) with
     /// `values` as its payloads.
     pub fn buildTag(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId) Allocator.Error!LocalId {
+        return self.buildTagInto(ty, name, values, null);
+    }
+
+    /// `buildTag` whose closed result is constructed in `into` when given:
+    /// a local of the tag's own layout that this construction defines.
+    fn buildTagInto(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId, into: ?LocalId) Allocator.Error!LocalId {
         if (!try self.closed(ty)) {
             const target = try self.localOf(ty, .frame);
             const union_ty = try self.structuralType(ty);
@@ -9123,13 +9366,14 @@ pub const Builder = struct {
             .tag_union => {},
             .primitive => |primitive| {
                 if (primitive != .bool) invariant("a tag expression's type is a non-Bool primitive");
-                return try self.boolValue(std.mem.eql(u8, self.program.store.nameText(name), "True"));
+                return try self.boolValueInto(std.mem.eql(u8, self.program.store.nameText(name), "True"), into);
             },
             .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag expression's type is not a tag union"),
         }
         const selected = try self.selectVariant(try self.structuralType(ty), self.ownTag(try self.structuralType(ty), name, values.len));
         const variant = selected.index;
-        const target = try self.localOf(ty, .frame);
+        const target = into orelse try self.localOf(ty, .frame);
+        if (self.store.getLocal(target).layout_idx != try self.program.layouts.layoutOf(ty)) invariant("a tag is constructed in a local of another layout");
         const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
         const payload: ?LocalId = if (values.len == 0 or committed.tag != .tag_union) null else blk: {
             const payload_layout = try self.variantPayloadLayout(try self.structuralType(ty), variant);
@@ -9222,7 +9466,7 @@ pub const Builder = struct {
         const scrutinee = self.popValue();
         const match = self.bodies().exprData(expr_id).match_;
         const scrutinee_ty = try self.valueType(match.cond);
-        const tail = self.isTail(expr_id);
+        const tail = self.isTail(expr_id) and !try self.returnsConstructedTag(expr_id);
         const state = try self.program.arena.allocator().create(Match.State);
         state.* = .{
             .arena = std.heap.ArenaAllocator.init(self.allocator),
@@ -9244,6 +9488,7 @@ pub const Builder = struct {
             const result = try self.localOf(try self.exprType(expr_id), .frame);
             state.merge = try self.beginMerge(merge_binders, .joined);
             const after = try self.declareMergeJoin(state.done, result, state.merge);
+            for (match.branches) |branch| try self.value_destinations.put(self.allocator, self.bodies().matchBranch(branch).value, result);
             try self.push(.{ .push_value = result });
             if (state.merge) |m| try self.push(.{ .enter_merge = m });
             try self.push(.{ .resume_at = after });
@@ -9972,10 +10217,14 @@ pub const Builder = struct {
                 try self.push(.discard);
                 try self.push(.{ .expr = expr });
             },
-            .expect => |cond| {
-                try self.push(.discard);
-                try self.push(.{ .finish_expect = cond });
-                try self.push(.{ .expr = cond });
+            // An omitted inline expect evaluates nothing.
+            .expect => |cond| switch (self.inlineExpectMode()) {
+                .run => {
+                    try self.push(.discard);
+                    try self.push(.{ .finish_expect = cond });
+                    try self.push(.{ .expr = cond });
+                },
+                .omit => {},
             },
             .crash => |literal| {
                 const message = try self.store.insertString(self.bodies().text(literal));

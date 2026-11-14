@@ -180,12 +180,12 @@ const generic_plus =
     \\
 ;
 
-test "issue 12310: operator requirements are checked against the type they resolve to, whatever the order" {
+test "issue 12310: method requirements are checked against the type they resolve to, whatever the order" {
     var known_first = try TestEnv.init("Test", generic_plus ++
         \\k = |y| {
         \\    need_foo(y)
-        \\    _a = y + 1.U8
-        \\    _b = y + "s"
+        \\    _a = y.plus(1.U8)
+        \\    _b = y.plus("s")
         \\    "ok"
         \\}
     );
@@ -194,43 +194,12 @@ test "issue 12310: operator requirements are checked against the type they resol
 
     var known_last = try TestEnv.init("Test", generic_plus ++
         \\k = |y| {
-        \\    _a = y + 1.U8
-        \\    _b = y + "s"
+        \\    _a = y.plus(1.U8)
+        \\    _b = y.plus("s")
         \\    need_foo(y)
         \\    "ok"
         \\}
     );
     defer known_last.deinit();
     try known_last.assertDefType("k", "Foo -> b where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]");
-}
-
-test "issue 12310: operator requirements on a generalized type at incompatible types are one method conflict" {
-    var env = try TestEnv.init("Test", generic_plus ++
-        \\k = |y| {
-        \\    _a = y + 1.U8
-        \\    _b = y + "s"
-        \\    "ok"
-        \\}
-    );
-    defer env.deinit();
-    try env.assertOneTypeErrorMsg(
-        \\**Type Mismatch**
-        \\This is used in a way that requires its type to have two different, incompatible `plus` methods (which `+` calls), but no type can have more than one `plus` method.
-        \\```roc
-        \\    _a = y + 1.U8
-        \\```
-        \\         ^^^^^^^^
-        \\
-        \\One part of this use needs `plus` to have this type:
-        \\
-        \\    b, c -> b where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]
-        \\
-        \\Another part needs it to have this type:
-        \\
-        \\    b, U8 -> b
-        \\
-        \\A type has only one `plus` method, so no type can satisfy both.
-        \\
-        \\
-    );
 }

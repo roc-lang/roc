@@ -180,7 +180,7 @@ NO CHANGE
 						(p-assign (ident "#interp_1"))
 						(e-lookup-local
 							(p-assign (ident "corners"))))
-					(e-interpolation (constraint-fn-var 340) (dispatcher-var 50)
+					(e-interpolation (constraint-fn-var 305) (dispatcher-var 50)
 						(first
 							(e-literal (string "")))
 						(parts
@@ -197,10 +197,10 @@ NO CHANGE
 				(p-assign (ident "_args")))
 			(e-block
 				(s-expr
-					(e-call (constraint-fn-var 385)
+					(e-call (constraint-fn-var 378)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
-						(e-call (constraint-fn-var 384)
+						(e-call (constraint-fn-var 377)
 							(e-lookup-local
 								(p-assign (ident "describe")))
 							(e-tag (name "Square")))))

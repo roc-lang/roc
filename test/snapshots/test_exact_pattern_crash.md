@@ -306,7 +306,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "p1"))
-				(e-call (constraint-fn-var 378)
+				(e-call (constraint-fn-var 364)
 					(e-lookup-local
 						(p-assign (ident "swap_pair")))
 					(e-tuple

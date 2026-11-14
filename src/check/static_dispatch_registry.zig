@@ -1249,7 +1249,7 @@ fn builtinOwnerForRegistryEntry(
     module_env: *const ModuleEnv,
     owner_stmt: CIR.Statement.Idx,
 ) ?BuiltinOwner {
-    const common = module_env.idents;
+    const common = &module_env.idents;
     if (module_env.module_role != .builtin) return null;
 
     const stmt = module_env.store.getStatement(owner_stmt);
@@ -2296,8 +2296,10 @@ pub const StaticDispatchPlanTable = struct {
                     if (std.meta.activeTag(checked_expr_data) != .interpolation) continue;
                     const args = [_]StaticDispatchOperand{.{ .generated_interpolation_segments = expr_idx }};
                     const from_interpolation = try names.internMethodName("from_interpolation");
-                    const constraint_fn_var = interpolation.constraint_fn_var orelse
-                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no constraint function variable", .{});
+                    // An interpolation introduced as the builtin `Str` has
+                    // no dispatch, so it has no plan (design.md "Concrete
+                    // Builtin Interpolation Introduction").
+                    const constraint_fn_var = interpolation.constraint_fn_var orelse continue;
                     const dispatcher_var = interpolation.dispatcher_var orelse
                         base.invariant("checked static dispatch registry invariant violated: checked interpolation has no dispatcher variable", .{});
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);

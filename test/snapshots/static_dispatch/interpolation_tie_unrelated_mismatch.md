@@ -145,7 +145,7 @@ NO CHANGE
 								(p-assign (ident "person"))))
 						(segments
 							(segment (name "age") (mode "required")))))
-				(e-interpolation (constraint-fn-var 290) (dispatcher-var 18)
+				(e-interpolation (constraint-fn-var 287) (dispatcher-var 18)
 					(first
 						(e-literal (string "")))
 					(parts
@@ -163,7 +163,7 @@ NO CHANGE
 			(e-block
 				(s-let
 					(p-assign (ident "s"))
-					(e-call (constraint-fn-var 331)
+					(e-call (constraint-fn-var 328)
 						(e-lookup-local
 							(p-assign (ident "describe")))
 						(e-lookup-local
@@ -171,12 +171,12 @@ NO CHANGE
 				(s-let
 					(p-assign (ident "x"))
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-call (constraint-fn-var 351)
+				(e-call (constraint-fn-var 348)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local
 						(p-assign (ident "s")))
-					(e-dispatch-call (method "to_str") (constraint-fn-var 343)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 340)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

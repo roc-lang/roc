@@ -1922,8 +1922,8 @@ test "invalid_flag_value suggests the closest valid value" {
 
 test "invalid_flag_value names the one other value of a two-value flag" {
     const choices = [_]cli_args.Choice{
-        .{ .name = "yes", .description = "lambda-set specialization (default)" },
-        .{ .name = "no", .description = "experimental boxy lowering" },
+        .{ .name = "yes", .description = "lambda-set specialization (the --opt=speed default)" },
+        .{ .name = "no", .description = "boxy lowering (the default otherwise)" },
     };
     const rendered = try renderPlainForTest(.{
         .invalid_arguments = .{
