@@ -542,7 +542,7 @@ pub const Builder = struct {
     /// later used.
     declared_captures: collections.DenseMapUnmanaged(ExprId, []const LocalId) = .empty,
     /// While lowering an exact procedure alias's forwarded lookup in the
-    /// alias's own module (`aliasTargetHidden`): where that alias's scopes
+    /// alias's own module (`aliasChainInstance`): where that alias's scopes
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
     /// The innermost declaration context of the call instances whose
@@ -7167,10 +7167,20 @@ pub const Builder = struct {
                 const target = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions.items()[node.subst.start..][0..node.subst.len];
                 switch (node.instantiation) {
+                    // The target takes the instantiation its callable or its
+                    // alias chain gives it, and its dictionary is adapted
+                    // from the target's own type there to the type its
+                    // consumer calls it at, as any other target's is.
                     .derived_from_callable, .alias => |callable| {
-                        const hidden = if (node.instantiation == .alias) try self.aliasTargetHidden(node, target, .{ .node = node_id }) else try self.relatedHiddenArgs(target, callable);
-                        defer self.allocator.free(hidden);
-                        return try self.composeDictionary(try self.program.methodEntryWorker(target), hidden);
+                        const instance = if (node.instantiation == .alias)
+                            try self.aliasTargetInstance(node, target, .{ .node = node_id })
+                        else
+                            try self.callableDerivedInstance(target, &.{}, try self.convert(callable));
+                        defer self.allocator.free(instance.hidden);
+                        const dictionary = try self.composeDictionary(try self.program.methodEntryWorker(target), instance.hidden);
+                        const target_worker = self.program.worker(target).*;
+                        const own_fn = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+                        return try self.adaptDictionary(dictionary, try self.program.substitute(self.allocator, own_fn, instance.bound), interface orelse try self.convert(callable));
                     },
                     .monomorphic, .callable => {},
                 }
@@ -7423,20 +7433,15 @@ pub const Builder = struct {
         return try self.composeDictionary(try self.program.structuralMapWorker(self.module, map), descs);
     }
 
-    /// The hidden arguments of `callee`, the procedure a dispatch edge
-    /// reached through the exact procedure alias the method is bound to
-    /// (`EvidenceTargetInstantiation.alias`). The edge instantiated the
-    /// alias's scope (`node.subst`) and resolved its requirements
+    /// The instantiation and hidden arguments of `callee`, the procedure a
+    /// dispatch edge reached through the exact procedure alias the method is
+    /// bound to (`EvidenceTargetInstantiation.alias`). The edge instantiated
+    /// the alias's scope (`node.subst`) and resolved its requirements
     /// (`through_alias`); each alias's forwarded lookup recorded its own
     /// substitution and evidence over that scope, so lowering the lookup's
     /// in the scope so instantiated gives the next alias's, alias by alias,
-    /// up to the procedure the chain reaches.
-    pub fn aliasTargetHidden(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId, edge: checked.LiteralEdge) Allocator.Error![]Word {
-        return (try self.aliasTargetInstance(node, callee, edge)).hidden;
-    }
-
-    /// `aliasTargetHidden` with the instantiation the chain's last lookup
-    /// gives the target.
+    /// up to the procedure the chain reaches, whose instantiation the
+    /// chain's last lookup gives.
     pub fn aliasTargetInstance(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
         const table = self.view.view.static_dispatch_plans;
         const alias = node.target.alias orelse invariant("an alias-instantiated target has no alias binding");
@@ -7769,10 +7774,6 @@ pub const Builder = struct {
             try indices.append(self.program.arena.allocator(), @intCast(index));
         }
         return indices.items;
-    }
-
-    pub fn relatedHiddenArgs(self: *Builder, callee: WorkerId, callable: checked.CheckedTypeId) Allocator.Error![]Word {
-        return try self.callableDerivedHidden(callee, &.{}, try self.convert(callable));
     }
 
     /// The hidden arguments of `callee` instantiated at `subst` (or, with

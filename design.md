@@ -16311,7 +16311,11 @@ dictionary is that value. A target reached through an exact procedure alias
 takes the substitution and evidence each alias's forwarded lookup recorded in
 the alias's scope, alias by alias; each alias's scope holds its dictionaries
 at the alias's own requirements, and a lookup that hands one on adapts it to
-the next scope's (Sealed Result Rows).
+the next scope's (Sealed Result Rows). The dictionary of a method bound to an
+alias, like that of a target whose instantiation follows from its callable,
+is the target's entry at the instantiation so composed, adapted from the
+target's own type there to its consumer's interface as any other target's is
+(`test/cli/WidenClosedImplMethodAlias.roc`).
 
 Evidence the checker leaves to the concrete callable (`from_callable`, a
 target `derived_from_callable`, nested `from_callable` evidence) and the
