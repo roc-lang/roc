@@ -1049,6 +1049,10 @@ const CollectBindingsContext = struct {
     annotated: *PatternSet,
     /// The patterns a definition or a statement declares.
     declared: *PatternSet,
+    /// The patterns the walk has already reached. A reassignment points back
+    /// at its var's pattern, so the walk reaches that pattern again for every
+    /// write to it.
+    visited: *PatternSet,
     oom: ?std.mem.Allocator.Error = null,
 
     fn visitStmtPre(ctx: *CollectBindingsContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
@@ -1066,6 +1070,9 @@ const CollectBindingsContext = struct {
             pattern.var_assign.ident
         else
             return .continue_traversal;
+
+        if (ctx.visited.contains(pattern_idx)) return .continue_traversal;
+        ctx.visited.insert(pattern_idx);
 
         // A leading `_` marks a binding the author deliberately ignores.
         // Annotating what someone said they do not care about is noise.
@@ -1125,6 +1132,8 @@ pub fn collectUnannotatedBindings(
     defer annotated.deinit(allocator);
     var declared = try PatternSet.init(allocator, &module_env.store);
     defer declared.deinit(allocator);
+    var visited = try PatternSet.init(allocator, &module_env.store);
+    defer visited.deinit(allocator);
 
     var results: std.ArrayList(UnannotatedBinding) = .empty;
     errdefer results.deinit(allocator);
@@ -1138,6 +1147,7 @@ pub fn collectUnannotatedBindings(
         .results = &results,
         .annotated = &annotated,
         .declared = &declared,
+        .visited = &visited,
     };
     var visitor = CirVisitor(CollectBindingsContext).init(&ctx, .{
         .visit_stmt_pre = CollectBindingsContext.visitStmtPre,
