@@ -4455,9 +4455,9 @@ const RootCompletionState = struct {
                     dependent_def,
                     dependency_def,
                 ),
-                .expr, .statement, .required_binding, .hoisted, .literal => true,
+                .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => true,
             },
-            .expr, .statement, .required_binding, .hoisted, .literal => true,
+            .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => true,
         };
         if (!is_strict) return true;
 
@@ -6890,12 +6890,14 @@ fn devRootSourceRegion(
         .statement => |stmt_idx| env.store.getStatementRegion(stmt_idx),
         .hoisted => |hoisted| env.store.getExprRegion(hoisted.expr),
         .literal => |literal| literalSourceRegion(module, literal.node()),
+        .literal_argument => |owner| env.store.getExprRegion(owner),
         .required_binding => rootBodySourceRegion(module, root),
     };
 }
 
 /// The source region of a compile-time root's body: its expression's; for a
-/// literal conversion root, its literal's; or, for a hoisted pattern root,
+/// literal conversion root, its literal's; for a literal argument root, its
+/// edge owner's; or, for a hoisted pattern root,
 /// its binding pattern's when the root rejects that binder, and otherwise the
 /// pattern's it matches.
 fn rootBodySourceRegion(
@@ -6904,6 +6906,7 @@ fn rootBodySourceRegion(
 ) base.Region {
     const store = &module.moduleEnvConst().store;
     if (root.literalNode()) |literal| return literalSourceRegion(module, literal.node());
+    if (root.source == .literal_argument) return store.getExprRegion(root.source.literal_argument);
     const body = root.hoisted_body orelse return store.getExprRegion(root.rootExpr());
     return switch (body) {
         .expr, .valueless_binding => store.getExprRegion(root.rootExpr()),
@@ -7745,7 +7748,7 @@ pub fn finishConstRoot(
         .constant => blk: {
             const def_idx = switch (root.source) {
                 .def => |def| def,
-                .expr, .statement, .required_binding, .hoisted, .literal => finalizationInvariant("constant root source was not a top-level definition"),
+                .expr, .statement, .required_binding, .hoisted, .literal, .literal_argument => finalizationInvariant("constant root source was not a top-level definition"),
             };
             const top_level = module.top_level_values.lookupByDef(def_idx) orelse
                 finalizationInvariant("constant root had no top-level value");
@@ -7788,6 +7791,7 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
         .required_binding => |left| left == b.required_binding,
         .hoisted => |left| left.index == b.hoisted.index and left.expr == b.hoisted.expr,
         .literal => |left| std.meta.eql(left, b.literal),
+        .literal_argument => |left| left == b.literal_argument,
     };
 }
 

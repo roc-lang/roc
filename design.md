@@ -6307,7 +6307,13 @@ lowering in its worker's workspace and never added to the checked module:
   (`RootSource.literal`, a `LiteralNode` naming a literal expression or a
   custom literal pattern; `CompileTimeRoot.literalNode`), it holds no
   expression, and lowering converts the literal's value through the
-  conversion plan keyed by the literal's node.
+  conversion plan keyed by the literal's node;
+- a literal argument root's body ("Literal Arguments"): the root's source is
+  the expression owning its edge (`RootSource.literal_argument`), which
+  locates the root for reports and which the root does not evaluate; it holds
+  no expression and no body nodes (`bodyParts` is empty), and lowering
+  converts its literal at the edge `CompileTimeRoot.literal_argument`
+  records.
 
 ### Forbidden Checked-Boundary Shapes
 
@@ -12702,6 +12708,20 @@ generalized interpolation's scheme relates its parts to the item type
 `a -> b where [b.from_interpolation : List(Str) -> Try(Iter(a) -> b, [InvalidInterpolation(Str)])]`),
 so a body compiled once for every instantiation builds its items from its parts
 without consulting any use.
+
+An interpolation whose target this boundary's literal defaulting decides is not
+related there: a receiver of the boundary's rank that no root's interface
+reaches (`boundary_reachable_vars`) defaults, and each of its interpolations is
+then discharged against the default on its own, exactly as when the target was
+decided before the boundary. Relating parts there would let one value retype
+another, and relating the receiver's interpolations into one requirement
+would leave all but one interpolation's parts unchecked. Relating a part can
+make it reachable, so the boundary recollects the reachable set and revisits
+its pool until no interpolation is newly related (`relateBoundaryRequirements`).
+In `var $o = ""` followed by `$o = "${Ok(n)}"` and `$o = "${n.to_str()}"`, with
+`$o` never escaping, only `Ok(n)` is rejected. Pinned by
+test/snapshots/static_dispatch/interpolation_defaulted_local_parts_unrelated.md
+and test/snapshots/static_dispatch/interpolation_defaulted_local_sites_unrelated.md.
 
 Instantiating a generalized interpolation copies its constraint and its parts'
 types, so a part rejected by an instantiated copy is rejected by that use's
@@ -19654,7 +19674,10 @@ neither fail nor bind anything else. A type has one method of each name, so
 when a receiver is still a type variable at its definition's generalization
 boundary, its requirements of one method become one requirement: the boundary
 relates their callables before it defaults literals and generalizes, and an
-inferred scheme never holds two requirements of one method on one type.
+inferred scheme never holds two requirements of one method on one type. A
+receiver that the boundary's literal defaulting decides is not about to be
+generalized, so its requirements are not related: each is discharged against
+the default on its own ("Builtin Str Interpolation Part Compatibility").
 Requirements that cannot be one are a type mismatch. That includes a relation
 that would make the method's type infinite, which no type can be (two uses of
 `row.i32()` whose results must be both `a` and `{ id: a }`); unification

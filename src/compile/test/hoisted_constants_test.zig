@@ -2756,6 +2756,7 @@ fn rootSourceMatches(
         .required_binding => |required_binding| required_binding == b.required_binding,
         .hoisted => |hoisted| hoisted.index == b.hoisted.index and hoisted.expr == b.hoisted.expr,
         .literal => |literal| std.meta.eql(literal, b.literal),
+        .literal_argument => |owner| owner == b.literal_argument,
     };
 }
 
