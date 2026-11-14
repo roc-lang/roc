@@ -261,19 +261,21 @@ pub const UseAbsorbers = struct {
         return sets.mayTakeIn(sortUnique(hashes));
     }
 
-    /// Whether the class `desc` is anonymous structure a use can change and
-    /// so must copy (`DescriptorFlags.per_use_structure`).
+    /// Whether the class of descriptor `desc_idx` is anonymous structure a
+    /// use can change and so must copy (`DescriptorFlags.per_use_structure`).
     pub fn copiedPerUse(
         self: *UseAbsorbers,
         gpa: Allocator,
         store: *const Store,
         idents: *const Ident.Store,
-        desc: types_mod.Descriptor,
+        desc_idx: store_mod.DescStoreIdx,
     ) Allocator.Error!bool {
-        if (!desc.liftsIntoNominal()) return false;
-        switch (desc.content.structure) {
+        const word = store.wordAt(desc_idx);
+        if (!word.liftsIntoNominal()) return false;
+        switch (word.kind) {
             .empty_tag_union => return self.tags.any or self.tags.every,
-            .tag_union => |tag_union| {
+            .tag_union => {
+                const tag_union = store.tagUnionAt(desc_idx);
                 if (self.tags.every) return true;
                 if (!self.tags.any) return false;
                 self.scratch.clearRetainingCapacity();
@@ -283,8 +285,8 @@ pub const UseAbsorbers = struct {
                 return self.tags.mayTakeIn(sortUnique(self.scratch.items));
             },
             .empty_record => return self.records.any or self.records.every or self.widening_fields.count() != 0,
-            .record => |record| {
-                const fields = store.getRecordFieldsSlice(record.fields);
+            .record => {
+                const fields = store.getRecordFieldsSlice(store.recordAt(desc_idx).fields);
                 // Widening adds a field the record lacks. The record's own
                 // fields stand for its whole row: a field further along the
                 // row only removes widenings, so leaving it out is safe.
@@ -316,7 +318,7 @@ pub const UseAbsorbers = struct {
                 }
                 return self.records.mayTakeIn(sortUnique(self.scratch.items));
             },
-            .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => unreachable, // liftsIntoNominal admits only records and tag unions
+            .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .flex, .rigid, .alias, .field_presence, .err => unreachable, // liftsIntoNominal admits only records and tag unions
         }
     }
 };
@@ -333,12 +335,13 @@ const FieldKind = enum {
 fn kindOf(store: *const Store, presence: types_mod.RecordField.Presence) FieldKind {
     return switch (presence.decode()) {
         .required => .required,
-        .unknown => |unknown| switch (store.resolveVar(unknown.presence).desc.content) {
-            .field_presence => |kind| switch (kind) {
+        .unknown => |unknown| unknown: {
+            const resolved = store.resolveVarWord(unknown.presence);
+            if (resolved.word.kind != .field_presence) break :unknown .unsettled;
+            break :unknown switch (store.fieldPresenceAt(resolved.desc_idx)) {
                 .required => .required,
                 .optional, .defaulted => .may_widen,
-            },
-            .flex, .rigid, .alias, .structure, .err => .unsettled,
+            };
         },
     };
 }

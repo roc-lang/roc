@@ -11872,7 +11872,7 @@ fn walkGroundMarks(
             .any => continue,
             .copied => if (copy != .none) continue,
         };
-        if (liftable == .refinable and try self.copiedPerUse(resolved.desc)) marks.ground.items[index] = false;
+        if (liftable == .refinable and try self.copiedPerUse(resolved.desc_idx)) marks.ground.items[index] = false;
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => marks.ground.items[index] = false,
             .alias => |alias| {
@@ -38057,9 +38057,9 @@ fn addLocalUseAbsorber(self: *Self, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!
 
 /// Whether the class `desc` is per-use structure: anonymous structure a use
 /// of a binding holding it can change (`UseAbsorbers.copiedPerUse`).
-fn copiedPerUse(self: *Self, desc: types_mod.Descriptor) Allocator.Error!bool {
-    if (!self.use_absorbers_collected) return desc.liftsIntoNominal();
-    return self.use_absorbers.copiedPerUse(self.gpa, self.types, self.cir.getIdentStoreConst(), desc);
+fn copiedPerUse(self: *Self, desc_idx: types_mod.DescStoreIdx) Allocator.Error!bool {
+    if (!self.use_absorbers_collected) return self.types.wordAt(desc_idx).liftsIntoNominal();
+    return self.use_absorbers.copiedPerUse(self.gpa, self.types, self.cir.getIdentStoreConst(), desc_idx);
 }
 
 /// Assert that `env` is a module whose types `use_absorbers` holds,
@@ -38102,7 +38102,7 @@ fn varIsGroundAs(self: *Self, root_var: Var, liftable: LiftableStructure) std.me
         const resolved = self.types.resolveVar(var_);
         if (visited.contains(resolved.var_)) continue;
         try visited.put(resolved.var_, {});
-        if (liftable == .refinable and try self.copiedPerUse(resolved.desc)) return false;
+        if (liftable == .refinable and try self.copiedPerUse(resolved.desc_idx)) return false;
 
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,

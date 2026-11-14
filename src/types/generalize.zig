@@ -187,9 +187,9 @@ pub const Generalizer = struct {
     }
 
     /// Whether a class this pass leaves ungeneralized is per-use structure.
-    fn copiedPerUse(self: *Self, desc: types.Descriptor) std.mem.Allocator.Error!bool {
-        const query = self.use_absorbers orelse return desc.liftsIntoNominal();
-        return query.absorbers.copiedPerUse(self.gpa, self.store, query.idents, desc);
+    fn copiedPerUse(self: *Self, desc_idx: DescStoreIdx) std.mem.Allocator.Error!bool {
+        const query = self.use_absorbers orelse return self.store.wordAt(desc_idx).liftsIntoNominal();
+        return query.absorbers.copiedPerUse(self.gpa, self.store, query.idents, desc_idx);
     }
 
     /// Orders `tmp_vars` by starting rank, keeping each rank's vars in the
@@ -332,7 +332,7 @@ pub const Generalizer = struct {
                     // every use even though no variable in it is quantified:
                     // a use may lift it into a nominal type (design.md
                     // "Anonymous Structure Is Copied Per Use").
-                    if (try self.copiedPerUse(self.store.getDesc(resolved.desc_idx))) {
+                    if (try self.copiedPerUse(resolved.desc_idx)) {
                         try self.store.markPerUseStructure(resolved.desc_idx);
                     }
                 } else {

@@ -206,6 +206,15 @@ pub const Descriptor = struct {
         /// A flex's `Flex.literal`; `.none` for every other kind.
         literal: Flex.Literal = .none,
         rank: Rank,
+
+        /// `Descriptor.liftsIntoNominal`, read from the word alone.
+        pub fn liftsIntoNominal(self: Word) bool {
+            if (self.flags.nominal_backing_structure) return false;
+            return switch (self.kind) {
+                .record, .tag_union, .empty_record, .empty_tag_union => true,
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .flex, .rigid, .alias, .field_presence, .err => false,
+            };
+        }
     };
 
     /// The rest of a stored descriptor: the content's payload, laid out per
@@ -421,14 +430,13 @@ pub const Descriptor = struct {
     /// variables, so sharing it shares that change (design.md "Anonymous
     /// Structure Is Copied Per Use").
     pub fn liftsIntoNominal(self: Descriptor) bool {
-        if (self.flags.nominal_backing_structure) return false;
-        return switch (self.content) {
-            .structure => |flat_type| switch (flat_type) {
-                .record, .tag_union, .empty_record, .empty_tag_union => true,
-                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => false,
-            },
-            .flex, .rigid, .alias, .field_presence, .err => false,
-        };
+        return self.word().liftsIntoNominal();
+    }
+
+    /// The kind, flags and rank of this descriptor, as its stored word holds
+    /// them.
+    fn word(self: Descriptor) Word {
+        return .{ .kind = ContentKind.of(self.content), .flags = self.flags, .rank = self.rank };
     }
 };
 

@@ -1093,8 +1093,9 @@ pub const Instantiator = struct {
         force_root_copy: bool,
     ) std.mem.Allocator.Error!bool {
         const machine = self.scratch();
-        const resolved = self.store.resolveVar(initial_var);
+        const resolved = self.store.resolveVarWord(initial_var);
         const resolved_var = resolved.var_;
+        const desc_idx = resolved.desc_idx;
 
         // The root and its explicit scheme requirements use one substitution.
         // An established copy takes precedence over ordinary rank-based sharing.
@@ -1115,31 +1116,30 @@ pub const Instantiator = struct {
         // its rank (a where-method signature is instantiated per body use
         // before the enclosing scheme generalizes).
         const is_polarity_marker = self.polarity_var_ident != null and
-            resolved.desc.content == .rigid and
-            resolved.desc.content.rigid.name.eql(self.polarity_var_ident.?);
-        const is_leaf = switch (resolved.desc.content) {
-            .alias, .structure => false,
+            resolved.word.kind == .rigid and
+            self.store.rigidAt(desc_idx).name.eql(self.polarity_var_ident.?);
+        const is_leaf = switch (resolved.word.kind) {
+            .alias, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => false,
             .flex, .rigid, .field_presence, .err => true,
         };
         if (!force_root_copy and self.share_leaves and is_leaf and !is_polarity_marker) {
             try machine.value_stack.append(self.store.gpa, resolved_var);
             return true;
         }
-        if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
-            const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
-                .alias, .structure => !self.reach_known_empty and (machine.reach_state.?.get(resolved_var) orelse false),
-                .flex, .rigid, .field_presence, .err => false,
-            };
+        if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.word.rank != .generalized) {
+            const copy_structure = self.copy_scheme_structure and !is_leaf and
+                !self.reach_known_empty and (machine.reach_state.?.get(resolved_var) orelse false);
             if (!copy_structure and !is_polarity_marker) {
                 try machine.value_stack.append(self.store.gpa, resolved_var);
                 return true;
             }
         }
 
-        var flags = resolved.desc.flags.copied();
-        flags.annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.desc.flags.annotation_tag_ext;
-        switch (resolved.desc.content) {
-            .rigid => |rigid| {
+        var flags = resolved.word.flags.copied();
+        flags.annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.word.flags.annotation_tag_ext;
+        switch (resolved.word.kind) {
+            .rigid => {
+                const rigid = self.store.rigidAt(desc_idx);
                 // Polarity vars (the deferred open-vs-closed tag union
                 // extensions of alias declaration bodies) are resolved before
                 // any rigid behavior applies: they are compiler-internal and
@@ -1274,13 +1274,14 @@ pub const Instantiator = struct {
                 } });
                 return false;
             },
-            .flex => |flex| {
+            .flex => {
+                const flex = self.store.flexAt(desc_idx);
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be registered _before_ any child copy runs
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
-                if (self.close_bounded_row_exts and resolved.desc.flags.bounded_row_ext) {
+                if (self.close_bounded_row_exts and resolved.word.flags.bounded_row_ext) {
                     try self.fillPlaceholder(fresh_var, .{ .structure = .empty_tag_union }, flags);
                     try machine.value_stack.append(self.store.gpa, fresh_var);
                     return true;
@@ -1305,7 +1306,8 @@ pub const Instantiator = struct {
                 } });
                 return false;
             },
-            .alias => |alias| {
+            .alias => {
+                const alias = self.store.aliasAt(desc_idx);
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
@@ -1324,7 +1326,8 @@ pub const Instantiator = struct {
                 } });
                 return false;
             },
-            .field_presence => |field_presence| {
+            .field_presence => {
+                const field_presence = self.store.fieldPresenceAt(desc_idx);
                 // A resolved presence fact carries no inner variables. It is
                 // still copied to a fresh var so an instantiated field-kind
                 // axis has the same identity semantics as every other axis.
@@ -1334,11 +1337,12 @@ pub const Instantiator = struct {
                 try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
             },
-            .structure => |flat_type| {
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
-                switch (flat_type) {
+                switch (resolved.word.kind) {
+                    .flex, .rigid, .alias, .field_presence, .err => unreachable, // the outer switch takes these kinds
                     .empty_record => {
                         try self.fillPlaceholder(fresh_var, Content{ .structure = FlatType.empty_record }, flags);
                         try machine.value_stack.append(self.store.gpa, fresh_var);
@@ -1349,7 +1353,8 @@ pub const Instantiator = struct {
                         try machine.value_stack.append(self.store.gpa, fresh_var);
                         return true;
                     },
-                    .tuple => |tuple| {
+                    .tuple => {
+                        const tuple = self.store.tupleAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .tuple = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1361,7 +1366,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .nominal_type => |nominal| {
+                    .nominal_type => {
+                        const nominal = self.store.nominalAt(desc_idx);
                         // A nominal application instantiates its actual args
                         // only. The declaration's backing template is never
                         // touched here; it is instantiated exclusively by
@@ -1383,7 +1389,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .fn_pure => |func| {
+                    .fn_pure => {
+                        const func = self.store.funcAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1397,7 +1404,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .fn_effectful => |func| {
+                    .fn_effectful => {
+                        const func = self.store.funcAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1411,7 +1419,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .fn_unbound => |func| {
+                    .fn_unbound => {
+                        const func = self.store.funcAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1425,7 +1434,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .record => |record| {
+                    .record => {
+                        const record = self.store.recordAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .record = .{
                             .common = .{
                                 .fresh_var = fresh_var,
@@ -1437,7 +1447,8 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .tag_union => |tag_union| {
+                    .tag_union => {
+                        const tag_union = self.store.tagUnionAt(desc_idx);
                         try machine.frames.append(self.store.gpa, .{ .tag_union = .{
                             .common = .{
                                 .fresh_var = fresh_var,

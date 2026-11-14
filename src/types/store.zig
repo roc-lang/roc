@@ -1135,13 +1135,13 @@ pub const Store = struct {
     /// In-place write of a descriptor's word alone: its flags or rank, never
     /// its kind, so its content stays as it was. Journaled and watched like
     /// every descriptor write (see setSlot).
-    fn setDescWord(self: *Self, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
+    inline fn setDescWord(self: *Self, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
         self.debugAssertUnfrozenWrite(idx);
         try self.setDescWordUnguarded(idx, word);
     }
 
     /// `setDescWord` without the frozen-class guard, for freezing and thawing.
-    fn setDescWordUnguarded(self: *Self, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
+    inline fn setDescWordUnguarded(self: *Self, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
         std.debug.assert(word.kind == self.descs.getWord(idx).kind and word.literal == self.descs.getWord(idx).literal);
         try self.journalDescWrite(idx);
         self.descs.setWord(idx, word);
@@ -1149,12 +1149,14 @@ pub const Store = struct {
 
     /// Before an in-place write to descriptor `idx`: journal its row while a
     /// probe that predates it is open, and note the write for class watches.
-    fn journalDescWrite(self: *Self, idx: DescStore.Idx) Allocator.Error!void {
+    inline fn journalDescWrite(self: *Self, idx: DescStore.Idx) Allocator.Error!void {
         self.debugAssertUnsealed();
-        if (self.savepoint_active and @backingInt(idx) < self.savepoint_baseline_descs) {
-            try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.getRow(idx) });
-        }
+        if (self.savepoint_active and @backingInt(idx) < self.savepoint_baseline_descs) try self.journalDescRow(idx);
         self.class_watch.noteWrite(idx);
+    }
+
+    fn journalDescRow(self: *Self, idx: DescStore.Idx) Allocator.Error!void {
+        try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.getRow(idx) });
     }
 
     /// Record the class of each of `vars` as settled. The caller guarantees
@@ -2672,7 +2674,7 @@ pub const Store = struct {
     }
 
     /// Set the rank for a descriptor. Writes the descriptor's word alone.
-    pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) Allocator.Error!void {
+    pub inline fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) Allocator.Error!void {
         self.debugAssertUnsealed();
         var word = self.descs.getWord(desc_idx);
         // A frozen class is ground, so no rank changes what it means.
@@ -2711,6 +2713,11 @@ pub const Store = struct {
             }
         }
     }
+    /// The word of descriptor `desc_idx`: its kind, flags and rank.
+    pub inline fn wordAt(self: *const Self, desc_idx: DescStore.Idx) Desc.Word {
+        return self.descs.getWord(desc_idx);
+    }
+
 
     /// The kind of content `var_`'s class holds.
     pub fn kindOf(self: *const Self, var_: Var) types.ContentKind {
