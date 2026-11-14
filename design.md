@@ -24470,7 +24470,9 @@ successors read other locals leaves the value unique. A transfer edge (alias
 or join) carries the unit through to its target only when no use of the
 source's ownership place at all, read or consume, can execute after it;
 otherwise the target holds a second reference and has no unique birth of its
-own. The place is the source's liveness group, the leader and every borrowed
+own, and the source (the root of its view chain) holds the first one, so the
+source's uniqueness is destroyed as well: a later read through the place, such
+as a field take, must not hand on a unit that the target shares. The place is the source's liveness group, the leader and every borrowed
 local anchored on it, which is the place emission keeps alive: a borrowed
 view of the source read after the edge needs the source's allocation, so
 emission retains the transferred value. A store into an aggregate and a
