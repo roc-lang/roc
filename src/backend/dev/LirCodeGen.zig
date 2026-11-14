@@ -707,7 +707,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Content identity and frame inventory of the proc currently being
         /// compiled, which name a failed Debug check in generated code
         /// independently of the program the code is linked into.
-        current_proc_identity: ?LIR.ProcIdentity = null,
         current_proc_frame_locals: LIR.LocalSpan = LIR.LocalSpan.empty(),
 
         /// Statement currently being generated, for debug-time invariant reporting.
@@ -8256,24 +8255,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn bindAssignedLocal(self: *Self, local: LocalId, value_loc: ValueLocation) Allocator.Error!void {
-            try self.bindLocal(local, value_loc, true);
+            try self.bindLocal(local, value_loc);
         }
 
-        /// Bind a call's target. While the call can leave another pending,
-        /// the target may hold no value, so nothing is asserted about it.
-        fn bindCallResult(self: *Self, local: LocalId, value_loc: ValueLocation, drive: lir.LIR.PendingDrive) Allocator.Error!void {
-            try self.bindLocal(local, value_loc, !drive.canLeavePending());
-        }
-
-        fn bindLocal(self: *Self, local: LocalId, value_loc: ValueLocation, holds_value: bool) Allocator.Error!void {
+        fn bindLocal(self: *Self, local: LocalId, value_loc: ValueLocation) Allocator.Error!void {
             const key = localKey(local);
             const local_layout = self.localLayout(local);
             if (self.local_locations.get(key)) |stable_loc| {
                 try self.storeValueIntoStableLocation(stable_loc, value_loc, local_layout);
-                if (holds_value) {
-                    try self.emitDebugAssertValidBoxLocal(local, stable_loc);
-                    try self.emitDebugAssertValidStrLocal(local, stable_loc);
-                }
                 return;
             }
 
@@ -8295,10 +8284,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_layout);
             try self.setLocalLocation(key, stable_loc);
-            if (holds_value) {
-                try self.emitDebugAssertValidBoxLocal(local, stable_loc);
-                try self.emitDebugAssertValidStrLocal(local, stable_loc);
-            }
         }
 
         /// Canonicalize a NaN observed through `to_bits`: Roc code never sees
@@ -8332,199 +8317,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const not_nan_patch = try self.codegen.emitCondJump(condCode(.below_or_equal));
             try self.codegen.emitLoadImm(bits_reg, @bitCast(normalized_nan_bits));
             try self.codegen.patchJump(not_nan_patch, self.codegen.currentOffset());
-        }
-
-        fn emitDebugAssertValidBoxLocal(
-            self: *Self,
-            local: LocalId,
-            stable_loc: ValueLocation,
-        ) Allocator.Error!void {
-            if (comptime builtin.mode != .debug) return;
-
-            const local_layout = self.localLayout(local);
-            const layout_val = self.layout_store.getLayout(local_layout);
-            if (layout_val.tag != .box) return;
-
-            const slot_offset: i32 = switch (stable_loc) {
-                .stack => |s| s.offset,
-                .general_reg,
-                .float_reg,
-                .vector_reg,
-                .stack_i128,
-                .stack_str,
-                .list_stack,
-                .immediate_i64,
-                .immediate_f32,
-                .immediate_f64,
-                .immediate_i128,
-                .noreturn,
-                => base.invariant(
-                    "LIR/codegen invariant violated: box local {d} did not lower to a stack stable location",
-                    .{@backingInt(local)},
-                ),
-            };
-
-            const ptr_reg, const masked_reg = try self.allocTempGenerals(2);
-            defer self.codegen.freeGeneral(masked_reg);
-            defer self.codegen.freeGeneral(ptr_reg);
-
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, slot_offset);
-            try self.emitCmpImm(ptr_reg, 0);
-            const null_patch = try self.emitJumpIfEqual();
-
-            try self.codegen.emitLoadImm(masked_reg, 7);
-            try self.codegen.emitAnd(.w64, masked_reg, masked_reg, ptr_reg);
-            try self.emitCmpImm(masked_reg, 0);
-            const aligned_patch = try self.emitJumpIfEqual();
-
-            try self.emitDebugCrashInvalidLocal(.box, .non_aligned_pointer, local);
-
-            const done = self.codegen.currentOffset();
-            try self.codegen.patchJump(aligned_patch, done);
-            try self.codegen.patchJump(null_patch, done);
-        }
-
-        fn emitDebugAssertValidStrLocal(
-            self: *Self,
-            local: LocalId,
-            stable_loc: ValueLocation,
-        ) Allocator.Error!void {
-            if (comptime builtin.mode != .debug) return;
-
-            const runtime_layout = self.runtimeRepresentationLayoutIdx(self.localLayout(local));
-            if (runtime_layout != .str) return;
-
-            const slot_offset: i32 = switch (stable_loc) {
-                .stack_str => |offset| offset,
-                .general_reg,
-                .float_reg,
-                .vector_reg,
-                .stack,
-                .stack_i128,
-                .list_stack,
-                .immediate_i64,
-                .immediate_f32,
-                .immediate_f64,
-                .immediate_i128,
-                .noreturn,
-                => base.invariant(
-                    "LIR/codegen invariant violated: str local {d} did not lower to a stack_str stable location",
-                    .{@backingInt(local)},
-                ),
-            };
-
-            const ptr_reg, const len_reg, const cap_reg, const tmp_reg = try self.allocTempGenerals(4);
-            defer self.codegen.freeGeneral(tmp_reg);
-            defer self.codegen.freeGeneral(cap_reg);
-            defer self.codegen.freeGeneral(len_reg);
-            defer self.codegen.freeGeneral(ptr_reg);
-
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, slot_offset + str_bytes_offset);
-            try self.emitLoad(.w64, cap_reg, frame_ptr, slot_offset + str_capacity_offset);
-            try self.emitLoad(.w64, len_reg, frame_ptr, slot_offset + str_len_offset);
-
-            // Small RocStrs are stored inline and identified by the small-string flag in length.
-            try self.codegen.emitLoadImm(tmp_reg, str_small_bit);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, len_reg);
-            try self.emitCmpImm(tmp_reg, 0);
-            const small_patch = try self.emitJumpIfNotEqual();
-
-            // Non-small RocStrs must have a non-null bytes pointer.
-            try self.emitCmpImm(ptr_reg, 0);
-            const ptr_non_null_patch = try self.emitJumpIfNotEqual();
-            try self.emitDebugCrashInvalidLocal(.str, .null_bytes_pointer, local);
-            const after_null = self.codegen.currentOffset();
-            try self.codegen.patchJump(ptr_non_null_patch, after_null);
-
-            // Seamless slices store an interior bytes pointer plus the original
-            // allocation pointer in capacity_or_alloc_ptr. Their bytes pointer
-            // may be arbitrarily offset, so validate the stored allocation
-            // pointer instead of requiring bytes alignment.
-            try self.codegen.emitLoadImm(tmp_reg, seamless_slice_tag);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, cap_reg);
-            try self.emitCmpImm(tmp_reg, 0);
-            const non_seamless_patch = try self.emitJumpIfEqual();
-
-            try self.codegen.emitLoadImm(tmp_reg, seamless_slice_alloc_ptr_mask);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, cap_reg);
-            try self.emitCmpImm(tmp_reg, 0);
-            const alloc_non_null_patch = try self.emitJumpIfNotEqual();
-            try self.emitDebugCrashInvalidLocal(.str, .null_allocation_pointer, local);
-            const after_alloc_null = self.codegen.currentOffset();
-            try self.codegen.patchJump(alloc_non_null_patch, after_alloc_null);
-
-            try self.codegen.emitLoadImm(ptr_reg, @alignOf(usize) - 1);
-            try self.codegen.emitAnd(.w64, ptr_reg, ptr_reg, tmp_reg);
-            try self.emitCmpImm(ptr_reg, 0);
-            const alloc_aligned_patch = try self.emitJumpIfEqual();
-            try self.emitDebugCrashInvalidLocal(.str, .misaligned_allocation_pointer, local);
-            const after_alloc_align = self.codegen.currentOffset();
-            try self.codegen.patchJump(alloc_aligned_patch, after_alloc_align);
-
-            const seamless_done_patch = try self.codegen.emitJump();
-            const after_seamless = self.codegen.currentOffset();
-            try self.codegen.patchJump(non_seamless_patch, after_seamless);
-
-            // Non-slice RocStrs must satisfy len <= decoded capacity.
-            try self.codegen.emitLoadImm(tmp_reg, @alignOf(usize) - 1);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, ptr_reg);
-            try self.emitCmpImm(tmp_reg, 0);
-            const ptr_aligned_patch = try self.emitJumpIfEqual();
-            try self.emitDebugCrashInvalidLocal(.str, .misaligned_bytes_pointer, local);
-            const after_ptr_align = self.codegen.currentOffset();
-            try self.codegen.patchJump(ptr_aligned_patch, after_ptr_align);
-
-            try self.emitShiftImm(.shr, .w64, tmp_reg, cap_reg, RocStr.capacity_shift);
-            try self.emitCmpReg(len_reg, tmp_reg);
-            const len_ok_patch = try self.codegen.emitCondJump(condCode(.below_or_equal));
-            try self.emitDebugCrashInvalidLocal(.str, .length_exceeds_capacity, local);
-            const done = self.codegen.currentOffset();
-            try self.codegen.patchJump(len_ok_patch, done);
-            try self.codegen.patchJump(seamless_done_patch, done);
-            try self.codegen.patchJump(small_patch, done);
-        }
-
-        /// Report a failed Debug invariant check on `local` through the
-        /// `debug_invalid_local` builtin, which formats the message from the
-        /// check's identity, so the site carries five immediates rather than
-        /// message bytes. The proc is named by its content identity and the
-        /// local by its position in the proc's frame inventory: program-wide
-        /// symbol and local numbers would make a proc's code depend on the
-        /// program compiling it, and an object-cache entry's message wrong in
-        /// every program that links it.
-        fn emitDebugCrashInvalidLocal(
-            self: *Self,
-            kind: builtins.dev_wrappers.InvalidLocalKind,
-            reason: builtins.dev_wrappers.InvalidLocalReason,
-            local: LocalId,
-        ) Allocator.Error!void {
-            const identity = self.current_proc_identity orelse
-                base.invariant("LIR/codegen invariant violated: Debug check on local {d} outside a proc", .{@backingInt(local)});
-            const frame = self.store.getLocalSpan(self.current_proc_frame_locals);
-            var frame_index: u32 = std.math.maxInt(u32);
-            var low: usize = 0;
-            var high: usize = GuardedList.borrowLen(frame);
-            while (low < high) {
-                const middle = low + (high - low) / 2;
-                const candidate = @backingInt(GuardedList.at(frame, middle));
-                if (candidate < @backingInt(local)) {
-                    low = middle + 1;
-                } else if (candidate > @backingInt(local)) {
-                    high = middle;
-                } else {
-                    frame_index = @intCast(middle);
-                    break;
-                }
-            }
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try builder.addImmArg(@backingInt(kind));
-            try builder.addImmArg(@backingInt(reason));
-            try builder.addImmArg(frame_index);
-            try builder.addImmArg(@bitCast(std.mem.readInt(u64, identity.bytes[0..8], .big)));
-            try builder.addImmArg(@bitCast(std.mem.readInt(u64, identity.bytes[8..16], .big)));
-            try self.callBuiltin(&builder, .debug_invalid_local);
-            try self.emitTrap();
         }
 
         fn storeValueIntoStableLocation(
@@ -14152,11 +13944,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.generateCallToCompiledProc(try self.compiledProcForId(proc_id), arg_locs, arg_layouts, callee.ret_layout);
             if (result_target) |dst| {
                 try self.emitDriveInto(drive, dst);
-                return self.finishCallTarget(target_local, dst, drive);
+                return self.finishTarget(target_local, dst);
             }
             if (self.localDyn(target_local) == null) {
                 const driven_loc = try self.emitDrivePending(drive, value_loc, self.localLayout(target_local));
-                return self.bindCallResult(target_local, driven_loc, drive);
+                return self.bindLocal(target_local, driven_loc);
             }
 
             // A closed result written to a dynamic target's storage, where
@@ -17718,17 +17510,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// `finishTarget` for a call marked `drive`: while the call can leave
-        /// another pending, the target may hold no value, so nothing is
-        /// asserted about it.
-        fn finishCallTarget(self: *Self, dst_local: LocalId, t: DynTarget, drive: lir.LIR.PendingDrive) Allocator.Error!void {
-            switch (t) {
-                .dynamic => {},
-                .closed => |offset| try self.bindCallResult(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), offset), drive),
-                .zero_sized => try self.bindCallResult(dst_local, .{ .immediate_i64 = 0 }, drive),
-            }
-        }
-
         /// Bind a closed target to the `size`-byte result in the return
         /// register.
         fn bindReturnedScalar(self: *Self, dst_local: LocalId, size: u32) Allocator.Error!void {
@@ -18536,7 +18317,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intFromBool(c.reuse_closure));
                         try self.callBuiltin(&builder, .native_callable_defer);
                         try self.emitDriveInto(c.drive, dst);
-                        try self.finishCallTarget(dst_local, dst, c.drive);
+                        try self.finishTarget(dst_local, dst);
                     } else {
                         if (c.drive != .none) base.invariant("LIR/codegen invariant violated: an erased call that is made carries a pending-call drive", .{});
                         try builder.addMemArg(frame_ptr, fn_slot);
@@ -19180,7 +18961,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_pending_cell_slot = self.pending_cell_slot;
             const saved_tail_exit_patches_len = self.tail_exit_patches.items.len;
             const saved_current_proc_name = self.current_proc_name;
-            const saved_current_proc_identity = self.current_proc_identity;
             const saved_current_proc_frame_locals = self.current_proc_frame_locals;
             const saved_current_proc_args = self.current_proc_args;
             const saved_current_stmt_id = self.current_stmt_id;
@@ -19205,7 +18985,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.carry_slot = null;
             self.pending_cell_slot = null;
             self.current_proc_name = proc.name;
-            self.current_proc_identity = proc.identity;
             self.current_proc_frame_locals = proc.frame_locals;
             self.current_proc_args = proc.args;
             self.current_stmt_id = null;
@@ -19286,7 +19065,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.pending_cell_slot = saved_pending_cell_slot;
                 self.tail_exit_patches.shrinkRetainingCapacity(saved_tail_exit_patches_len);
                 self.current_proc_name = saved_current_proc_name;
-                self.current_proc_identity = saved_current_proc_identity;
                 self.current_proc_frame_locals = saved_current_proc_frame_locals;
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
@@ -19511,7 +19289,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.pending_cell_slot = saved_pending_cell_slot;
             self.ret_ptr_slot = saved_ret_ptr_slot;
             self.current_proc_name = saved_current_proc_name;
-            self.current_proc_identity = saved_current_proc_identity;
             self.current_proc_frame_locals = saved_current_proc_frame_locals;
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
@@ -21254,7 +21031,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .ret_layout = self.localLayout(assign.target),
                             });
                             const driven_loc = try self.emitDrivePending(extra.drive, value_loc, self.localLayout(assign.target));
-                            try self.bindCallResult(assign.target, driven_loc, extra.drive);
+                            try self.bindLocal(assign.target, driven_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },
 
@@ -21269,7 +21046,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.deferred,
                             );
                             const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign_stmt.target));
-                            try self.bindCallResult(assign_stmt.target, driven_loc, assign.drive);
+                            try self.bindLocal(assign_stmt.target, driven_loc);
                             try work.append(wa, .{ .node = assign_stmt.next });
                         },
 
