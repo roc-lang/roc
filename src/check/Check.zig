@@ -31062,6 +31062,11 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
                         break :blk;
                     },
+                    .erroneous_annotation => {
+                        try self.noteLocalLookupForLocalProcedures(lookup.pattern_idx);
+                        try self.markErroneousNameUse(expr_idx, expr_var);
+                        break :blk;
+                    },
                     .value => {},
                 }
             }
@@ -31409,6 +31414,8 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     try self.reportValuelessDeclarationUse(expr_var, expr_region);
                 } else if (reference == .non_effectful_hosted) {
                     try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
+                } else if (reference == .erroneous_annotation) {
+                    try self.markErroneousNameUse(expr_idx, expr_var);
                 } else {
                     try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
                     const ext_instantiated_var = try self.instantiateImportedBindingVar(
@@ -36315,9 +36322,12 @@ fn defReference(module_env: *const ModuleEnv, def: CIR.Def) DefReference {
     }
     if (tag == .expr_hosted_lambda) {
         const annotation_idx = def.annotation orelse return .value;
-        return if (hostedAnnotationIsEffectful(module_env, annotation_idx)) .value else .non_effectful_hosted;
+        if (!hostedAnnotationIsEffectful(module_env, annotation_idx)) return .non_effectful_hosted;
     }
-    return .value;
+    // An erroneous annotation declares no type, so a use relates nothing to
+    // it (design.md "Every Rejection Is Explicit Recovery").
+    const annotation_idx = def.annotation orelse return .value;
+    return if (module_env.store.getAnnotation(annotation_idx).erroneous) .erroneous_annotation else .value;
 }
 
 /// Whether a hosted declaration's annotation is an effectful function type.
@@ -38997,6 +39007,10 @@ fn checkResolvedAssociatedTarget(
         },
         .non_effectful_hosted => {
             try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
+            return;
+        },
+        .erroneous_annotation => {
+            try self.markErroneousNameUse(expr_idx, expr_var);
             return;
         },
         .value => {},

@@ -1390,8 +1390,14 @@ checker recovery. The recovery rules:
   records this on the annotation itself (`CIR.Annotation.erroneous`) as soon as
   it generates the annotation's type, before any body or use is related to it,
   so the record is available in every module that can see the definition. The
-  definition's right-hand side becomes the runtime error, a method included,
-  and a static dispatch that selects a method with such an annotation is
+  definition's right-hand side becomes the runtime error, a method included.
+  Every use of the definition, in its own module or an importing one, by name
+  or as an associated item, is erroneous at the use (`defReference` classifies
+  it `.erroneous_annotation`; see the use rule below), so a call of it is
+  retired before it relates any argument: in `taken : List(Time) -> List(Time)`
+  called as `taken(w0)` with `w0 = []`, `w0` keeps its own `List(_)` type
+  rather than taking on the annotation's erroneous one. A static dispatch that
+  selects a method with such an annotation is
   rejected exactly as one selecting an annotation-only declaration is: its
   constraint callable is never related to the erroneous type, which would
   otherwise reach the instantiation that the dispatch belongs to while every
@@ -1556,8 +1562,9 @@ checker recovery. The recovery rules:
   variable the binding cannot quantify is checked without the annotation, and
   its right-hand side is erroneous (Value Bindings Generalize By Expression).
 - A use of a declaration that already reported its own rejection (a value
-  binding whose annotation is rejected, or a hosted declaration that is not an
-  effectful function), or of an erroneous name (one a rejected pattern or a
+  binding whose annotation is rejected, a definition whose annotation is
+  erroneous, or a hosted declaration that is not an effectful function), or of
+  an erroneous name (one a rejected pattern or a
   pattern matched against an erroneous value introduces), is erroneous at the
   use (`Check.markErroneousNameUse`): the use never relates to the
   declaration's type, so uses cannot disagree with one another, and the error
@@ -14700,6 +14707,11 @@ Other solved-graph mutations:
   rejection reads the explicit `CIR.Annotation.erroneous` record, which only an
   annotation that already produced a diagnostic carries, so no error-free
   program's typechecking or checked-module output changes.
+- `markErroneousNameUse` for a use of a definition whose annotation is
+  erroneous (`defReference`'s `.erroneous_annotation`; `markErroneous`)—
+  mechanism: diagnostic recovery after an already-reported error. It reads the
+  same explicit `CIR.Annotation.erroneous` record, so no error-free program's
+  typechecking or checked-module output changes.
 - `rejectRequirementsOfUnappliedCallees` (`markStaticDispatchFnRejected`)—
   mechanism: diagnostic recovery after an already-reported error (Every
   Rejection Is Explicit Recovery, above). It applies only to an ambiguity
