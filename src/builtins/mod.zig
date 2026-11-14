@@ -31,6 +31,7 @@ pub const str = @import("str.zig");
 pub const utils = @import("utils.zig");
 
 test "builtins tests" {
+    std.testing.refAllDecls(@import("atomic_rc_test.zig"));
     std.testing.refAllDecls(@import("builtin_registry.zig"));
     std.testing.refAllDecls(@import("crypto.zig"));
     std.testing.refAllDecls(@import("blake3_iterative.zig"));
