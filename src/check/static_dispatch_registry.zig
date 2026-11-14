@@ -804,10 +804,10 @@ pub const MethodRegistryEntry = struct {
     /// `to_inspect`, or its declaration was rejected (`target` is `null`).
     /// Only `inspectOverride` reads it; ordinary method dispatch ignores
     /// it.
-    inspect_override: ?CheckedTypeId = null,
+    inspect_override: collections.OptionalId(CheckedTypeId) = .none,
     /// The evidence of inspection's use of this override at
     /// `inspect_override`, published with the module's dispatch evidence.
-    inspect_evidence: ?EvidenceNodeId = null,
+    inspect_evidence: collections.OptionalId(EvidenceNodeId) = .none,
 };
 
 /// The `to_inspect` method generic inspection calls for an owner, the checked
@@ -821,16 +821,13 @@ pub const InspectOverride = struct {
 
 /// Public `MethodRegistry` declaration.
 pub const MethodRegistry = struct {
-    entries: []MethodRegistryEntry = &.{},
+    entries: collections.SafeList(MethodRegistryEntry) = .{},
 
     pub const Serialized = extern struct {
         entries: SerializedSlice(MethodRegistryEntry) = .{},
-        pub fn serialize(self: *Serialized, t: *const MethodRegistry, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.entries.serialize(t.entries, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) MethodRegistry {
-            return .{ .entries = self.entries.deserialize(base_addr) };
-        }
+        const Serde = artifact_serialize.SliceStoreSerde(MethodRegistry, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
     };
 
     pub fn lookup(self: *const MethodRegistry, key: MethodKey) ?CheckedMethodLookup {
@@ -840,7 +837,7 @@ pub const MethodRegistry = struct {
         // every load is defined (entries are zeroed at build/serialization).
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
-        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
+        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries.items(), normalized, methodEntryOrder) orelse return null;
         const target = found.target orelse return .rejected;
         return .{ .target = target };
     }
@@ -852,24 +849,18 @@ pub const MethodRegistry = struct {
     pub fn inspectOverride(self: *const MethodRegistry, key: MethodKey) ?InspectOverride {
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
-        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
-        const callable_ty = found.inspect_override orelse return null;
+        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries.items(), normalized, methodEntryOrder) orelse return null;
+        const callable_ty = found.inspect_override.get() orelse return null;
         return .{
             .target = found.target orelse
                 std.debug.panic("checked static dispatch registry invariant violated: rejected declaration was recorded as an inspect override", .{}),
             .callable_ty = callable_ty,
-            .evidence = found.inspect_evidence orelse
+            .evidence = found.inspect_evidence.get() orelse
                 base.invariant("checked static dispatch registry invariant violated: inspect override had no published use evidence", .{}),
         };
     }
 
-    /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen
-    /// table's `entries` alias the artifact buffer and are freed wholesale by the
-    /// artifact, never here.
-    pub fn deinit(self: *MethodRegistry, allocator: Allocator) void {
-        allocator.free(self.entries);
-        self.* = .{};
-    }
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
     /// `referenced_targets` resolves a method binding that is no procedure
     /// of its own: `methodBindingTarget(binding, binding_expr, method_owner)`
@@ -928,7 +919,7 @@ pub const MethodRegistry = struct {
                 try entries.append(allocator, .{
                     .key = method_key,
                     .target = null,
-                    .inspect_override = null,
+                    .inspect_override = .none,
                 });
                 continue;
             }
@@ -945,10 +936,10 @@ pub const MethodRegistry = struct {
                         const export_name = try names.internExportIdent(idents, method_ident);
                         const proc_base = try names.internProcBase(.{
                             .module_name = module_name,
-                            .export_name = export_name,
+                            .export_name = .some(export_name),
                             .kind = .checked_source,
                             .ordinal = @backingInt(def_idx),
-                            .source_def_idx = @backingInt(def_idx),
+                            .source_def_idx = .some(@backingInt(def_idx)),
                         });
                         break :blk .{ .procedure = .{
                             .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
@@ -970,7 +961,7 @@ pub const MethodRegistry = struct {
                     try entries.append(allocator, .{
                         .key = method_key,
                         .target = null,
-                        .inspect_override = null,
+                        .inspect_override = .none,
                     });
                     continue;
                 },
@@ -1010,17 +1001,17 @@ pub const MethodRegistry = struct {
                 // generic code that never hold a local procedure's declaration
                 // context, so only a procedure or a stored top-level value
                 // can be one.
-                .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
+                .inspect_override = .of(if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
                     (std.meta.activeTag(target_kind) == .procedure or std.meta.activeTag(target_kind) == .callable_binding))
                     try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
                 else
-                    null,
+                    null),
             });
         }
 
         finalizeMethodRegistryEntries(entries.items);
 
-        return .{ .entries = try entries.toOwnedSlice(allocator) };
+        return .{ .entries = .fromOwnedSlice(try entries.toOwnedSlice(allocator)) };
     }
 };
 
@@ -1659,8 +1650,8 @@ pub const EvidenceNode = struct {
     target: MethodTarget,
     /// Exact checked dispatcher type that selected this target. Defaulted
     /// literal evidence has no concrete source type and records null.
-    dispatcher_ty: ?CheckedTypeId = null,
-    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
+    dispatcher_ty: collections.OptionalId(CheckedTypeId) = .none,
+    generated_codec_derivation: collections.OptionalId(GeneratedCodecDerivationId) = .none,
     instantiation: EvidenceTargetInstantiation,
     nested: EvidenceNested = .{ .resolved = .{} },
     /// Range into `StaticDispatchPlanTable.site_substitutions`: the checked
@@ -1741,10 +1732,10 @@ pub const EvidenceParamRecord = struct {
     /// `DispatchRefScope.scheme_vars`): the substitution entry this
     /// obligation's receiver is read from. Composite scheme requirements are
     /// supplied by checked evidence and have no quantified-variable slot.
-    slot: ?u32,
+    slot: collections.OptionalU32,
     /// Checker-recorded derived implementation permitted when the concrete
     /// dispatcher has no registered method target.
-    structural: ?StructuralKind = null,
+    structural: collections.OptionalEnum(StructuralKind) = .none,
     source: EvidenceParamSource = .scheme_callable,
     path: EvidencePath = .{},
 };
@@ -1870,17 +1861,24 @@ pub const StaticDispatchCallPlan = struct {
     args: artifact_serialize.Span = .{},
     result_mode: StaticDispatchResultMode,
     /// Exact generated-codec contract selected for a structural parser or
-    /// encoder call. Null for every other resolution kind.
-    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
+    /// encoder call. Absent for every other resolution kind.
+    generated_codec_derivation: collections.OptionalId(GeneratedCodecDerivationId) = .none,
     /// Assigned by `resolveTotalDispatchPlans` during CheckedModule construction; the default is
     /// a construction placeholder the pass overwrites for every plan.
     resolution: CheckedCallResolution = .checked_error,
 
     /// The plan's operands within its table's pool.
     pub fn argsSlice(self: StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
-        return table.operand_pool[self.args.start .. self.args.start + self.args.len];
+        return table.operand_pool.items()[self.args.start .. self.args.start + self.args.len];
     }
 };
+
+comptime {
+    std.debug.assert(@sizeOf(StaticDispatchCallPlan) == 88);
+    std.debug.assert(@sizeOf(EvidenceNode) == 184);
+    std.debug.assert(@sizeOf(EvidenceParamRecord) == 44);
+    std.debug.assert(@sizeOf(MethodRegistryEntry) == 176);
+}
 
 /// Public `StaticDispatchPlanId` declaration.
 pub const StaticDispatchPlanId = enum(u32) { _ };
@@ -1920,9 +1918,13 @@ pub const GeneratedCodecCall = struct {
     method_role: u32,
     dispatcher_ty: CheckedTypeId,
     callable_ty: CheckedTypeId,
-    subject_ty: ?CheckedTypeId = null,
+    subject_ty: collections.OptionalId(CheckedTypeId) = .none,
     resolution: GeneratedCodecCallResolution = .pending,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(GeneratedCodecCall) == 28);
+}
 
 /// Exact checked contract for one compiler-generated codec instantiation.
 pub const GeneratedCodecDerivation = struct {
@@ -1954,7 +1956,7 @@ pub const GeneratedCodecDerivation = struct {
     calls: artifact_serialize.Span = .{},
 
     pub fn callsSlice(self: GeneratedCodecDerivation, table: *const StaticDispatchPlanTable) []const GeneratedCodecCall {
-        return table.generated_codec_calls[self.calls.start .. self.calls.start + self.calls.len];
+        return table.generated_codec_calls.items()[self.calls.start .. self.calls.start + self.calls.len];
     }
 };
 
@@ -1986,7 +1988,7 @@ pub const IteratorDispatchCall = struct {
     resolution: CheckedCallResolution = .checked_error,
 
     pub fn argsSlice(self: IteratorDispatchCall, table: *const StaticDispatchPlanTable) []const IteratorDispatchOperand {
-        return table.iter_operand_pool[self.args.start .. self.args.start + self.args.len];
+        return table.iter_operand_pool.items()[self.args.start .. self.args.start + self.args.len];
     }
 };
 
@@ -2117,53 +2119,53 @@ fn sortedPlanKVs(allocator: Allocator, entries: *std.ArrayListUnmanaged(PlanKV))
 /// sorted expr/node → plan indexes, and the shared operand pools the plans reference
 /// (transform D). Reconstituted as plain slices on deserialize.
 pub const StaticDispatchPlanTable = struct {
-    plans: []StaticDispatchCallPlan = &.{},
+    plans: collections.SafeList(StaticDispatchCallPlan) = .{},
     /// The CIR node of a dispatching expression or of a custom literal
     /// pattern's equality -> `StaticDispatchPlanId`, sorted by key
     /// (transform D).
-    by_node: []PlanKV = &.{},
+    by_node: collections.SafeList(PlanKV) = .{},
     /// `CIR.Node.Idx` -> `StaticDispatchPlanId`, sorted by key.
-    numeral_by_node: []PlanKV = &.{},
+    numeral_by_node: collections.SafeList(PlanKV) = .{},
     /// `CIR.Node.Idx` -> `StaticDispatchPlanId`, sorted by key.
-    quote_by_node: []PlanKV = &.{},
-    iterator_for_plans: []IteratorForPlan = &.{},
+    quote_by_node: collections.SafeList(PlanKV) = .{},
+    iterator_for_plans: collections.SafeList(IteratorForPlan) = .{},
     /// One checker-authored public iterator representation topology per
     /// `IteratorOwner`, indexed by its ordinal.
-    iterator_topologies: []IteratorRepresentationTopology = &.{},
+    iterator_topologies: collections.SafeList(IteratorRepresentationTopology) = .{},
     /// `CIR.Node.Idx` -> `IteratorForPlanId`, sorted by key.
-    iterator_for_by_node: []PlanKV = &.{},
+    iterator_for_by_node: collections.SafeList(PlanKV) = .{},
     /// Build-time collection of every plan referenced by each template.
     /// CheckedModule construction consumes this to resolve evidence, then outputs the
     /// category-specific pools below for post-check consumers.
-    template_refs: []StaticDispatchPlanId = &.{},
+    template_refs: collections.SafeList(StaticDispatchPlanId) = .{},
     /// Direct calls grouped by checked procedure template.
-    direct_template_refs: []StaticDispatchPlanId = &.{},
+    direct_template_refs: collections.SafeList(StaticDispatchPlanId) = .{},
     /// Evidence-dependent or representation-sensitive relations grouped by
     /// checked procedure template.
-    dispatch_relation_refs: []StaticDispatchPlanId = &.{},
+    dispatch_relation_refs: collections.SafeList(StaticDispatchPlanId) = .{},
     /// Shared flat pool of plan operands (transform-B side list).
-    operand_pool: []const StaticDispatchOperand = &.{},
+    operand_pool: collections.SafeList(StaticDispatchOperand) = .{},
     /// Shared flat pool of iterator-plan operands.
-    iter_operand_pool: []const IteratorDispatchOperand = &.{},
+    iter_operand_pool: collections.SafeList(IteratorDispatchOperand) = .{},
     /// Concrete dispatch targets with nested evidence (`EvidenceNodeId`s).
-    evidence_nodes: []EvidenceNode = &.{},
+    evidence_nodes: collections.SafeList(EvidenceNode) = .{},
     /// Flat pool of evidence: node `nested` ranges and site-evidence ranges.
-    evidence_refs: []CheckedEvidence = &.{},
+    evidence_refs: collections.SafeList(CheckedEvidence) = .{},
     /// Checked-expr-keyed evidence for instantiation sites, sorted by key.
-    site_evidence: []SiteEvidenceEntry = &.{},
+    site_evidence: collections.SafeList(SiteEvidenceEntry) = .{},
     /// Flat pool backing `SiteEvidenceEntry` substitution ranges.
-    site_substitutions: []const CheckedTypeId = &.{},
+    site_substitutions: collections.SafeList(CheckedTypeId) = .{},
     /// Per procedure template (indexed like the template table), the
     /// chain-free evidence of the template's root edge: how each of its own
     /// obligations resolves when nothing instantiates it (a compile-time
     /// root, a platform requirement, a const-eval entry). A range into
     /// `evidence_refs`. Null explicitly marks a scheme-only procedure that
     /// requires instantiation evidence and cannot be invoked as a bare root.
-    template_root_evidence: []const ?artifact_serialize.Span = &.{},
+    template_root_evidence: collections.SafeList(?artifact_serialize.Span) = .{},
     /// Exact generated-codec contracts emitted by checking.
-    generated_codec_derivations: []GeneratedCodecDerivation = &.{},
+    generated_codec_derivations: collections.SafeList(GeneratedCodecDerivation) = .{},
     /// Shared flat pool backing `GeneratedCodecDerivation.calls`.
-    generated_codec_calls: []GeneratedCodecCall = &.{},
+    generated_codec_calls: collections.SafeList(GeneratedCodecCall) = .{},
 
     pub const Serialized = extern struct {
         plans: SerializedSlice(StaticDispatchCallPlan) = .{},
@@ -2437,8 +2439,8 @@ pub const StaticDispatchPlanTable = struct {
         defer role_candidate_pool.deinit(allocator);
         var next_role_by_method = collections.DenseMap(canonical.MethodNameId, u32).init(allocator);
         defer next_role_by_method.deinit();
-        for (module_env.generated_codec_derivations.items.items) |derivation| {
-            const source_calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
+        for (module_env.generated_codec_derivations.items()) |derivation| {
+            const source_calls = module_env.generated_codec_calls.items()[derivation.calls_start..][0..derivation.calls_len];
             const calls_start: u32 = @intCast(generated_codec_calls.items.len);
             role_candidates.clearRetainingCapacity();
             role_candidate_pool.clearRetainingCapacity();
@@ -2496,7 +2498,7 @@ pub const StaticDispatchPlanTable = struct {
                     .method_role = method_role.?,
                     .dispatcher_ty = dispatcher_ty,
                     .callable_ty = callable_ty,
-                    .subject_ty = subject_ty,
+                    .subject_ty = .of(subject_ty),
                 });
             }
             try generated_codec_derivations.append(allocator, .{
@@ -2626,7 +2628,7 @@ pub const StaticDispatchPlanTable = struct {
             try by_node.append(allocator, .{ .key = @intCast(raw), .val = @backingInt(plan_id) });
         }
 
-        for (module_env.for_loop_dispatch_plans.items.items) |for_plan| {
+        for (module_env.for_loop_dispatch_plans.items()) |for_plan| {
             const for_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(for_plan.node_idx));
             const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(for_plan.pattern_idx));
             const iterable_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(for_plan.iterable_idx));
@@ -2718,24 +2720,24 @@ pub const StaticDispatchPlanTable = struct {
         };
 
         return .{
-            .plans = try plans.toOwnedSlice(allocator),
-            .by_node = by_node_sorted,
-            .numeral_by_node = numeral_sorted,
-            .quote_by_node = quote_sorted,
-            .iterator_for_plans = try iterator_for_plans.toOwnedSlice(allocator),
-            .iterator_topologies = iterator_topologies,
-            .iterator_for_by_node = iterator_for_sorted,
-            .operand_pool = try operand_pool.toOwnedSlice(allocator),
-            .iter_operand_pool = try iter_operand_pool.toOwnedSlice(allocator),
-            .generated_codec_derivations = try generated_codec_derivations.toOwnedSlice(allocator),
-            .generated_codec_calls = try generated_codec_calls.toOwnedSlice(allocator),
+            .plans = .fromOwnedSlice(try plans.toOwnedSlice(allocator)),
+            .by_node = .fromOwnedSlice(by_node_sorted),
+            .numeral_by_node = .fromOwnedSlice(numeral_sorted),
+            .quote_by_node = .fromOwnedSlice(quote_sorted),
+            .iterator_for_plans = .fromOwnedSlice(try iterator_for_plans.toOwnedSlice(allocator)),
+            .iterator_topologies = .fromOwnedSlice(iterator_topologies),
+            .iterator_for_by_node = .fromOwnedSlice(iterator_for_sorted),
+            .operand_pool = .fromOwnedSlice(try operand_pool.toOwnedSlice(allocator)),
+            .iter_operand_pool = .fromOwnedSlice(try iter_operand_pool.toOwnedSlice(allocator)),
+            .generated_codec_derivations = .fromOwnedSlice(try generated_codec_derivations.toOwnedSlice(allocator)),
+            .generated_codec_calls = .fromOwnedSlice(try generated_codec_calls.toOwnedSlice(allocator)),
         };
     }
 
     /// The dispatch plan of a dispatching expression, or the equality plan
     /// of a custom literal pattern, by CIR node.
     pub fn lookupByNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
-        return if (lookupPlanKV(self.by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
+        return if (lookupPlanKV(self.by_node.items(), node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
     /// The dispatch plan of a dispatching expression.
@@ -2745,21 +2747,21 @@ pub const StaticDispatchPlanTable = struct {
 
     /// The `from_numeral` plan of the numeric literal at a CIR node.
     pub fn numeralPlanForNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
-        return if (lookupPlanKV(self.numeral_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
+        return if (lookupPlanKV(self.numeral_by_node.items(), node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
     /// The `from_quote` plan of the string literal at a CIR node.
     pub fn quotePlanForNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
-        return if (lookupPlanKV(self.quote_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
+        return if (lookupPlanKV(self.quote_by_node.items(), node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
     /// The iterator plan of the `for` loop at a CIR node.
     pub fn iteratorForPlanForNode(self: *const StaticDispatchPlanTable, node: u32) ?IteratorForPlanId {
-        return if (lookupPlanKV(self.iterator_for_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
+        return if (lookupPlanKV(self.iterator_for_by_node.items(), node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
     pub fn evidenceNode(self: *const StaticDispatchPlanTable, id: EvidenceNodeId) EvidenceNode {
-        return self.evidence_nodes[@backingInt(id)];
+        return self.evidence_nodes.items()[@backingInt(id)];
     }
 
     /// The evidence node's nested evidence, in the target scheme's canonical
@@ -2774,7 +2776,7 @@ pub const StaticDispatchPlanTable = struct {
                 base.invariant("alias-scope evidence was read as its target's own evidence", .{});
             },
         };
-        return self.evidence_refs[span.start .. span.start + span.len];
+        return self.evidence_refs.items()[span.start .. span.start + span.len];
     }
 
     /// The evidence an edge that instantiated a procedure alias's scheme
@@ -2786,7 +2788,7 @@ pub const StaticDispatchPlanTable = struct {
                 base.invariant("target evidence was read as an alias scope's evidence", .{});
             },
         };
-        return self.evidence_refs[span.start .. span.start + span.len];
+        return self.evidence_refs.items()[span.start .. span.start + span.len];
     }
 
     pub fn generatedCodecCallEvidence(self: *const StaticDispatchPlanTable, call: GeneratedCodecCall) []const CheckedEvidence {
@@ -2811,12 +2813,12 @@ pub const StaticDispatchPlanTable = struct {
     /// checked instantiation edge was recorded for the expression.
     pub fn siteEvidence(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedEvidence {
         const found = self.siteEvidenceSpan(expr) orelse return null;
-        return self.evidence_refs[found.start .. found.start + found.len];
+        return self.evidence_refs.items()[found.start .. found.start + found.len];
     }
 
     /// Exact durable range for a checker-recorded instantiation edge.
     pub fn siteEvidenceSpan(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?artifact_serialize.Span {
-        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @backingInt(expr), siteEvidenceOrder) orelse return null;
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence.items(), @backingInt(expr), siteEvidenceOrder) orelse return null;
         return .{ .start = found.start, .len = found.len };
     }
 
@@ -2824,10 +2826,10 @@ pub const StaticDispatchPlanTable = struct {
     /// requirements resolved without a caller.
     pub fn templateRootEvidence(self: *const StaticDispatchPlanTable, template: canonical.CheckedProcedureTemplateId) []const CheckedEvidence {
         const raw = @backingInt(template);
-        if (raw >= self.template_root_evidence.len) return &.{};
-        std.debug.assert(self.template_root_evidence[raw] != null);
-        const span = self.template_root_evidence[raw].?;
-        return self.evidence_refs[span.start .. span.start + span.len];
+        if (raw >= self.template_root_evidence.items().len) return &.{};
+        std.debug.assert(self.template_root_evidence.items()[raw] != null);
+        const span = self.template_root_evidence.items()[raw].?;
+        return self.evidence_refs.items()[span.start .. span.start + span.len];
     }
 
     /// The substitution recorded for the scheme used at `expr`: one checked
@@ -2837,14 +2839,14 @@ pub const StaticDispatchPlanTable = struct {
     /// The checked type of the instance a stored nested-function use at
     /// `expr` places into its containing value.
     pub fn siteInstanceType(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?CheckedTypeId {
-        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @backingInt(expr), siteEvidenceOrder) orelse return null;
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence.items(), @backingInt(expr), siteEvidenceOrder) orelse return null;
         if (found.instance_ty == SiteEvidenceEntry.no_site_instance) return null;
         return @fromBackingInt(@intCast(found.instance_ty));
     }
 
     pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedTypeId {
-        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @backingInt(expr), siteEvidenceOrder) orelse return null;
-        return self.site_substitutions[found.subst_start .. found.subst_start + found.subst_len];
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence.items(), @backingInt(expr), siteEvidenceOrder) orelse return null;
+        return self.site_substitutions.items()[found.subst_start .. found.subst_start + found.subst_len];
     }
 
     /// Build-time-only teardown: frees the heap-owned slices. A frozen
@@ -2854,25 +2856,25 @@ pub const StaticDispatchPlanTable = struct {
     /// needed because, unlike the mutation-guarded stores, this table has no post-load
     /// mutators.)
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {
-        allocator.free(self.template_refs);
-        allocator.free(self.direct_template_refs);
-        allocator.free(self.dispatch_relation_refs);
-        allocator.free(self.by_node);
-        allocator.free(self.numeral_by_node);
-        allocator.free(self.quote_by_node);
-        allocator.free(self.iterator_for_by_node);
-        allocator.free(self.plans);
-        allocator.free(self.iterator_for_plans);
-        allocator.free(self.iterator_topologies);
-        allocator.free(@constCast(self.operand_pool));
-        allocator.free(@constCast(self.iter_operand_pool));
-        allocator.free(self.evidence_nodes);
-        allocator.free(self.evidence_refs);
-        allocator.free(self.site_evidence);
-        allocator.free(@constCast(self.site_substitutions));
-        allocator.free(@constCast(self.template_root_evidence));
-        allocator.free(self.generated_codec_derivations);
-        allocator.free(self.generated_codec_calls);
+        self.template_refs.deinit(allocator);
+        self.direct_template_refs.deinit(allocator);
+        self.dispatch_relation_refs.deinit(allocator);
+        self.by_node.deinit(allocator);
+        self.numeral_by_node.deinit(allocator);
+        self.quote_by_node.deinit(allocator);
+        self.iterator_for_by_node.deinit(allocator);
+        self.plans.deinit(allocator);
+        self.iterator_for_plans.deinit(allocator);
+        self.iterator_topologies.deinit(allocator);
+        self.operand_pool.deinit(allocator);
+        self.iter_operand_pool.deinit(allocator);
+        self.evidence_nodes.deinit(allocator);
+        self.evidence_refs.deinit(allocator);
+        self.site_evidence.deinit(allocator);
+        self.site_substitutions.deinit(allocator);
+        self.template_root_evidence.deinit(allocator);
+        self.generated_codec_derivations.deinit(allocator);
+        self.generated_codec_calls.deinit(allocator);
         self.* = .{};
     }
 };
@@ -2950,7 +2952,7 @@ const StaticDispatchConstraintIndex = struct {
         }
 
         var index = StaticDispatchConstraintIndex{
-            .constraints = store.static_dispatch_constraints.items.items,
+            .constraints = store.static_dispatch_constraints.items(),
         };
         errdefer index.deinit(allocator);
 
@@ -3367,7 +3369,7 @@ test "method registry finalization sorts entries for binary lookup" {
 
     finalizeMethodRegistryEntries(entries);
 
-    var registry = MethodRegistry{ .entries = entries };
+    var registry = MethodRegistry{ .entries = .fromBorrowedSlice(entries) };
     const found = registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @fromBackingInt(@intCast(1)) }) orelse return error.MissingSortedMethodTarget;
     try std.testing.expectEqual(@as(CIR.Def.Idx, @fromBackingInt(@intCast(15))), found.target.def_idx);
     const structural = registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @fromBackingInt(@intCast(2)) }) orelse return error.MissingStructuralMethodTarget;
@@ -3392,7 +3394,7 @@ test "method registry distinguishes a rejected declaration from an undeclared me
 
     finalizeMethodRegistryEntries(entries);
 
-    var registry = MethodRegistry{ .entries = entries };
+    var registry = MethodRegistry{ .entries = .fromBorrowedSlice(entries) };
     const declared = registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @fromBackingInt(@intCast(1)) }) orelse
         return error.MissingDeclaredMethodTarget;
     try std.testing.expectEqual(@as(CIR.Def.Idx, @fromBackingInt(@intCast(10))), declared.target.def_idx);
@@ -3453,7 +3455,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
                 } },
                 .callable_ty = @fromBackingInt(@intCast(11)),
             },
-            .dispatcher_ty = @fromBackingInt(@intCast(12)),
+            .dispatcher_ty = .some(@fromBackingInt(@intCast(12))),
             .instantiation = .{ .callable = @fromBackingInt(@intCast(13)) },
             .nested = .{ .resolved = .{ .start = 0, .len = 1 } },
         }};
@@ -3484,38 +3486,38 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         }};
 
         const table = StaticDispatchPlanTable{
-            .plans = &plans,
-            .by_node = &by_node,
-            .iterator_topologies = &iterator_topologies,
-            .operand_pool = operands,
-            .evidence_nodes = &evidence_nodes,
-            .evidence_refs = &evidence_refs,
-            .site_evidence = &site_evidence,
+            .plans = .fromBorrowedSlice(&plans),
+            .by_node = .fromBorrowedSlice(&by_node),
+            .iterator_topologies = .fromBorrowedSlice(&iterator_topologies),
+            .operand_pool = .fromBorrowedSlice(operands),
+            .evidence_nodes = .fromBorrowedSlice(&evidence_nodes),
+            .evidence_refs = .fromBorrowedSlice(&evidence_refs),
+            .site_evidence = .fromBorrowedSlice(&site_evidence),
         };
 
         const rt = try artifact_serialize.roundTripForTest(gpa, StaticDispatchPlanTable, &table);
         defer gpa.free(rt.buffer);
 
         const loaded = rt.loaded;
-        try std.testing.expectEqual(@as(usize, 2), loaded.plans.len);
-        try std.testing.expectEqual(@as(usize, operand_count), loaded.operand_pool.len);
-        try std.testing.expectEqualSlices(IteratorRepresentationTopology, &iterator_topologies, loaded.iterator_topologies);
+        try std.testing.expectEqual(@as(usize, 2), loaded.plans.items().len);
+        try std.testing.expectEqual(@as(usize, operand_count), loaded.operand_pool.items().len);
+        try std.testing.expectEqualSlices(IteratorRepresentationTopology, &iterator_topologies, loaded.iterator_topologies.items());
 
-        const first_args = loaded.plans[0].argsSlice(&loaded);
+        const first_args = loaded.plans.items()[0].argsSlice(&loaded);
         try std.testing.expectEqual(@as(usize, 2), first_args.len);
         try std.testing.expectEqual(@as(CIR.Expr.Idx, @fromBackingInt(@intCast(100))), first_args[0].checked_expr);
 
-        const second_args = loaded.plans[1].argsSlice(&loaded);
+        const second_args = loaded.plans.items()[1].argsSlice(&loaded);
         try std.testing.expectEqual(@as(usize, operand_count - 2), second_args.len);
         try std.testing.expectEqual(
             @as(CIR.Expr.Idx, @fromBackingInt(@intCast(operand_count - 1 + 100))),
             second_args[second_args.len - 1].checked_expr,
         );
 
-        try std.testing.expectEqual(@as(?u32, 1), lookupPlanKV(loaded.by_node, 11));
+        try std.testing.expectEqual(@as(?u32, 1), lookupPlanKV(loaded.by_node.items(), 11));
 
         const node = loaded.evidenceNode(@fromBackingInt(@intCast(fixtureTableIndex(0))));
-        try std.testing.expectEqual(@as(?CheckedTypeId, @fromBackingInt(@intCast(12))), node.dispatcher_ty);
+        try std.testing.expectEqual(@as(?CheckedTypeId, @fromBackingInt(@intCast(12))), node.dispatcher_ty.get());
         try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(13))), node.instantiation.callable);
         const nested = loaded.nestedEvidence(node);
         try std.testing.expectEqual(@as(usize, 1), nested.len);

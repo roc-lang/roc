@@ -52,7 +52,7 @@ test "a template's stored sealed slots match the independent scalar oracle" {
     // every actual checked template, including its sealed source type view.
     var computed: std.ArrayList(u32) = .empty;
     defer computed.deinit(gpa);
-    for (templates.templates.items) |*template| {
+    for (templates.templates.items()) |*template| {
         computed.clearRetainingCapacity();
         for (templates.templateSchemeVars(template), 0..) |variable, slot| {
             if (try walk.sealed(variable, template.checked_fn_root, templates.templateEvidenceParams(template))) try computed.append(gpa, @intCast(slot));
@@ -77,8 +77,8 @@ test "a template's stored sealed slots match the independent scalar oracle" {
 }
 
 fn findTemplate(artifact: *const CheckedArtifact.CheckedModuleArtifact, name: []const u8) ?*const CheckedArtifact.CheckedProcedureTemplate {
-    for (artifact.checked_procedure_templates.templates.items) |*template| {
-        const export_name = artifact.canonical_names.procBase(template.proc_base).export_name orelse continue;
+    for (artifact.checked_procedure_templates.templates.items()) |*template| {
+        const export_name = artifact.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
         if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) return template;
     }
     return null;

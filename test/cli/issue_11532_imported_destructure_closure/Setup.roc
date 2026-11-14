@@ -4,7 +4,7 @@ module [cfg]
 
 Cfg :: { label : Str, build : U32 -> Str }.{
 	new : Str -> Try(Cfg, [Bad(Str)])
-	new = |label| Ok(Cfg.({ label, build: |_n| label }))
+	new = |text| Ok(Cfg.({ label: text, build: |_n| text }))
 
 	label : Cfg -> Str
 	label = |Cfg.(config)| config.label

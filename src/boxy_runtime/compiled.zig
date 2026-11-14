@@ -418,8 +418,9 @@ pub const ListOpRequest = extern struct {
     n: [3]u64,
 };
 
+/// A list of `len` zero-sized items and no spare capacity.
 fn zstList(len: usize) RocList {
-    return .{ .bytes = null, .length = len, .capacity_or_alloc_ptr = 0 };
+    return RocList.zeroSized(len, len);
 }
 
 fn zstSublistLen(size: usize, start: u64, len: u64) usize {
@@ -475,20 +476,20 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
             walk.copyBytes(req.out, at, e.width);
         },
         .append_unsafe => writeList(req.out, if (e.width == 0)
-            zstList(a.len() + 1)
+            a.zeroSizedKeeping(a.len() + 1)
         else
             list.listAppendUnsafe(a, req.element, e.width, &walk.elemCopy)),
         .concat => {
             const b = req.list2.?.*;
             writeList(req.out, if (e.width == 0)
-                zstList(a.len() + b.len())
+                a.zeroSizedKeeping(a.len() + b.len())
             else
                 list.listConcat(a, b, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, mode(req.unique_args, 1), ops));
         },
         .append_range_within => {
             const count = req.n[1];
             writeList(req.out, if (e.width == 0)
-                zstList(a.len() + @as(usize, @intCast(count)))
+                a.zeroSizedKeeping(a.len() + @as(usize, @intCast(count)))
             else if (count == 0)
                 a
             else
@@ -504,7 +505,7 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .append_range_within_unsafe => {
             const count = req.n[1];
             writeList(req.out, if (e.width == 0)
-                zstList(a.len() + @as(usize, @intCast(count)))
+                a.zeroSizedKeeping(a.len() + @as(usize, @intCast(count)))
             else if (count == 0)
                 a
             else
@@ -513,16 +514,16 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .append_sublist => {
             const count = req.n[1];
             writeList(req.out, if (e.width == 0)
-                zstList(a.len() + @as(usize, @intCast(count)))
+                a.zeroSizedKeeping(a.len() + @as(usize, @intCast(count)))
             else
                 list.listAppendSublist(a, req.list2.?.*, req.n[0], count, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, ops));
         },
         .prepend => writeList(req.out, if (e.width == 0)
-            zstList(a.len() + 1)
+            a.zeroSizedKeeping(a.len() + 1)
         else
             list.listPrepend(a, e.alignment, req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
         .swap => writeList(req.out, if (e.width == 0)
-            zstList(a.len())
+            a
         else
             list.listSwap(a, e.alignment, e.width, req.n[0], req.n[1], e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
         .map_can_reuse => req.out[0] = @intFromBool(list.listMapCanReuse(a, ops)),
@@ -535,7 +536,11 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
             }
             writeList(req.out, a);
         },
-        .sublist, .sublist_borrowed, .take_first, .take_last, .clear => {
+        .clear => writeList(req.out, if (e.width == 0)
+            a.zeroSizedKeeping(0)
+        else
+            list.listClear(a, e.alignment, e.width, e.rc, e.context, e.dec, m0, ops)),
+        .sublist, .sublist_borrowed, .take_first, .take_last => {
             const start: u64, const len: u64 = switch (req.op) {
                 .sublist, .sublist_borrowed => .{ req.n[0], req.n[1] },
                 .take_first => .{ 0, req.n[0] },
@@ -544,11 +549,10 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
                     const take = req.n[0];
                     break :blk .{ if (take >= size) 0 else size - take, take };
                 },
-                .clear => .{ 0, 0 },
-                .capacity, .slack_unique, .owned_unique, .get_unsafe, .append_unsafe, .concat, .append_range_within, .copy_range_within, .append_range_within_unsafe, .append_sublist, .prepend, .swap, .map_can_reuse, .item_size_at_most, .map_cast_unsafe, .map_extract_unsafe, .map_write_unsafe, .drop_at, .replace_unsafe, .set, .set_in_place_unsafe, .with_capacity, .reserve, .reserve_for_append, .release_excess_capacity, .reverse => unreachable, // the enclosing prong admits only these five
+                .clear, .capacity, .slack_unique, .owned_unique, .get_unsafe, .append_unsafe, .concat, .append_range_within, .copy_range_within, .append_range_within_unsafe, .append_sublist, .prepend, .swap, .map_can_reuse, .item_size_at_most, .map_cast_unsafe, .map_extract_unsafe, .map_write_unsafe, .drop_at, .replace_unsafe, .set, .set_in_place_unsafe, .with_capacity, .reserve, .reserve_for_append, .release_excess_capacity, .reverse => unreachable, // the enclosing prong admits only these five
             };
             if (e.width == 0) {
-                writeList(req.out, zstList(if (req.op == .clear) 0 else zstSublistLen(a.len(), start, len)));
+                writeList(req.out, zstList(zstSublistLen(a.len(), start, len)));
             } else if (req.op == .sublist_borrowed) {
                 writeList(req.out, list.listSublistBorrowed(a, e.width, start, len, e.rc, ops));
             } else {
@@ -558,7 +562,7 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .drop_at => {
             if (e.width == 0) {
                 const size = a.len();
-                writeList(req.out, zstList(if (req.n[0] >= @as(u64, @intCast(size))) size else size -| 1));
+                writeList(req.out, a.zeroSizedKeeping(if (req.n[0] >= @as(u64, @intCast(size))) size else size -| 1));
             } else {
                 writeList(req.out, list.listDropAt(a, e.alignment, e.width, e.rc, req.n[0], e.context, e.inc, e.context, e.dec, m0, ops));
             }
@@ -566,7 +570,7 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .replace_unsafe => {
             if (e.width == 0) {
                 const list_out = if (req.ret_desc) |ret_desc| req.out + recordOf(ret_desc, ops).fieldBySemanticIndex(0).offset else req.out;
-                writeList(list_out, zstList(a.len()));
+                writeList(list_out, a);
                 return;
             }
             // The result is the record `{ list : List(a), value : a }`.
@@ -587,7 +591,7 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         },
         .set, .set_in_place_unsafe => {
             if (e.width == 0) {
-                writeList(req.out, zstList(a.len()));
+                writeList(req.out, a);
                 return;
             }
             // `set` does not return the displaced element; `listSet` releases it.
@@ -595,12 +599,12 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
             writeList(req.out, list.listSet(a, e.alignment, req.n[0], req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, set_mode, &walk.elemCopy, ops));
         },
         .with_capacity => writeList(req.out, if (e.width == 0)
-            zstList(0)
+            RocList.zeroSized(0, req.n[0])
         else
             list.listWithCapacity(req.n[0], e.alignment, e.width, e.rc, null, &list.rcNone, ops)),
         .reserve, .reserve_for_append => {
             if (e.width == 0) {
-                writeList(req.out, zstList(a.len()));
+                writeList(req.out, a.zeroSizedReserving(req.n[0]));
                 return;
             }
             const reserve = if (req.op == .reserve) &list.listReserve else &list.listReserveForAppend;
@@ -611,7 +615,7 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         else
             list.listReleaseExcessCapacity(a, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, ops)),
         .reverse => writeList(req.out, if (e.width == 0)
-            zstList(a.len())
+            a
         else
             list.listReverse(a, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
     }

@@ -13,6 +13,63 @@ const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 
+/// Counts the releases of a loaded entry, which is a heap buffer here.
+const CountedRelease = struct {
+    var count: usize = 0;
+
+    fn release(bytes: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, allocator: std.mem.Allocator) void {
+        count += 1;
+        allocator.free(bytes);
+    }
+};
+
+test "a ModuleEnv loaded in place grows by copying and releases its entry once" {
+    const gpa = std.testing.allocator;
+    const source = "x = 1\n";
+
+    var original = try ModuleEnv.init(gpa, source);
+    defer original.deinit();
+    try original.initCIRFields("Loaded");
+    const x = try original.insertIdent(Ident.for_text("x"));
+    const literal = try original.insertString("literal");
+    const first_var = try original.types.fresh();
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, ModuleEnv.Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    _ = try writer.writeToBuffer(buffer);
+
+    const loaded: *const ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try loaded.validate(buffer.len);
+    var env = loaded.deserializeInPlace(@intFromPtr(buffer.ptr), gpa, source, "Loaded", .writable) catch |err| {
+        gpa.free(buffer);
+        return err;
+    };
+    env.loaded_entry = .{ .bytes = buffer, .release = &CountedRelease.release };
+    CountedRelease.count = 0;
+
+    // Existing entries come back where they were written.
+    try testing.expectEqual(x, try env.insertIdent(Ident.for_text("x")));
+    try testing.expectEqual(literal, try env.insertString("literal"));
+    try testing.expect(!env.types.isSealed());
+
+    // New entries grow the borrowed lists into owned memory.
+    const y = try env.insertIdent(Ident.for_text("y"));
+    const another = try env.insertString("another");
+    const second_var = try env.types.fresh();
+    try testing.expectEqualStrings("y", env.getIdent(y));
+    try testing.expectEqualStrings("another", env.getString(another));
+    try testing.expect(env.types.resolveVar(second_var).is_root);
+    try testing.expect(env.types.resolveVar(first_var).is_root);
+    try testing.expectEqual(x, try env.insertIdent(Ident.for_text("x")));
+
+    // `deinit` frees the grown copies, then the entry, exactly once.
+    env.deinit();
+    try testing.expectEqual(@as(usize, 1), CountedRelease.count);
+}
+
 test "ModuleEnv.Serialized roundtrip" {
     const gpa = std.testing.allocator;
     const source = "hello world\ntest line 2\n";
@@ -87,11 +144,9 @@ test "ModuleEnv.Serialized roundtrip" {
     corrupt_serialized.common.idents.interner.bytes.len = std.math.maxInt(u64);
     try std.testing.expectError(error.CorruptArtifact, corrupt_serialized.validate(buffer.len));
 
-    const env = try deserialized_ptr.deserializeWithMutableTypes(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
-    defer {
-        env.deinitCachedModule();
-        gpa.destroy(env);
-    }
+    var loaded_env = try deserialized_ptr.deserializeInPlace(@intFromPtr(buffer.ptr), gpa, source, "TestModule", .sealed);
+    defer loaded_env.deinit();
+    const env = &loaded_env;
 
     try std.testing.expectEqual(original.common.idents.interner.entry_count, env.common.idents.interner.entry_count);
     try std.testing.expectEqualStrings("hello", original.getIdent(hello_idx));
@@ -106,21 +161,21 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try std.testing.expectEqual(original.common.line_starts.len(), env.common.line_starts.len());
-    for (original.common.line_starts.items.items, env.common.line_starts.items.items) |expected, actual| {
+    for (original.common.line_starts.items(), env.common.line_starts.items()) |expected, actual| {
         try std.testing.expectEqual(expected, actual);
     }
     try std.testing.expectEqualStrings("TestModule", env.module_name);
 
     try std.testing.expectEqual(@as(usize, 2), env.imports.imports.len());
-    try std.testing.expectEqualStrings("json.Json", env.common.strings.get(env.imports.imports.items.items[0]));
-    try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items.items[1]));
-    try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
+    try std.testing.expectEqualStrings("json.Json", env.common.strings.get(env.imports.imports.items()[0]));
+    try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items()[1]));
+    try std.testing.expectEqual(@as(?can.CIR.Import.Idx, @fromBackingInt(1)), env.imports.find(env.imports.imports.items()[1]));
     try std.testing.expectEqual(@as(usize, 1), env.rejectedStaticDispatches().len);
     try std.testing.expectEqual(@as(types.Var, @fromBackingInt(@intCast(1234))), env.rejectedStaticDispatches()[0].fnVar());
     try std.testing.expect(env.nodeIsBindingScheme(@fromBackingInt(@intCast(7))));
     try std.testing.expect(env.nodeIsBindingScheme(@fromBackingInt(@intCast(42))));
     try std.testing.expect(!env.nodeIsBindingScheme(@fromBackingInt(@intCast(41))));
-    try std.testing.expectEqual(@as(usize, 2), env.binding_schemes.items.items.len);
+    try std.testing.expectEqual(@as(usize, 2), env.binding_schemes.items().len);
     const codec_requirements_7 = env.bindingSchemeCodecRequirementsForNode(@fromBackingInt(@intCast(7)));
     try std.testing.expectEqual(@as(usize, 1), codec_requirements_7.len);
     try std.testing.expectEqual(@as(u32, 91), codec_requirements_7[0].scheme_root);
@@ -187,9 +242,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try testing.expectEqual(@as(usize, 3), env.common.line_starts.len());
-    try testing.expectEqual(@as(u32, 0), env.common.line_starts.items.items[0]);
-    try testing.expectEqual(@as(u32, 12), env.common.line_starts.items.items[1]);
-    try testing.expectEqual(@as(u32, 24), env.common.line_starts.items.items[2]);
+    try testing.expectEqual(@as(u32, 0), env.common.line_starts.items()[0]);
+    try testing.expectEqual(@as(u32, 12), env.common.line_starts.items()[1]);
+    try testing.expectEqual(@as(u32, 24), env.common.line_starts.items()[2]);
 
     try testing.expectEqualStrings(source, env.common.source);
     try testing.expectEqualStrings("TestModule", env.module_name);
@@ -198,19 +253,15 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
 
     // Verify the import strings are correct (they reference string indices in the string store)
-    const import_str1 = env.common.strings.get(env.imports.imports.items.items[0]);
-    const import_str2 = env.common.strings.get(env.imports.imports.items.items[1]);
+    const import_str1 = env.common.strings.get(env.imports.imports.items()[0]);
+    const import_str2 = env.common.strings.get(env.imports.imports.items()[1]);
 
     try testing.expectEqualStrings("json.Json", import_str1);
     try testing.expectEqualStrings("core.List", import_str2);
 
-    // Verify that the map was repopulated correctly
-    try testing.expectEqual(@as(usize, 2), env.imports.map.count());
-
-    // The deserialized StringLiteral.Store is immutable, so cached import lookup
-    // uses the serialized string index rather than reinterning its bytes.
-    const json_string_idx = env.imports.imports.items.items[0];
-    const import_json_cached = env.imports.map.get(json_string_idx).?;
+    // The serialized lookup table finds each import by its interned name.
+    const json_string_idx = env.imports.imports.items()[0];
+    const import_json_cached = env.imports.find(json_string_idx).?;
     try testing.expectEqual(@as(u32, 0), @backingInt(import_json_cached));
 }
 
@@ -295,13 +346,11 @@ test "ModuleEnv.Serialized roundtrip preserves file dependency states" {
     _ = try writer.writeToBuffer(buffer);
 
     const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const env = try deserialized_ptr.deserializeWithMutableTypes(@intFromPtr(buffer.ptr), gpa, source, "Test");
-    defer {
-        env.deinitCachedModule();
-        gpa.destroy(env);
-    }
+    var loaded_env = try deserialized_ptr.deserializeInPlace(@intFromPtr(buffer.ptr), gpa, source, "Test", .sealed);
+    defer loaded_env.deinit();
+    const env = &loaded_env;
 
-    const deps = env.file_dependencies.items.items;
+    const deps = env.file_dependencies.items();
     try testing.expectEqual(@as(usize, 3), deps.len);
 
     try testing.expectEqual(ModuleEnv.FileDependencyState.present, deps[0].state);

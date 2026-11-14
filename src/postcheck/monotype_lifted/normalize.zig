@@ -678,7 +678,7 @@ const Normalizer = struct {
                     try self.append(sink_id, try self.program.addStmt(.{ .let_ = .{
                         .pat = binding.bind,
                         .value = value,
-                        .comptime_site = binding.comptime_site,
+                        .comptime_site = .of(binding.comptime_site),
                     } }));
                     return .{ .request = .{ .expr = .{ .source = binding.rest, .sink = sink_id } } };
                 },
@@ -806,13 +806,13 @@ const Normalizer = struct {
         const branch = &frame.branches.items[frame.branches.items.len - 1];
         const bindings_sink: SinkId = @intCast(frame.index);
         if (phase == 1) {
-            if (branch.guard) |guard| return .{ .request = .{ .expr = .{ .source = guard, .sink = bindings_sink } } };
+            if (branch.guard.get()) |guard| return .{ .request = .{ .expr = .{ .source = guard, .sink = bindings_sink } } };
             frame.cursor += 1;
-        } else if (branch.guard != null) {
+        } else if (branch.guard != .none) {
             // A guard whose evaluation transfers control ends the branch's
             // bindings there, so it produces no value to test: reaching the
             // branch runs its bindings up to that transfer.
-            branch.guard = if (self.sink(bindings_sink).terminated) null else delivered.?;
+            branch.guard = .of(if (self.sink(bindings_sink).terminated) null else delivered.?);
         }
         branch.bindings = try self.program.addStmtSpan(self.sink(bindings_sink).list.items);
         self.releaseSinksFrom(bindings_sink);

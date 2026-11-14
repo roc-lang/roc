@@ -8,7 +8,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const can = @import("can");
 const check = @import("check");
-const collections = @import("collections");
 const builtin_static = can.BuiltinStatic;
 
 const CIR = can.CIR;
@@ -16,7 +15,6 @@ const Allocator = std.mem.Allocator;
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinModuleView = builtin_static.BuiltinModuleView;
 const BuiltinIndices = CIR.BuiltinIndices;
-const CompactWriter = collections.CompactWriter;
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
 
 /// Centralized container for all builtin modules
@@ -53,21 +51,14 @@ pub const BuiltinModules = struct {
         }
 
         // The baked blob is the serialized artifact followed by a layout-version
-        // trailer. Validate and strip it before relocating: a mismatch means the
-        // embedded blob is stale relative to this compiler (a build-system
-        // inconsistency), which we reject rather than relocate into a differently-
-        // shaped struct.
-        const artifact_blob = compiled_builtins.builtin_artifact_bin[0..];
-        const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(artifact_blob);
-        const artifact_buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-            @alignCast(artifact_blob[0..serialized_bytes.len]);
-
-        const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
-        // L-10: bounds-check every relocatable marker against the buffer before any
-        // sub-store aliases it, so a corrupt/truncated baked blob fails cleanly.
-        try serialized.validate(artifact_buffer.len);
-        var checked_artifact = serialized.deserializeStatic(
-            artifact_buffer,
+        // trailer. `viewStaticBuiltin` validates and strips it before relocating:
+        // a mismatch means the embedded blob is stale relative to this compiler
+        // (a build-system inconsistency), which we reject rather than relocate
+        // into a differently-shaped struct. It also bounds-checks every
+        // relocatable marker against the blob before any sub-store aliases it,
+        // so a corrupt or truncated baked blob fails cleanly.
+        var checked_artifact = try CheckedModuleArtifact.viewStaticBuiltin(
+            compiled_builtins.builtin_artifact_bin,
             allocator,
             .{ .static_builtin = builtin_module.env },
         );
@@ -87,3 +78,10 @@ pub const BuiltinModules = struct {
         self.checked_artifact.deinit(self.allocator);
     }
 };
+
+test "baked Builtin completes requested roots for both lowering strategies" {
+    var modules = try BuiltinModules.init(std.testing.allocator, std.testing.io);
+    defer modules.deinit();
+    try std.testing.expect(!modules.checked_artifact.hasUnevaluatedRequests(.lss));
+    try std.testing.expect(!modules.checked_artifact.hasUnevaluatedRequests(.boxy));
+}

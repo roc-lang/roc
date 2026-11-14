@@ -17,7 +17,7 @@ fn expectHostedArgKeepsCheckedHostAbiLayout(store: *const lir.LirStore, layouts:
     for (store.getProcSpecs(), 0..) |_, index| {
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const spec = store.getProcSpec(proc_id);
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         if (!std.mem.eql(u8, store.getString(hosted.symbol), hosted_symbol)) continue;
         found += 1;
         const args = store.getLocalSpan(spec.args);
@@ -47,7 +47,7 @@ fn expectReturnAbi(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.L
     var found: usize = 0;
     for (result.store.getProcSpecs(), 0..) |_, index| {
         const spec = result.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-        if (spec.hosted) |hosted| {
+        if (spec.hosted.get()) |hosted| {
             if (!std.mem.eql(u8, result.store.getString(hosted.symbol), "roc_stdout_line")) continue;
             const value = result.layouts.getLayout(spec.ret_layout);
             try std.testing.expectEqual(layout.LayoutTag.tag_union, value.tag);
@@ -214,7 +214,7 @@ fn expectHostedArg32(store: *const lir.LirStore, layouts: *const layout.Store) h
     var found: usize = 0;
     for (store.getProcSpecs(), 0..) |_, index| {
         const spec = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         if (!std.mem.eql(u8, store.getString(hosted.symbol), hosted_symbol)) continue;
         const args = store.getLocalSpan(spec.args);
         const value = layouts.getLayout(store.getLocal(GuardedList.at(args, 0)).layout_idx);

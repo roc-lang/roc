@@ -29,7 +29,7 @@ const dev_diagnostics = base.dev_diagnostics;
 /// test mode, since they also lower the paired platform modules' bodies.
 pub fn requiresTestUnit(artifact: *const Artifact) bool {
     if (artifact.has_expects) return true;
-    for (artifact.root_requests.requests) |root| {
+    for (artifact.root_requests.requests.items()) |root| {
         if (root.kind == .test_expect) return true;
     }
     return false;
@@ -198,9 +198,9 @@ pub const Built = struct {
 pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool, wasm_stack_checks: bool) Allocator.Error!object_cache.Key {
     std.debug.assert(!wasm_stack_checks or imageKind(target) == .wasm);
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
-        const inputs = try gpa.alloc(object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
+        const inputs = try gpa.alloc(object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.items().len);
         defer gpa.free(inputs);
-        for (platform_view.hosted_bindings.bindings, inputs) |binding, *input| input.* = .{
+        for (platform_view.hosted_bindings.bindings.items(), inputs) |binding, *input| input.* = .{
             .target_module = binding.target_checked_module.bytes,
             .target_def = @backingInt(binding.target_def),
             .symbol = platform_view.canonical_names.externalSymbolNameText(binding.external_symbol_name),
@@ -230,15 +230,17 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to restore key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         return null;
     };
-    const bytes = manager.loadFamilyBytes(.boxy_object, key.bytes, object_cache.scope) orelse {
+    const loaded = manager.loadFamilyBytes(.boxy_object, key.bytes, object_cache.scope) orelse {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no object cache entry for key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         return null;
     };
-    defer gpa.free(bytes);
+    const bytes = loaded.bytes;
+    defer manager.allocator.free(bytes);
     const entry = object_cache.decode(gpa, bytes) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidEntry => {
             if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} is not an entry ({d} bytes)\n", .{ &std.fmt.bytesToHex(key.bytes[0..8], .lower), bytes.len });
+            manager.rejectEntry(.checked, .boxy_object, key.bytes, object_cache.scope, loaded.stamp, "it does not decode as a Boxy object", .{});
             return null;
         },
     };
@@ -307,6 +309,7 @@ fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cach
             return error.OutOfMemory;
         },
         error.InvalidEntry => {
+            manager.rejectEntry(.checked, .boxy_object, key.bytes, object_cache.scope, data.stamp, "it does not decode as a Boxy object", .{});
             data.deinit(gpa);
             return null;
         },
@@ -382,7 +385,7 @@ pub fn hostedSymbols(arena: Allocator, store_: *const lir.LirStore) Allocator.Er
     var seen = std.StringHashMap(void).init(arena);
     var symbols = std.ArrayList([]const u8).empty;
     for (store_.getProcSpecs()) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         const text = store_.getString(hosted.symbol);
         const gop = try seen.getOrPut(text);
         if (!gop.found_existing) try symbols.append(arena, try arena.dupe(u8, text));
@@ -682,7 +685,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
 pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Error![]check.CheckedArtifact.RootRequest {
     var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     errdefer roots.deinit(gpa);
-    for (artifact.root_requests.requests) |root| {
+    for (artifact.root_requests.requests.items()) |root| {
         if (root.kind != .test_expect) continue;
         try roots.append(gpa, root);
     }

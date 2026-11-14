@@ -9,14 +9,28 @@
 //!   mentions a same-module top-level def, whose body is walked in turn.
 //! - OMISSION edges: a LOCAL nominal construction (`Cfg.{ ... }`) omits a
 //!   declared defaulted field, so materializing the surrounding expression
-//!   materializes that field's default.
+//!   materializes that field's default. A construction written through a
+//!   local alias (`C.{ ... }` with `C : Cfg`) is the same construction when
+//!   the alias's annotation is a reference canonicalization resolved to a
+//!   local type declaration, followed through any chain of such aliases to
+//!   the nominal declaration: every hop is a name canonicalization already
+//!   resolved, so the edge is name-resolvable.
 //!
 //! Value references only point down the import DAG, so a path that returns
 //! to its origin default can never leave the declaring module: this pass is
-//! module-local without losing any name-resolvable cycle. Edges that only
-//! exist after type checking—method/dispatch call targets and FOREIGN
-//! nominal constructions' omissions—terminate here by principle and are the
-//! checker's residue (`defaultMaterializationIsRecursive` in
+//! module-local without losing any name-resolvable cycle. An alias never
+//! changes which pass owns a construction: a construction through an alias
+//! is handled exactly as the same construction written through the name of
+//! the type the alias stands for, whichever module declares that type. A
+//! construction of another module's nominal type, written through its name
+//! or through an alias of it, contributes no edge here, because that type's
+//! defaults live in a module that cannot reference this one; its omitted
+//! defaults are filled in by checking. Edges that only exist after type
+//! checking—method/dispatch call targets, and a construction through an
+//! alias that reaches its nominal type through a type argument (`C :
+//! Same(Cfg)` with `Same(a) : a`), which names its type only once the
+//! argument is substituted—terminate here by principle and are the checker's
+//! residue (`defaultMaterializationIsRecursive` in
 //! src/check/Check.zig). A plain call through a function PARAMETER needs no
 //! edge of its own: the function value reached the parameter as an argument
 //! of some walked call, where the conservative argument rule (below) already
@@ -595,9 +609,11 @@ const Pass = struct {
     /// that field's default. The enumeration (update/unset/backing-shape
     /// rules included) is shared with `DependencyGraph.zig` via
     /// `default_omissions.zig`, so the cycle graph and the demand graph
-    /// agree on what "omitted" means.
+    /// agree on what "omitted" means. A construction written through a local
+    /// alias that names a local nominal declaration omits that declaration's
+    /// defaults.
     fn appendOmissionEdges(self: *Pass, decl_stmt: CIR.Statement.Idx, backing_expr: Expr.Idx) Allocator.Error!void {
-        var omissions = default_omissions.omittedDefaults(self.env, decl_stmt, backing_expr);
+        var omissions = default_omissions.omittedDefaultsThroughLocalAliases(self.env, decl_stmt, backing_expr);
         while (omissions.next()) |omitted| {
             // `collectDefaults` registered the defaults of `type_decls` and
             // `forward_type_decls`; a construction naming a declaration
@@ -614,7 +630,8 @@ const Pass = struct {
     /// drops every default in the SCC.
     fn findAndReportCycles(self: *Pass) Allocator.Error!void {
         const count = self.nodeCount();
-        const unvisited = std.math.maxInt(u32);
+        // Visit indices are issued from one, so zero marks an unvisited node.
+        const unvisited: u32 = 0;
 
         var state = TarjanState{
             .index_of = try self.gpa.alloc(u32, count),
@@ -698,7 +715,7 @@ const Pass = struct {
         index_of: []u32,
         lowlink_of: []u32,
         on_stack: []bool,
-        next_index: u32 = 0,
+        next_index: u32 = 1,
         stack: std.ArrayListUnmanaged(u32) = .empty,
         frames: std.ArrayListUnmanaged(Frame) = .empty,
 

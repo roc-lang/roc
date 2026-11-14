@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 
@@ -11,11 +12,12 @@ pub const Id = enum(u32) { _ };
 
 /// Exact callee edges, stored backwards so rejection visits each edge once.
 pub const Graph = struct {
-    const none = std.math.maxInt(u32);
-    const Edge = struct { caller: Id, next: u32 };
+    const EdgeIndex = enum(u32) { _ };
+    const OptionalEdgeIndex = collections.OptionalId(EdgeIndex);
+    const Edge = struct { caller: Id, next: OptionalEdgeIndex };
 
     allocator: Allocator,
-    heads: []u32,
+    heads: collections.OptionalIndexColumn(EdgeIndex),
     allowed: []bool,
     edges: std.ArrayList(Edge) = .empty,
     rejected: std.ArrayList(Id) = .empty,
@@ -23,20 +25,19 @@ pub const Graph = struct {
     /// A graph over `count` callables, all eligible until rejected.
     pub fn init(allocator: Allocator, count: usize) Allocator.Error!Graph {
         if (count > std.math.maxInt(u32)) return error.OutOfMemory;
-        const heads = try allocator.alloc(u32, count);
-        errdefer allocator.free(heads);
+        var heads = try collections.OptionalIndexColumn(EdgeIndex).initFilled(allocator, count);
+        errdefer heads.deinit(allocator);
         const allowed = try allocator.alloc(bool, count);
         errdefer allocator.free(allowed);
         var rejected = try std.ArrayList(Id).initCapacity(allocator, count);
         errdefer rejected.deinit(allocator);
-        @memset(heads, none);
         @memset(allowed, true);
         return .{ .allocator = allocator, .heads = heads, .allowed = allowed, .rejected = rejected };
     }
 
     /// Free the graph's storage.
     pub fn deinit(self: *Graph) void {
-        self.allocator.free(self.heads);
+        self.heads.deinit(self.allocator);
         self.allocator.free(self.allowed);
         self.edges.deinit(self.allocator);
         self.rejected.deinit(self.allocator);
@@ -45,9 +46,10 @@ pub const Graph = struct {
     /// Record that `caller`'s body reaches `callee`.
     pub fn addDependency(self: *Graph, caller: Id, callee: Id) Allocator.Error!void {
         const index = std.math.cast(u32, self.edges.items.len) orelse return error.OutOfMemory;
-        if (index == none) return error.OutOfMemory;
-        try self.edges.append(self.allocator, .{ .caller = caller, .next = self.heads[@backingInt(callee)] });
-        self.heads[@backingInt(callee)] = index;
+        if (index == std.math.maxInt(u32)) return error.OutOfMemory;
+        const previous: OptionalEdgeIndex = if (self.heads.get(@backingInt(callee))) |head| .some(head) else .none;
+        try self.edges.append(self.allocator, .{ .caller = caller, .next = previous });
+        self.heads.set(@backingInt(callee), @fromBackingInt(index));
     }
 
     /// Mark a callable whose own body is ineligible.
@@ -63,11 +65,11 @@ pub const Graph = struct {
     pub fn finish(self: *Graph) void {
         var index: usize = 0;
         while (index < self.rejected.items.len) : (index += 1) {
-            var edge_index = self.heads[@backingInt(self.rejected.items[index])];
-            while (edge_index != none) {
-                const edge = self.edges.items[edge_index];
+            var edge_index = self.heads.get(@backingInt(self.rejected.items[index]));
+            while (edge_index) |current| {
+                const edge = self.edges.items[@backingInt(current)];
                 self.reject(edge.caller);
-                edge_index = edge.next;
+                edge_index = edge.next.get();
             }
         }
     }

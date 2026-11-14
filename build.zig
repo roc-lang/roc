@@ -319,8 +319,13 @@ fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
 /// fails with "InputSection too large for range extension thunk". Splitting per
 /// function and per datum gives LLD those insertion points, and lets the final
 /// link discard unused compiler code on every target.
+///
+/// COFF skips function sections: a stripped Zig object built with them puts all
+/// of its unwind data in one `.pdata$`/`.xdata$` COMDAT whose key MinGW's libc
+/// objects share, so LLD drops the compiler's unwind tables and
+/// `CompileTimeHost.windowsX64FailurePoint` cannot unwind host frames.
 fn splitCompilerSections(step: *Step.Compile) void {
-    step.link_function_sections = true;
+    if (step.rootModuleTarget().ofmt != .coff) step.link_function_sections = true;
     step.link_data_sections = true;
 }
 
@@ -668,6 +673,9 @@ const TestsSummaryStep = struct {
     producers: std.StringHashMapUnmanaged(void) = .empty,
     serialize_runs: bool = false,
     last_run: ?*Step = null,
+    /// Set by `finish`, after which the summary's argument list ends in the
+    /// passthrough separator and no further report can be counted.
+    finished: bool = false,
 
     fn create(b: *std.Build, test_filters: []const []const u8, forced_passes: usize) *TestsSummaryStep {
         const self = b.allocator.create(TestsSummaryStep) catch @panic("OOM");
@@ -688,6 +696,7 @@ const TestsSummaryStep = struct {
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
         const run: *Step.Run = @fieldParentPtr("step", run_step);
         const b = run.step.owner;
+        if (self.finished) std.debug.panic("test report producer registered after its summary finished: {s}", .{run.producer.?.name});
         const entry = self.producers.getOrPut(b.allocator, run.producer.?.name) catch @panic("OOM");
         if (entry.found_existing) std.debug.panic("duplicate test report producer: {s}", .{run.producer.?.name});
         const basename = b.fmt("{s}.tsv", .{run.producer.?.name});
@@ -710,6 +719,14 @@ const TestsSummaryStep = struct {
             self.last_run = run_step;
         }
         self.step.dependOn(run_step);
+    }
+
+    /// End the report list: arguments after the separator are passthrough
+    /// filters, so every report must be added before this.
+    fn finish(self: *TestsSummaryStep) void {
+        self.finished = true;
+        self.run.addArg("--");
+        self.run.addPassthruArgs();
     }
 };
 
@@ -1846,6 +1863,15 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "issue_12778_wide_record_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "51181" } },
     .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12778_wide_record_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "51181" } },
     .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12778_wide_record_split_static_lib_app.wasm", .run_args = &.{ "--expected", "51181" }, .split_bytes = "256" },
+    // A recursion through a closure call whose lambda set has 256 members
+    // fits a 1 MiB shadow stack: the calling function's frame does not grow
+    // with the member count (#12922).
+    .{ .app = "issue_12922_lambda_set_frame_static_lib_app.roc", .options = &.{ "--opt=dev", "--wasm-stack-size=1048576" }, .output = "issue_12922_lambda_set_frame_static_lib_app.wasm", .run_args = &.{ "--expected", "20" } },
+    // The same storage contract holds for Boxy's runtime producers and for
+    // WebAssembly 1.0, not only the specialized bulk-memory path.
+    .{ .app = "issue_12922_lambda_set_frame_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no", "--wasm-stack-size=1048576" }, .output = "issue_12922_lambda_set_frame_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "20" } },
+    .{ .app = "issue_12922_lambda_set_frame_static_lib_app.roc", .options = &.{ "--opt=dev", "--wasm-stack-size=1048576" }, .output = "issue_12922_lambda_set_frame_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "20" } },
+    .{ .app = "issue_12922_lambda_set_frame_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no", "--wasm-stack-size=1048576" }, .output = "issue_12922_lambda_set_frame_boxy_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "20" } },
     // Narrowing try conversions from 128-bit integers (#12782).
     .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12782_i128_narrow_static_lib_app.wasm", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
     .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12782_i128_narrow_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
@@ -2317,17 +2343,21 @@ pub fn build(b: *std.Build) void {
 
     // Generate compiled_builtins.zig with hardcoded Builtin module.
     // The embedded blobs are copied by Zig at compile time into 16-byte-aligned
-    // static storage, so runtime code can build views over them directly. The
-    // storage keeps the embedded file's own type (a sentinel-terminated byte
-    // array): initializing it from the file is then a reuse of the embedded
-    // bytes, whereas coercing them to a plain byte array makes the compiler
-    // build the 40 MB value element by element, which takes seconds, holds
-    // about 1.5 GB, and crashes zig 0.17.0 once the blobs pass about 45 MB.
+    // `const` storage, so runtime code can build views over them directly. An
+    // optimized native build (LLVM) places that storage in read-only data, so a
+    // write through a view faults; the self-hosted x86_64 backend that Debug
+    // builds use places const data in a writable segment. The storage keeps the embedded file's own type (a
+    // sentinel-terminated byte array): initializing it from the file is then a
+    // reuse of the embedded bytes, whereas coercing them to a plain byte array
+    // makes the compiler build the 40 MB value element by element, which takes
+    // seconds, holds about 1.5 GB, and crashes zig 0.17.0 once the blobs pass
+    // about 45 MB.
     //
     // A root module that declares `roc_compressed_builtins` (see
     // `addCompressedBuiltins`) embeds zstd frames instead: the blobs are about
     // 40 MB raw and 4 MB compressed. The raw files are then only read for their
-    // lengths, so they are not linked, and `decompress` must run before any blob is read.
+    // lengths, so they are not linked; the blobs are decompressed into writable
+    // storage, and `decompress` must run before any blob is read.
     const builtins_source_str =
         \\const std = @import("std");
         \\const root = @import("root");
@@ -2338,16 +2368,34 @@ pub fn build(b: *std.Build) void {
         \\const slack = if (compressed) std.compress.zstd.block_size_max else 0;
         \\
         \\const builtin_bin_raw = @embedFile("Builtin.bin");
-        \\var builtin_bin_storage: (if (compressed) [builtin_bin_raw.len + slack]u8 else [builtin_bin_raw.len:0]u8) align(16) =
-        \\    if (compressed) @splat(0) else builtin_bin_raw.*;
-        \\pub const builtin_bin: *align(16) [builtin_bin_raw.len]u8 = builtin_bin_storage[0..builtin_bin_raw.len];
         \\const builtin_source_raw = @embedFile("Builtin.roc");
-        \\var builtin_source_storage: [builtin_source_raw.len + slack]u8 = @splat(0);
-        \\pub const builtin_source = if (compressed) builtin_source_storage[0..builtin_source_raw.len] else builtin_source_raw;
         \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
-        \\var builtin_artifact_bin_storage: (if (compressed) [builtin_artifact_bin_raw.len + slack]u8 else [builtin_artifact_bin_raw.len:0]u8) align(16) =
-        \\    if (compressed) @splat(0) else builtin_artifact_bin_raw.*;
-        \\pub const builtin_artifact_bin: *align(16) [builtin_artifact_bin_raw.len]u8 = builtin_artifact_bin_storage[0..builtin_artifact_bin_raw.len];
+        \\
+        \\/// The raw blobs, in read-only data.
+        \\const raw = struct {
+        \\    const builtin_bin: [builtin_bin_raw.len:0]u8 align(16) = builtin_bin_raw.*;
+        \\    const builtin_artifact_bin: [builtin_artifact_bin_raw.len:0]u8 align(16) = builtin_artifact_bin_raw.*;
+        \\};
+        \\
+        \\/// Writable storage the compressed blobs are decompressed into.
+        \\const decompressed_storage = struct {
+        \\    var builtin_bin: [builtin_bin_raw.len + slack]u8 align(16) = @splat(0);
+        \\    var builtin_source: [builtin_source_raw.len + slack]u8 = @splat(0);
+        \\    var builtin_artifact_bin: [builtin_artifact_bin_raw.len + slack]u8 align(16) = @splat(0);
+        \\};
+        \\
+        \\pub const builtin_bin: *align(16) const [builtin_bin_raw.len]u8 = if (compressed)
+        \\    decompressed_storage.builtin_bin[0..builtin_bin_raw.len]
+        \\else
+        \\    raw.builtin_bin[0..builtin_bin_raw.len];
+        \\pub const builtin_source: *const [builtin_source_raw.len]u8 = if (compressed)
+        \\    decompressed_storage.builtin_source[0..builtin_source_raw.len]
+        \\else
+        \\    builtin_source_raw;
+        \\pub const builtin_artifact_bin: *align(16) const [builtin_artifact_bin_raw.len]u8 = if (compressed)
+        \\    decompressed_storage.builtin_artifact_bin[0..builtin_artifact_bin_raw.len]
+        \\else
+        \\    raw.builtin_artifact_bin[0..builtin_artifact_bin_raw.len];
         \\
         \\var decompressed = !compressed;
         \\
@@ -2357,9 +2405,9 @@ pub fn build(b: *std.Build) void {
         \\    if (!compressed) return;
         \\    if (decompressed) return;
         \\    const frames = root.roc_compressed_builtins;
-        \\    try decompressInto(frames.builtin_bin, &builtin_bin_storage, builtin_bin_raw.len);
-        \\    try decompressInto(frames.builtin_source, &builtin_source_storage, builtin_source_raw.len);
-        \\    try decompressInto(frames.builtin_artifact_bin, &builtin_artifact_bin_storage, builtin_artifact_bin_raw.len);
+        \\    try decompressInto(frames.builtin_bin, &decompressed_storage.builtin_bin, builtin_bin_raw.len);
+        \\    try decompressInto(frames.builtin_source, &decompressed_storage.builtin_source, builtin_source_raw.len);
+        \\    try decompressInto(frames.builtin_artifact_bin, &decompressed_storage.builtin_artifact_bin, builtin_artifact_bin_raw.len);
         \\    decompressed = true;
         \\}
         \\
@@ -3767,6 +3815,19 @@ pub fn build(b: *std.Build) void {
         wasm_test_exe.root_module.addImport("build_options", roc_modules.build_options);
         wasm_test_exe.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
 
+        if (b.option([]const u8, "wasm-cart", "Run one wasm static-library cart, selected by its output filename")) |selected| {
+            const index = for (wasm_static_lib_carts, 0..) |cart, i| {
+                if (std.mem.eql(u8, cart.output, selected)) break i;
+            } else std.debug.panic("Unknown wasm cart output: {s}", .{selected});
+            const cart = wasm_static_lib_carts[index];
+            const args = cart.run_args orelse std.debug.panic("Wasm cart has no runtime assertion: {s}", .{selected});
+            const run_cart = b.addRunArtifact(wasm_test_exe);
+            run_cart.addArg("--wasm-path");
+            run_cart.addFileArg(wasm_static_lib_cart_outputs[index]);
+            run_cart.addArgs(args);
+            b.step("run-test-wasm-cart", "Build and run only the selected wasm static-library cart").dependOn(&run_cart.step);
+        }
+
         const install = b.addInstallArtifact(wasm_test_exe, .{});
         build_test_wasm_static_lib_runner_step.dependOn(&install.step);
 
@@ -4176,8 +4237,9 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("compiler_version", compiler_version_module);
         }
 
-        // Add compiled builtins to tests that canonicalize ordinary modules.
-        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
+        // Add compiled builtins to tests that canonicalize ordinary modules
+        // or read the baked Builtin module.
+        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "docs") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
@@ -4610,8 +4672,6 @@ pub fn build(b: *std.Build) void {
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);
     run_check_cli_global_stdio_step.dependOn(&check_cli_stdio.step);
 
-    tests_summary.run.addArg("--");
-    tests_summary.run.addPassthruArgs();
     run_test_zig_step.dependOn(tests_summary.step);
 
     b.default_step.dependOn(build_web_step);
@@ -5154,6 +5214,9 @@ pub fn build(b: *std.Build) void {
     }
 
     test_fixtures.addUpdateStep(&.{build_test_hosts_step});
+
+    // After every suite is registered, so each report precedes the separator.
+    tests_summary.finish();
 
     // Last, so that every top-level step exists -- including the ones created
     // inside addMainExe.

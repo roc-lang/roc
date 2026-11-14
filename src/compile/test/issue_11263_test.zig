@@ -138,7 +138,7 @@ test "issue 11263: a rejected field access preserves independent compile-time ro
     const bodies = artifact.bodies();
     const store = &artifact.moduleEnvConst().store;
     var found_independent = false;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());
         const region = store.getNodeRegion(@fromBackingInt(root_node));
         // A root evaluated at compile time whose own body contains the

@@ -547,8 +547,11 @@ pub fn Engine(comptime Adapter: type) type {
         state_nodes: std.ArrayListUnmanaged(u32) = .empty,
         state_class: std.ArrayListUnmanaged(u32) = .empty,
         local_class: std.ArrayListUnmanaged(u32) = .empty,
-        local_globals: std.ArrayListUnmanaged(u32) = .empty,
-        block_existing: std.ArrayListUnmanaged(u32) = .empty,
+        /// Each block's class while one component is named, absent until
+        /// known. Read per block, so it starts cleared to absent (zero).
+        local_globals: std.ArrayListUnmanaged(collections.OptionalU32) = .empty,
+        /// The existing class of each block, absent for a new block.
+        block_existing: std.ArrayListUnmanaged(collections.OptionalU32) = .empty,
         next_local_class: std.ArrayListUnmanaged(u32) = .empty,
         /// One refinement round's blocks by their signature in
         /// `local_group_bytes`.
@@ -1042,12 +1045,12 @@ pub fn Engine(comptime Adapter: type) type {
             // are new.
             try self.local_globals.resize(self.gpa, block_count);
             const globals = self.local_globals.items;
-            @memset(globals, nil);
+            @memset(globals, .none);
             for (self.state_class.items, 0..) |class, state| {
                 if (class == nil) continue;
                 const block = self.local_class.items[state];
-                std.debug.assert(globals[block] == nil or globals[block] == class);
-                globals[block] = class;
+                std.debug.assert(globals[block] == .none or globals[block].get().? == class);
+                globals[block] = .some(class);
             }
             // Walks name new blocks structurally whatever order they are
             // named in, referring only to existing classes by id.
@@ -1055,14 +1058,15 @@ pub fn Engine(comptime Adapter: type) type {
             @memcpy(self.block_existing.items, globals);
             for (members, 0..) |member, state| {
                 const block = self.local_class.items[state];
-                if (globals[block] != nil) continue;
+                if (globals[block] != .none) continue;
                 self.signature.clearRetainingCapacity();
                 try self.appendCycleWalk(@intCast(state));
-                globals[block] = try self.internWalk(self.signature.items, member);
-                self.classes.items[globals[block]].on_cycle = true;
+                const class = try self.internWalk(self.signature.items, member);
+                globals[block] = .some(class);
+                self.classes.items[class].on_cycle = true;
             }
             for (members, 0..) |member, state| {
-                self.setClass(member, globals[self.local_class.items[state]]);
+                self.setClass(member, globals[self.local_class.items[state]].get().?);
             }
             // Register each class's one-step structure for unrolled copies.
             for (members) |member| try self.registerStep(self.nodeClass(member));
@@ -1147,7 +1151,7 @@ pub fn Engine(comptime Adapter: type) type {
                     .fixed => |class| class,
                     .state => |child_state| blk: {
                         const block = self.local_class.items[child_state];
-                        if (self.block_existing.items[block] != nil) break :blk self.block_existing.items[block];
+                        if (self.block_existing.items[block].get()) |existing| break :blk existing;
                         if (self.dfs_index.get(block)) |visit| {
                             try self.signature.append(self.gpa, 4);
                             try appendVarint(&self.signature, self.gpa, visit);

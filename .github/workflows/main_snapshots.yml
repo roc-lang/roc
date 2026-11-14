@@ -1,0 +1,46 @@
+on:
+  push:
+    branches: [main]
+
+name: Main Snapshot Checks
+
+# PR CI tests each PR merged with main as it was when the PR's CI ran, so two
+# PRs that each pass can still leave stale snapshot output on main once both
+# merge. Every open PR then fails these checks. Running them on each push to
+# main reports that drift on the commit that introduced it.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+jobs:
+  snapshots:
+    name: Snapshot checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.17.1
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Check snapshot files
+        run: zig build run-check-snapshots
+
+      - name: Check snapshot tool expectations
+        run: zig build run-test-zig-snapshot-tool

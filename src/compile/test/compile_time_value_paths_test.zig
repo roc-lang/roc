@@ -137,7 +137,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     const root = coord.executableRootCheckedArtifact();
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
     defer gpa.free(lir_roots);
     var restored = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
@@ -477,7 +477,7 @@ fn programSize(result: *lir.Program.Result) std.mem.Allocator.Error!ProgramSize 
         size.widest_frame = @max(size.widest_frame, proc.frame_locals.len);
         // Initializer procedures count too: moving per-element code out of
         // the entrypoint still makes every later pass process it.
-        const body = proc.body orelse continue;
+        const body = proc.body.get() orelse continue;
         var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
         defer statements.deinit();
         while (try statements.next()) |_| size.statements += 1;

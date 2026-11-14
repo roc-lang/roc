@@ -137,14 +137,14 @@ outerFunc = |_| {
 					(e-block
 						(s-let
 							(p-assign (ident "z"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 261)
+							(e-dispatch-call (method "plus") (constraint-fn-var 255)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
 								(args
 									(e-lookup-local
 										(p-assign (ident "y"))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 270)
+						(e-dispatch-call (method "plus") (constraint-fn-var 264)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "z"))))

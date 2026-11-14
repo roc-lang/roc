@@ -136,7 +136,7 @@ test "file imports reject absolute paths before recording dependencies" {
     }
 
     try testing.expect(found_absolute_path);
-    try expectEqual(@as(usize, 0), result.parse_env.file_dependencies.items.items.len);
+    try expectEqual(@as(usize, 0), result.parse_env.file_dependencies.items().len);
 }
 
 test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT EXPOSED, and working imports" {
@@ -673,7 +673,7 @@ test "aliased package-qualified import resolves before the import statement" {
         const external = app_env.store.getExpr(@fromBackingInt(@intCast(raw_node_idx))).e_lookup_external;
         if (!external.ident_idx.eql(make_ident)) continue;
 
-        const import_name_idx = app_env.imports.imports.items.items[@backingInt(external.module_idx)];
+        const import_name_idx = app_env.imports.imports.items()[@backingInt(external.module_idx)];
         try testing.expectEqualStrings("pf.Lib", app_env.getString(import_name_idx));
         found_make_lookup = true;
     }
@@ -835,7 +835,7 @@ test "import interner - Import.Idx functionality" {
     var found_dict = false;
     var found_json_decode = false;
     var found_set = false;
-    for (result.parse_env.imports.imports.items.items) |import_string_idx| {
+    for (result.parse_env.imports.imports.items()) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
         if (CIR.Import.isCompilerBuiltinImportName(module_name)) continue;
 
@@ -888,7 +888,7 @@ test "import interner - many imports keep stable module identity keys" {
     try result.can.canonicalizeFile();
 
     var explicit_import_count: usize = 0;
-    for (result.parse_env.imports.imports.items.items) |import_string_idx| {
+    for (result.parse_env.imports.imports.items()) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
         if (CIR.Import.isCompilerBuiltinImportName(module_name)) continue;
 
@@ -899,7 +899,7 @@ test "import interner - many imports keep stable module identity keys" {
     try expectEqual(@as(usize, import_count), explicit_import_count);
 }
 
-test "imported type-module tag rejects alias target" {
+test "imported type-module tag through an alias target names the alias" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
@@ -961,18 +961,19 @@ test "imported type-module tag rejects alias target" {
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
 
-    var found_alias_error = false;
+    // Checking resolves the alias to the type it names and reports an alias
+    // that names no nominal type, so canonicalization records the alias.
     for (diagnostics) |diagnostic| {
-        if (diagnostic == .type_alias_but_needed_nominal) {
-            const d = diagnostic.type_alias_but_needed_nominal;
-            const name = env.getIdent(d.name);
-            if (std.mem.eql(u8, name, "Alias")) {
-                found_alias_error = true;
-            }
-        }
+        if (diagnostic == .type_alias_but_needed_nominal or
+            diagnostic == .type_not_exposed) return error.UnexpectedDiagnostic;
     }
 
-    try testing.expect(found_alias_error);
+    const defs = env.store.sliceDefs(env.top_level_value_defs);
+    try testing.expectEqual(@as(usize, 1), defs.len);
+    const bad = env.store.getExpr(env.store.getDef(defs[0]).expr);
+    try testing.expect(bad == .e_nominal_external);
+    const target_stmt: CIR.Statement.Idx = @fromBackingInt(@intCast(bad.e_nominal_external.target_node_idx));
+    try testing.expect(imported_env.store.getStatement(target_stmt) == .s_alias_decl);
 }
 
 test "imported nested associated types resolve by qualified export key" {

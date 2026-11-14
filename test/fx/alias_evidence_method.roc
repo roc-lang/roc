@@ -4,11 +4,11 @@ import pf.Stdout
 
 # A dispatch through an alias, including its literal argument: a generic caller
 # holds that argument in its own scope, outside the aliases' scopes.
-show = |_self, value| value.to_str()
-show_again = show
+show_value = |_self, value| value.to_str()
+show_again = show_value
 
-tick = |_self, value| value + 1
-tick_again = tick
+tick_value = |_self, value| value + 1
+tick_again = tick_value
 
 Foo := [F].{
     show = show_again

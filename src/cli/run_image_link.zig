@@ -28,6 +28,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const collections = @import("collections");
 const backend = @import("backend");
 const unit_walk = @import("unit_walk.zig");
 const ipc = @import("ipc");
@@ -87,9 +88,10 @@ pub const Plan = struct {
     order: []u32,
     places: []Place,
     layout: RunImage.ComposedLayout,
-    /// For each host symbol, its import slot in the image, or `no_slot`
-    /// when no placed site references it.
-    host_slots: []u32,
+    /// For each host symbol a placed site references, its import slot in
+    /// the image. Written for exactly those symbols and read only through
+    /// placed sites.
+    host_slots: collections.WriteFirstSlice(u32),
     /// For each import slot, its host symbol and the start of its sites.
     slot_symbols: []u32,
     slot_site_starts: []u32,
@@ -112,7 +114,7 @@ pub const Plan = struct {
         self.gpa.free(self.images);
         self.gpa.free(self.order);
         self.gpa.free(self.places);
-        self.gpa.free(self.host_slots);
+        self.host_slots.deinit(self.gpa);
         self.gpa.free(self.slot_symbols);
         self.gpa.free(self.slot_site_starts);
         self.gpa.free(self.entry_offsets);
@@ -269,9 +271,8 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
 
     // The sites the shim fills: every host site, and every 64-bit address
     // into the image.
-    const host_slots = try gpa.alloc(u32, inputs.host_symbols.len);
-    errdefer gpa.free(host_slots);
-    @memset(host_slots, no_slot);
+    var host_slots = try collections.WriteFirstSlice(u32).init(gpa, inputs.host_symbols.len);
+    errdefer host_slots.deinit(gpa);
     const host_counts = try gpa.alloc(u32, inputs.host_symbols.len);
     defer gpa.free(host_counts);
     @memset(host_counts, 0);
@@ -322,7 +323,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
     var symbol_names_len: usize = 0;
     for (host_counts, 0..) |count, symbol| {
         if (count == 0) continue;
-        host_slots[symbol] = @intCast(slot_symbols.items.len);
+        host_slots.set(symbol, @intCast(slot_symbols.items.len));
         try slot_symbols.append(gpa, @intCast(symbol));
         try slot_site_starts.append(gpa, host_site_count);
         host_site_count += count;
@@ -485,7 +486,7 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
                     break :app regionBase(self.places[found.image], bases, @fromBackingInt(symbol.region)) + symbol.value;
                 },
                 .host => |symbol| {
-                    const slot = self.host_slots[@intCast(symbol)];
+                    const slot = self.host_slots.get(@intCast(symbol));
                     composed.host_sites[site_cursors[slot]] = .{
                         .offset = site_offset,
                         .addend = site.addend,

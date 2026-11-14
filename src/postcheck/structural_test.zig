@@ -465,7 +465,7 @@ test "Monotype iterator result completion stays out of relation replay and retai
         "const DraftTemplateSpec = struct",
         "const DraftConstUseProvenance",
     );
-    try expectContains(template_spec, "lookup_request_fn_node: ?NodeId");
+    try expectContains(template_spec, "lookup_request_fn_node: solve.MaybeNodeId");
 }
 
 test "Monotype direct uninhabited calls lower argument through graph cell" {
@@ -854,9 +854,9 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
         "fn requireLoweredExpr(",
         "fn nodeIsProvenUninhabited(",
     );
-    try expectContains(demand_source, ".impossibility_proof = try self.currentRuntimeImpossibilityProof(expr_proof)");
+    try expectContains(demand_source, ".impossibility_proof = .of(try self.currentRuntimeImpossibilityProof(expr_proof))");
     try expectContains(demand_source, ".frames = self.runtime_demand_guard_frames");
-    try expectContains(demand_source, ".local_proof = try self.anyImpossibilityProof(&.{ entry_guard_proof, expr_proof })");
+    try expectContains(demand_source, ".local_proof = .of(try self.anyImpossibilityProof(&.{ entry_guard_proof, expr_proof }))");
     try expectNotContains(demand_source, "producer");
     try expectNotContains(demand_source, "flattenRuntimeDemandGuardFrames");
 
@@ -869,10 +869,10 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(proof_data, "all: DraftSpan(RuntimeImpossibilityProofId)");
     try expectContains(proof_data, "pending,");
     try expectContains(proof_data, "forward: RuntimeImpossibilityProofId");
-    try expectContains(proof_data, "impossibility_proof: ?RuntimeImpossibilityProofId");
+    try expectContains(proof_data, "impossibility_proof: collections.OptionalId(RuntimeImpossibilityProofId)");
     try expectContains(proof_data, "statement_success");
     try expectContains(proof_data, "const RuntimeDemandGuardFrameStack = struct");
-    try expectContains(proof_data, "parent: ?RuntimeDemandGuardFrameId");
+    try expectContains(proof_data, "parent: collections.OptionalId(RuntimeDemandGuardFrameId)");
     try expectContains(proof_data, "try draft.runtime_demand_guard_frames.append");
     try expectNotContains(proof_data, "alloc(RuntimeDemandGuardFrame, existing.len + 1)");
     try expectContains(proof_data, "runtime impossibility proof graph contained a cycle");
@@ -948,7 +948,7 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(lower_source, "const proof_reservation = try self.addImpossibilityProof(.pending)");
     try expectContains(lower_source, ".{ .forward = proof }");
     try expectContains(lower_source, "try self.resolveDraftConstUseReservations(body_draft)");
-    try expectContains(lower_source, "sources[reservation_index] = restored");
+    try expectContains(lower_source, "sources.set(reservation_index, restored)");
     try expectContains(lower_source, "deferred const reservation dependencies formed a cycle");
     try expectContains(lower_source, "body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[restored_index]");
     try expectContains(lower_source, "body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[restored_index]");
@@ -1419,7 +1419,7 @@ test "Monotype evidence chains retain checker-recorded lexical scope topology" {
     try expectNotContains(lower_source, "parent.* = source_ctx.evidence");
     try expectNotContains(lower_source, "publicOpaqueUnificationType");
     try expectContains(lower_source, "const EvidenceScope = struct");
-    try expectContains(lower_source, "const scope_record = view.templates.dispatch_scopes[raw_scope]");
+    try expectContains(lower_source, "const scope_record = view.templates.dispatch_scopes.items()[raw_scope]");
     try expectContains(lower_source, "context.evidence");
     try expectContains(lower_source, "const_evidence_frames");
 

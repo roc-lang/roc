@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
 const build_options = @import("build_options");
 const can = @import("can");
 const check = @import("check");
@@ -252,7 +253,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const root_view = check.CheckedArtifact.importedView(root);
-    const app = if (root_view.hoisted_constants.entries.len >= 2)
+    const app = if (root_view.hoisted_constants.entries.items().len >= 2)
         root_view
     else
         findHoistedArtifact(imports, 2) orelse
@@ -296,7 +297,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectRootRequestBefore(app_artifact, indirect_local.root, indirect_top.id);
     try expectPatternExtractionRoots(app_artifact);
 
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -429,7 +430,7 @@ test "imported checked bodies restore their module's hoisted constants" {
     );
     try std.testing.expect(@backingInt(forty_one.root) < @backingInt(forty_two.root));
 
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -508,7 +509,7 @@ test "hoisted list constants lower to internal static data in request order" {
     const root = coord.executableRootCheckedArtifact();
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -528,10 +529,10 @@ test "hoisted list constants lower to internal static data in request order" {
 
     if (lowered.lir_result.static_data_values.items.len != 2) return error.StaticDataInitializerCountMismatch;
     try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
-    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.?);
-    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
-    const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
-    const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
+    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.get().?);
+    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.get().?);
+    const first_body = first_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
+    const second_body = second_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
     // Queued initializers lower in request order. ARC leaves initializers as
     // lowered, so their bodies' statement ids still show that order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
@@ -639,7 +640,7 @@ test "hoisted Dec and I128 list constants keep their elements 16-aligned in stat
     const root = coord.executableRootCheckedArtifact();
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -778,7 +779,7 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
     const root = coord.executableRootCheckedArtifact();
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -923,7 +924,7 @@ test "a restored list of boxed capturing closures that read their own constant i
     , expectRestoredSelfReadingClosuresStatic);
 }
 
-test "an empty compile-time list reads immutable data without a capacity request" {
+test "an empty compile-time list with capacity reads immutable data without a capacity request" {
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -945,7 +946,7 @@ test "an empty compile-time list reads immutable data without a capacity request
 test "a compile-time record of an empty list and a scalar reads immutable data" {
     // The record is read whole: a field projection of a completed record
     // is its own compile-time root, evaluated from the frozen record,
-    // whose empty list carries no capacity.
+    // whose empty list's descriptor records its capacity.
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -966,9 +967,10 @@ test "a compile-time record of an empty list and a scalar reads immutable data" 
     }.inspect);
 }
 
-test "an empty list with capacity in a record frozen into static data is the empty list" {
-    // The completed empty list has no backing allocation or runtime capacity
-    // request, including when stored inside a record.
+test "an empty list with capacity in a record frozen into static data keeps its capacity" {
+    // The completed empty list's descriptor records the capacity it was
+    // evaluated with and points at an allocation holding no items, with no
+    // runtime capacity request, including when stored inside a record.
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1027,7 +1029,7 @@ test "an empty list with capacity in a record frozen into static data is the emp
     const root = coord.executableRootCheckedArtifact();
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -1058,8 +1060,9 @@ test "an empty list with capacity in a record frozen into static data is the emp
     );
     defer static_data_exports.deinitStaticData(gpa, exports);
 
-    // Every list field of a frozen record: null pointer, zero length and
-    // capacity, and no relocation.
+    // Every list field of a frozen record: a relocated pointer just past the
+    // header of an allocation with no items, zero length, and a capacity of
+    // four.
     const layouts = &lowered.lir_result.layouts;
     var frozen_lists: usize = 0;
     for (lowered.lir_result.static_data_values.items, 0..) |value, index| {
@@ -1076,8 +1079,22 @@ test "an empty list with capacity in a record frozen into static data is the emp
             if (layouts.getLayout(layouts.getStructFieldLayout(struct_idx, field_index)).tag != .list) continue;
             const offset = static_export.symbol_offset + layouts.getStructFieldOffset(struct_idx, field_index);
             const size = layouts.getStructFieldSize(struct_idx, field_index);
-            try std.testing.expect(std.mem.allEqual(u8, static_export.bytes[offset..][0..size], 0));
-            for (static_export.relocations) |relocation| try std.testing.expect(relocation.offset != offset);
+            try std.testing.expectEqual(@as(u32, 24), size);
+            const words = static_export.bytes[offset..][0..size];
+            try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, words[8..16], .little));
+            try std.testing.expectEqual(builtins.list.RocList.encodeCapacityForWidth(4), std.mem.readInt(u64, words[16..24], .little));
+            var pointers: usize = 0;
+            for (static_export.relocations) |relocation| {
+                if (relocation.offset != offset) continue;
+                const target = for (exports) |candidate| {
+                    if (std.mem.eql(u8, candidate.symbol_name, relocation.target_symbol_name)) break candidate;
+                } else return error.StaticDataSymbolNotFound;
+                // The pointer sits just past a static refcount word.
+                const items: usize = @intCast(@as(i64, target.symbol_offset) + relocation.addend);
+                try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, target.bytes[items - 8 ..][0..8], .little));
+                pointers += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 1), pointers);
             frozen_lists += 1;
         }
     }
@@ -1129,7 +1146,7 @@ fn lowerEchoApp(source: []const u8, comptime inspect: fn (*lir.Program.Result) H
     const root = coord.executableRootCheckedArtifact();
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -1156,7 +1173,7 @@ fn reachableStatementCount(result: *lir.Program.Result) HoistedConstantsTestErro
     // entrypoint still makes the compiler process it (the regression in #11376).
     var statement_count: usize = 0;
     for (result.store.getProcSpecs()) |proc| {
-        const body = proc.body orelse continue;
+        const body = proc.body.get() orelse continue;
         var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
         defer statements.deinit();
         while (try statements.next()) |_| statement_count += 1;
@@ -1212,11 +1229,11 @@ test "computed callable aliases retain evaluation requests while proven forwards
         const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
         var evaluated: usize = 0;
         var forwarded: usize = 0;
-        for (artifact.callable_eval_templates.templates.items) |template| {
-            const requested = for (artifact.root_requests.compile_time_requests) |request| {
-                if (request.compile_time_root == template.root) break true;
+        for (artifact.callable_eval_templates.templates.items()) |template| {
+            const requested = for (artifact.root_requests.compile_time_requests.items()) |request| {
+                if (request.compile_time_root.get() == template.root) break true;
             } else false;
-            if (template.forwarded_lookup != null) {
+            if (template.forwarded_lookup != .none) {
                 forwarded += 1;
                 try std.testing.expect(!requested);
             } else {
@@ -1335,7 +1352,7 @@ test "callable binding with alias annotation is const-evaluated" {
 
     const app_artifact = coord.appRootCheckedArtifact();
     var saw_callable_binding = false;
-    for (app_artifact.compile_time_roots.roots) |root| {
+    for (app_artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .callable_binding) continue;
         saw_callable_binding = true;
         if (root.payload != .fn_value) return error.CallableBindingConstFnNotStored;
@@ -1896,7 +1913,7 @@ test "hoisted roots admit non-concrete transient locals without losing validatio
     const artifact = coord.appRootCheckedArtifact();
     var found = false;
     var found_validation = false;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind == .hoisted_validation) found_validation = true;
         if (root.kind != .hoisted_constant or root.source != .hoisted) continue;
         if (root.payload != .const_node) continue;
@@ -1976,7 +1993,7 @@ test "issue 10721: compile-time known destructure of a match-returned closure re
 
     const artifact = coord.appRootCheckedArtifact();
     var found_maximal_data_root = false;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.source != .hoisted) continue;
         if (root.kind == .hoisted_constant) found_maximal_data_root = true;
         try std.testing.expect(root.kind != .callable_binding);
@@ -2044,7 +2061,7 @@ test "issue 10721: compile-time known destructure inside an effectful body resol
 
     const artifact = coord.appRootCheckedArtifact();
     var found_validation_root = false;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .hoisted_validation) continue;
         try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.discarded, root.payload);
         const body = root.hoisted_body orelse return error.ExpectedHoistedValidationBody;
@@ -2270,7 +2287,7 @@ fn checkEchoApp(gpa: std.mem.Allocator, source: []const u8) HoistedConstantsTest
         }
         if (std.mem.eql(u8, entry.report.title, "Compile Time Crash")) result.comptime_crash = true;
     }
-    for (coord.appRootCheckedArtifact().compile_time_roots.roots) |root| {
+    for (coord.appRootCheckedArtifact().compile_time_roots.roots.items()) |root| {
         if (root.payload == .runtime) result.has_runtime_roots = true;
     }
     return result;
@@ -2339,7 +2356,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
 
     const artifact = coord.appRootCheckedArtifact();
     var validating_extraction_roots: usize = 0;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.source != .hoisted) continue;
         if (root.kind == .hoisted_validation) return error.DuplicateValidationRoot;
         if (root.kind != .callable_binding) continue;
@@ -2406,7 +2423,7 @@ test "a match on a constant with a guard selects a hoisted root" {
 
     const artifact = coord.appRootCheckedArtifact();
     var found_hoisted_root = false;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind == .hoisted_constant) found_hoisted_root = true;
     }
     try std.testing.expect(found_hoisted_root);
@@ -2562,7 +2579,7 @@ fn findHoistedArtifact(
     min_count: usize,
 ) ?check.CheckedArtifact.ImportedModuleView {
     for (views) |view| {
-        if (view.hoisted_constants.entries.len >= min_count) return view;
+        if (view.hoisted_constants.entries.items().len >= min_count) return view;
     }
     return null;
 }
@@ -2574,7 +2591,7 @@ fn expectCompileTimeRootKindsPresent(
     var saw_top_level_callable = false;
     var saw_hoisted_constant = false;
 
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         switch (root.kind) {
             .constant => {
                 saw_top_level_constant = true;
@@ -2604,7 +2621,7 @@ fn expectPendingProcedureAliasRoot(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     source_name: []const u8,
 ) HoistedConstantsTestError!void {
-    for (artifact.top_level_values.entries) |entry| {
+    for (artifact.top_level_values.entries.items()) |entry| {
         if (!std.mem.eql(u8, artifact.canonical_names.exportNameText(entry.source_name), source_name)) continue;
         const root_id = artifact.compile_time_roots.lookupIdByPattern(entry.pattern) orelse {
             try std.testing.expect(false);
@@ -2622,7 +2639,7 @@ fn expectPendingProcedureAliasRoot(
 fn expectExportedRuntimeEntrypoint(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) HoistedConstantsTestError!void {
-    for (artifact.root_requests.runtime_requests) |root| {
+    for (artifact.root_requests.runtime_requests.items()) |root| {
         if (root.kind == .runtime_entrypoint and
             root.abi == .roc and
             root.exposure == .exported and
@@ -2649,7 +2666,7 @@ fn compileTimeRequestIndexForRoot(
     root_id: check.CheckedArtifact.ComptimeRootId,
 ) ?usize {
     const root = artifact.compile_time_roots.root(root_id);
-    for (artifact.root_requests.compile_time_requests, 0..) |request, i| {
+    for (artifact.root_requests.compile_time_requests.items(), 0..) |request, i| {
         if (rootRequestMatchesCompileTimeRoot(root, request)) return i;
     }
     return null;
@@ -2697,7 +2714,7 @@ fn expectPatternExtractionRoots(
 ) HoistedConstantsTestError!void {
     var extraction_count: usize = 0;
 
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .hoisted_constant) continue;
         const body = root.hoisted_body orelse continue;
         const extraction = switch (body) {
@@ -2707,8 +2724,8 @@ fn expectPatternExtractionRoots(
         };
         extraction_count += 1;
 
-        try std.testing.expectEqual(extraction.result_pattern, root.source_pattern orelse return error.PatternExtractionMissingSourcePattern);
-        const checked_result_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedRootPattern;
+        try std.testing.expectEqual(extraction.result_pattern, root.source_pattern.get() orelse return error.PatternExtractionMissingSourcePattern);
+        const checked_result_pattern = root.pattern.get() orelse return error.PatternExtractionMissingCheckedRootPattern;
         try std.testing.expectEqual(extraction.result_pattern, checked_result_pattern);
 
         // The root evaluates the match of its base expression against the
@@ -2800,7 +2817,7 @@ fn findStoredCompileTimeRootI64(
     kind: check.CheckedArtifact.CompileTimeRootKind,
     expected: i64,
 ) ?check.CheckedArtifact.CompileTimeRoot {
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != kind) continue;
         if (rootStoredI64(artifact, root)) |actual| {
             if (actual == expected) return root;
@@ -2813,7 +2830,7 @@ fn findStoredI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     expected: i64,
 ) ?check.CheckedArtifact.HoistedConstEntry {
-    for (artifact.hoisted_constants.entries) |entry| {
+    for (artifact.hoisted_constants.entries.items()) |entry| {
         if (storedI64(artifact, entry)) |actual| {
             if (actual == expected) return entry;
         } else |_| {}
@@ -2826,7 +2843,7 @@ fn countStoredHoistedI64(
     expected: i64,
 ) usize {
     var count: usize = 0;
-    for (artifact.hoisted_constants.entries) |entry| {
+    for (artifact.hoisted_constants.entries.items()) |entry| {
         if (storedI64(artifact, entry)) |actual| {
             if (actual == expected) count += 1;
         } else |_| {}
@@ -2841,7 +2858,7 @@ fn countHoistedMatchRoots(
 ) usize {
     const store = &artifact.moduleEnvConst().store;
     var count: usize = 0;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .hoisted_constant) continue;
         const evaluates_match = if (root.evaluatedExpr()) |evaluated| store.getExpr(evaluated) == .e_match else root.hoisted_body.? == .pattern_extraction;
         if (evaluates_match) count += 1;
@@ -2854,7 +2871,7 @@ fn countCompileTimeRootKind(
     kind: check.CheckedArtifact.CompileTimeRootKind,
 ) usize {
     var count: usize = 0;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind == kind) count += 1;
     }
     return count;
@@ -2913,7 +2930,7 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
 
 fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
     for (result.static_data_values.items) |value| {
-        try std.testing.expect(result.store.getProcSpecImmediate(value.initializer.?).is_static_initializer);
+        try std.testing.expect(result.store.getProcSpecImmediate(value.initializer.get().?).is_static_initializer);
     }
 }
 

@@ -17,6 +17,10 @@ const field_order = layout_shape.field_order;
 const digest_mod = @import("./digest.zig");
 
 const target = base.target;
+/// A strongly connected component of one layout graph commit.
+const LayoutComponentId = enum(u32) { _ };
+const LayoutComponentColumn = collections.OptionalIndexColumn(LayoutComponentId);
+const BoxNodeColumn = collections.OptionalIndexColumn(GraphNodeId);
 const Layout = layout_mod.Layout;
 const LayoutTag = layout_mod.LayoutTag;
 const Idx = layout_mod.Idx;
@@ -112,7 +116,7 @@ pub const Store = struct {
 
     layouts: collections.SafeList(Layout),
     /// The list layout each layout resolves to through boxes, or `Idx.none`.
-    resolved_list_layouts: std.ArrayList(Idx),
+    resolved_list_layouts: collections.SafeList(Idx),
     tuple_elems: collections.SafeList(Idx),
     struct_fields: StructField.SafeMultiList,
     /// Each committed struct field's byte offset for both pointer widths,
@@ -193,7 +197,7 @@ pub const Store = struct {
         var self = Self{
             .allocator = allocator,
             .layouts = .{},
-            .resolved_list_layouts = .empty,
+            .resolved_list_layouts = .{},
             .tuple_elems = .{},
             .struct_fields = .{},
             .struct_field_offsets = .{},
@@ -232,7 +236,7 @@ pub const Store = struct {
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = tag_union_data.items.items.len;
+            const expected_idx = tag_union_data.items().len;
             const idx = try tag_union_data.append(allocator, .{
                 .size = layout_mod.WidthValues(u32).both(1, 1),
                 .discriminant_offset = layout_mod.WidthValues(u32).both(0, 0),
@@ -251,92 +255,92 @@ pub const Store = struct {
         // Pre-populate primitive type layouts in order matching the Idx enum.
         // Changing the order of these can break things!
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.boolType());
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.str());
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u8));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i8));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u16));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i16));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u32));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i32));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u64));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i64));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.u128));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.int(.i128));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.frac(.f32));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.frac(.f64));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.frac(.dec));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.opaquePtr());
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.zst());
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
         inline for (std.enums.values(layout_mod.Vector)) |vector| {
-            const expected_idx = layouts.items.items.len;
+            const expected_idx = layouts.items().len;
             const idx = try layouts.append(allocator, Layout.vector(vector));
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
@@ -353,7 +357,7 @@ pub const Store = struct {
         try self.rememberScratchInternKey(.bool);
         try self.resolved_list_layouts.ensureTotalCapacity(allocator, num_primitives);
         for (0..num_primitives) |_| {
-            self.resolved_list_layouts.appendAssumeCapacity(.none);
+            _ = self.resolved_list_layouts.appendAssumeCapacity(.none);
         }
         return self;
     }
@@ -573,7 +577,7 @@ pub const Store = struct {
         if (self.layouts.len() >= @backingInt(Idx.none)) return error.OutOfMemory;
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
         const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
-        try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
+        _ = try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
         return idx;
     }
 
@@ -587,9 +591,9 @@ pub const Store = struct {
         try self.buildStructInternKeyFromFields(sort_key, fields);
         if (self.lookupInternedScratchKey()) |existing| return existing;
 
-        const fields_start = self.struct_fields.items.len;
+        const fields_start = self.struct_fields.len();
         for (fields) |field| {
-            const expected_idx = self.struct_fields.items.len;
+            const expected_idx = self.struct_fields.len();
             const idx = try self.struct_fields.append(self.allocator, field);
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
@@ -598,7 +602,7 @@ pub const Store = struct {
         const contains_refcounted = self.computeStructContainsRefcounted(fields);
         const slots = self.computeStructOwnershipSlots(fields, contains_refcounted);
         const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
-        const expected_idx = self.struct_data.items.items.len;
+        const expected_idx = self.struct_data.items().len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = metrics.sizes,
             .fields = .{
@@ -644,7 +648,7 @@ pub const Store = struct {
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
         const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
-            const expected_idx = self.tag_union_data.items.items.len;
+            const expected_idx = self.tag_union_data.items().len;
             const idx = try self.tag_union_data.append(self.allocator, .{
                 .size = sizes,
                 .discriminant_offset = discriminant_offsets,
@@ -889,9 +893,9 @@ pub const Store = struct {
             return Layout.zst();
         }
 
-        const fields_start = self.struct_fields.items.len;
+        const fields_start = self.struct_fields.len();
         for (temp_fields.items) |field| {
-            const expected_idx = self.struct_fields.items.len;
+            const expected_idx = self.struct_fields.len();
             const idx = try self.struct_fields.append(self.allocator, field);
             std.debug.assert(@backingInt(idx) == expected_idx);
         }
@@ -900,7 +904,7 @@ pub const Store = struct {
         const contains_refcounted = self.computeStructContainsRefcounted(temp_fields.items);
         const slots = self.computeStructOwnershipSlots(temp_fields.items, contains_refcounted);
         const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
-        const expected_idx = self.struct_data.items.items.len;
+        const expected_idx = self.struct_data.items().len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = metrics.sizes,
             .fields = .{
@@ -941,7 +945,7 @@ pub const Store = struct {
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
         const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
-            const expected_idx = self.tag_union_data.items.items.len;
+            const expected_idx = self.tag_union_data.items().len;
             const idx = try self.tag_union_data.append(self.allocator, .{
                 .size = sizes,
                 .discriminant_offset = discriminant_offsets,
@@ -1001,7 +1005,7 @@ pub const Store = struct {
 
     /// The committed layout of a recursive-graph key, if any.
     fn recursiveGraphLayout(self: *const Self, key: RecursiveGraphAnalysis.RecursiveKey) ?Idx {
-        const entries = self.recursive_layout_keys.items.items;
+        const entries = self.recursive_layout_keys.items();
         const position = self.interned_recursive_graphs.getKeyAdapted(key, RecursiveKeyAdapter{ .entries = entries }) orelse return null;
         return entries[position].layout;
     }
@@ -1009,14 +1013,14 @@ pub const Store = struct {
     /// Record the layout a new recursive-graph key committed to.
     fn recordRecursiveLayoutKey(self: *Self, key: RecursiveGraphAnalysis.RecursiveKey, layout_idx: Idx) std.mem.Allocator.Error!void {
         const position: u32 = @intCast(self.recursive_layout_keys.len());
-        try self.interned_recursive_graphs.ensureUnusedCapacityContext(self.allocator, 1, .{ .entries = self.recursive_layout_keys.items.items });
+        try self.interned_recursive_graphs.ensureUnusedCapacityContext(self.allocator, 1, .{ .entries = self.recursive_layout_keys.items() });
         _ = try self.recursive_layout_keys.append(self.allocator, .{ .key = key, .layout = layout_idx });
-        self.interned_recursive_graphs.putAssumeCapacityNoClobberContext(position, {}, .{ .entries = self.recursive_layout_keys.items.items });
+        self.interned_recursive_graphs.putAssumeCapacityNoClobberContext(position, {}, .{ .entries = self.recursive_layout_keys.items() });
     }
 
     /// Every recursive-graph key with its layout, in commit order.
     pub fn recursiveLayoutKeys(self: *const Self) []const RecursiveLayoutKey {
-        return self.recursive_layout_keys.items.items;
+        return self.recursive_layout_keys.items();
     }
     /// Digest domain of recursive layout keys.
     pub const recursive_digest_domain = "roc.layout.recursive-graph.v3";
@@ -1360,6 +1364,19 @@ pub const Store = struct {
         }
     }
 
+    /// The explicit `.box` node over `ref`'s target, seen through nominal
+    /// wrappers, if the commit's graph has one.
+    fn explicitBoxNode(
+        graph: *const LayoutGraph,
+        box_node_of_target: BoxNodeColumn.View,
+        ref: GraphRef,
+    ) ?GraphNodeId {
+        return switch (RecursiveGraphAnalysis.resolveNominalRef(graph, ref)) {
+            .canonical => null,
+            .local => |target_id| box_node_of_target.get(@backingInt(target_id)),
+        };
+    }
+
     /// Commit a working graph, returning each node's value layout.
     ///
     /// Distinct logical graphs can describe one layout: a graph whose
@@ -1374,7 +1391,10 @@ pub const Store = struct {
     /// without the duplicates, so every representation keeps one layout
     /// index, which is what lets equal content digests stand for equal
     /// layouts. The layouts of the first attempt that the second does not
-    /// reuse stay in the store unreferenced.
+    /// reuse stay in the store unreferenced. The recursion boxes a commit
+    /// inserts are not nodes, so the redirect cannot reach them; a commit
+    /// instead gives a recursive slot an explicit `.box` node over the same
+    /// target when the graph has one (`explicitBoxNode`).
     fn commitWorkingGraph(
         self: *Self,
         scratch: Allocator,
@@ -1437,7 +1457,41 @@ pub const Store = struct {
                 entry.value_ptr.* = layout_idx;
             }
         }
+        if (std.debug.runtime_safety) try self.assertOneLayoutPerDigest(scratch, layouts_before, committed);
         return committed;
+    }
+
+    /// Debug-only check that no two layouts a recursive commit created and
+    /// its committed layouts reach have the same content, including the
+    /// recursion boxes the commit inserted, which are not graph nodes.
+    fn assertOneLayoutPerDigest(
+        self: *Self,
+        scratch: Allocator,
+        layouts_before: u64,
+        committed: []const Idx,
+    ) Allocator.Error!void {
+        var by_digest = std.AutoHashMap(digest_mod.Digest, Idx).init(scratch);
+        var visited = std.AutoHashMap(Idx, void).init(scratch);
+        var stack: std.ArrayList(Idx) = .empty;
+        for (committed) |root| {
+            if (@backingInt(root) < layouts_before) continue;
+            try stack.append(scratch, root);
+            while (stack.pop()) |layout_idx| {
+                if ((try visited.getOrPut(layout_idx)).found_existing) continue;
+                const entry = try by_digest.getOrPut(try self.contentDigest(layout_idx));
+                if (entry.found_existing) {
+                    base.invariant(
+                        "layout.Store invariant violated: a recursive commit gave one runtime representation layouts {d} and {d}",
+                        .{ @backingInt(entry.value_ptr.*), @backingInt(layout_idx) },
+                    );
+                }
+                entry.value_ptr.* = layout_idx;
+                var children = digest_mod.Digests.Children.init(self, layout_idx);
+                while (children.next()) |child| {
+                    if (@backingInt(child) >= layouts_before) try stack.append(scratch, child);
+                }
+            }
+        }
     }
 
     /// Commit a graph of uncommitted nodes, returning each node's value
@@ -1455,11 +1509,10 @@ pub const Store = struct {
         const value_layouts = try scratch.alloc(Idx, node_count);
         const resolved = try scratch.alloc(bool, node_count);
         const recursive_nodes = try scratch.alloc(bool, node_count);
-        const component_ids = try scratch.alloc(u32, node_count);
+        var component_ids = try LayoutComponentColumn.initFilled(scratch, node_count);
         const reaches_cycle = try scratch.alloc(bool, node_count);
         @memset(resolved, false);
         @memset(recursive_nodes, false);
-        @memset(component_ids, std.math.maxInt(u32));
         @memset(reaches_cycle, false);
 
         const visit_index = try scratch.alloc(i32, graph.nodes.items.len);
@@ -1480,7 +1533,7 @@ pub const Store = struct {
             on_stack: []bool,
             stack: *std.ArrayList(GraphNodeId),
             recursive_nodes: []bool,
-            component_ids: []u32,
+            component_ids: *LayoutComponentColumn,
             reaches_cycle: []bool,
             next_index: i32 = 0,
             next_component_id: u32 = 0,
@@ -1516,7 +1569,7 @@ pub const Store = struct {
                 for (component) |member| {
                     const index = @backingInt(member);
                     self_finder.recursive_nodes[index] = true;
-                    self_finder.component_ids[index] = component_id;
+                    self_finder.component_ids.set(index, @fromBackingInt(component_id));
                 }
 
                 var has_boxable_slot_edge = false;
@@ -1527,7 +1580,7 @@ pub const Store = struct {
                                 switch (field.child) {
                                     .canonical => {},
                                     .local => |child_id| {
-                                        if (self_finder.component_ids[@backingInt(child_id)] == component_id) {
+                                        if (self_finder.component_ids.get(@backingInt(child_id)) == @as(LayoutComponentId, @fromBackingInt(component_id))) {
                                             has_boxable_slot_edge = true;
                                             break;
                                         }
@@ -1540,7 +1593,7 @@ pub const Store = struct {
                                 switch (child) {
                                     .canonical => {},
                                     .local => |child_id| {
-                                        if (self_finder.component_ids[@backingInt(child_id)] != component_id) continue;
+                                        if (self_finder.component_ids.get(@backingInt(child_id)) != @as(LayoutComponentId, @fromBackingInt(component_id))) continue;
                                         switch (self_finder.graph.getNode(child_id)) {
                                             .struct_ => {},
                                             .pending, .committed, .nominal, .box, .list, .closure, .erased_callable, .tag_union => {
@@ -1721,7 +1774,7 @@ pub const Store = struct {
             .on_stack = on_stack,
             .stack = &tarjan_stack,
             .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
+            .component_ids = &component_ids,
             .reaches_cycle = reaches_cycle,
         };
 
@@ -1751,6 +1804,11 @@ pub const Store = struct {
         @memset(finalize_state, .unseen);
         const raw_used = try scratch.alloc(bool, node_count);
         @memset(raw_used, false);
+        // The first explicit `.box` node over each non-nominal node, filled
+        // while raw slots are reserved. A recursive slot edge to a node with
+        // one reads that box node rather than minting a box of its own, so
+        // `box(target)` has one layout in the commit.
+        var box_node_of_target = try BoxNodeColumn.initFilled(scratch, node_count);
 
         const Finalizer = struct {
             store: *Self,
@@ -1761,7 +1819,8 @@ pub const Store = struct {
             finalize_state: []FinalizeState,
             raw_used: []bool,
             recursive_nodes: []bool,
-            component_ids: []u32,
+            component_ids: LayoutComponentColumn.View,
+            box_node_of_target: BoxNodeColumn.View,
 
             /// The layout of child `ref`, or the node that must be finalized
             /// first to produce it.
@@ -1813,7 +1872,7 @@ pub const Store = struct {
                 if (!self_finalizer.recursive_nodes[parent_index] or !self_finalizer.recursive_nodes[child_index]) {
                     return false;
                 }
-                if (self_finalizer.component_ids[parent_index] != self_finalizer.component_ids[child_index]) {
+                if (self_finalizer.component_ids.get(parent_index) != self_finalizer.component_ids.get(child_index)) {
                     return false;
                 }
 
@@ -1905,6 +1964,7 @@ pub const Store = struct {
                             while (frame.children.items.len < graph_fields.len) {
                                 const field = graph_fields[frame.children.items.len];
                                 if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child)) break :blk field.child;
+                                if (explicitBoxNode(self_finalizer.graph, self_finalizer.box_node_of_target, field.child)) |box_node| break :blk .{ .local = box_node };
                                 try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(field.child));
                             }
                             break :blk null;
@@ -1914,6 +1974,7 @@ pub const Store = struct {
                             while (frame.children.items.len < graph_refs.len) {
                                 const variant_ref = graph_refs[frame.children.items.len];
                                 if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref)) break :blk variant_ref;
+                                if (explicitBoxNode(self_finalizer.graph, self_finalizer.box_node_of_target, variant_ref)) |box_node| break :blk .{ .local = box_node };
                                 try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(variant_ref));
                             }
                             break :blk null;
@@ -1931,13 +1992,24 @@ pub const Store = struct {
                     }
 
                     const children = frame.children.items;
+                    const index = @backingInt(node_id);
                     const value_layout = switch (node) {
                         .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                         .nominal => children[0],
-                        .box => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
-                            try self_finalizer.store.insertLayout(Layout.boxOfZst())
-                        else
-                            try self_finalizer.store.insertBox(children[0]),
+                        .box => blk_box: {
+                            const box_layout = if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
+                                Layout.boxOfZst()
+                            else
+                                Layout.box(children[0]);
+                            // A box read before it finished keeps its raw slot,
+                            // so it fills that slot rather than interning a
+                            // second layout of the same content.
+                            if (self_finalizer.raw_used[index]) {
+                                self_finalizer.store.setCommitLayout(self_finalizer.raw_layouts[index], box_layout);
+                                break :blk_box self_finalizer.raw_layouts[index];
+                            }
+                            break :blk_box try self_finalizer.store.insertLayout(box_layout);
+                        },
                         .list => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
                             try self_finalizer.store.insertLayout(Layout.listOfZst())
                         else
@@ -1962,8 +2034,7 @@ pub const Store = struct {
                         .tag_union => try self_finalizer.store.putTagUnion(children),
                     };
 
-                    const index = @backingInt(node_id);
-                    if (self_finalizer.raw_used[index]) {
+                    if (self_finalizer.raw_used[index] and value_layout != self_finalizer.raw_layouts[index]) {
                         self_finalizer.store.setCommitLayout(
                             self_finalizer.raw_layouts[index],
                             self_finalizer.store.getLayout(value_layout),
@@ -1990,7 +2061,8 @@ pub const Store = struct {
             .finalize_state = finalize_state,
             .raw_used = raw_used,
             .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
+            .component_ids = component_ids.view(),
+            .box_node_of_target = box_node_of_target.view(),
         };
 
         // A node that reaches no cycle reads no raw slot, and neither does
@@ -2008,6 +2080,18 @@ pub const Store = struct {
         const layouts_start = self.layouts.len();
         for (graph.nodes.items, reaches_cycle, 0..) |node, reaches, i| {
             if (!reaches) continue;
+            // A box over a node on a cycle reaches that cycle itself, so this
+            // loop sees every box a recursive slot edge can read.
+            switch (node) {
+                .box => |child| switch (RecursiveGraphAnalysis.resolveNominalRef(graph, child)) {
+                    .canonical => {},
+                    .local => |target_id| {
+                        const target_index = @backingInt(target_id);
+                        if (!box_node_of_target.isPresent(target_index)) box_node_of_target.set(target_index, @fromBackingInt(@intCast(i)));
+                    },
+                },
+                .pending, .committed, .nominal, .list, .closure, .erased_callable, .struct_, .tag_union => {},
+            }
             raw_layouts[i] = try self.reserveLayout(switch (node) {
                 .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                 .nominal, .struct_, .tag_union => Layout.zst(),
@@ -2027,7 +2111,8 @@ pub const Store = struct {
             value_layouts: []Idx,
             resolved: []bool,
             recursive_nodes: []bool,
-            component_ids: []u32,
+            component_ids: LayoutComponentColumn.View,
+            box_node_of_target: BoxNodeColumn.View,
 
             fn valueIdx(self_resolver: *@This(), ref: GraphRef) Idx {
                 return switch (ref) {
@@ -2100,7 +2185,7 @@ pub const Store = struct {
                 if (!self_resolver.recursive_nodes[parent_index] or !self_resolver.recursive_nodes[child_index]) {
                     return false;
                 }
-                if (self_resolver.component_ids[parent_index] != self_resolver.component_ids[child_index]) {
+                if (self_resolver.component_ids.get(parent_index) != self_resolver.component_ids.get(child_index)) {
                     return false;
                 }
 
@@ -2121,10 +2206,15 @@ pub const Store = struct {
                 return self_resolver.pointerTargetLayout(child_ref);
             }
 
+            /// The target's explicit box node, whose raw slot is ready from
+            /// the start, or else a box minted over the target's raw slot.
             fn recursiveSlotLayout(
                 self_resolver: *@This(),
                 child_ref: GraphRef,
             ) std.mem.Allocator.Error!Idx {
+                if (explicitBoxNode(self_resolver.graph, self_resolver.box_node_of_target, child_ref)) |box_node| {
+                    return self_resolver.raw_layouts[@backingInt(box_node)];
+                }
                 return try self_resolver.store.insertBox(self_resolver.recursiveSlotTargetLayout(child_ref));
             }
 
@@ -2240,7 +2330,8 @@ pub const Store = struct {
             .value_layouts = value_layouts,
             .resolved = resolved,
             .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
+            .component_ids = component_ids.view(),
+            .box_node_of_target = box_node_of_target.view(),
         };
 
         // A node resolves once the children it waits on have, so each node is
@@ -2311,7 +2402,7 @@ pub const Store = struct {
         const layouts_end: usize = @intCast(self.layouts.len());
         for (@as(usize, @intCast(layouts_start))..layouts_end) |i| {
             const idx: Idx = @fromBackingInt(@intCast(i));
-            self.resolved_list_layouts.items[i] = self.computeResolvedListLayoutIdx(idx) orelse .none;
+            self.resolved_list_layouts.items()[i] = self.computeResolvedListLayoutIdx(idx) orelse .none;
         }
 
         return value_layouts;
@@ -2566,7 +2657,7 @@ pub const Store = struct {
 
         const order_start: usize = @intCast(self.struct_field_original_order.len());
         for (0..fields.len) |position| _ = try self.struct_field_original_order.append(self.allocator, @intCast(position));
-        const order = self.struct_field_original_order.items.items[order_start..];
+        const order = self.struct_field_original_order.items()[order_start..];
         std.mem.sort(u32, order, fields, struct {
             fn lessThan(sorted_fields: []const StructField, a: u32, b: u32) bool {
                 return sorted_fields[a].index < sorted_fields[b].index;
@@ -2594,7 +2685,7 @@ pub const Store = struct {
         const fields = self.getStructData(struct_idx).getFields();
         std.debug.assert(field_index_in_sorted_fields < fields.count);
         const absolute_index: u32 = @backingInt(fields.start) + field_index_in_sorted_fields;
-        return self.struct_field_offsets.items.items[absolute_index].get(target_usize);
+        return self.struct_field_offsets.items()[absolute_index].get(target_usize);
     }
 
     pub fn getStructFieldOffset(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) u32 {
@@ -2632,7 +2723,7 @@ pub const Store = struct {
         // binary search.
         const fields = self.getStructData(struct_idx).getFields();
         const start: usize = @backingInt(fields.start);
-        const order = self.struct_field_original_order.items.items[start .. start + fields.count];
+        const order = self.struct_field_original_order.items()[start .. start + fields.count];
         var low: usize = 0;
         var high: usize = order.len;
         while (low < high) {
@@ -3073,7 +3164,7 @@ pub const Store = struct {
         const ptr = self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx))));
         ptr.* = layout;
         self.digest_cache.invalidateLayout(idx);
-        self.resolved_list_layouts.items[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx) orelse .none;
+        self.resolved_list_layouts.items()[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx) orelse .none;
     }
 
     /// Overwrite a layout that the running graph commit reserved. The commit
@@ -3102,7 +3193,7 @@ pub const Store = struct {
     }
 
     pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
-        const resolved = self.resolved_list_layouts.items[@backingInt(layout_idx)];
+        const resolved = self.resolved_list_layouts.items()[@backingInt(layout_idx)];
         return if (resolved == Idx.none) null else resolved;
     }
 };
@@ -4116,6 +4207,44 @@ test "commitGraph resolves recursive Box back-edges to the union layout itself (
         // Str payload (24 bytes) dominates the Box pointer payload; the
         // 1-byte discriminant lands after it and pads to 8-byte alignment.
         try testing.expectEqual(@as(u32, 32), info.size());
+    }
+}
+
+/// Commits `T := [Nil, Cons({ t : T, bt : Box(T) })]` and returns the layouts
+/// of the `t` and `bt` fields, with the explicit box node reserved first when
+/// `box_first`, so the finalizer reaches it before its target.
+fn commitRecursionBoxBesideExplicitBox(store: *Store, box_first: bool) Allocator.Error![2]Idx {
+    const allocator = std.testing.allocator;
+    var graph = LayoutGraph{};
+    defer graph.deinit(allocator);
+    var box_node: GraphNodeId = undefined;
+    if (box_first) box_node = try graph.reserveNode(allocator);
+    const union_node = try graph.reserveNode(allocator);
+    const cons_node = try graph.reserveNode(allocator);
+    if (!box_first) box_node = try graph.reserveNode(allocator);
+    graph.setNode(box_node, .{ .box = .{ .local = union_node } });
+    graph.setNode(cons_node, .{ .struct_ = try graph.appendFields(allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = union_node } },
+        .{ .index = 1, .child = .{ .local = box_node } },
+    }) });
+    graph.setNode(union_node, .{ .tag_union = try graph.appendRefs(allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = cons_node } }) });
+    var commit = try store.commitGraph(&graph, .{ .local = if (box_first) box_node else union_node });
+    defer commit.deinit(allocator);
+    const cons_struct = store.getLayout(commit.value_layouts[@backingInt(cons_node)]).getStruct().idx;
+    return .{
+        store.getStructFieldLayoutByOriginalIndex(cons_struct, 0),
+        store.getStructFieldLayoutByOriginalIndex(cons_struct, 1),
+    };
+}
+
+test "commitGraph gives a recursion box and an explicit Box of the same type one layout (issue #12927)" {
+    const testing = std.testing;
+    for ([_]bool{ true, false }) |box_first| {
+        var store = try Store.init(testing.allocator, .u64);
+        defer store.deinit();
+        const fields = try commitRecursionBoxBesideExplicitBox(&store, box_first);
+        try testing.expectEqual(LayoutTag.box, store.getLayout(fields[0]).tag);
+        try testing.expectEqual(fields[0], fields[1]);
     }
 }
 

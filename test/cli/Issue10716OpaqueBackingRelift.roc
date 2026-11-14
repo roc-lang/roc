@@ -1,7 +1,7 @@
 Issue10716OpaqueBackingRelift :: [].{
 	State :: { value : U64 }.{
 		new : U64 -> State
-		new = |value| State.({ value: value })
+		new = |initial| State.({ value: initial })
 
 		value : State -> U64
 		value = |State.(state)| state.value

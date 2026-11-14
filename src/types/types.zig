@@ -910,8 +910,8 @@ pub const RecordField = struct {
         }
     };
 
-    /// A safe multi list of record fields
-    pub const SafeMultiList = MkSafeMultiList(Self);
+    /// Independently growing columns of record fields.
+    pub const SafeMultiList = collections.ReservedColumns(Self, .dense);
 
     /// A safe list of record fields
     pub const SafeList = MkSafeList(Self);
@@ -950,6 +950,16 @@ pub const Tag = struct {
     /// A list of argument types for the tag (0 = no payload)
     args: Var.SafeList.Range,
 
+    /// Whether this tag is in its row only because `match` branch patterns
+    /// asked for it (design.md "Pattern-Only Tags"). A user-written match
+    /// branch's tag pattern mints its tag marked; every other producer mints
+    /// it unmarked, and unification keeps a shared tag marked only when both
+    /// sides were. This is diagnostic METADATA: it never affects typing, and
+    /// type identity (canonical and sealed type keys, digests, snapshot
+    /// comparison, exhaustiveness, layouts) never reads it. A copy that drops
+    /// it can only lose an unmatchable-pattern warning, never add one.
+    pattern_only: bool = false,
+
     const Self = @This();
 
     /// A function to be passed into std.mem.sort to sort fields by name
@@ -965,8 +975,8 @@ pub const Tag = struct {
     /// A safe list of tags
     pub const SafeList = MkSafeList(@This());
 
-    /// A safe multi list of tags
-    pub const SafeMultiList = MkSafeMultiList(@This());
+    /// Independently growing columns of tag rows.
+    pub const SafeMultiList = collections.ReservedColumns(@This(), .dense);
 };
 
 /// Two tag union fields

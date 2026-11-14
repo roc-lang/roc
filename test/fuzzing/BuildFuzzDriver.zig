@@ -138,7 +138,7 @@ pub fn run(buf: [*]u8, len: isize, debug: bool, mode: Mode) void {
     };
     defer gpa.free(relations);
 
-    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_checked.root_requests.runtime_requests) catch |err| switch (err) {
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_checked.root_requests.runtime_requests.items()) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM while selecting LIR roots"),
     };
     defer gpa.free(lir_roots);

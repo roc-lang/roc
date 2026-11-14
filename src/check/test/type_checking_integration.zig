@@ -3645,7 +3645,11 @@ test "issue 10763 - a stored call result is monomorphic" {
         \\    check(|| "a", "a")
         \\}
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    // Both operands of the second call hold a string where `check`'s one
+    // `val` is U64, and each literal is reported.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertTypeErrorTitles(&.{ "Type Mismatch", "Type Mismatch" });
 }
 
 test "issue 11217 - aliasing a stored call result does not generalize it" {
@@ -3841,7 +3845,7 @@ test "checked artifact method registry skips nominal associated values" {
     );
     defer registry.deinit(testing.allocator);
 
-    try testing.expectEqual(@as(usize, 0), registry.entries.len);
+    try testing.expectEqual(@as(usize, 0), registry.entries.items().len);
 }
 
 test "typed method definition entries expose finalized owner-method keys" {
@@ -4361,7 +4365,7 @@ test "check type - tuple access batch retires discarded defaults and preserves i
         try testing.expect(problem == .tuple_access_needs_annotation);
     }
     try test_env.assertDefTypeOptions("independent", "Foo", .{ .allow_type_errors = true });
-    const omissions = test_env.module_env.record_omitted_defaults.items.items;
+    const omissions = test_env.module_env.record_omitted_defaults.items();
     try testing.expectEqual(1, omissions.len);
     const independent = test_env.module_env.store.getDef(test_env.module_env.store.defAt(test_env.module_env.all_defs, 3));
     try testing.expectEqual(independent.expr, omissions[0].expr);
@@ -4399,8 +4403,11 @@ test "check type - match branch conflicting with rigid return type reports error
 
 test "check type - match" {
     const source =
+        \\flag : [True, False]
+        \\flag = True
+        \\
         \\x =
-        \\  match True {
+        \\  match flag {
         \\    True => "true"
         \\    False => "false"
         \\  }
@@ -4996,6 +5003,7 @@ test "check type - patterns - wrong type" {
 test "check type - patterns tag with payload" {
     const source =
         \\{
+        \\  x : [Ok(Str), Err(Str)]
         \\  x = Ok("ok")
         \\
         \\  match(x) {
@@ -5135,6 +5143,7 @@ test "check type - patterns list" {
 test "check type - patterns record" {
     const source =
         \\{
+        \\  val : { x : Str, y : [True, False] }
         \\  val = { x: "hello", y: True }
         \\
         \\  match(val) {
@@ -5149,6 +5158,7 @@ test "check type - patterns record" {
 test "check type - patterns record 2" {
     const source =
         \\{
+        \\  val : { x : Str, y : [True, False] }
         \\  val = { x: "hello", y: True }
         \\
         \\  match(val) {
@@ -5552,10 +5562,13 @@ test "check type - constant match scrutinee warns" {
         \\}
     ;
 
-    try checkTypesModule(source, .{ .pass_with_warnings = .{
-        .def = .last_def,
-        .warnings = &.{"Unconditional Condition"},
-    } }, "Str -> Str");
+    try checkTypesModule(source, .{
+        .pass_with_warnings = .{
+            .def = .last_def,
+            // Nothing produces `False`, so its branch is also unmatchable.
+            .warnings = &.{ "Unconditional Condition", "Unmatchable Pattern" },
+        },
+    }, "Str -> Str");
 }
 
 test "check type - constant match guard warns" {
@@ -10277,7 +10290,8 @@ test "check type - value rows - an unannotated top-level value's row is shared b
     // Every use of `e` in its module widens one row (design.md "Value Rows:
     // Uses Share One Row"): a `match` naming `Zed` and a call where
     // `[Aa, Boom, ..]` is accepted leave `e` at `[Aa, Boom, Zed]`, which the
-    // module closes when it finishes.
+    // module closes when it finishes. Nothing produces `Zed`, so its branch is
+    // reported as unmatchable (design.md "Pattern-Only Tags").
     const source =
         \\e = Boom
         \\
@@ -10298,8 +10312,8 @@ test "check type - value rows - an unannotated top-level value's row is shared b
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertNoErrors();
-    try test_env.assertDefType("e", "[Aa, Boom, Zed]");
+    try test_env.assertOneTypeWarning("Unmatchable Pattern");
+    try test_env.assertDefTypeOptions("e", "[Aa, Boom, Zed]", .{ .allow_type_errors = true });
 }
 
 test "check type - value rows - two uses at different closed unions are a mismatch" {
@@ -11562,7 +11576,8 @@ test "check type - exhaustive match does not over-close static dispatch return t
     // A static dispatch method returns a tag (inferred as open tag union).
     // The caller pattern matches it exhaustively without wildcards.
     // Each call site gets a fresh instantiation, so closing at one site
-    // should not affect the type at another.
+    // should not affect the type at another. `get` never produces `Blue`, so
+    // that branch is reported as unmatchable (design.md "Pattern-Only Tags").
     const source =
         \\Maker := {}.{
         \\  get = |_maker| Red
@@ -11583,14 +11598,12 @@ test "check type - exhaustive match does not over-close static dispatch return t
         \\  }
         \\}
     ;
-    try checkTypesModuleDefs(
-        source,
-        &.{
-            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red]" },
-            .{ .def = "narrow", .expected = "Str" },
-            .{ .def = "broad", .expected = "Str" },
-        },
-    );
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeWarning("Unmatchable Pattern");
+    try test_env.assertDefTypeOptions("Test.Maker.get", "_arg -> [Red]", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("narrow", "Str", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("broad", "Str", .{ .allow_type_errors = true });
 }
 
 test "check type - exhaustive match close does not leak through shared variable" {
@@ -12237,6 +12250,114 @@ test "check type - finalize defaulting - heterogeneous multi-driver group at top
         \\top = (5).plus((2).shl_wrap(3))
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "issue 12970: returned callback preserves captured method requirements across a where use" {
+    var env = try TestEnv.init("Returned",
+        \\Returned := [].{
+        \\    distinct : List(k) -> U64
+        \\        where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+        \\    distinct = |keys| Set.from_list(keys).len()
+        \\
+        \\    labels : Str -> (List(U64) -> List(Str))
+        \\    labels = |prefix| |keys| {
+        \\        labelled = |suffix| keys.map(|k| "${prefix}${k.to_str()}${suffix}")
+        \\        n = distinct(keys)
+        \\        labelled("/${n.to_str()}")
+        \\    }
+        \\}
+        \\
+        \\expect Returned.labels("#")([7, 7]) == ["#7/1", "#7/1"]
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+}
+
+test "issue 12970: an unannotated enclosing function stays generic in its receiver's item" {
+    var env = try TestEnv.init("NoAnno",
+        \\NoAnno := [].{
+        \\    distinct : List(k) -> U64
+        \\        where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+        \\    distinct = |keys| Set.from_list(keys).len()
+        \\
+        \\    labels = |prefix, keys| {
+        \\        labelled = |suffix| keys.map(|k| "${prefix}${k.to_str()}${suffix}")
+        \\        n = distinct(keys)
+        \\        labelled("/${n.to_str()}")
+        \\    }
+        \\}
+        \\
+        \\expect NoAnno.labels("#", [7.U64, 7]) == ["#7/1", "#7/1"]
+        \\expect NoAnno.labels("#", ["a", "b"]) == ["#a/2", "#b/2"]
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+}
+
+test "issue 12970: a local function's variable fixed by its enclosing receiver is monomorphic" {
+    var env = try TestEnv.init("Mono",
+        \\Mono := [].{
+        \\    both = |keys| {
+        \\        wrap = |x| keys.append(x)
+        \\        n = List.len(keys)
+        \\        (wrap(n), wrap("a"))
+        \\    }
+        \\}
+    );
+    defer env.deinit();
+    try env.assertTypeErrorTitles(&.{"Type Mismatch"});
+}
+
+test "issue 12970: a relation on an enclosing item fixes the local function's other variables" {
+    var env = try TestEnv.init("Poly",
+        \\Poly := [].{
+        \\    Thing :: U64.{
+        \\        combine : Thing, a -> a
+        \\        combine = |_, a| a
+        \\    }
+        \\
+        \\    both = |keys| {
+        \\        pair = |d| keys.map(|k| k.combine(d))
+        \\        n = List.len(keys)
+        \\        (pair(n), pair("a"))
+        \\    }
+        \\}
+    );
+    defer env.deinit();
+    try env.assertTypeErrorTitles(&.{"Type Mismatch"});
+}
+
+test "issue 12978: callback record accepts nominal method props with omitted defaults" {
+    var env = try TestEnv.init("Test",
+        \\Value :: U64.{
+        \\    make : U64 -> Value
+        \\    make = |n| Value.(n)
+        \\
+        \\    read : Value, ReadProps -> U64
+        \\    read = |Value.(n), ReadProps.({ max_bytes })| n + max_bytes
+        \\}
+        \\
+        \\ReadProps := { max_bytes : U64 ?? 8 }
+        \\Ask : [Bytes(Value), Large(Value)]
+        \\
+        \\apply : a, { plan : a -> b } -> b
+        \\apply = |value, { plan }| plan(value)
+        \\
+        \\reader : Ask -> List(U64)
+        \\reader = |ask| apply(
+        \\    ask,
+        \\    {
+        \\        plan: |a| match a {
+        \\            Bytes(f) => [f.read({})]
+        \\            Large(f) => [f.read({ max_bytes: 64 })]
+        \\        },
+        \\    },
+        \\)
+        \\
+        \\expect reader(Bytes(Value.make(1))) == [9]
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
 }
 
 // OUTER-ROOTED DISPATCH CHAINS: a dispatch deferred on a flex receiver owned

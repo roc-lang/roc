@@ -181,7 +181,7 @@ test "derived encoder: a boundary-local record literal's field kinds settle befo
     // The codec's error row reaches the signature's implicitly open row, but
     // no caller can change the record's codec, so the scheme needs no
     // codec evidence from its uses.
-    try std.testing.expectEqual(0, test_env.module_env.binding_scheme_codec_requirements.items.items.len);
+    try std.testing.expectEqual(0, test_env.module_env.binding_scheme_codec_requirements.items().len);
 }
 
 test "derived encoder: a record literal the signature reaches keeps its field kinds undetermined" {
@@ -196,7 +196,7 @@ test "derived encoder: a record literal the signature reaches keeps its field ki
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expect(test_env.module_env.binding_scheme_codec_requirements.items.items.len > 0);
+    try std.testing.expect(test_env.module_env.binding_scheme_codec_requirements.items().len > 0);
 }
 
 test "derived encoder: a record literal's field kind pinned by an optional access stays optional" {

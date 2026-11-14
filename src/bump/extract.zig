@@ -28,6 +28,9 @@ const CheckedTypeId = CheckedArtifact.CheckedTypeId;
 const CheckedModuleArtifact = CheckedArtifact.CheckedModuleArtifact;
 const CheckedTypeStoreView = CheckedArtifact.CheckedTypeStoreView;
 
+/// A module position in the package API being extracted.
+const ApiModuleIndex = enum(u32) { _ };
+
 /// One exact public namespace used for API extraction or reference routing.
 pub const ModuleInput = struct {
     /// The public namespace name, e.g. "Parser" or a platform root's name.
@@ -137,13 +140,13 @@ pub fn extractPackageApi(
             try api.addModule(try api.allocator().dupe(u8, input.exposed_name))
         else
             null;
-        try extractor.input_modules.append(gpa, module_index);
+        try extractor.input_modules.append(gpa, if (module_index) |index| .some(@fromBackingInt(@as(u32, @intCast(index)))) else .none);
     }
     try extractor.sortPublicInputs();
     try extractor.adoptRenamedNominals(api_input_count);
 
     for (extractor.input_modules.items, 0..) |module_index, input_index| {
-        const api_module = module_index orelse continue;
+        const api_module: usize = @backingInt(module_index.get() orelse continue);
         extractor.current_input = input_index;
         try extractor.extractModule(input_index, api_module);
     }
@@ -164,7 +167,7 @@ const Extractor = struct {
     inputs: std.ArrayList(ModuleInput) = .empty,
     /// The PackageApi module that receives each namespace's items, parallel
     /// to `inputs`; null for namespaces used only to route references.
-    input_modules: std.ArrayList(?usize) = .empty,
+    input_modules: std.ArrayList(collections.OptionalId(ApiModuleIndex)) = .empty,
     /// Public namespaces sorted by owning checked artifact for binary routing.
     public_input_order: std.ArrayList(usize) = .empty,
     /// Public alias declarations whose nominal type is extracted in their
@@ -434,9 +437,9 @@ const Extractor = struct {
             if (pattern != .assign) continue;
             const ident = pattern.assign.ident;
             const name = module_env.getIdentText(ident);
-            if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
+            if (!inputIncludesValue(input, &exposed_names, def_idx, name)) continue;
 
-            const path = try publicItemPath(self.api.allocator(), input, name);
+            const path = try publicValuePath(self.api.allocator(), input, name);
             self.current_item = path;
             const gop = try seen_paths.getOrPut(self.gpa, path);
             if (gop.found_existing) continue;
@@ -935,6 +938,54 @@ fn inputIncludesName(
     return module_kind != .type_module or nameIsPublic(name, input.exposed_name);
 }
 
+/// The type declaration whose namespace `input` presents, if it presents
+/// one type's: its exact public type, or a type module's main type.
+fn namespaceRootDecl(input: ModuleInput) ?can.CIR.Statement.Idx {
+    if (input.public_type_decl) |root_statement| return root_statement;
+    const module_env = input.module_env;
+    return switch (module_env.module_kind) {
+        .type_module => |main_type_ident| blk: {
+            const node_idx = module_env.getExposedTypeNodeIndexById(main_type_ident) orelse
+                base.invariant("bump invariant violated: type module '{s}' does not expose its main type", .{module_env.module_name});
+            break :blk @as(can.CIR.Statement.Idx, @fromBackingInt(@intCast(node_idx)));
+        },
+        .default_app, .app, .package, .platform, .hosted, .module, .malformed => null,
+    };
+}
+
+/// Whether the value `def_idx`, named `name`, belongs to `input`'s
+/// namespace. A value a type owns is declared inside that type's
+/// declaration, so the declaration's region decides it: the name alone
+/// cannot, because a value owned by a type declared beside a type module's
+/// main type is named under the module's name too.
+fn inputIncludesValue(
+    input: ModuleInput,
+    exposed_names: *const std.StringHashMapUnmanaged(void),
+    def_idx: can.CIR.Def.Idx,
+    name: []const u8,
+) bool {
+    if (input.exposed_names != null) return exposed_names.contains(exposedRootName(name));
+    const module_env = input.module_env;
+    const root_statement = namespaceRootDecl(input) orelse return true;
+    const root_region = module_env.store.getStatementRegion(root_statement);
+    const def_region = module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def_idx));
+    return def_region.start.offset >= root_region.start.offset and def_region.end.offset <= root_region.end.offset;
+}
+
+/// The public path of a value `inputIncludesValue` accepted. The value's
+/// source name spells the type that owns it relative to the module, except
+/// that a type declared beside a type module's main type is spelled with the
+/// module's name first.
+fn publicValuePath(alloc: Allocator, input: ModuleInput, source_name: []const u8) Allocator.Error![]const u8 {
+    const root_statement = input.public_type_decl orelse return try alloc.dupe(u8, source_name);
+    const root_name = publicTypeDeclName(input, root_statement);
+    if (nameIsPublic(source_name, root_name)) return try publicItemPath(alloc, input, source_name);
+    const module_name = input.module_env.module_name;
+    std.debug.assert(nameIsPublic(source_name, module_name) and source_name.len > module_name.len and
+        nameIsPublic(source_name[module_name.len + 1 ..], root_name));
+    return try std.fmt.allocPrint(alloc, "{s}{s}", .{ input.exposed_name, source_name[module_name.len + 1 + root_name.len ..] });
+}
+
 fn exposedRootName(name: []const u8) []const u8 {
     return if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
 }
@@ -962,8 +1013,9 @@ fn qualifiedPath(
     if (origin == .builtin) {
         // Builtin type names may arrive pre-qualified ("Builtin.Str"); users
         // never write that namespace, so drop it (same policy as docs).
-        const bare = if (std.mem.startsWith(u8, type_name, "Builtin."))
-            type_name["Builtin.".len..]
+        const builtin_prefix = "Builtin.";
+        const bare = if (std.mem.startsWith(u8, type_name, builtin_prefix))
+            type_name[builtin_prefix.len..]
         else
             type_name;
         return try alloc.dupe(u8, bare);
