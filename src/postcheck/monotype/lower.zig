@@ -1647,7 +1647,8 @@ const ExprData = union(enum) {
     str_from_quote: u32,
     str_segment: SourceExprData(.str_segment),
     /// A string concatenated from its parts: a builtin string literal or an
-    /// interpolation whose target is the builtin `Str`.
+    /// interpolation whose target is the builtin `Str` and whose dispatch
+    /// checking accepted.
     str: checked_bodies.StrParts,
     bytes_literal: SourceExprData(.bytes_literal),
     lookup_local: struct { pattern: CIR.Pattern.Idx, resolved: ?ResolvedUse },

@@ -12082,7 +12082,10 @@ is produced even when only patterns name it here:
   static-dispatch constraints of type variables, since a `where` method's
   result is reachable only through its constraint's function type. The walk
   runs at judgment time, not when the lambda finishes, because later relations
-  can split a parameter row's tags into new row parts.
+  can split a parameter row's tags into new row parts. A lambda written as a
+  call argument is the exception: only that call's callee calls it, so its
+  parameters are not recorded and their rows are judged by what the call
+  relates them to.
 - A derived parser builds its shape's values from its input, so every type
   reachable from a parser derivation's shape counts as produced.
 - A rejected expression (`Check.erroneous_value_exprs`) already owns an error
@@ -12125,8 +12128,12 @@ mistaken one. A module with no recorded patterns does no work, and the walk
 runs only when some pattern's tag is still marked.
 
 The rule is intentionally conservative about parameters: a value mixed with a
-parameter, or an inline callback over a known list (`xs.map(|v| match v {
-C => .. })`), shares the parameter's row and is not reported. A top-level
+parameter shares the parameter's row and is not reported. A callback written
+as a call argument is judged by its call: over a known list
+(`[A, B].map(|v| match v { C => .. })`) the `C` pattern is reported, and over
+a value that came from an enclosing lambda's parameter it is not, because the
+enclosing lambda's body holds the match and so its parameters are recorded. A
+top-level
 constant is judged like any other value: `mode = Debug` matched against
 `Release` is reported, and the annotation `mode : [Debug, Release]` (whose
 tags are unmarked) is how an author says `Release` is intended.
@@ -13054,6 +13061,20 @@ generalized interpolation's scheme relates its parts to the item type
 `a -> b where [b.from_interpolation : List(Str) -> Try(Iter(a) -> b, [InvalidInterpolation(Str)])]`),
 so a body compiled once for every instantiation builds its items from its parts
 without consulting any use.
+
+An interpolation whose target this boundary's literal defaulting decides is not
+related there: a receiver of the boundary's rank that no root's interface
+reaches (`boundary_reachable_vars`) defaults, and each of its interpolations is
+then discharged against the default on its own, exactly as when the target was
+decided before the boundary. Relating parts there would let one value retype
+another, and relating the receiver's interpolations into one requirement
+would leave all but one interpolation's parts unchecked. Relating a part can
+make it reachable, so the boundary recollects the reachable set and revisits
+its pool until no interpolation is newly related (`relateBoundaryRequirements`).
+In `var $o = ""` followed by `$o = "${Ok(n)}"` and `$o = "${n.to_str()}"`, with
+`$o` never escaping, only `Ok(n)` is rejected. Pinned by
+test/snapshots/static_dispatch/interpolation_defaulted_local_parts_unrelated.md
+and test/snapshots/static_dispatch/interpolation_defaulted_local_sites_unrelated.md.
 
 Instantiating a generalized interpolation copies its constraint and its parts'
 types, so a part rejected by an instantiated copy is rejected by that use's
@@ -20052,7 +20073,10 @@ neither fail nor bind anything else. A type has one method of each name, so
 when a receiver is still a type variable at its definition's generalization
 boundary, its requirements of one method become one requirement: the boundary
 relates their callables before it defaults literals and generalizes, and an
-inferred scheme never holds two requirements of one method on one type.
+inferred scheme never holds two requirements of one method on one type. A
+receiver that the boundary's literal defaulting decides is not about to be
+generalized, so its requirements are not related: each is discharged against
+the default on its own ("Builtin Str Interpolation Part Compatibility").
 Requirements that cannot be one are a type mismatch. That includes a relation
 that would make the method's type infinite, which no type can be (two uses of
 `row.i32()` whose results must be both `a` and `{ id: a }`); unification
@@ -24827,6 +24851,39 @@ Only optimized builds (`--opt=speed` and `--opt=size`) run the analysis
 (`thread_confined_rc`). Dev builds, compile-time evaluation, and the
 interpreter emit atomic count updates for every allocation and record no
 host-visibility results.
+
+### Releasing The Last Reference
+
+A release decides that its allocation is dying from the result of its own
+decrement and from nothing else: the builtins' release primitive
+(`releaseRcPtr`, `releaseDataPtr`, `RocList.releaseAllocation`) decrements
+and reports whether that decrement took the count to zero. The release that
+did owns the allocation exclusively; it releases what the allocation holds (a
+list's items, a box's payload, an erased callable's capture) and then
+frees it. No release path reads the count first to ask whether it is unique.
+For an allocation shared across threads that question has no stable answer:
+two threads holding the last two references would both read 2, both skip the
+teardown, and one of them would then free the allocation with its contents
+still alive.
+
+The atomic decrement uses acquire-release ordering. Release ordering places
+every access a thread made through its reference before the teardown done by
+whichever thread releases last, and acquire ordering is what lets that last
+thread rely on it. Single-thread releases use plain loads and stores and
+follow the same decrement-then-decide shape, so the compiled helpers, the
+interpreter, and the dynamic-value walker share one definition.
+
+A uniqueness check that gates an in-place update reads the count with a
+relaxed atomic load, in the builtins (`loadRefcountForUniqueness`) and in the
+checks backends emit inline. Another thread holding a reference may be
+decrementing the count during the read. A result of one means no other
+thread holds a reference, and the release ordering of that thread's
+decrement has already placed its accesses before the update.
+
+The concurrent-release tests in `src/builtins/atomic_rc_test.zig` run in the
+builtins module tests and, under ThreadSanitizer, in
+`zig build run-test-builtins-tsan`, which checks the orderings against the
+memory model rather than against the host CPU.
 
 ### Uniqueness Inference
 

@@ -276,6 +276,9 @@ const jobs = [_]Job{
     },
     .{ .name = "run-check-test-asset-coverage", .placement = .source },
 } ++ module_test_jobs ++ zig_test_suite_jobs ++ [_]Job{
+    // ThreadSanitizer checks the refcount orderings against the memory model
+    // rather than the host CPU, and has no runtime for Windows.
+    .{ .name = "run-test-builtins-tsan", .placement = .primary_host },
     .{
         .name = "run-test-eval",
         .kind = .harness,
