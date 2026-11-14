@@ -613,6 +613,13 @@ within an explicit code-growth limit; a larger value keeps its named binding.
 A compile-time value read is not a substitutable read: its value guard crashes
 where the program evaluates the read when that value's evaluation failed, so
 substitution may neither drop a discarded read nor move one to a later use.
+LIR passes that run before the guards are inserted observe the same rule: the
+slots `comptime_value_guards.guardedSlots` names are the reads the guards will
+guard, and join-parameter pruning never deletes a read of one as a dead pure
+definition, even one of a zero-sized value whose only consumer is a call of a
+callable with no variants. Pinned by "a hoisted call of a function field read
+from a value checking rejected reports nothing more" in
+`src/compile/test/hoisted_constants_test.zig`.
 Making a value reusable is decided by substitutability alone, never by that
 limit: a substitutable value of any size is already reusable and is kept whole,
 so reuse never walks or copies its structure. A long interpolation binds one
