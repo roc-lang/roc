@@ -47,7 +47,7 @@ test "issue 12722: top-level constant stores split_on pieces of a compile-time h
 
     const expected = [_][]const u8{ "a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
     var list_constants: usize = 0;
-    for (artifact.compile_time_roots.roots) |root| {
+    for (artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .constant or root.payload != .const_node) continue;
         const value = artifact.const_store.get(root.payload.const_node);
         if (value != .list) continue;

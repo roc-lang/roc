@@ -455,7 +455,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .field_access_segments = .empty,
     };
 
-    const expected_idx = store.nodes.items.len;
+    const expected_idx = store.nodes.len();
     const idx = try store.nodes.append(gpa, .{
         .tag = .root,
         .main_token = 0,
@@ -1361,12 +1361,12 @@ pub fn getCollection(store: *const NodeStore, collection_idx: AST.Collection.Idx
 
 /// Sets the parser-produced layout fact for a collection-owning node.
 pub fn setCollectionLayout(store: *NodeStore, idx: anytype, layout: AST.CollectionLayout) void {
-    store.nodes.items.items(.collection_layout)[@backingInt(idx)] = layout;
+    store.nodes.field(.collection_layout)[@backingInt(idx)] = layout;
 }
 
 /// Returns the parser-produced layout fact for a collection-owning node.
 pub fn getCollectionLayout(store: *const NodeStore, idx: anytype) AST.CollectionLayout {
-    return store.nodes.items.items(.collection_layout)[@backingInt(idx)];
+    return store.nodes.field(.collection_layout)[@backingInt(idx)];
 }
 
 /// Returns the number of nodes in the store.
@@ -2526,9 +2526,9 @@ pub fn collectRedundantReturns(store: *const NodeStore) Allocator.Error!std.Dyna
     var pending: std.ArrayList(AST.Expr.Idx) = .empty;
     defer pending.deinit(store.gpa);
 
-    const tags = store.nodes.items.items(.tag);
+    const tags = store.nodes.field(.tag);
     // A lambda node keeps its body's index in `main_token`.
-    for (tags, store.nodes.items.items(.main_token)) |tag, body| {
+    for (tags, store.nodes.field(.main_token)) |tag, body| {
         if (tag == .lambda) try pending.append(store.gpa, @fromBackingInt(body));
     }
     while (pending.pop()) |idx| {

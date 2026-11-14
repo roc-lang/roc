@@ -10,6 +10,6 @@ import pf.Padded
 ## the declared field order and reserves the unnamed padding. A correct layout
 ## prints "1122" (z=11 -> 1100, plus a=22).
 main! = || {
-    padded = Padded.new(11, 22)
+    padded = Padded.make(11, 22)
     Stdout.line!(padded.check!())
 }

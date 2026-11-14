@@ -14,13 +14,12 @@
 //! identical rather than relying on byte-offset ids being incidentally
 //! consistent.
 //!
-//! After deserialization the interner is frozen (`supports_inserts = false`):
+//! A deserialized interner borrows its columns from the serialized bytes:
 //! `lookup` (text → id) and `getText` (id → text) both work with NO rebuild,
 //! because the probing table is part of the serialized data and is relocated in
-//! place. `enableRuntimeInserts` can re-open it for insertion if ever needed.
+//! place. Inserting copies a column into owned memory the first time it grows.
 
 const std = @import("std");
-const invariant = @import("invariant.zig").invariant;
 const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
@@ -41,9 +40,6 @@ ends: SafeList(u32) = .{},
 /// A value of 0 means the slot is empty. Stored as a flat array of u32 so it
 /// relocates with a single base-pointer fixup.
 index: SafeList(u32) = .{},
-/// True while this interner owns growable memory; false after deserialize
-/// (memory then points into the serialization buffer and must not be freed/grown).
-supports_inserts: bool = true,
 
 const initial_index_capacity: usize = 16;
 const Index = InternedBytes.Index(Policy);
@@ -57,21 +53,16 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SerialStrin
         .bytes = .{},
         .ends = .{},
         .index = .{},
-        .supports_inserts = true,
     };
     self.bytes = try SafeList(u8).initCapacity(gpa, capacity * 4);
     self.ends = try SafeList(u32).initCapacity(gpa, capacity);
     self.index = try SafeList(u32).initCapacity(gpa, index_cap);
-    try self.index.items.ensureTotalCapacityPrecise(gpa, index_cap);
-    self.index.items.items.len = index_cap;
-    @memset(self.index.items.items, 0);
+    self.index.appendNTimesAssumeCapacity(0, index_cap);
     return self;
 }
 
-/// Free owned memory. No-op for deserialized (frozen) interners, whose memory is
-/// owned by the serialization buffer.
+/// Free owned memory. A column that borrows serialized bytes frees nothing.
 pub fn deinit(self: *SerialStringInterner, gpa: Allocator) void {
-    if (!self.supports_inserts) return;
     self.bytes.deinit(gpa);
     self.ends.deinit(gpa);
     self.index.deinit(gpa);
@@ -79,7 +70,7 @@ pub fn deinit(self: *SerialStringInterner, gpa: Allocator) void {
 
 /// Number of interned strings.
 pub fn count(self: *const SerialStringInterner) u32 {
-    return @intCast(self.ends.items.items.len);
+    return @intCast(self.ends.items().len);
 }
 
 /// Immutable append boundary for the durable id and byte arrays.
@@ -91,15 +82,15 @@ pub const EpochBoundary = struct {
 /// Capture the current durable boundary without exposing growable storage.
 pub fn epochBoundary(self: *const SerialStringInterner) EpochBoundary {
     return .{
-        .ids = @intCast(self.ends.items.items.len),
-        .bytes = @intCast(self.bytes.items.items.len),
+        .ids = @intCast(self.ends.items().len),
+        .bytes = @intCast(self.bytes.items().len),
     };
 }
 
 fn textAt(self: *const SerialStringInterner, id: u32) []const u8 {
-    const ends = self.ends.items.items;
+    const ends = self.ends.items();
     const start = if (id == 0) 0 else ends[id - 1];
-    return self.bytes.items.items[start..ends[id]];
+    return self.bytes.items()[start..ends[id]];
 }
 
 /// Text for a serial id.
@@ -117,7 +108,7 @@ const Policy = struct {
     pub const initial_index_capacity: usize = SerialStringInterner.initial_index_capacity;
 
     pub fn count(self: *const SerialStringInterner) u32 {
-        return @intCast(self.ends.items.items.len);
+        return @intCast(self.ends.items().len);
     }
     pub fn cellForId(id: Id) Cell {
         return id + 1;
@@ -129,16 +120,15 @@ const Policy = struct {
         return self.textAt(id);
     }
     pub fn appendEntry(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!Id {
-        assertSupportsInserts(self.supports_inserts);
         // Ids, byte offsets, and lengths are 32-bit, and index cells store
         // `id + 1`; an interner past that range has exhausted the
         // representable memory.
-        const id = std.math.cast(u32, self.ends.items.items.len) orelse return error.OutOfMemory;
+        const id = std.math.cast(u32, self.ends.items().len) orelse return error.OutOfMemory;
         if (id == std.math.maxInt(u32)) return error.OutOfMemory;
-        const start = std.math.cast(u32, self.bytes.items.items.len) orelse return error.OutOfMemory;
+        const start = std.math.cast(u32, self.bytes.items().len) orelse return error.OutOfMemory;
         const len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
         const end = std.math.add(u32, start, len) catch return error.OutOfMemory;
-        try self.ends.items.ensureUnusedCapacity(gpa, 1);
+        try self.ends.ensureUnusedCapacity(gpa, 1);
         _ = try self.bytes.appendSlice(gpa, string);
         _ = try self.ends.append(gpa, end);
         return id;
@@ -147,11 +137,6 @@ const Policy = struct {
         return InternedBytes.hash(string);
     }
 };
-
-fn assertSupportsInserts(supports_inserts: bool) void {
-    if (supports_inserts) return;
-    invariant("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
-}
 
 /// Look up a string's serial id without modifying the interner. Safe on frozen
 /// (deserialized) interners.
@@ -170,33 +155,21 @@ pub fn insert(self: *SerialStringInterner, gpa: Allocator, string: []const u8) A
     return index.insert(self, gpa, string);
 }
 
-/// Re-open a deserialized interner for insertion by copying its data into fresh,
-/// growable memory.
-pub fn enableRuntimeInserts(self: *SerialStringInterner, gpa: Allocator) Allocator.Error!void {
-    if (self.supports_inserts) return;
-
-    self.* = try self.clone(gpa);
-}
-
 /// Preserve serial IDs and the lookup index while taking independent ownership.
 pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!SerialStringInterner {
-    var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items.items.len);
+    var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items().len);
     errdefer new_bytes.deinit(gpa);
-    _ = try new_bytes.appendSlice(gpa, self.bytes.items.items);
-    var new_ends = try SafeList(u32).initCapacity(gpa, self.ends.items.items.len);
+    _ = try new_bytes.appendSlice(gpa, self.bytes.items());
+    var new_ends = try SafeList(u32).initCapacity(gpa, self.ends.items().len);
     errdefer new_ends.deinit(gpa);
-    _ = try new_ends.appendSlice(gpa, self.ends.items.items);
-    var new_index = try SafeList(u32).initCapacity(gpa, self.index.items.items.len);
+    _ = try new_ends.appendSlice(gpa, self.ends.items());
+    var new_index = try SafeList(u32).fromSlice(gpa, self.index.items());
     errdefer new_index.deinit(gpa);
-    try new_index.items.ensureTotalCapacityPrecise(gpa, self.index.items.items.len);
-    new_index.items.items.len = self.index.items.items.len;
-    @memcpy(new_index.items.items, self.index.items.items);
 
     return .{
         .bytes = new_bytes,
         .ends = new_ends,
         .index = new_index,
-        .supports_inserts = true,
     };
 }
 
@@ -221,12 +194,18 @@ pub const Serialized = extern struct {
         self._padding = 0;
     }
 
+    /// Reject columns that disagree with the entry count or a probe table a
+    /// lookup could walk forever. Constant time: no entry is read.
+    pub fn validateShape(self: *const Serialized) error{CorruptArtifact}!void {
+        if (self.ends.len != self.entry_count) return error.CorruptArtifact;
+        if (!collections.serde_validation.probeTableShapeValid(self.index.len, self.entry_count)) return error.CorruptArtifact;
+    }
+
     pub fn deserialize(self: *const Serialized, base: usize) SerialStringInterner {
         return .{
             .bytes = self.bytes.deserializeInto(base),
             .ends = self.ends.deserializeInto(base),
             .index = self.index.deserializeInto(base),
-            .supports_inserts = false,
         };
     }
 };
@@ -316,7 +295,6 @@ test "SerialStringInterner: lookup + getText survive serialize/deserialize with 
     var rt = try roundTrip(gpa, &it);
     defer gpa.free(rt.buffer);
 
-    try testing.expect(!rt.it.supports_inserts);
     try testing.expectEqualStrings("List", rt.it.getText(list));
     try testing.expectEqualStrings("Dict", rt.it.getText(dict));
     try testing.expectEqualStrings("map", rt.it.getText(map));
@@ -325,7 +303,7 @@ test "SerialStringInterner: lookup + getText survive serialize/deserialize with 
     try testing.expectEqual(@as(?u32, null), rt.it.lookup("Set"));
 }
 
-test "SerialStringInterner: enableRuntimeInserts copies frozen data and permits insertion" {
+test "SerialStringInterner: a loaded interner keeps its ids and accepts inserts" {
     const gpa = testing.allocator;
 
     var it = try SerialStringInterner.initCapacity(gpa, 4);
@@ -336,22 +314,47 @@ test "SerialStringInterner: enableRuntimeInserts copies frozen data and permits 
     var rt = try roundTrip(gpa, &it);
     defer gpa.free(rt.buffer);
 
-    try rt.it.enableRuntimeInserts(gpa);
     defer rt.it.deinit(gpa);
 
-    try testing.expect(rt.it.supports_inserts);
     try testing.expectEqual(@as(?u32, list), rt.it.lookup("List"));
+    try testing.expectEqual(list, try rt.it.insert(gpa, "List"));
     const dict = try rt.it.insert(gpa, "Dict");
     try testing.expectEqual(@as(u32, 1), dict);
     try testing.expectEqual(@as(?u32, dict), rt.it.lookup("Dict"));
     try testing.expectEqualStrings("Dict", rt.it.getText(dict));
 }
 
+test "SerialStringInterner: validateShape rejects counts its columns cannot hold" {
+    const gpa = testing.allocator;
+
+    var it = try SerialStringInterner.initCapacity(gpa, 4);
+    defer it.deinit(gpa);
+    _ = try it.insert(gpa, "List");
+
+    const rt = try roundTrip(gpa, &it);
+    defer gpa.free(rt.buffer);
+    const ser: *SerialStringInterner.Serialized = @ptrCast(@alignCast(rt.buffer.ptr));
+    try ser.validateShape();
+
+    const intact = ser.*;
+    ser.entry_count += 1;
+    try testing.expectError(error.CorruptArtifact, ser.validateShape());
+
+    ser.* = intact;
+    ser.entry_count = @intCast(ser.index.len);
+    ser.ends.len = ser.entry_count;
+    try testing.expectError(error.CorruptArtifact, ser.validateShape());
+
+    ser.* = intact;
+    ser.index.len -= 1;
+    try testing.expectError(error.CorruptArtifact, ser.validateShape());
+}
+
 fn nonEmptyBasePointers(it: *const SerialStringInterner) usize {
     var n: usize = 0;
-    if (it.bytes.items.capacity != 0) n += 1;
-    if (it.ends.items.capacity != 0) n += 1;
-    if (it.index.items.capacity != 0) n += 1;
+    if (it.bytes.len() != 0) n += 1;
+    if (it.ends.len() != 0) n += 1;
+    if (it.index.len() != 0) n += 1;
     return n;
 }
 

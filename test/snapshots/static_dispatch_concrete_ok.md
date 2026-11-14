@@ -91,14 +91,14 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 248)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 242)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
 				(args))))
 	(d-let
 		(p-assign (ident "direct"))
-		(e-dispatch-call (method "to_i128") (constraint-fn-var 250)
+		(e-dispatch-call (method "to_i128") (constraint-fn-var 245)
 			(receiver
 				(e-typed-int (value "5") (type "U8")))
 			(args)))

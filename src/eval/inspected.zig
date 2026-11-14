@@ -1156,7 +1156,7 @@ pub fn devEvalTopLevelExpects(
     defer requests.deinit(allocator);
     var test_plan = std.ArrayList(lir.CheckedPipeline.RootTestPlanMetadata).empty;
     defer test_plan.deinit(allocator);
-    for (resources.checked_artifact.root_requests.requests) |request| {
+    for (resources.checked_artifact.root_requests.requests.items()) |request| {
         if (request.kind != .test_expect) continue;
         const index: u32 = @intCast(requests.items.len);
         try requests.append(allocator, request);
@@ -1268,7 +1268,7 @@ pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
 /// Return the finalized string value of the explicitly published compile-time
 /// REPL root. The returned bytes borrow from `resources`.
 pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const u8 {
-    for (resources.checked_artifact.compile_time_roots.roots) |root| {
+    for (resources.checked_artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .repl_expr) continue;
 
         var node = switch (root.payload) {
@@ -1700,7 +1700,7 @@ fn lowerCheckedRootWithViews(
         .root = check.CheckedArtifact.loweringView(root_module),
         .imports = import_views,
     };
-    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = root_module.root_requests.runtime_requests };
+    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = root_module.root_requests.runtime_requests.items() };
     const target = lowerToLirTarget(target_usize, options);
     var lowered = switch (target.specialization_strategy) {
         .lss => try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target),
@@ -2023,7 +2023,7 @@ fn directImportsArePublished(
     published: []const check.CheckedArtifact.PublishImportArtifact,
 ) bool {
     const module_env = module.moduleEnvConst();
-    for (module_env.imports.imports.items.items, 0..) |_, i| {
+    for (module_env.imports.imports.items(), 0..) |_, i| {
         const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
         var found = false;
@@ -2227,7 +2227,7 @@ fn makeModuleSource(
 fn resolveImportsByModuleIndex(module_envs: []const *ModuleEnv) void {
     for (module_envs) |module_env| {
         module_env.imports.clearResolvedModules();
-        for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
+        for (module_env.imports.imports.items(), 0..) |str_idx, i| {
             const import_name = module_env.getString(str_idx);
             const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(i));
             if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
@@ -2252,7 +2252,7 @@ fn resolveImportsByModuleIndex(module_envs: []const *ModuleEnv) void {
 
 fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const ModuleEnv) void {
     module_env.imports.clearResolvedModules();
-    for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
+    for (module_env.imports.imports.items(), 0..) |str_idx, i| {
         const import_name = module_env.getString(str_idx);
         const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(i));
         if (CIR.Import.isCompilerBuiltinImportName(import_name)) {

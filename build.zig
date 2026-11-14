@@ -319,8 +319,13 @@ fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
 /// fails with "InputSection too large for range extension thunk". Splitting per
 /// function and per datum gives LLD those insertion points, and lets the final
 /// link discard unused compiler code on every target.
+///
+/// COFF skips function sections: a stripped Zig object built with them puts all
+/// of its unwind data in one `.pdata$`/`.xdata$` COMDAT whose key MinGW's libc
+/// objects share, so LLD drops the compiler's unwind tables and
+/// `CompileTimeHost.windowsX64FailurePoint` cannot unwind host frames.
 fn splitCompilerSections(step: *Step.Compile) void {
-    step.link_function_sections = true;
+    if (step.rootModuleTarget().ofmt != .coff) step.link_function_sections = true;
     step.link_data_sections = true;
 }
 
@@ -668,6 +673,9 @@ const TestsSummaryStep = struct {
     producers: std.StringHashMapUnmanaged(void) = .empty,
     serialize_runs: bool = false,
     last_run: ?*Step = null,
+    /// Set by `finish`, after which the summary's argument list ends in the
+    /// passthrough separator and no further report can be counted.
+    finished: bool = false,
 
     fn create(b: *std.Build, test_filters: []const []const u8, forced_passes: usize) *TestsSummaryStep {
         const self = b.allocator.create(TestsSummaryStep) catch @panic("OOM");
@@ -688,6 +696,7 @@ const TestsSummaryStep = struct {
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
         const run: *Step.Run = @fieldParentPtr("step", run_step);
         const b = run.step.owner;
+        if (self.finished) std.debug.panic("test report producer registered after its summary finished: {s}", .{run.producer.?.name});
         const entry = self.producers.getOrPut(b.allocator, run.producer.?.name) catch @panic("OOM");
         if (entry.found_existing) std.debug.panic("duplicate test report producer: {s}", .{run.producer.?.name});
         const basename = b.fmt("{s}.tsv", .{run.producer.?.name});
@@ -710,6 +719,14 @@ const TestsSummaryStep = struct {
             self.last_run = run_step;
         }
         self.step.dependOn(run_step);
+    }
+
+    /// End the report list: arguments after the separator are passthrough
+    /// filters, so every report must be added before this.
+    fn finish(self: *TestsSummaryStep) void {
+        self.finished = true;
+        self.run.addArg("--");
+        self.run.addPassthruArgs();
     }
 };
 
@@ -1771,8 +1788,9 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     // `.iter()` must materialize as static data and allocate nothing, so the
     // whole minted chain (base list included) is zero-alloc on the cart path.
     // `--max-allocs 0` is a strictly stronger assertion than
-    // `--assert-alloc-balanced`.
-    .{ .app = "iter_list_hoist_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "iter_list_hoist_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--max-allocs", "0" } },
+    // `--assert-alloc-balanced`. Minted chains are the specialized lowering's
+    // iterator representation, which `--opt=size` selects only when asked.
+    .{ .app = "iter_list_hoist_static_lib_app.roc", .options = &.{ "--opt=size", "--specialize=yes" }, .output = "iter_list_hoist_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--max-allocs", "0" } },
     // Noiter twin: the same sums over plain list literals. The runner prints
     // each cart's byte size, so the iter build minus this baseline is the
     // minted-adapter premium tracked in CI (the fusion pass's target).
@@ -2286,7 +2304,7 @@ pub fn build(b: *std.Build) void {
 
     // The native Boxy runtime object (`roc_desc_*`) for the host target.
     const build_boxy_runtime_step = b.step("build-boxy-runtime", "Build the native Boxy runtime object");
-    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime", "src/boxy_runtime/static_lib.zig", target);
+    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime", "src/boxy_runtime/static_lib.zig", target, false);
     build_boxy_runtime_step.dependOn(&b.addInstallArtifact(boxy_runtime_obj, .{ .dest_dir = .{ .override = .{ .custom = "boxy_runtime" } } }).step);
 
     // Build-time compiler for builtin .roc modules
@@ -2326,17 +2344,21 @@ pub fn build(b: *std.Build) void {
 
     // Generate compiled_builtins.zig with hardcoded Builtin module.
     // The embedded blobs are copied by Zig at compile time into 16-byte-aligned
-    // static storage, so runtime code can build views over them directly. The
-    // storage keeps the embedded file's own type (a sentinel-terminated byte
-    // array): initializing it from the file is then a reuse of the embedded
-    // bytes, whereas coercing them to a plain byte array makes the compiler
-    // build the 40 MB value element by element, which takes seconds, holds
-    // about 1.5 GB, and crashes zig 0.17.0 once the blobs pass about 45 MB.
+    // `const` storage, so runtime code can build views over them directly. An
+    // optimized native build (LLVM) places that storage in read-only data, so a
+    // write through a view faults; the self-hosted x86_64 backend that Debug
+    // builds use places const data in a writable segment. The storage keeps the embedded file's own type (a
+    // sentinel-terminated byte array): initializing it from the file is then a
+    // reuse of the embedded bytes, whereas coercing them to a plain byte array
+    // makes the compiler build the 40 MB value element by element, which takes
+    // seconds, holds about 1.5 GB, and crashes zig 0.17.0 once the blobs pass
+    // about 45 MB.
     //
     // A root module that declares `roc_compressed_builtins` (see
     // `addCompressedBuiltins`) embeds zstd frames instead: the blobs are about
     // 40 MB raw and 4 MB compressed. The raw files are then only read for their
-    // lengths, so they are not linked, and `decompress` must run before any blob is read.
+    // lengths, so they are not linked; the blobs are decompressed into writable
+    // storage, and `decompress` must run before any blob is read.
     const builtins_source_str =
         \\const std = @import("std");
         \\const root = @import("root");
@@ -2347,16 +2369,34 @@ pub fn build(b: *std.Build) void {
         \\const slack = if (compressed) std.compress.zstd.block_size_max else 0;
         \\
         \\const builtin_bin_raw = @embedFile("Builtin.bin");
-        \\var builtin_bin_storage: (if (compressed) [builtin_bin_raw.len + slack]u8 else [builtin_bin_raw.len:0]u8) align(16) =
-        \\    if (compressed) @splat(0) else builtin_bin_raw.*;
-        \\pub const builtin_bin: *align(16) [builtin_bin_raw.len]u8 = builtin_bin_storage[0..builtin_bin_raw.len];
         \\const builtin_source_raw = @embedFile("Builtin.roc");
-        \\var builtin_source_storage: [builtin_source_raw.len + slack]u8 = @splat(0);
-        \\pub const builtin_source = if (compressed) builtin_source_storage[0..builtin_source_raw.len] else builtin_source_raw;
         \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
-        \\var builtin_artifact_bin_storage: (if (compressed) [builtin_artifact_bin_raw.len + slack]u8 else [builtin_artifact_bin_raw.len:0]u8) align(16) =
-        \\    if (compressed) @splat(0) else builtin_artifact_bin_raw.*;
-        \\pub const builtin_artifact_bin: *align(16) [builtin_artifact_bin_raw.len]u8 = builtin_artifact_bin_storage[0..builtin_artifact_bin_raw.len];
+        \\
+        \\/// The raw blobs, in read-only data.
+        \\const raw = struct {
+        \\    const builtin_bin: [builtin_bin_raw.len:0]u8 align(16) = builtin_bin_raw.*;
+        \\    const builtin_artifact_bin: [builtin_artifact_bin_raw.len:0]u8 align(16) = builtin_artifact_bin_raw.*;
+        \\};
+        \\
+        \\/// Writable storage the compressed blobs are decompressed into.
+        \\const decompressed_storage = struct {
+        \\    var builtin_bin: [builtin_bin_raw.len + slack]u8 align(16) = @splat(0);
+        \\    var builtin_source: [builtin_source_raw.len + slack]u8 = @splat(0);
+        \\    var builtin_artifact_bin: [builtin_artifact_bin_raw.len + slack]u8 align(16) = @splat(0);
+        \\};
+        \\
+        \\pub const builtin_bin: *align(16) const [builtin_bin_raw.len]u8 = if (compressed)
+        \\    decompressed_storage.builtin_bin[0..builtin_bin_raw.len]
+        \\else
+        \\    raw.builtin_bin[0..builtin_bin_raw.len];
+        \\pub const builtin_source: *const [builtin_source_raw.len]u8 = if (compressed)
+        \\    decompressed_storage.builtin_source[0..builtin_source_raw.len]
+        \\else
+        \\    builtin_source_raw;
+        \\pub const builtin_artifact_bin: *align(16) const [builtin_artifact_bin_raw.len]u8 = if (compressed)
+        \\    decompressed_storage.builtin_artifact_bin[0..builtin_artifact_bin_raw.len]
+        \\else
+        \\    raw.builtin_artifact_bin[0..builtin_artifact_bin_raw.len];
         \\
         \\var decompressed = !compressed;
         \\
@@ -2366,9 +2406,9 @@ pub fn build(b: *std.Build) void {
         \\    if (!compressed) return;
         \\    if (decompressed) return;
         \\    const frames = root.roc_compressed_builtins;
-        \\    try decompressInto(frames.builtin_bin, &builtin_bin_storage, builtin_bin_raw.len);
-        \\    try decompressInto(frames.builtin_source, &builtin_source_storage, builtin_source_raw.len);
-        \\    try decompressInto(frames.builtin_artifact_bin, &builtin_artifact_bin_storage, builtin_artifact_bin_raw.len);
+        \\    try decompressInto(frames.builtin_bin, &decompressed_storage.builtin_bin, builtin_bin_raw.len);
+        \\    try decompressInto(frames.builtin_source, &decompressed_storage.builtin_source, builtin_source_raw.len);
+        \\    try decompressInto(frames.builtin_artifact_bin, &decompressed_storage.builtin_artifact_bin, builtin_artifact_bin_raw.len);
         \\    decompressed = true;
         \\}
         \\
@@ -4198,8 +4238,9 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("compiler_version", compiler_version_module);
         }
 
-        // Add compiled builtins to tests that canonicalize ordinary modules.
-        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
+        // Add compiled builtins to tests that canonicalize ordinary modules
+        // or read the baked Builtin module.
+        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "docs") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
@@ -4632,8 +4673,6 @@ pub fn build(b: *std.Build) void {
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);
     run_check_cli_global_stdio_step.dependOn(&check_cli_stdio.step);
 
-    tests_summary.run.addArg("--");
-    tests_summary.run.addPassthruArgs();
     run_test_zig_step.dependOn(tests_summary.step);
 
     b.default_step.dependOn(build_web_step);
@@ -5177,6 +5216,9 @@ pub fn build(b: *std.Build) void {
 
     test_fixtures.addUpdateStep(&.{build_test_hosts_step});
 
+    // After every suite is registered, so each report precedes the separator.
+    tests_summary.finish();
+
     // Last, so that every top-level step exists -- including the ones created
     // inside addMainExe.
     assertGranularTestStepsAreIsolated(b);
@@ -5479,7 +5521,7 @@ fn addEvalWasmRuntimeModules(
 
     // The Boxy runtime a `.boxy` program's module merges next to the
     // builtins, whose compiler-rt it shares.
-    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}_eval", .{name}), "src/boxy_runtime/static_lib.zig", target);
+    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}_eval", .{name}), "src/boxy_runtime/static_lib.zig", target, false);
 
     const builtins_files = b.addWriteFiles();
     _ = builtins_files.addCopyFile(merged_builtins, "roc_builtins.o");
@@ -5764,18 +5806,26 @@ fn addBuiltinsObject(
     return obj;
 }
 
-/// The position-independent native Boxy runtime object: the `roc_desc_*`
-/// entry points over the builtins, reaching the host through the runtime
-/// symbols (`src/boxy_runtime/static_lib.zig`). It gets its own builtins
-/// module instance with the minimal builtins imports, as the builtins objects
-/// do.
+/// The Boxy runtime object: the `roc_desc_*` entry points over the builtins,
+/// reaching the host through the runtime symbols
+/// (`src/boxy_runtime/static_lib.zig`). It gets its own builtins module
+/// instance with the minimal builtins imports, as the builtins objects do.
+///
+/// The object is position-independent, so it can join a shared-library link
+/// and a wasm archive a platform links as a shared module. The one exception
+/// is a wasm stack-checked twin (`wasm_stack_checks`), which names
+/// `__stack_low` by a direct data-symbol relocation: that relocated
+/// `i32.const` is how its bound reaches the stack room analysis
+/// (`StackRoom.fillCheckRooms`).
 fn addBoxyRuntimeObject(
     b: *std.Build,
     roc_modules: modules.RocModules,
     name: []const u8,
     root_source_file: []const u8,
     target: ResolvedTarget,
+    wasm_stack_checks: bool,
 ) *Step.Compile {
+    std.debug.assert(!wasm_stack_checks or target.result.cpu.arch == .wasm32);
     const builtins_module = b.createModule(.{ .root_source_file = b.path("src/builtins/mod.zig") });
     addBuiltinsImports(b, roc_modules, builtins_module);
     builtins_module.addImport("roc_str_view", roc_modules.roc_str_view);
@@ -5794,11 +5844,7 @@ fn addBoxyRuntimeObject(
             .optimize = .ReleaseFast,
             .strip = program_object_strip,
             .omit_frame_pointer = program_object_omit_frame_pointer,
-            // Native runtime objects can participate in shared-library links.
-            // Wasm uses direct data-symbol relocations, which is how the
-            // stack-checked twin's `__stack_low` bound reaches the stack room
-            // analysis (`StackRoom.fillCheckRooms`) as a relocated `i32.const`.
-            .pic = target.result.cpu.arch != .wasm32,
+            .pic = !wasm_stack_checks,
         }),
     });
     obj.root_module.addImport("builtins", builtins_module);
@@ -6221,7 +6267,7 @@ fn addMainExe(
 
     // The Boxy runtime object a `--specialize=no` program compiled by the
     // dev backend links next to the builtins.
-    const boxy_runtime_native_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime_native", "src/boxy_runtime/static_lib.zig", builtins_target);
+    const boxy_runtime_native_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime_native", "src/boxy_runtime/static_lib.zig", builtins_target, false);
     const host_boxy_runtime_filename = if (target.result.os.tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
     _ = embedded_assets.addCopyFile(boxy_runtime_native_obj.getEmittedBin(), b.pathJoin(&.{ "", host_boxy_runtime_filename }));
     embedded_digests.addArg("boxy_runtime_native");
@@ -6330,7 +6376,7 @@ fn addMainExe(
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
         {
-            const cross_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib.zig", cross_resolved_target);
+            const cross_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib.zig", cross_resolved_target, false);
             const boxy_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
             embedded_digests.addArg(b.fmt("boxy_runtime_{s}", .{cross_target.name}));
             embedded_digests.addFileArg(cross_boxy_runtime_obj.getEmittedBin());
@@ -6373,7 +6419,7 @@ fn addMainExe(
                 b.pathJoin(&.{ "targets", cross_target.name, "roc_builtins_extern_stack_checked.o" }),
             );
 
-            const checked_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_stack_checked_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib_stack_checked.zig", cross_resolved_target);
+            const checked_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_stack_checked_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib_stack_checked.zig", cross_resolved_target, true);
             embedded_digests.addArg(b.fmt("boxy_runtime_stack_checked_{s}", .{cross_target.name}));
             embedded_digests.addFileArg(checked_boxy_runtime_obj.getEmittedBin());
             _ = embedded_assets.addCopyFile(

@@ -11,6 +11,8 @@ const base = @import("base");
 const types_mod = @import("types");
 const can = @import("can");
 
+const snapshot = @import("../snapshot.zig");
+
 const Ident = base.Ident;
 const Var = types_mod.Var;
 const CIR = can.CIR;
@@ -54,6 +56,9 @@ pub const Context = union(enum) {
     fn_call_non_function: FnCallNonFunctionContext,
     /// Argument to a function call
     fn_call_arg: FnCallArgContext,
+    /// Two operands of one call that each fit the called function's declared
+    /// type, but not both at once
+    fn_call_args_conflict: FnCallArgsConflictContext,
 
     // Control flow contexts
     /// Condition of an if expression
@@ -163,6 +168,31 @@ pub const Context = union(enum) {
         num_args: u32,
         /// Region of the argument
         arg_region: base.Region,
+    };
+
+    /// Context for two operands of one call that conflict with each other.
+    /// The mismatch's expected type is the earlier operand's and its actual
+    /// type is the later argument's.
+    pub const FnCallArgsConflictContext = struct {
+        /// Name of the function being called, if known
+        fn_name: ?Ident.Idx,
+        /// The earlier operand
+        first: Operand,
+        /// Region of the earlier operand
+        first_region: base.Region,
+        /// 0-based index of the later argument
+        second_arg_index: u32,
+        /// Region of the later argument
+        second_region: base.Region,
+        /// The called function's declared type
+        fn_type: snapshot.SnapshotContentIdx,
+
+        pub const Operand = union(enum) {
+            /// The value a method is called on
+            receiver,
+            /// 0-based index of an argument
+            arg: u32,
+        };
     };
 
     /// Context for if branch type errors

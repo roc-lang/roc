@@ -273,6 +273,13 @@ pub fn Bindings(comptime V: type) type {
             return self.slots.items[slot];
         }
 
+        /// The binding `binding` shadows: its name's binding in the nearest
+        /// enclosing scope that binds it, if any.
+        pub fn shadowedBinding(self: *const Self, binding: Binding) ?Binding {
+            if (binding.shadowed == no_binding) return null;
+            return self.slots.items[binding.shadowed];
+        }
+
         /// The value `scope` itself binds `name` to, if it binds it.
         pub fn getInScope(self: *const Self, name: Ident.Idx, scope: u32) ?V {
             var slot = self.innermost.get(name) orelse return null;

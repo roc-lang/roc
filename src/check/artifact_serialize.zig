@@ -241,6 +241,8 @@ pub fn SerializedSlice(comptime T: type) type {
         /// L-10: reject an `(offset, len)` that would `deserialize` into a slice
         /// reaching outside the `backing_len`-byte buffer (truncated/corrupt blob).
         pub fn validateRelocations(self: *const Self, backing_len: u64) error{CorruptArtifact}!void {
+            // A store loads a slice as a `SafeList`, whose length is a `u32`.
+            if (self.len > std.math.maxInt(u32)) return error.CorruptArtifact;
             try validateOffsetLen(@sizeOf(T), @alignOf(T), self.offset, self.len, backing_len);
         }
     };
@@ -465,14 +467,6 @@ fn layoutVersionHash(comptime T: type, comptime version: u32) [32]u8 {
     return result;
 }
 
-/// Wrap a relocated slice as an `ArrayList` view (`items = slice`, `capacity =
-/// slice.len`). A deserialized store keeps its in-memory `ArrayList` field type, but
-/// its frozen backing is buffer-owned and never grown; this is the one shared adapter
-/// every sub-store's `deserialize` uses to re-form those fields.
-pub fn arrayListFromSlice(comptime T: type, slice: []T) std.ArrayList(T) {
-    return std.ArrayList(T).fromOwnedSlice(slice);
-}
-
 /// A `(start, len)` range into a flat pool. `appendSpan` callers that don't have their
 /// own named range type return this.
 pub const Span = struct { start: u32 = 0, len: u32 = 0 };
@@ -514,7 +508,7 @@ pub fn binarySearchIndexByKey(
     return null;
 }
 
-/// Append `items` to a flat side pool (`ArrayList`), returning their `(start, len)`
+/// Append `items` to a flat side pool (a `SafeList` or `std.ArrayList`), returning their `(start, len)`
 /// range as `RangeT` (a `start: u32, len: u32` struct—a store's named range or the
 /// shared `Span`). This is the single implementation behind every transform-B "flatten
 /// a slice into a shared pool" helper. An empty input appends nothing and returns the
@@ -523,15 +517,22 @@ pub fn binarySearchIndexByKey(
 pub fn appendSpan(
     comptime RangeT: type,
     comptime T: type,
-    pool: *std.ArrayList(T),
+    pool: anytype,
     allocator: std.mem.Allocator,
     items: []const T,
 ) std.mem.Allocator.Error!RangeT {
     if (items.len == 0) return .{ .start = 0, .len = 0 };
-    const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;
+    const safe_list = comptime isSafeListType(@TypeOf(pool.*));
+    if (comptime !safe_list) comptime std.debug.assert(@TypeOf(pool.*) == std.ArrayList(T));
+    const current_len: usize = if (safe_list) pool.length else pool.items.len;
+    const start = std.math.cast(u32, current_len) orelse return error.OutOfMemory;
     const len = std.math.cast(u32, items.len) orelse return error.OutOfMemory;
     if (len > std.math.maxInt(u32) - start) return error.OutOfMemory;
-    try pool.appendSlice(allocator, items);
+    if (safe_list) {
+        _ = try pool.appendSlice(allocator, items);
+    } else {
+        try pool.appendSlice(allocator, items);
+    }
     return .{ .start = start, .len = len };
 }
 
@@ -545,15 +546,6 @@ pub fn comptimeStrEq(comptime a: []const u8, comptime b: []const u8) bool {
     return true;
 }
 
-/// The store's `serialized: bool` frozen flag, if present. `deserialize` sets it to
-/// `true`; it never appears in `Serialized` (it is build-only state).
-fn frozenFlagField(comptime Store: type) ?[]const u8 {
-    for (@typeInfo(Store).@"struct".field_names, @typeInfo(Store).@"struct".field_types) |f_name, f_type| {
-        if (comptimeStrEq(f_name, "serialized") and f_type == bool) return "serialized";
-    }
-    return null;
-}
-
 /// The store's retained build-only `allocator: Allocator` field, if present. A store
 /// with one keeps the load allocator for its build-only fields; its `deserialize`
 /// takes the allocator as a parameter (`deserializeWithAllocator`).
@@ -564,12 +556,12 @@ fn allocatorField(comptime Store: type) ?[]const u8 {
     return null;
 }
 
-/// Build-only store fields that are NOT serialized, beyond the auto-detected frozen
-/// flag and allocator (e.g. dedup hashmaps, scratch buffers, side-index tables). A
+/// Build-only store fields that are NOT serialized, beyond the auto-detected
+/// allocator (e.g. scratch buffers, side-index tables). A
 /// store lists them in a `pub const serde_transient_fields = [_][]const u8{...}` decl;
 /// `deserialize` resets each to its struct default (so they must declare one). They
 /// are excluded from the serialized set, and a store field that is neither serialized,
-/// the flag, the allocator, nor listed here is a compile error—closing the
+/// the allocator, nor listed here is a compile error—closing the
 /// "forgot to serialize a data field" footgun the strict field set otherwise guards.
 fn transientFields(comptime Store: type) []const []const u8 {
     if (@hasDecl(Store, "serde_transient_fields")) return &Store.serde_transient_fields;
@@ -599,18 +591,21 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 ///     };
 ///
 /// Stores carrying extra runtime state are handled by reflection, not excluded:
-///   * a `serialized: bool` frozen flag—auto-detected and set `true` on load;
 ///   * a retained `allocator: Allocator`—auto-detected; the store aliases
 ///     `deserialize = Serde.deserializeWithAllocator` and the allocator is injected;
 ///   * build-only side tables—declared in `serde_transient_fields` and reset to
 ///     their struct default on load;
-///   * `ArrayList`-backed fields—adapted via `.items`/`arrayListFromSlice`.
-/// Every store field must be one of: serialized (a `Serialized` field), the frozen
-/// flag, the allocator, or a declared transient—otherwise a compile error fires, so
-/// a data field accidentally left out of `Serialized` cannot silently vanish. `deinit`
-/// stays hand-written per store: it encodes genuine per-store ownership (slice-free vs
-/// list/interner deinit, frozen gating, allocator retention) that does not belong in
-/// shared infra.
+///   * `SafeList`-backed fields—serialized from `.items()` and loaded as lists
+///     borrowing the relocated buffer, which copy on their first growth and free
+///     nothing they borrow. A `std.ArrayList` field is a compile error: it would
+///     hand the buffer to an allocator on growth or `deinit`. A raw slice field is
+///     a compile error too: a slice cannot record whether it borrows, so a built
+///     and a loaded store could not share one `deinit`.
+/// Every store field must be one of: serialized (a `Serialized` field), the
+/// allocator, or a declared transient—otherwise a compile error fires, so
+/// a data field accidentally left out of `Serialized` cannot silently vanish. A
+/// store's `deinit` (`SliceStoreDeinit` or hand-written) is one path for built and
+/// loaded stores alike.
 pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
     comptime {
         // Every Serialized field must map to a store field of the same name.
@@ -619,17 +614,23 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
                 "SliceStoreSerde: Serialized field '" ++ sf_name ++ "' has no matching field in " ++ @typeName(Store),
             );
         }
-        // Every store field must be accounted for: serialized, the frozen flag, the
-        // allocator, or a declared transient. A forgotten data field is a compile error.
-        const flag = frozenFlagField(Store);
+        // A serialized field loads pointing into the buffer, so it must be a list
+        // that records whether it borrows: a raw slice cannot.
+        for (@typeInfo(Serialized).@"struct".field_names) |sf_name| {
+            if (@typeInfo(@FieldType(Store, sf_name)) == .pointer) @compileError(
+                "SliceStoreSerde: store field '" ++ sf_name ++ "' of " ++ @typeName(Store) ++
+                    " is a raw slice, which a load would point into the buffer with no way to tell it from an owned one; make it a SafeList.",
+            );
+        }
+        // Every store field must be accounted for: serialized, the allocator,
+        // or a declared transient. A forgotten data field is a compile error.
         const alloc = allocatorField(Store);
         for (@typeInfo(Store).@"struct".field_names) |f_name| {
             const persistent = @hasField(Serialized, f_name);
-            const is_flag = flag != null and comptimeStrEq(f_name, flag.?);
             const is_alloc = alloc != null and comptimeStrEq(f_name, alloc.?);
-            if (!persistent and !is_flag and !is_alloc and !isTransientField(Store, f_name)) @compileError(
+            if (!persistent and !is_alloc and !isTransientField(Store, f_name)) @compileError(
                 "SliceStoreSerde: store field '" ++ f_name ++ "' of " ++ @typeName(Store) ++
-                    " is neither serialized, the frozen flag, the allocator, nor a declared transient" ++
+                    " is neither serialized, the allocator, nor a declared transient" ++
                     " (add it to `Serialized` or `serde_transient_fields`).",
             );
         }
@@ -640,12 +641,12 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
                 // `SerializedSlice.serialize` takes the slice by value; `SerializedOptional`
                 // and a nested `Serialized` take a pointer. Pick the form from the field's
                 // own `serialize` signature so all shapes are handled uniformly, and pull the
-                // slice out of an `ArrayList`-backed store field via `.items`.
+                // slice out of a `SafeList`-backed store field via `.items()`.
                 const SourceParam = @typeInfo(@TypeOf(field_type.serialize)).@"fn".param_types[1].?;
                 if (@typeInfo(SourceParam).pointer.size == .one) {
                     try @field(self, field_name).serialize(&@field(store, field_name), gpa, writer);
-                } else if (comptime isArrayListType(@TypeOf(@field(store, field_name)))) {
-                    try @field(self, field_name).serialize(@field(store, field_name).items, gpa, writer);
+                } else if (comptime isSafeListType(@TypeOf(@field(store, field_name)))) {
+                    try @field(self, field_name).serialize(@field(store, field_name).items(), gpa, writer);
                 } else {
                     try @field(self, field_name).serialize(@field(store, field_name), gpa, writer);
                 }
@@ -653,7 +654,6 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
         }
 
         fn fill(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) Store {
-            const flag = comptime frozenFlagField(Store);
             const alloc = comptime allocatorField(Store);
             var store: Store = undefined;
             // Serialized (persistent) fields come straight from the relocated blob.
@@ -667,19 +667,22 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
                     @field(self, field_name).deserializeWithAllocator(base_addr, allocator)
                 else
                     @field(self, field_name).deserialize(base_addr);
-                if (comptime isArrayListType(@TypeOf(@field(store, field_name)))) {
-                    @field(store, field_name) = arrayListFromSlice(@typeInfo(@TypeOf(value)).pointer.child, value);
+                const FieldT = @TypeOf(@field(store, field_name));
+                if (comptime isArrayListType(FieldT)) @compileError(
+                    "SliceStoreSerde: store field '" ++ field_name ++ "' of " ++ @typeName(Store) ++
+                        " is a std.ArrayList, which would hand the loaded buffer to an allocator; make it a SafeList.",
+                );
+                if (comptime isSafeListType(FieldT) and @TypeOf(value) != FieldT) {
+                    @field(store, field_name) = FieldT.fromBorrowedSlice(value);
                 } else {
                     @field(store, field_name) = value;
                 }
             }
-            // The remaining (build-only) fields: the frozen flag is set, the retained
-            // allocator is injected, and every declared transient resets to its default.
+            // The remaining (build-only) fields: the retained allocator is
+            // injected, and every declared transient resets to its default.
             inline for (@typeInfo(Store).@"struct".field_names) |f_name| {
                 if (comptime @hasField(Serialized, f_name)) continue;
-                if (comptime flag != null and comptimeStrEq(f_name, flag.?)) {
-                    @field(store, f_name) = true;
-                } else if (comptime alloc != null and comptimeStrEq(f_name, alloc.?)) {
+                if (comptime alloc != null and comptimeStrEq(f_name, alloc.?)) {
                     @field(store, f_name) = allocator;
                 } else {
                     @field(store, f_name) = initTransient(@FieldType(Store, f_name), Store, f_name, allocator);
@@ -700,20 +703,16 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
     };
 }
 
-/// `deinit` for a store whose ownership is uniform: every slice field is freed,
-/// every field with a `deinit` is deinitialized, and POD fields need nothing. A
-/// `serialized: bool` frozen flag gates the persisted fields (they alias a loaded
-/// buffer) while declared transients are always released. The store is reset to
-/// its default value. A store aliases it as `pub const deinit = SliceStoreDeinit(@This()).deinit;`.
+/// `deinit` for a store whose ownership is uniform: every field with a `deinit`
+/// is deinitialized and POD fields need nothing. Built and loaded stores take
+/// the same path: a list loaded borrowing the buffer frees nothing. The store is
+/// reset to its default value. A store aliases it as
+/// `pub const deinit = SliceStoreDeinit(@This()).deinit;`.
 pub fn SliceStoreDeinit(comptime Store: type) type {
     return struct {
         pub fn deinit(store: *Store, allocator: std.mem.Allocator) void {
-            const flag = comptime frozenFlagField(Store);
-            const frozen = if (comptime flag != null) @field(store, flag.?) else false;
             inline for (@typeInfo(Store).@"struct".field_names) |name| {
-                const is_flag = comptime flag != null and comptimeStrEq(name, flag.?);
-                const persisted = comptime !is_flag and !isTransientField(Store, name);
-                if (!frozen or !persisted) deinitStoreField(&@field(store, name), allocator);
+                deinitStoreField(&@field(store, name), allocator);
             }
             store.* = .{};
         }
@@ -723,10 +722,7 @@ pub fn SliceStoreDeinit(comptime Store: type) type {
 fn deinitStoreField(field: anytype, allocator: std.mem.Allocator) void {
     const FT = @TypeOf(field.*);
     switch (@typeInfo(FT)) {
-        .pointer => |info| {
-            if (info.size != .slice) @compileError("SliceStoreDeinit: " ++ @typeName(FT) ++ " is not a slice");
-            allocator.free(field.*);
-        },
+        .pointer => @compileError("SliceStoreDeinit: " ++ @typeName(FT) ++ " is a raw pointer; store a SafeList"),
         .@"struct" => if (comptime @hasDecl(FT, "deinit")) {
             if (@typeInfo(@TypeOf(FT.deinit)).@"fn".param_types.len == 1) field.deinit() else field.deinit(allocator);
         } else if (comptime ownsPointers(FT)) {
@@ -835,10 +831,15 @@ fn initTransient(comptime FT: type, comptime Store: type, comptime name: []const
 }
 
 /// True for `std.ArrayList(T)`: a struct with both `items` (a slice) and `capacity`.
-/// Used by `SliceStoreSerde` to decide whether a store field needs `.items`/
-/// `arrayListFromSlice` adapting versus being a plain slice.
+/// `SliceStoreSerde` rejects such a store field.
 fn isArrayListType(comptime T: type) bool {
     return @typeInfo(T) == .@"struct" and @hasField(T, "items") and @hasField(T, "capacity");
+}
+
+/// True for `collections.SafeList(T)`, which `SliceStoreSerde` serializes from
+/// `.items()` and loads borrowing the relocated buffer.
+fn isSafeListType(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length");
 }
 
 /// Errors that can occur in serialization round-trip tests.

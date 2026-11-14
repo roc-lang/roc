@@ -62,7 +62,7 @@ main = {
 			(s-dbg
 				(e-lookup-local
 					(p-assign (ident "x"))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 225)
+			(e-dispatch-call (method "plus") (constraint-fn-var 219)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

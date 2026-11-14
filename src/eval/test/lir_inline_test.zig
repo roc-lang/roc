@@ -185,7 +185,7 @@ fn lowerModuleWithOptions(
     }
 
     const main_def = resources.can.explicitRootDefByName("main") orelse return error.MissingRootProcedure;
-    const main_request = for (resources.checked_artifact.root_requests.requests) |request| {
+    const main_request = for (resources.checked_artifact.root_requests.requests.items()) |request| {
         switch (request.source) {
             .def => |def| if (def == main_def) break request,
             .expr, .statement, .required_binding, .hoisted, .literal => {},
@@ -284,9 +284,9 @@ fn lowerMonotypeModuleWithOptions(
     var selected_test_roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     defer selected_test_roots.deinit(allocator);
     const root_requests = switch (options.root_selection) {
-        .all => resources.checked_artifact.root_requests.requests,
+        .all => resources.checked_artifact.root_requests.requests.items(),
         .test_expects => blk: {
-            for (resources.checked_artifact.root_requests.requests) |request| {
+            for (resources.checked_artifact.root_requests.requests.items()) |request| {
                 if (request.kind == .test_expect) try selected_test_roots.append(allocator, request);
             }
             break :blk selected_test_roots.items;
@@ -345,7 +345,7 @@ fn monotypeCountersForModuleWithImports(
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = resources.checked_artifact.root_requests.requests.items() },
         .{ .specialization_counters = &counters },
     );
     defer mono.deinit();
@@ -1080,7 +1080,7 @@ fn liftModuleAfterSpecConstr(
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = resources.checked_artifact.root_requests.requests.items() },
         .{},
     );
     var mono_owned = true;
@@ -1289,7 +1289,7 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = resources.checked_artifact.root_requests.requests.items() },
         .{ .proc_debug_names = true },
     );
     var mono_owned = true;
@@ -2418,7 +2418,7 @@ test "adjacent expect roots remain isolated and ordered" {
     try std.testing.expect(roots[0].def != roots[1].def);
 
     var root_index: usize = 0;
-    for (lowered.resources.checked_artifact.root_requests.requests) |request| {
+    for (lowered.resources.checked_artifact.root_requests.requests.items()) |request| {
         if (request.kind != .test_expect) continue;
         try std.testing.expectEqual(request.order, roots[root_index].request.order);
         root_index += 1;
@@ -3314,7 +3314,7 @@ test "differently ordered source record rows produce normalized monotype rows" {
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = resources.checked_artifact.root_requests.requests.items() },
         .{},
     );
     defer mono.deinit();
@@ -4198,6 +4198,71 @@ test "issue 12609 lss runs imported stored inline lambdas at two types" {
     try std.testing.expectEqualStrings("(\"hi!\", \"abab\", [1, 2, 1, 2])", output);
 }
 
+// repro for https://github.com/roc-lang/roc/issues/12984
+//
+// The `_` in the annotation leaves the error row and the quote literal's type
+// to the body, so the body's scheme quantifies them and `count_down` takes the
+// literal's converted value as a hidden argument. The recursive call shares
+// those variables with the body and forwards that argument.
+test "issue 12984 boxy forwards a hole-inferred literal argument through an annotated recursive call" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\count_down : U64 -> Try(U64, _)
+        \\count_down = |n| if n == 7 Err(Seven("seven")) else if n == 0 Ok(n) else count_down(n - 1)
+        \\
+        \\main = (count_down(3), count_down(9))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(Ok(0), Err(Seven(\"seven\")))", output);
+}
+
+test "issue 12984 boxy forwards hole-inferred literal arguments across a mutually recursive group" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\count_down : U64 -> Try(U64, _)
+        \\count_down = |n| if n == 7 Err(Seven("seven")) else if n == 0 Ok(n) else step(n - 1)
+        \\
+        \\step : U64 -> Try(U64, _)
+        \\step = |n| if n == 3 Err(Three("three")) else count_down(n)
+        \\
+        \\main = (count_down(2), count_down(5), count_down(9))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(Ok(0), Err(Three(\"three\")), Err(Seven(\"seven\")))", output);
+}
+
 test "issue 12609 boxy runs imported lambdas a stored conditional, match, or block selects" {
     const allocator = std.testing.allocator;
     const hooks_module =
@@ -5038,6 +5103,49 @@ test "a capture slot of a lifted closure reads as a slot only of the closure's b
                 .arg_ptr = @ptrCast(&n),
             });
             try std.testing.expectEqual(@as(u64, 45), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
+test "issue 12976 a function returning a parameter its closure also captures lowers at every inline mode" {
+    // repro for https://github.com/roc-lang/roc/issues/12976
+    // `pass`'s parameter is also capture 0 of the closure it builds. Deciding
+    // whether inlining `pass(A)` is productive reads what `pass` builds at
+    // `.0`, which is `pass`'s own argument, not a capture `pass(A)` supplies.
+    const allocator = std.testing.allocator;
+    const source =
+        \\pass : [A, B] -> ([A, B], ({} -> [A, B]))
+        \\pass = |x| (x, |_| x)
+        \\pick : [A, B] -> U64
+        \\pick = |t| match t {
+        \\    A => 1
+        \\    B => 2
+        \\}
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    r = pass(A)
+        \\    pick(r.0) + n
+        \\}
+    ;
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .procedures, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+            defer interpreter.deinit();
+            var n: u64 = 5;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&n),
+            });
+            try std.testing.expectEqual(@as(u64, 6), evaluated.value.read(u64));
         }
         try runtime_env.checkForLeaks();
     }
@@ -6403,7 +6511,7 @@ fn directDispatchPlanIsParametric(
     method: []const u8,
 ) TestError!bool {
     var found: ?bool = null;
-    for (resources.checked_artifact.static_dispatch_plans.plans) |plan| {
+    for (resources.checked_artifact.static_dispatch_plans.plans.items()) |plan| {
         if (!std.mem.eql(u8, resources.checked_artifact.canonical_names.methodNameText(plan.method), method)) continue;
         const parametric = switch (plan.resolution) {
             .direct_parametric => true,
@@ -9736,9 +9844,9 @@ test "deeply nested tuple literal publishes evidence paths linear in its depth" 
 
     const templates = &resources.checked_artifact.checked_procedure_templates;
     var deepest_path: u32 = 0;
-    for (templates.evidence_params_pool) |param| deepest_path = @max(deepest_path, param.path.len);
+    for (templates.evidence_params_pool.items()) |param| deepest_path = @max(deepest_path, param.path.len);
     try std.testing.expect(deepest_path > depth);
-    try std.testing.expect(templates.evidence_path_nodes.len < 4 * depth);
+    try std.testing.expect(templates.evidence_path_nodes.items().len < 4 * depth);
     try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
 }
 
@@ -9831,7 +9939,7 @@ test "literal conversion ownership includes nested codec evidence" {
                 .run_low_level,
                 => continue,
             };
-            const plan = artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
+            const plan = artifact.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
             try std.testing.expect(plan.resolution == .direct_parametric);
             try std.testing.expect(conversion_root == null);
             dependent_conversions += 1;
@@ -9894,7 +10002,7 @@ test "custom literal field default gets an ordinary conversion root" {
     const artifact = &resources.checked_artifact;
     try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
     const plan_id = bodies.literalConversion(bodies.defaultExprs()[0]).plan orelse return error.TestUnexpectedResult;
-    const plan = &artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
+    const plan = &artifact.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
     const saved = plan.resolution;
     defer plan.resolution = saved;
     plan.resolution = .{ .direct_parametric = saved.direct_closed };
@@ -9925,55 +10033,55 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     const artifact = &resources.checked_artifact;
     const templates = &artifact.checked_procedure_templates;
     try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
-    try std.testing.expect(templates.dispatch_scopes.len > 0);
-    try std.testing.expect(templates.specialization_interface_relations.len > 0);
+    try std.testing.expect(templates.dispatch_scopes.items().len > 0);
+    try std.testing.expect(templates.specialization_interface_relations.items().len > 0);
 
     var template_index: ?usize = null;
-    for (templates.templates.items, 0..) |template, i| {
+    for (templates.templates.items(), 0..) |template, i| {
         if (template.specialization_interface_relations.len > 0) {
             template_index = i;
             break;
         }
     }
     const raw_template = template_index orelse return error.TestUnexpectedResult;
-    const saved_template_span = templates.templates.items[raw_template].specialization_interface_relations;
-    templates.templates.items[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
-    templates.templates.items[raw_template].specialization_interface_relations.len = 1;
+    const saved_template_span = templates.templates.items()[raw_template].specialization_interface_relations;
+    templates.templates.items()[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.items().len);
+    templates.templates.items()[raw_template].specialization_interface_relations.len = 1;
     var failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.template_specialization_relations_out_of_bounds, failure.kind);
-    templates.templates.items[raw_template].specialization_interface_relations = saved_template_span;
+    templates.templates.items()[raw_template].specialization_interface_relations = saved_template_span;
 
-    const saved_parent = templates.dispatch_scopes[0].parent;
-    templates.dispatch_scopes[0].parent = .some(@fromBackingInt(@intCast(templates.dispatch_scopes.len)));
+    const saved_parent = templates.dispatch_scopes.items()[0].parent;
+    templates.dispatch_scopes.items()[0].parent = .some(@fromBackingInt(@intCast(templates.dispatch_scopes.items().len)));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
-    templates.dispatch_scopes[0].parent = saved_parent;
+    templates.dispatch_scopes.items()[0].parent = saved_parent;
 
-    const saved_scheme_root = templates.dispatch_scopes[0].scheme_root;
-    templates.dispatch_scopes[0].scheme_root = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items.len);
+    const saved_scheme_root = templates.dispatch_scopes.items()[0].scheme_root;
+    templates.dispatch_scopes.items()[0].scheme_root = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items().len);
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_scheme_root_out_of_bounds, failure.kind);
-    templates.dispatch_scopes[0].scheme_root = saved_scheme_root;
+    templates.dispatch_scopes.items()[0].scheme_root = saved_scheme_root;
 
-    const saved_scope = templates.specialization_interface_relations[0].scope;
-    templates.specialization_interface_relations[0].scope = .{ .generalized = @fromBackingInt(@intCast(templates.dispatch_scopes.len)) };
+    const saved_scope = templates.specialization_interface_relations.items()[0].scope;
+    templates.specialization_interface_relations.items()[0].scope = .{ .generalized = @fromBackingInt(@intCast(templates.dispatch_scopes.items().len)) };
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_scope_out_of_bounds, failure.kind);
-    templates.specialization_interface_relations[0].scope = saved_scope;
+    templates.specialization_interface_relations.items()[0].scope = saved_scope;
 
-    const saved_relation_data = templates.specialization_interface_relations[0].data;
-    templates.specialization_interface_relations[0].data = .{ .type_equality = .{
-        .left = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items.len),
-        .right = templates.dispatch_scopes[0].scheme_root,
+    const saved_relation_data = templates.specialization_interface_relations.items()[0].data;
+    templates.specialization_interface_relations.items()[0].data = .{ .type_equality = .{
+        .left = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items().len),
+        .right = templates.dispatch_scopes.items()[0].scheme_root,
     } };
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_type_out_of_bounds, failure.kind);
-    templates.specialization_interface_relations[0].data = saved_relation_data;
+    templates.specialization_interface_relations.items()[0].data = saved_relation_data;
 
     var call_index: ?usize = null;
     var direct_call_index: ?usize = null;
     var local_use_index: ?usize = null;
-    for (templates.specialization_interface_relations, 0..) |relation, i| switch (relation.data) {
+    for (templates.specialization_interface_relations.items(), 0..) |relation, i| switch (relation.data) {
         .call => |call| {
             if (call_index == null) call_index = i;
             if (call.direct_target != null and direct_call_index == null) direct_call_index = i;
@@ -9985,24 +10093,24 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     };
 
     const raw_call = call_index orelse return error.TestUnexpectedResult;
-    const saved_args = templates.specialization_interface_relations[raw_call].data.call.args;
-    templates.specialization_interface_relations[raw_call].data.call.args = .{
-        .start = @intCast(templates.specialization_interface_types.len),
+    const saved_args = templates.specialization_interface_relations.items()[raw_call].data.call.args;
+    templates.specialization_interface_relations.items()[raw_call].data.call.args = .{
+        .start = @intCast(templates.specialization_interface_types.items().len),
         .len = 1,
     };
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_call_args_out_of_bounds, failure.kind);
-    templates.specialization_interface_relations[raw_call].data.call.args = saved_args;
+    templates.specialization_interface_relations.items()[raw_call].data.call.args = saved_args;
 
     const raw_direct_call = direct_call_index orelse return error.TestUnexpectedResult;
-    const saved_direct_target = templates.specialization_interface_relations[raw_direct_call].data.call.direct_target;
-    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = @fromBackingInt(@intCast(artifact.resolved_value_refs.records.len));
+    const saved_direct_target = templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target;
+    templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = @fromBackingInt(@intCast(artifact.resolved_value_refs.records.items().len));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_value_ref_out_of_bounds, failure.kind);
-    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
+    templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = saved_direct_target;
 
     var non_procedure_ref: ?check.CheckedArtifact.ResolvedValueRefId = null;
-    for (artifact.resolved_value_refs.records, 0..) |record, i| {
+    for (artifact.resolved_value_refs.records.items(), 0..) |record, i| {
         const ref_tag = std.meta.activeTag(record.ref);
         if (ref_tag != .local_proc and
             ref_tag != .top_level_proc and
@@ -10016,30 +10124,30 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
         }
     }
     const invalid_procedure_ref = non_procedure_ref orelse return error.TestUnexpectedResult;
-    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = invalid_procedure_ref;
+    templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = invalid_procedure_ref;
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_direct_target_invalid, failure.kind);
-    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
+    templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = saved_direct_target;
 
     const raw_local_use = local_use_index orelse return error.TestUnexpectedResult;
-    const saved_local_ref = templates.specialization_interface_relations[raw_local_use].data.local_proc_use;
-    templates.specialization_interface_relations[raw_local_use].data.local_proc_use = invalid_procedure_ref;
+    const saved_local_ref = templates.specialization_interface_relations.items()[raw_local_use].data.local_proc_use;
+    templates.specialization_interface_relations.items()[raw_local_use].data.local_proc_use = invalid_procedure_ref;
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
-    templates.specialization_interface_relations[raw_local_use].data.local_proc_use = saved_local_ref;
+    templates.specialization_interface_relations.items()[raw_local_use].data.local_proc_use = saved_local_ref;
 
-    const local_record = artifact.resolved_value_refs.records[@backingInt(saved_local_ref)].ref.local_proc;
+    const local_record = artifact.resolved_value_refs.records.items()[@backingInt(saved_local_ref)].ref.local_proc;
     const local_scope = local_record.dispatch_scope orelse return error.TestUnexpectedResult;
     const raw_local_scope = @backingInt(local_scope);
-    const saved_scope_expr = templates.dispatch_scopes[raw_local_scope].checked_expr;
+    const saved_scope_expr = templates.dispatch_scopes.items()[raw_local_scope].checked_expr;
     const next_expr = (@backingInt(saved_scope_expr) + 1) % artifact.bodies().nodeCount();
-    templates.dispatch_scopes[raw_local_scope].checked_expr = @fromBackingInt(@intCast(next_expr));
+    templates.dispatch_scopes.items()[raw_local_scope].checked_expr = @fromBackingInt(@intCast(next_expr));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
-    templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
+    templates.dispatch_scopes.items()[raw_local_scope].checked_expr = saved_scope_expr;
 
-    var path_param_span: ?@TypeOf(templates.templates.items[0].evidence_params) = null;
-    for (templates.templates.items) |template| {
+    var path_param_span: ?@TypeOf(templates.templates.items()[0].evidence_params) = null;
+    for (templates.templates.items()) |template| {
         const params = templates.evidenceParams(&template);
         for (params) |param| {
             if (param.path.len > 0) {
@@ -10049,11 +10157,11 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
         }
         if (path_param_span != null) break;
     }
-    const saved_scope_params = templates.dispatch_scopes[raw_local_scope].evidence_params;
-    templates.dispatch_scopes[raw_local_scope].evidence_params = path_param_span orelse return error.TestUnexpectedResult;
+    const saved_scope_params = templates.dispatch_scopes.items()[raw_local_scope].evidence_params;
+    templates.dispatch_scopes.items()[raw_local_scope].evidence_params = path_param_span orelse return error.TestUnexpectedResult;
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
-    templates.dispatch_scopes[raw_local_scope].evidence_params = saved_scope_params;
+    templates.dispatch_scopes.items()[raw_local_scope].evidence_params = saved_scope_params;
 
     try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
 }
@@ -10071,7 +10179,7 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const templates = &resources.checked_artifact.checked_procedure_templates;
-    const paths = templates.evidence_path_nodes;
+    const paths = templates.evidence_path_nodes.items();
     try std.testing.expect(paths.len > 0);
     const original_step = paths[0].step;
 
@@ -10097,7 +10205,7 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
     // A param's length must match the depth of the node it names.
     paths[0].step = original_step;
     try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
-    for (templates.evidence_params_pool) |*param| {
+    for (templates.evidence_params_pool.items()) |*param| {
         if (param.path.len != 0) param.path.len += 1;
     }
     failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
@@ -10112,18 +10220,19 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by no
 
     const table = &resources.checked_artifact.static_dispatch_plans;
     const bodies = resources.checked_artifact.bodies();
-    const removed: usize = for (table.by_node, 0..) |entry, i| {
+    const removed: usize = for (table.by_node.items(), 0..) |entry, i| {
         if (bodies.index().nodeKind(entry.key) != .expr) continue;
         if (bodies.exprData(@fromBackingInt(@intCast(entry.key))) == .dispatch_call) break i;
     } else return error.TestUnexpectedResult;
-    const removed_node = table.by_node[removed].key;
+    const removed_node = table.by_node.items()[removed].key;
 
     const original_by_node = table.by_node;
-    const without_removed = try allocator.alloc(check.StaticDispatchRegistry.PlanKV, original_by_node.len - 1);
+    const original_items = original_by_node.items();
+    const without_removed = try allocator.alloc(check.StaticDispatchRegistry.PlanKV, original_items.len - 1);
     defer allocator.free(without_removed);
-    @memcpy(without_removed[0..removed], original_by_node[0..removed]);
-    @memcpy(without_removed[removed..], original_by_node[removed + 1 ..]);
-    table.by_node = without_removed;
+    @memcpy(without_removed[0..removed], original_items[0..removed]);
+    @memcpy(without_removed[removed..], original_items[removed + 1 ..]);
+    table.by_node = .fromBorrowedSlice(without_removed);
     defer table.by_node = original_by_node;
 
     const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
@@ -10139,15 +10248,15 @@ test "dispatch evidence boundary validator names the method of a dangling eviden
 
     const table = &resources.checked_artifact.static_dispatch_plans;
     var corrupted_method: ?[]const u8 = null;
-    for (table.plans) |*plan| {
+    for (table.plans.items()) |*plan| {
         switch (plan.resolution) {
             .direct_closed => {
-                plan.resolution = .{ .direct_closed = .{ .evidence = @fromBackingInt(@intCast(table.evidence_nodes.len)) } };
+                plan.resolution = .{ .direct_closed = .{ .evidence = @fromBackingInt(@intCast(table.evidence_nodes.items().len)) } };
                 corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
                 break;
             },
             .direct_parametric => {
-                plan.resolution = .{ .direct_parametric = .{ .evidence = @fromBackingInt(@intCast(table.evidence_nodes.len)) } };
+                plan.resolution = .{ .direct_parametric = .{ .evidence = @fromBackingInt(@intCast(table.evidence_nodes.items().len)) } };
                 corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
                 break;
             },
@@ -10188,8 +10297,8 @@ test "dispatch evidence boundary validator reports a site-evidence key outside t
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const table = &resources.checked_artifact.static_dispatch_plans;
-    try std.testing.expect(table.site_evidence.len > 0);
-    table.site_evidence[0].key = @intCast(resources.checked_artifact.bodies().nodeCount());
+    try std.testing.expect(table.site_evidence.items().len > 0);
+    table.site_evidence.items()[0].key = @intCast(resources.checked_artifact.bodies().nodeCount());
 
     const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
@@ -10360,7 +10469,7 @@ test "W6a open where-method widening and nested evidence lower through explicit 
     // where-use complete map must preserve the enclosing slot's resolved
     // nested vector through checked-artifact construction and Monotype lowering.
     var found_requires_record_reuse = false;
-    for (compiled.resources.checked_artifact.static_dispatch_plans.plans) |plan| {
+    for (compiled.resources.checked_artifact.static_dispatch_plans.plans.items()) |plan| {
         if (!std.mem.eql(
             u8,
             compiled.resources.checked_artifact.canonical_names.methodNameText(plan.method),
@@ -14059,7 +14168,7 @@ fn lowerRowCoercion(allocator: Allocator, source: []const u8, strategy: base.Spe
         .specialization_strategy = strategy,
     });
     errdefer lowered.deinit(allocator);
-    try std.testing.expect(lowered.resources.checked_artifact.moduleEnvConst().row_coerced_results.items.items.len != 0);
+    try std.testing.expect(lowered.resources.checked_artifact.moduleEnvConst().row_coerced_results.items().len != 0);
     return lowered;
 }
 
@@ -14613,7 +14722,7 @@ test "issue 12491 nested closure chain bound to a block local lowers under boxy"
 
 /// The procedure template of `artifact` exported as `name`.
 fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
-    for (artifact.checked_procedure_templates.templates.items) |template| {
+    for (artifact.checked_procedure_templates.templates.items()) |template| {
         const export_name = artifact.canonical_names.procBase(template.proc_base).export_name.get() orelse continue;
         if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) return template;
     }
@@ -14677,7 +14786,7 @@ test "sealed result rows: an annotated result row is a static worker and widenin
     const artifact = &lowered.resources.checked_artifact;
     for ([_][]const u8{ "read", "parse" }) |name| {
         const template = try templateNamed(artifact, name);
-        const scheme_vars = artifact.checked_procedure_templates.scheme_vars_pool[template.scheme_vars.start..][0..template.scheme_vars.len];
+        const scheme_vars = artifact.checked_procedure_templates.scheme_vars_pool.items()[template.scheme_vars.start..][0..template.scheme_vars.len];
         try std.testing.expectEqual(@as(usize, 1), scheme_vars.len);
         const payload = artifact.checked_types.payload(scheme_vars[0]);
         try std.testing.expect(payload == .flex);
@@ -14686,7 +14795,7 @@ test "sealed result rows: an annotated result row is a static worker and widenin
     }
     {
         const template = try templateNamed(artifact, "pass");
-        const scheme_vars = artifact.checked_procedure_templates.scheme_vars_pool[template.scheme_vars.start..][0..template.scheme_vars.len];
+        const scheme_vars = artifact.checked_procedure_templates.scheme_vars_pool.items()[template.scheme_vars.start..][0..template.scheme_vars.len];
         try std.testing.expectEqual(@as(usize, 1), scheme_vars.len);
         try std.testing.expect(artifact.checked_types.payload(scheme_vars[0]) == .rigid);
     }

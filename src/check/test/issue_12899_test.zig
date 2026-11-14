@@ -6,7 +6,7 @@ const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
 
 fn expectParameters(env: *const TestEnv, name: []const u8, declared: u32, context: u16) error{ TestExpectedEqual, TestUnexpectedResult }!void {
-    for (env.module_env.types.nominal_decls.items.items) |decl| {
+    for (env.module_env.types.nominal_decls.items()) |decl| {
         if (!std.mem.eql(u8, env.module_env.getIdent(decl.ident.ident_idx), name)) continue;
         try std.testing.expectEqual(context, decl.flags.context_len);
         try std.testing.expectEqual(declared + context, decl.formals.count);

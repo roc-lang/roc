@@ -49,7 +49,7 @@ CONFLICTING TAG - issue_11097_wrapped_try_overlap.md:7:1:7:4
 			(line-break)
 			(reflow "It also comes from here:")
 			(line-break)
-			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 2 6) (end 2 15) (annotation error) (line-text "\t_ = save({})?"))
+			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 7 19) (end 7 37) (annotation error) (line-text "use = run(|_| Err(PersistFailed(Foo)))"))
 			(line-break)
 			(line-break)
 			(reflow "where it is:")
@@ -132,7 +132,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 275)
+								(e-call (constraint-fn-var 269)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-empty_record)))
@@ -163,7 +163,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 307)
+								(e-call (constraint-fn-var 301)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-empty_record)))
@@ -196,7 +196,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "use"))
-		(e-call (constraint-fn-var 360)
+		(e-call (constraint-fn-var 354)
 			(e-lookup-local
 				(p-assign (ident "run")))
 			(e-lambda

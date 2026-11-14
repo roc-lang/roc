@@ -2201,7 +2201,7 @@ const StaticDataBuilder = struct {
     }
 
     fn buildProvidedExports(self: *StaticDataBuilder) MaterializationError!void {
-        for (self.root.module.provided_exports.exports, 0..) |provided, provided_index| {
+        for (self.root.module.provided_exports.exports.items(), 0..) |provided, provided_index| {
             const data = switch (provided) {
                 .data => |data| data,
                 .procedure, .checked_error => continue,
@@ -2548,7 +2548,7 @@ const StaticDataBuilder = struct {
 };
 
 fn moduleHasProvidedData(module: *const Checked.CheckedModuleArtifact) bool {
-    for (module.provided_exports.exports) |provided| {
+    for (module.provided_exports.exports.items()) |provided| {
         switch (provided) {
             .data => return true,
             .procedure, .checked_error => {},

@@ -1726,7 +1726,7 @@ pub const SyntaxChecker = struct {
             }
         }
 
-        const file_deps = module_env.file_dependencies.items.items;
+        const file_deps = module_env.file_dependencies.items();
         for (file_deps) |dep| {
             if (cir_queries.regionContainsOffset(dep.region(), target_offset)) {
                 const path_text = module_env.getString(dep.relative_path);
@@ -1963,7 +1963,7 @@ pub const SyntaxChecker = struct {
         if (store.nodes.get(node_idx).tag != .def) return null;
         const def = store.getDef(@fromBackingInt(value_node));
         const ident = module_lookup.extractIdentFromPattern(store, def.pattern) orelse return null;
-        for (module_env.method_idents.entries.items) |entry| {
+        for (module_env.method_idents.entries.items()) |entry| {
             if (entry.value.eql(ident)) return entry.key.owner;
         }
         return null;
@@ -1971,7 +1971,7 @@ pub const SyntaxChecker = struct {
 
     /// The checked environment `module_env`'s import `import_idx` resolved to.
     fn importedEnvForImport(env: *BuildEnv, module_env: *ModuleEnv, doc_path: []const u8, import_idx: CIR.Import.Idx) ?*ModuleEnv {
-        const import_name = module_env.common.getString(module_env.imports.imports.items.items[@backingInt(import_idx)]);
+        const import_name = module_env.common.getString(module_env.imports.imports.items()[@backingInt(import_idx)]);
         return env.importedModuleEnv(doc_path, import_name);
     }
 
@@ -2101,42 +2101,45 @@ pub const SyntaxChecker = struct {
         // 1. If the tag reference carries an explicit external nominal import identity,
         // navigate directly to that imported module and declaration.
         if (tag_ref.nominal_external) |nom_ext| {
-            const import_idx_int = @backingInt(nom_ext.module_idx);
-            if (import_idx_int < module_env.imports.imports.len()) {
-                const string_idx = module_env.imports.imports.items.items[import_idx_int];
-                const module_name = module_env.common.getString(string_idx);
-                const env = build_env;
-                const importing_pkg = env.findPackageForModulePath(doc_path);
-                const mod_state_opt = if (std.mem.find(u8, module_name, ".") != null)
-                    env.findModuleByQualifiedNameInPackage(importing_pkg, module_name)
-                else
-                    env.findModuleByNameInPackage(importing_pkg, module_name);
-                if (mod_state_opt) |mod_state| {
-                    if (mod_state.moduleEnv()) |target_mod_env| {
-                        const target_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(nom_ext.target_node_idx));
-                        const node_tag = target_mod_env.store.nodes.get(target_node_idx).tag;
-                        if (node_tag == .statement_nominal_decl or node_tag == .statement_alias_decl) {
-                            const stmt = target_mod_env.store.getSourceStatement(@fromBackingInt(@backingInt(target_node_idx)));
-                            const maybe_anno = typeDeclAnno(stmt);
-                            if (maybe_anno) |anno_idx| {
-                                if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
-                                    const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                                    const module_uri = noteOom(oom, self.uriForPath(mod_state.path)) orelse return null;
-                                    return DefinitionResult{
-                                        .uri = module_uri,
-                                        .range = range,
-                                    };
-                                }
+            const found_mod_state: ?*compile.coordinator.ModuleState = switch (nom_ext.module) {
+                .import => |import_idx| blk: {
+                    const import_idx_int = @backingInt(import_idx);
+                    if (import_idx_int >= module_env.imports.imports.len()) break :blk null;
+                    const string_idx = module_env.imports.imports.items()[import_idx_int];
+                    const module_name = module_env.common.getString(string_idx);
+                    const importing_pkg = build_env.findPackageForModulePath(doc_path);
+                    break :blk if (std.mem.find(u8, module_name, ".") != null)
+                        build_env.findModuleByQualifiedNameInPackage(importing_pkg, module_name)
+                    else
+                        build_env.findModuleByNameInPackage(importing_pkg, module_name);
+                },
+                .identity => |identity| findModuleByContentIdentity(build_env, module_env.moduleIdentityHash(identity)),
+            };
+            if (found_mod_state) |mod_state| {
+                if (mod_state.moduleEnv()) |target_mod_env| {
+                    const target_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(nom_ext.target_node_idx));
+                    const node_tag = target_mod_env.store.nodes.get(target_node_idx).tag;
+                    if (node_tag == .statement_nominal_decl or node_tag == .statement_alias_decl) {
+                        const stmt = target_mod_env.store.getSourceStatement(@fromBackingInt(@backingInt(target_node_idx)));
+                        const maybe_anno = typeDeclAnno(stmt);
+                        if (maybe_anno) |anno_idx| {
+                            if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
+                                const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
+                                const module_uri = noteOom(oom, self.uriForPath(mod_state.path)) orelse return null;
+                                return DefinitionResult{
+                                    .uri = module_uri,
+                                    .range = range,
+                                };
                             }
                         }
-                        if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
-                            const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                            const module_uri = noteOom(oom, self.uriForPath(mod_state.path)) orelse return null;
-                            return DefinitionResult{
-                                .uri = module_uri,
-                                .range = range,
-                            };
-                        }
+                    }
+                    if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
+                        const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
+                        const module_uri = noteOom(oom, self.uriForPath(mod_state.path)) orelse return null;
+                        return DefinitionResult{
+                            .uri = module_uri,
+                            .range = range,
+                        };
                     }
                 }
             }

@@ -27,10 +27,8 @@ MISSING MATCH ARROW - fuzz_crash_032.md:7:22:7:22
 UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:1:14:1:17
 UNDECLARED TYPE - fuzz_crash_032.md:1:21:1:24
 UNDECLARED TYPE - fuzz_crash_032.md:4:25:4:30
-EXPECTED NOMINAL TYPE - fuzz_crash_032.md:6:26:6:37
 INVALID PATTERN - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:8:3:8:4
-EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:13:8:24
 TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 TYPE MISMATCH - fuzz_crash_032.md:7:22:7:30
 # PROBLEMS
@@ -257,22 +255,6 @@ TYPE MISMATCH - fuzz_crash_032.md:7:22:7:30
 			(source-region (file "fuzz_crash_032.md") (start 4 25) (end 4 30) (annotation error) (line-text "olor = |color| { import Color.RGB"))))
 	(report
 		(severity runtime_error)
-		(title "Expected Nominal Type")
-		(region (start 6 26) (end 6 37))
-		(headline
-			(reflow "You are using the type ")
-			(annotated code "LocalStatus")
-			(reflow " like a nominal type, but it is an alias."))
-		(document
-			(source-region (file "fuzz_crash_032.md") (start 6 26) (end 6 37) (annotation error) (line-text "    match color { RGB => LocalStatus.Pending"))
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " You can declare this type with ")
-			(annotated code ":=")
-			(reflow " to make it nominal.")))
-	(report
-		(severity runtime_error)
 		(title "Invalid Pattern")
 		(headline
 			(reflow "This pattern contains invalid syntax or uses unsupported features."))
@@ -287,22 +269,6 @@ TYPE MISMATCH - fuzz_crash_032.md:7:22:7:30
 			(reflow " is not declared in this scope."))
 		(document
 			(source-region (file "fuzz_crash_032.md") (start 8 3) (end 8 4) (annotation error) (line-text "  B.Blue => LocalStatus.Pending"))))
-	(report
-		(severity runtime_error)
-		(title "Expected Nominal Type")
-		(region (start 8 13) (end 8 24))
-		(headline
-			(reflow "You are using the type ")
-			(annotated code "LocalStatus")
-			(reflow " like a nominal type, but it is an alias."))
-		(document
-			(source-region (file "fuzz_crash_032.md") (start 8 13) (end 8 24) (annotation error) (line-text "  B.Blue => LocalStatus.Pending"))
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " You can declare this type with ")
-			(annotated code ":=")
-			(reflow " to make it nominal.")))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")

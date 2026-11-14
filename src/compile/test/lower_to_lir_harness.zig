@@ -1280,9 +1280,9 @@ fn lowerAppPathToLir(
     // These scheduler fixtures explicitly exercise checked procedure-use roots;
     // ordinary host compilation selects only provided exports.
     const lir_roots = if (opts.parallel_procedure_root_fixture or opts.prepared_direct_call_root_fixture)
-        try gpa.dupe(check.CheckedArtifact.RootRequest, root.root_requests.runtime_requests)
+        try gpa.dupe(check.CheckedArtifact.RootRequest, root.root_requests.runtime_requests.items())
     else
-        try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+        try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests.items());
     defer gpa.free(lir_roots);
     if (opts.parallel_procedure_root_fixture) {
         var procedure_use_roots: usize = 0;

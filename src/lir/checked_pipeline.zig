@@ -2113,12 +2113,12 @@ fn platformHostedBindings(
     root_view: checked.ImportedModuleView,
     modules: CheckedModuleSet,
 ) ?[]const checked.HostedBinding {
-    if (root_view.module_identity.kind == .platform) return root_view.hosted_bindings.bindings;
+    if (root_view.module_identity.kind == .platform) return root_view.hosted_bindings.bindings.items();
     for (modules.imports) |imported| {
-        if (imported.module_identity.kind == .platform) return imported.hosted_bindings.bindings;
+        if (imported.module_identity.kind == .platform) return imported.hosted_bindings.bindings.items();
     }
     for (modules.root.relation_modules) |relation| {
-        if (relation.module_identity.kind == .platform) return relation.hosted_bindings.bindings;
+        if (relation.module_identity.kind == .platform) return relation.hosted_bindings.bindings.items();
     }
     return null;
 }
@@ -2127,7 +2127,7 @@ fn hostedProceduresBound(
     view: checked.ImportedModuleView,
     bindings: []const checked.HostedBinding,
 ) bool {
-    for (view.hosted_procs.procs) |proc| {
+    for (view.hosted_procs.procs.items()) |proc| {
         var bound = false;
         for (bindings) |binding| {
             if (!std.mem.eql(u8, &binding.target_checked_module.bytes, &view.key.bytes)) continue;
@@ -2201,7 +2201,7 @@ fn collectStaticDataRequests(
 
     if (!include_provided) return try requests.toOwnedSlice(allocator);
 
-    for (root.provided_exports.exports) |provided| {
+    for (root.provided_exports.exports.items()) |provided| {
         switch (provided) {
             .data => |data| {
                 try requests.append(allocator, .{
@@ -2832,8 +2832,8 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     module_kind = info.kind;
                     module_name = info.name;
                     callable_name = defName(info, proc_base);
-                    if (callable_kind_is_template and sub < info.templates.templates.items.len) {
-                        const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
+                    if (callable_kind_is_template and sub < info.templates.templates.items().len) {
+                        const source_fn_ty = info.templates.templates.items()[sub].checked_fn_root;
                         if (info.types.containsId(source_fn_ty)) {
                             poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
                         }

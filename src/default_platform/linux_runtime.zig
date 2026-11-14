@@ -370,7 +370,7 @@ fn signalHandler(sig: linux.SIG, info: *const linux.siginfo_t, ctx: ?*anyopaque)
         // pointer alone.
         const stack_pointer: ?usize = if (interrupted) |registers| registers.stack_pointer else null;
         switch (memory_fault.classifyFault(fault_addr, stack_pointer, null)) {
-            .stack_overflow => writeLiteral(stderr_fd, "Roc application overflowed its stack memory\n\n"),
+            .stack_overflow => writeLiteral(stderr_fd, runtime_shared.stack_overflow_message),
             .access_violation => {
                 var address_buf: [2 + 2 * @sizeOf(usize)]u8 = undefined;
                 writeLiteral(stderr_fd, "Roc process terminated by a segmentation fault at address ");

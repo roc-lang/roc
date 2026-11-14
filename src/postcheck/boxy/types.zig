@@ -355,7 +355,8 @@ pub const Span = struct { start: u32, len: u32 };
 pub const FieldSpan = struct { start: u32, len: u32 };
 /// A range of tags in `Store.tags`.
 pub const TagSpan = struct { start: u32, len: u32 };
-/// A stored memory order: its entry in `Store.declared_slots`.
+/// A stored memory order: its entry in `Store.declared_slots` and
+/// `Store.declared_entries`.
 pub const SlotSpan = struct { start: u32, len: u32 };
 
 /// How a nominal record with unnamed fields lays itself out (design.md
@@ -367,10 +368,22 @@ pub const SlotSpan = struct { start: u32, len: u32 };
 pub const DeclaredOrder = struct {
     /// The types of the unnamed fields, in declared order.
     padding: Span,
-    /// The record's slots in declared order, each by storage index: a named
+    /// The record's slots in memory order, each by storage index: a named
     /// field's position in the record's `fields`, and an unnamed field's
-    /// position in `padding` past those.
+    /// position in `padding` past those. The store derives them from the
+    /// declaration's entries when it interns the record: the entries in
+    /// declared order, then every field no entry names, which a row
+    /// extension supplies, in label order. So every field has a slot, and
+    /// resolving a row extension early or late gives one type.
     slots: SlotSpan,
+};
+
+/// One entry of a padded nominal's declaration, in declared order.
+pub const DeclaredEntry = union(enum) {
+    /// A named field, by label.
+    named: NameId,
+    /// An unnamed field, by its position in `padding`.
+    padding: u32,
 };
 
 /// A record's `DeclaredOrder`, or its absence, at a `DeclaredOrder`'s own
@@ -400,7 +413,7 @@ pub const OptionalDeclaredOrder = struct {
 /// A `DeclaredOrder` to intern, with its children as slices.
 pub const DeclaredOrderInput = struct {
     padding: []const TypeId,
-    slots: []const u32,
+    entries: []const DeclaredEntry,
 };
 
 /// A record type: its fields sorted by label text, a variable node standing
@@ -496,6 +509,7 @@ pub const Store = struct {
     fields: std.ArrayList([]const Field) = .empty,
     tags: std.ArrayList([]const Tag) = .empty,
     declared_slots: std.ArrayList([]const u32) = .empty,
+    declared_entries: std.ArrayList([]const DeclaredEntry) = .empty,
     span_arena: std.heap.ArenaAllocator,
     interned: std.HashMapUnmanaged(InternKey, TypeId, InternContext, std.hash_map.default_max_load_percentage) = .empty,
     key_bytes: std.ArrayList(u8) = .empty,
@@ -575,6 +589,7 @@ pub const Store = struct {
         self.fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);
         self.declared_slots.deinit(self.allocator);
+        self.declared_entries.deinit(self.allocator);
         self.span_arena.deinit();
         self.interned.deinit(self.allocator);
         self.key_bytes.deinit(self.allocator);
@@ -762,9 +777,14 @@ pub const Store = struct {
         return self.span(declared.padding);
     }
 
-    /// The slots of `declared`, in declared order, by storage index.
+    /// The slots of `declared`, in memory order, by storage index.
     pub fn declaredSlots(self: *const Store, declared: DeclaredOrder) []const u32 {
         return self.declared_slots.items[declared.slots.start];
+    }
+
+    /// The declaration entries `declared`'s slots were derived from.
+    pub fn declaredEntries(self: *const Store, declared: DeclaredOrder) []const DeclaredEntry {
+        return self.declared_entries.items[declared.slots.start];
     }
 
     /// The record row of `ty`: `ty` itself, unless it is the backing of a
@@ -809,6 +829,13 @@ pub const Store = struct {
             .primitive => |prim| try self.scratch_key.append(self.allocator, @backingInt(prim)),
             .empty_record => {},
             .record => |record| {
+                // Reading a field by name, merging a substituted remainder,
+                // and deriving declared slots all rely on this order.
+                if (std.debug.runtime_safety) {
+                    for (record.fields[0..record.fields.len -| 1], record.fields[@min(1, record.fields.len)..]) |prev, next| {
+                        std.debug.assert(self.nameLessThan(prev.name, next.name));
+                    }
+                }
                 try self.keyU32(@intCast(record.fields.len));
                 for (record.fields) |field| {
                     try self.keyU32(@backingInt(field.name));
@@ -826,8 +853,14 @@ pub const Store = struct {
                 if (record.ext) |ext| closed = closed and self.isClosed(ext);
                 if (record.declared) |declared| {
                     try self.keySpan(declared.padding);
-                    try self.keyU32(@intCast(declared.slots.len));
-                    for (declared.slots) |slot| try self.keyU32(slot);
+                    try self.keyU32(@intCast(declared.entries.len));
+                    for (declared.entries) |entry| {
+                        try self.scratch_key.append(self.allocator, @backingInt(std.meta.activeTag(entry)));
+                        try self.keyU32(switch (entry) {
+                            .named => |name| @backingInt(name),
+                            .padding => |ordinal| ordinal,
+                        });
+                    }
                     for (declared.padding) |padding| closed = closed and self.isClosed(padding);
                 }
             },
@@ -891,7 +924,7 @@ pub const Store = struct {
                 .ext = .of(record.ext),
                 .declared = if (record.declared) |declared| .some(.{
                     .padding = try self.addSpan(declared.padding),
-                    .slots = try self.addSlots(declared.slots),
+                    .slots = try self.addDeclaredOrder(record.fields, declared),
                 }) else .none,
             } },
             .tuple => |items| .{ .tuple = try self.addSpan(items) },
@@ -963,10 +996,48 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(fields.len) };
     }
 
-    fn addSlots(self: *Store, slots: []const u32) Allocator.Error!SlotSpan {
-        const owned = try self.span_arena.allocator().dupe(u32, slots);
-        try self.declared_slots.append(self.allocator, owned);
+    /// Stores `declared`'s entries and the slots derived from them over
+    /// `fields`, which are sorted by label (see `DeclaredOrder.slots`).
+    fn addDeclaredOrder(self: *Store, fields: []const Field, declared: DeclaredOrderInput) Allocator.Error!SlotSpan {
+        const arena = self.span_arena.allocator();
+        const slots = try arena.alloc(u32, fields.len + declared.padding.len);
+        const named = try self.allocator.alloc(bool, fields.len);
+        defer self.allocator.free(named);
+        @memset(named, false);
+        var next_slot: usize = 0;
+        for (declared.entries) |entry| {
+            slots[next_slot] = switch (entry) {
+                .named => |name| blk: {
+                    const index = self.fieldIndex(fields, name) orelse invariant("a declared field is absent from its nominal's record row");
+                    std.debug.assert(!named[index]);
+                    named[index] = true;
+                    break :blk index;
+                },
+                .padding => |ordinal| @intCast(fields.len + ordinal),
+            };
+            next_slot += 1;
+        }
+        for (named, 0..) |is_named, index| {
+            if (is_named) continue;
+            slots[next_slot] = @intCast(index);
+            next_slot += 1;
+        }
+        std.debug.assert(next_slot == slots.len);
+        try self.declared_slots.append(self.allocator, slots);
+        try self.declared_entries.append(self.allocator, try arena.dupe(DeclaredEntry, declared.entries));
         return .{ .start = @intCast(self.declared_slots.items.len - 1), .len = @intCast(slots.len) };
+    }
+
+    /// The position of the field named `name` in `fields`, sorted by label.
+    fn fieldIndex(self: *const Store, fields: []const Field, name: NameId) ?u32 {
+        var low: usize = 0;
+        var high: usize = fields.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.nameLessThan(fields[mid].name, name)) low = mid + 1 else high = mid;
+        }
+        if (low < fields.len and fields[low].name == name) return @intCast(low);
+        return null;
     }
 
     fn addTags(self: *Store, tags: []const TagInput) Allocator.Error!TagSpan {
@@ -1772,22 +1843,16 @@ pub const Converter = struct {
         defer allocator.free(padding);
         for (declared_padding, padding) |checked_ty, *slot| slot.* = try self.convert(module, checked_ty, env);
         const declared_fields = declaration.declaredFields(view.types());
-        const slots = try allocator.alloc(u32, declared_fields.len);
-        defer allocator.free(slots);
-        for (declared_fields, slots) |declared, *slot| slot.* = switch (declared) {
-            .named => |label| blk: {
-                const name = try self.store.internName(view.nameStore().recordFieldLabelText(label));
-                for (fields, 0..) |field, index| {
-                    if (field.name == name) break :blk @intCast(index);
-                }
-                invariant("a declared field is absent from its nominal's record row");
-            },
-            .padding => |ordinal| @intCast(fields.len + ordinal),
+        const entries = try allocator.alloc(DeclaredEntry, declared_fields.len);
+        defer allocator.free(entries);
+        for (declared_fields, entries) |declared, *entry| entry.* = switch (declared) {
+            .named => |label| .{ .named = try self.store.internName(view.nameStore().recordFieldLabelText(label)) },
+            .padding => |ordinal| .{ .padding = ordinal },
         };
         return try self.store.intern(.{ .record = .{
             .fields = fields,
             .ext = ext,
-            .declared = .{ .padding = padding, .slots = slots },
+            .declared = .{ .padding = padding, .entries = entries },
         } });
     }
 };
@@ -1843,7 +1908,7 @@ test "record interning preserves immutable field default identities" {
     const padded = try store.intern(.{ .record = .{
         .fields = &fields,
         .ext = null,
-        .declared = .{ .padding = &.{u8_ty}, .slots = &.{ 0, 1 } },
+        .declared = .{ .padding = &.{u8_ty}, .entries = &.{ .{ .named = count }, .{ .padding = 0 } } },
     } });
     try std.testing.expectEqual(first, try store.recordRow(padded));
 }
@@ -1855,14 +1920,15 @@ test "a padded backing is a type of its own, whose unnamed fields count toward i
     const z = try store.internName("z");
     const number = try store.primitive(.u32);
     const fields: []const Field = &.{ .{ .name = a, .ty = number, .kind = .inline_slot }, .{ .name = z, .ty = number, .kind = .inline_slot } };
+    const z_pad_a: []const DeclaredEntry = &.{ .{ .named = z }, .{ .padding = 0 }, .{ .named = a } };
     const plain = try store.intern(.{ .record = .{ .fields = fields, .ext = null } });
-    const padded = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{number}, .slots = &.{ 1, 2, 0 } } } });
-    const other_order = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{number}, .slots = &.{ 0, 2, 1 } } } });
-    const other_padding = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{try store.primitive(.u64)}, .slots = &.{ 1, 2, 0 } } } });
+    const padded = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{number}, .entries = z_pad_a } } });
+    const other_order = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{number}, .entries = &.{ .{ .named = a }, .{ .padding = 0 }, .{ .named = z } } } } });
+    const other_padding = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{try store.primitive(.u64)}, .entries = z_pad_a } } });
     try std.testing.expect(plain != padded);
     try std.testing.expect(padded != other_order);
     try std.testing.expect(padded != other_padding);
-    try std.testing.expectEqual(padded, try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{number}, .slots = &.{ 1, 2, 0 } } } }));
+    try std.testing.expectEqual(padded, try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{number}, .entries = z_pad_a } } }));
 
     try std.testing.expect(!store.sameRecordOrder(store.get(plain).record, store.get(padded).record));
     try std.testing.expect(!store.sameRecordOrder(store.get(padded).record, store.get(plain).record));
@@ -1874,12 +1940,48 @@ test "a padded backing is a type of its own, whose unnamed fields count toward i
     try std.testing.expectEqual(plain, try store.recordRow(padded));
     try std.testing.expectEqual(plain, try store.recordRow(plain));
     try std.testing.expectEqual(number, try store.recordRow(number));
-    const only_padding = try store.intern(.{ .record = .{ .fields = &.{}, .ext = null, .declared = .{ .padding = &.{number}, .slots = &.{0} } } });
+    const only_padding = try store.intern(.{ .record = .{ .fields = &.{}, .ext = null, .declared = .{ .padding = &.{number}, .entries = &.{.{ .padding = 0 }} } } });
     try std.testing.expectEqual(try store.emptyRecord(), try store.recordRow(only_padding));
 
     try std.testing.expect(store.isClosed(padded));
-    const open = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{try store.variable(0)}, .slots = &.{ 1, 2, 0 } } } });
+    const open = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{try store.variable(0)}, .entries = z_pad_a } } });
     try std.testing.expect(!store.isClosed(open));
+}
+
+test "a padded backing's fields that no entry names follow the entries in label order" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const a = try store.internName("a");
+    const b = try store.internName("b");
+    const z = try store.internName("z");
+    const number = try store.primitive(.u64);
+    const byte = try store.primitive(.u8);
+    const entries: []const DeclaredEntry = &.{ .{ .named = z }, .{ .padding = 0 } };
+
+    // `Pad(r) := { z : U64, _ : U8, ..r }` at `r = { a : U64 }`.
+    const one = try store.intern(.{ .record = .{
+        .fields = &.{ .{ .name = a, .ty = number, .kind = .inline_slot }, .{ .name = z, .ty = number, .kind = .inline_slot } },
+        .ext = null,
+        .declared = .{ .padding = &.{byte}, .entries = entries },
+    } });
+    try std.testing.expectEqualSlices(u32, &.{ 1, 2, 0 }, store.declaredSlots(store.get(one).record.declared.get().?));
+    try std.testing.expectEqualSlices(DeclaredEntry, entries, store.declaredEntries(store.get(one).record.declared.get().?));
+
+    // At `r = { a : U64, b : U64 }`.
+    const two = try store.intern(.{ .record = .{
+        .fields = &.{ .{ .name = a, .ty = number, .kind = .inline_slot }, .{ .name = b, .ty = number, .kind = .inline_slot }, .{ .name = z, .ty = number, .kind = .inline_slot } },
+        .ext = null,
+        .declared = .{ .padding = &.{byte}, .entries = entries },
+    } });
+    try std.testing.expectEqualSlices(u32, &.{ 2, 3, 0, 1 }, store.declaredSlots(store.get(two).record.declared.get().?));
+
+    // Generic in `r`, whose fields are not yet known.
+    const open = try store.intern(.{ .record = .{
+        .fields = &.{.{ .name = z, .ty = number, .kind = .inline_slot }},
+        .ext = try store.variable(0),
+        .declared = .{ .padding = &.{byte}, .entries = entries },
+    } });
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1 }, store.declaredSlots(store.get(open).record.declared.get().?));
 }
 
 /// Whether two types could unify without a structural conflict: the same
@@ -2005,7 +2107,7 @@ fn hasErrorUnmemoized(allocator: Allocator, modules: *const Modules, module: Mod
 /// Only identity and checked types are consumed by these reachability tests.
 fn addErrorTestModule(modules: *Modules, store: *checked.CheckedTypeStore) Allocator.Error!ModuleIndex {
     if (store.synthesized_keys == null) {
-        store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(modules.allocator, std.testing.io, store.roots.items.len));
+        store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(modules.allocator, std.testing.io, store.roots.items().len));
     }
     var identity: [32]u8 = @splat(0);
     std.mem.writeInt(u64, identity[0..8], @intCast(modules.views.items.len), .little);

@@ -106,7 +106,7 @@ pub fn appendRegionInfoToSexprTree(self: *const AST, env: *const CommonEnv, tree
     const start = self.tokens.resolve(region.start);
     const region_end_idx = if (region.end > 0) region.end - 1 else region.end;
     const end = self.tokens.resolve(region_end_idx);
-    const info: base.RegionInfo = base.RegionInfo.position(self.env.source, env.line_starts.items.items, start.start.offset, end.end.offset) catch .{
+    const info: base.RegionInfo = base.RegionInfo.position(self.env.source, env.line_starts.items(), start.start.offset, end.end.offset) catch .{
         .start_line_idx = 0,
         .start_col_idx = 0,
         .end_line_idx = 0,
@@ -264,7 +264,7 @@ fn tokenizeReport(
         diagnostic.region.end.offset <= source_env.source.len)
     {
         var env = source_env.*;
-        const owns_line_starts = env.line_starts.items.items.len == 0;
+        const owns_line_starts = env.line_starts.items().len == 0;
         if (owns_line_starts) env.line_starts = try @TypeOf(env.line_starts).initCapacity(allocator, 0);
         defer if (owns_line_starts) env.line_starts.deinit(allocator);
         if (owns_line_starts) {
@@ -274,7 +274,7 @@ fn tokenizeReport(
         // Convert region to RegionInfo
         const region_info = base.RegionInfo.position(
             source_env.source,
-            env.line_starts.items.items,
+            env.line_starts.items(),
             diagnostic.region.start.offset,
             diagnostic.region.end.offset,
         ) catch {
@@ -288,7 +288,7 @@ fn tokenizeReport(
             .error_highlight,
             filename,
             source_env.source,
-            env.line_starts.items.items,
+            env.line_starts.items(),
         );
     }
 
@@ -354,14 +354,14 @@ const ParseReportOptions = struct {
 
 fn finishParseReport(ctx: ParseReportContext, report: *reporting.Report) Allocator.Error!reporting.Report {
     if (ctx.region.start.offset <= ctx.region.end.offset and ctx.region.end.offset <= ctx.env.source.len) {
-        const region_info = base.RegionInfo.position(ctx.env.source, ctx.env.line_starts.items.items, ctx.region.start.offset, ctx.region.end.offset) catch {
+        const region_info = base.RegionInfo.position(ctx.env.source, ctx.env.line_starts.items(), ctx.region.start.offset, ctx.region.end.offset) catch {
             return report.*;
         };
 
         try report.document.addLineBreaks(2);
 
         const owned_filename = try report.addOwnedString(ctx.filename);
-        try report.addSourceContext(region_info, owned_filename, ctx.env.source, ctx.env.line_starts.items.items);
+        try report.addSourceContext(region_info, owned_filename, ctx.env.source, ctx.env.line_starts.items());
     }
 
     return report.*;

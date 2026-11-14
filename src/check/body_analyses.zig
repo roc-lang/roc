@@ -649,7 +649,7 @@ pub const ModuleIndex = struct {
         fn indexDeclarations(self: *Builder) Allocator.Error!void {
             const env = self.env;
             const store = &env.store;
-            for (env.method_defs.entries.items) |entry| {
+            for (env.method_defs.entries.items()) |entry| {
                 if (store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
                 const statement: StatementId = @fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)));
                 const decl = store.getStatement(statement).s_decl;
@@ -659,7 +659,7 @@ pub const ModuleIndex = struct {
 
             var recursively_referenced = collections.DenseMap(u32, void).init(self.allocator);
             defer recursively_referenced.deinit();
-            for (env.scheme_uses.items.items) |record| {
+            for (env.scheme_uses.items()) |record| {
                 if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_value_reference)) continue;
                 const node: CIR.Node.Idx = @fromBackingInt(@intCast(record.node_idx));
                 if (store.nodes.get(node).tag != .expr_var) continue;
@@ -1035,9 +1035,9 @@ fn dispatchNodes(
 ) Allocator.Error!NodeBits {
     const plans = bodies.tables.plans orelse invariant("a body analysis ran without the module's dispatch plans");
     var bits = try std.DynamicBitSetUnmanaged.initEmpty(allocator, bodies.nodeCount());
-    for ([_][]const static_dispatch.PlanKV{ plans.by_node, plans.numeral_by_node, plans.quote_by_node }) |entries| {
+    for ([_][]const static_dispatch.PlanKV{ plans.by_node.items(), plans.numeral_by_node.items(), plans.quote_by_node.items() }) |entries| {
         for (entries) |entry| {
-            if (selected(plans.plans[entry.val].resolution)) bits.set(entry.key);
+            if (selected(plans.plans.items()[entry.val].resolution)) bits.set(entry.key);
         }
     }
     return .{ .bits = bits };
@@ -1094,7 +1094,7 @@ fn computeUnitFacts(allocator: Allocator, bodies: CheckedBodies, unit_id: UnitId
 fn appendDispatchOperands(bodies: CheckedBodies, raw_node: u32, out: anytype) Allocator.Error!void {
     const plans = bodies.tables.plans orelse invariant("a body analysis ran without the module's dispatch plans");
     const plan_id = plans.lookupByNode(raw_node) orelse return;
-    const plan = plans.plans[@backingInt(plan_id)];
+    const plan = plans.plans.items()[@backingInt(plan_id)];
     for (plan.argsSlice(plans)) |operand| switch (operand) {
         .checked_expr => |expr| try out.add(expr),
         .generated_interpolation_segments, .generated_numeral, .generated_quote, .literal_pattern_value, .literal_pattern_conversion => {},
@@ -2032,7 +2032,7 @@ pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: Diagn
     defer allocator.free(states);
     var erroneous = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     defer erroneous.deinit(allocator);
-    for (bodies.env.erroneous_nodes.items.items) |entry| erroneous.set(entry.node_idx);
+    for (bodies.env.erroneous_nodes.items()) |entry| erroneous.set(entry.node_idx);
     var scan = DiagnosticScan{
         .allocator = allocator,
         .bodies = bodies,
@@ -2050,7 +2050,7 @@ pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: Diagn
         .ordinary => {},
         .final => {
             const plans = bodies.tables.plans orelse invariant("diagnostic errors were computed without the module's dispatch plans");
-            for (plans.plans) |plan| {
+            for (plans.plans.items()) |plan| {
                 if (plan.resolution == .checked_error) {
                     rejected_dispatch = try dispatchNodes(allocator, bodies, dispatchResolutionIsCheckedError);
                     scan.rejected_dispatch = &rejected_dispatch;
@@ -2101,10 +2101,10 @@ const ConstantGraph = struct {
         const module = bodies.tables.module orelse invariant("diagnostic errors were computed without the module's identity");
         var by_pattern = collections.DenseMap(u32, ExprId).init(allocator);
         defer by_pattern.deinit();
-        for (roots.roots) |root| {
+        for (roots.roots.items()) |root| {
             if (root.pattern.get()) |pattern| try by_pattern.put(@backingInt(pattern), root.rootExpr());
         }
-        for (refs.records) |record| {
+        for (refs.records.items()) |record| {
             const ref = switch (record.ref) {
                 .top_level_const => |use| use.const_ref,
                 .selected_hoisted_const => |use| use.const_use.const_ref,
@@ -2480,7 +2480,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     const module = tables.module orelse invariant("single-source calls were computed without the module's identity");
     const env = bodies.env;
 
-    const count = templates.templates.items.len;
+    const count = templates.templates.items().len;
     const eligible = try allocator.alloc(bool, count);
     defer allocator.free(eligible);
     @memset(eligible, false);
@@ -2506,22 +2506,22 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     var public_defs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
     defer public_defs.deinit();
     for (tables.exported_defs) |def| try public_defs.put(def, {});
-    for (env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
-    for (templates.by_def) |entry| {
+    for (env.method_defs.entries.items()) |entry| try public_defs.put(entry.value.def_idx, {});
+    for (templates.by_def.items()) |entry| {
         const id = local.template(entry.template) orelse continue;
         if (!public_defs.contains(entry.def)) eligible[@backingInt(id)] = true;
     }
-    for (templates.promoted) |entry| {
+    for (templates.promoted.items()) |entry| {
         const id = local.template(entry.template) orelse continue;
         eligible[@backingInt(id)] = true;
     }
-    for (templates.templates.items, eligible) |template, *is_eligible| {
+    for (templates.templates.items(), eligible) |template, *is_eligible| {
         if (template.target != .roc or template.body != .checked_body) is_eligible.* = false;
     }
 
     // A dispatch target can be reached without a reference.
-    for (plans.direct_template_refs) |plan_id| {
-        const direct = switch (plans.plans[@backingInt(plan_id)].resolution) {
+    for (plans.direct_template_refs.items()) |plan_id| {
+        const direct = switch (plans.plans.items()[@backingInt(plan_id)].resolution) {
             .direct_closed, .direct_parametric => |direct| direct,
             .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => continue,
         };
@@ -2538,7 +2538,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     var shapes = try SourceCallShapes.collect(allocator, bodies);
     defer shapes.deinit(allocator);
     const callees = &shapes.callees;
-    for (refs.records) |record| {
+    for (refs.records.items()) |record| {
         const procedure = switch (record.ref) {
             .top_level_proc, .promoted_top_level_proc => |procedure| procedure,
             .platform_required_proc => |required| required.procedure,
@@ -2582,7 +2582,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
         }
     }
 
-    const site_flags = try singleSourceSites(allocator, sites.sites, &shapes);
+    const site_flags = try singleSourceSites(allocator, sites.sites.items(), &shapes);
     errdefer allocator.free(site_flags);
 
     const facts = try allocator.create(SingleSourceFacts);

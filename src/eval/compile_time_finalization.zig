@@ -226,7 +226,7 @@ const DebugEvents = struct {
     /// this compilation demands: every root, or, for a demand-driven
     /// compilation, the stored roots its program demands.
     fn appendStored(self: *DebugEvents, module: *const checked.CheckedModuleArtifact) Allocator.Error!void {
-        for (module.compile_time_debug.entries) |entry| {
+        for (module.compile_time_debug.entries.items()) |entry| {
             if (self.fresh_roots.contains(.{ .module = module.key.digest().bytes, .root = entry.root })) continue;
             try self.appendEvent(module.key.digest(), module.compile_time_roots.root(entry.root), module.compile_time_debug.message(entry), false);
         }
@@ -245,7 +245,7 @@ const DebugEvents = struct {
         for (modules) |entry| {
             inputs.clearRetainingCapacity();
             const previous = entry.module.compile_time_debug;
-            for (previous.entries) |stored| {
+            for (previous.entries.items()) |stored| {
                 if (self.fresh_roots.contains(.{ .module = entry.module.key.digest().bytes, .root = stored.root })) continue;
                 try inputs.append(self.allocator, .{ .root = stored.root, .message = previous.message(stored) });
             }
@@ -1138,7 +1138,7 @@ fn evaluateBoxyRoots(
     for (modules, 0..) |entry, index| {
         const entry_key = try canonical_modules.getOrPut(allocator, entry.module.key.digest().bytes);
         if (entry_key.found_existing) continue;
-        for (entry.module.root_requests.compile_time_requests) |request| {
+        for (entry.module.root_requests.compile_time_requests.items()) |request| {
             const root_id = compileTimeRootForRequest(entry.module, request);
             const root = entry.module.compile_time_roots.root(root_id);
             if (root.payload != .pending) continue;
@@ -1300,7 +1300,7 @@ fn planRoots(
     var plan = RootPlan{};
     errdefer plan.deinit(allocator);
     for (modules) |entry| {
-        for (entry.module.root_requests.compile_time_requests) |request| {
+        for (entry.module.root_requests.compile_time_requests.items()) |request| {
             // A reopened artifact's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
             const root_id = compileTimeRootForRequest(entry.module, request);
@@ -1373,7 +1373,7 @@ fn computeLiteralDemand(
     var declared = std.AutoHashMapUnmanaged(lir.CheckedPipeline.LiteralDemand.DeclaredRoot, void).empty;
     defer declared.deinit(allocator);
     for (modules) |entry| {
-        for (entry.module.root_requests.compile_time_requests) |request| {
+        for (entry.module.root_requests.compile_time_requests.items()) |request| {
             try declared.put(allocator, .{ .module = entry.module.key.digest(), .root = compileTimeRootForRequest(entry.module, request) }, {});
         }
     }
@@ -2025,7 +2025,7 @@ fn finalizeProgramBoxy(
     for (modules, 0..) |entry, index| {
         const entry_key = try canonical_modules.getOrPut(allocator, entry.module.key.digest().bytes);
         if (entry_key.found_existing) continue;
-        for (entry.module.root_requests.compile_time_requests) |request| {
+        for (entry.module.root_requests.compile_time_requests.items()) |request| {
             const root_id = compileTimeRootForRequest(entry.module, request);
             if (!entry.module.compile_time_roots.root(root_id).needsEvaluation(.boxy)) continue;
             try roots.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
@@ -2100,7 +2100,7 @@ fn evaluateRootsBoxy(
         allocator.free(states);
     }
     for (modules, states) |entry, *state| {
-        state.* = try RootCompletionState.init(allocator, entry.module, entry.module.root_requests.compile_time_requests);
+        state.* = try RootCompletionState.init(allocator, entry.module, entry.module.root_requests.compile_time_requests.items());
         states_initialized += 1;
     }
 
@@ -2348,7 +2348,7 @@ const ModuleEvaluation = struct {
 
     /// Whether the module's program runs against its imports' objects.
     fn links(self: *const ModuleEvaluation, shared: Shared) bool {
-        return shared.options.boxy_objects != null and self.artifact(shared).platform_type_inputs.requirements.len == 0;
+        return shared.options.boxy_objects != null and self.artifact(shared).platform_type_inputs.requirements.items().len == 0;
     }
 
     /// Whether the module's program can be lowered: its imports' objects
@@ -2879,7 +2879,7 @@ fn runBoxyModuleBatch(
         const previous_report_sites = owners.report_sites;
         owners.report_sites = false;
         defer owners.report_sites = previous_report_sites;
-        const alias_requests = alias_entry.module.root_requests.compile_time_requests;
+        const alias_requests = alias_entry.module.root_requests.compile_time_requests.items();
         for (root_ids, plans) |id, plan| {
             if (!state.isDone(id)) continue;
             const request_index = alias_state.requestIndexForRoot(id);
@@ -2954,7 +2954,7 @@ const PublishedRequests = struct {
         for (modules, self.by_module) |entry, *slot| {
             var list = std.ArrayList(checked.RootRequest).empty;
             errdefer list.deinit(allocator);
-            for (entry.module.root_requests.compile_time_requests) |request| {
+            for (entry.module.root_requests.compile_time_requests.items()) |request| {
                 if (demanded.contains(.{ .module = entry.module.key.bytes, .root = compileTimeRootForRequest(entry.module, request) }))
                     try list.append(allocator, request);
             }
@@ -3002,7 +3002,7 @@ fn recordEvaluatedRootReads(
         const merged = try checked.CompileTimeRootReadTable.merge(
             entry.module.evaluationAllocator(),
             entry.module.compile_time_root_reads,
-            entry.module.compile_time_roots.roots.len,
+            entry.module.compile_time_roots.roots.items().len,
             inputs.items,
         );
         if (entry.module.freesReplacedEvaluationColumns()) entry.module.compile_time_root_reads.deinit(entry.module.evaluationAllocator());
@@ -3068,7 +3068,7 @@ fn isLiteralArgumentRequest(
 /// later compilation that demands it evaluates it from.
 fn sealUndemandedRoots(modules: []const ProgramModule) void {
     for (modules) |entry| {
-        for (entry.module.root_requests.compile_time_requests) |request| {
+        for (entry.module.root_requests.compile_time_requests.items()) |request| {
             const root = compileTimeRootForRequest(entry.module, request);
             if (entry.module.compile_time_roots.root(root).payload == .pending) {
                 entry.module.compile_time_roots.fillPayload(root, .unevaluated);
@@ -3393,7 +3393,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
                 errdefer completion.deinit();
                 state.* = .{
                     .completion = completion,
-                    .ordinals = try RootOrdinalColumn.initFilled(allocator, entry.module.compile_time_roots.roots.len),
+                    .ordinals = try RootOrdinalColumn.initFilled(allocator, entry.module.compile_time_roots.roots.items().len),
                 };
                 initialized += 1;
             }
@@ -4104,7 +4104,7 @@ fn finalize(
         @as(*const Options, @ptrCast(@alignCast(raw))).*
     else
         .{};
-    const requests = module.root_requests.compile_time_requests;
+    const requests = module.root_requests.compile_time_requests.items();
     const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
         const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
@@ -4191,13 +4191,13 @@ const RootCompletionState = struct {
         module: *checked.CheckedModuleArtifact,
         requests: []const checked.RootRequest,
     ) Allocator.Error!RootCompletionState {
-        const statuses = try allocator.alloc(RootStatus, module.compile_time_roots.roots.len);
+        const statuses = try allocator.alloc(RootStatus, module.compile_time_roots.roots.items().len);
         errdefer allocator.free(statuses);
         @memset(statuses, .pending);
 
         const request_root_ids = try allocator.alloc(checked.ComptimeRootId, requests.len);
         errdefer allocator.free(request_root_ids);
-        var request_index_by_root = try RequestPositionColumn.initFilled(allocator, module.compile_time_roots.roots.len);
+        var request_index_by_root = try RequestPositionColumn.initFilled(allocator, module.compile_time_roots.roots.items().len);
         errdefer request_index_by_root.deinit(allocator);
         for (requests, 0..) |request, i| {
             const root_id = compileTimeRootForRequest(module, request);
@@ -7257,10 +7257,10 @@ fn compileTimeRootForRequest(
         finalizationInvariant("compile-time request had no exact checked root identity");
     };
     const raw = @backingInt(root_id);
-    if (raw >= module.compile_time_roots.roots.len) {
+    if (raw >= module.compile_time_roots.roots.items().len) {
         finalizationInvariant("compile-time request root identity was outside the checked root table");
     }
-    const root = module.compile_time_roots.roots[raw];
+    const root = module.compile_time_roots.roots.items()[raw];
     const kind_matches = switch (request.kind) {
         .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .literal_argument,
         .compile_time_callable => root.kind == .callable_binding,
@@ -7326,7 +7326,7 @@ fn completeRoot(
         => null,
     };
     module.compile_time_roots.fillPayload(root_id, payload);
-    module.compile_time_roots.roots[@backingInt(root_id)].lss_value_has_functions = function_strategy == .lss and switch (payload) {
+    module.compile_time_roots.roots.items()[@backingInt(root_id)].lss_value_has_functions = function_strategy == .lss and switch (payload) {
         .fn_value => true,
         .const_node => |node| switch (module.const_store.get(node)) {
             .crash, .checked_error => false,

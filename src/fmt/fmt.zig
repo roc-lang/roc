@@ -380,7 +380,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     var line_offsets = try SafeList(u32).initCapacity(gpa, 256);
     defer line_offsets.deinit(gpa);
     {
-        const expected_idx = line_offsets.items.items.len;
+        const expected_idx = line_offsets.items().len;
         const idx = try line_offsets.append(gpa, 0);
         if (@backingInt(idx) != expected_idx) {
             base.invariant("fmt invariant violated: line offset appended at index {d}, expected {d}", .{ @backingInt(idx), expected_idx });
@@ -388,7 +388,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     }
     for (source, 0..) |c, i| {
         if (c == '\n') {
-            const expected_idx = line_offsets.items.items.len;
+            const expected_idx = line_offsets.items().len;
             const idx = try line_offsets.append(gpa, @intCast(i));
             if (@backingInt(idx) != expected_idx) {
                 base.invariant("fmt invariant violated: line offset appended at index {d}, expected {d}", .{ @backingInt(idx), expected_idx });
@@ -404,8 +404,8 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
-        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable; // line_offsets starts with offset 0, which is at most every needle
-        const column = region.start.offset - line_offsets.items.items[line];
+        const line = binarySearch(line_offsets.items(), region.start.offset) orelse unreachable; // line_offsets starts with offset 0, which is at most every needle
+        const column = region.start.offset - line_offsets.items()[line];
         const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
         // TODO: pretty print the parse failures.
         try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });
@@ -598,7 +598,7 @@ const Formatter = struct {
         fmt.ast.store.emptyScratch();
         const file = fmt.ast.store.getFile();
         const header = fmt.ast.store.getHeader(file.header);
-        const header_region = fmt.ast.store.nodes.items.items(.region)[@backingInt(file.header)];
+        const header_region = fmt.ast.store.nodes.field(.region)[@backingInt(file.header)];
         // Only flush comments before the header if it has its own tokens.
         // type_module, default_app, and malformed headers share the first statement's token,
         // so flushing here would duplicate the whitespace handling.
@@ -4028,7 +4028,7 @@ const Formatter = struct {
     }
 
     fn nodeRegion(fmt: *Formatter, idx: u32) AST.TokenizedRegion {
-        return fmt.ast.store.nodes.items.items(.region)[idx];
+        return fmt.ast.store.nodes.field(.region)[idx];
     }
 
     /// Mark the redundant `..` in one statement list's type annotations before

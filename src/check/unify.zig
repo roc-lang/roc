@@ -794,7 +794,7 @@ const Unifier = struct {
     fn isPairVisited(self: *Self, a_var: Var, b_var: Var) std.mem.Allocator.Error!bool {
         const scratch = self.scratch;
         // Visited vars are stored as pairs: [a1, b1, a2, b2, ...]
-        const items = scratch.visited_vars.items.items;
+        const items = scratch.visited_vars.items();
         const pair_count = items.len / 2;
         if (pair_count <= visited_scan_limit) {
             // Few pairs are in flight in nearly every unification, and
@@ -839,7 +839,7 @@ const Unifier = struct {
     /// Drop the in-flight pairs past `len` vars, keeping the index in step.
     fn truncateVisited(self: *Self, len: u32) void {
         const scratch = self.scratch;
-        const items = scratch.visited_vars.items.items;
+        const items = scratch.visited_vars.items();
         const keep_pairs = len / 2;
         if (scratch.visited_index_generation == self.types_store.slot_generation) {
             while (scratch.visited_index_pairs > keep_pairs) {
@@ -851,14 +851,14 @@ const Unifier = struct {
                 if (count.* == 0) _ = scratch.visited_index.remove(key);
             }
         }
-        scratch.visited_vars.items.items.len = len;
+        scratch.visited_vars.shrinkRetainingCapacity(len);
     }
 
     /// Check if a single var is already being unified in constraint unification (legacy mark-based behavior).
     /// This is used for constraint unification where we skip if EITHER var is visited.
     fn hasConstraintVisitedVar(self: *Self, var_: Var) bool {
         const resolved = self.types_store.resolveVar(var_);
-        for (self.scratch.constraint_visited_vars.items.items) |visited_var| {
+        for (self.scratch.constraint_visited_vars.items()) |visited_var| {
             const visited_resolved = self.types_store.resolveVar(visited_var);
             if (resolved.desc_idx == visited_resolved.desc_idx) return true;
         }
@@ -903,7 +903,7 @@ const Unifier = struct {
     }
 
     fn newMismatchFlag(self: *Self) std.mem.Allocator.Error!u32 {
-        const flag_idx: u32 = @intCast(self.scratch.mismatch_flags.items.items.len);
+        const flag_idx: u32 = @intCast(self.scratch.mismatch_flags.items().len);
         _ = try self.scratch.mismatch_flags.append(self.scratch.gpa, false);
         return flag_idx;
     }
@@ -911,16 +911,17 @@ const Unifier = struct {
     /// Push a frame, writing only its active variant: the union is as
     /// large as its largest variant, and most frames are small.
     fn pushWorkFrame(self: *Self, frame: WorkFrame) std.mem.Allocator.Error!void {
-        const slot = try self.scratch.unify_work_stack.items.addOne(self.scratch.gpa);
+        const slot = try self.scratch.unify_work_stack.addOne(self.scratch.gpa);
         writeActiveVariant(WorkFrame, slot, frame);
     }
 
     /// Pop the top frame into `out`, reading only its active variant.
     fn popWorkFrame(self: *Self, out: *WorkFrame) bool {
-        const items = &self.scratch.unify_work_stack.items.items;
+        const stack = &self.scratch.unify_work_stack;
+        const items = stack.items();
         if (items.len == 0) return false;
-        writeActiveVariant(WorkFrame, out, items.*[items.len - 1]);
-        items.len -= 1;
+        writeActiveVariant(WorkFrame, out, items[items.len - 1]);
+        stack.shrinkRetainingCapacity(items.len - 1);
         return true;
     }
 
@@ -1016,7 +1017,7 @@ const Unifier = struct {
                     return;
                 }
 
-                const visited_vars_len: u32 = @intCast(self.scratch.visited_vars.items.items.len);
+                const visited_vars_len: u32 = @intCast(self.scratch.visited_vars.items().len);
                 _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
                 _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
 
@@ -1063,7 +1064,7 @@ const Unifier = struct {
             .propagate => return error.TypeMismatch,
             .ignore => return .ignored,
             .set_flag => |flag_idx| {
-                self.scratch.mismatch_flags.items.items[flag_idx] = true;
+                self.scratch.mismatch_flags.items()[flag_idx] = true;
                 return .flagged;
             },
             .record_then_propagate => |record| {
@@ -1370,7 +1371,7 @@ const Unifier = struct {
                 // unify that against the rigid. This mirrors the `.rigid` branch
                 // of `unifyAlias`, keeping unification commutative.
                 const backing_var = self.types_store.getAliasBackingVar(b_alias);
-                try self.unifyGuarded(backing_var, vars.a.var_);
+                try self.unifyGuarded(vars.a.var_, backing_var);
             },
             .structure => return error.TypeMismatch,
             .field_presence => return error.TypeMismatch,
@@ -1411,7 +1412,7 @@ const Unifier = struct {
                 // Structural aliases are transparent. The concrete structure
                 // constrains the alias backing; alias spelling is checked
                 // presentation data, not union-find representative shape.
-                try self.unifyGuarded(vars.b.var_, backing_var);
+                try self.unifyGuarded(backing_var, vars.b.var_);
             },
             // A presence fact is not a type: it can never unify with an alias
             // (two-axes invariant). Reaching here is a structural mismatch.
@@ -2038,7 +2039,7 @@ const Unifier = struct {
     }
 
     fn processSameAliasAfterArgs(self: *Self, post: SameAliasAfterArgs) Error!void {
-        if (self.scratch.mismatch_flags.items.items[post.did_arg_error_flag]) {
+        if (self.scratch.mismatch_flags.items()[post.did_arg_error_flag]) {
             return error.TypeMismatch;
         }
 
@@ -2088,12 +2089,10 @@ const Unifier = struct {
     }
 
     fn mergeRowEntriesIntoScratch(self: *Self, comptime kind: RowKind, range: *kind.Entry().SafeList.Range, entries: kind.Entry().SafeMultiList.Range) std.mem.Allocator.Error!void {
-        const next = kind.storeEntries(self.types_store).sliceRange(entries);
         try self.scratch.mergeSortedExtension(
             kind,
             range,
-            next.items(.name),
-            next.items(kind.payloadField()),
+            kind.storeEntries(self.types_store).sliceRange(entries),
             self.ident_store,
         );
     }
@@ -2152,7 +2151,7 @@ const Unifier = struct {
     }
 
     fn processSharedFieldsAfterChildren(self: *Self, post: SharedFieldsAfterChildren) Error!void {
-        if (self.scratch.mismatch_flags.items.items[post.did_field_error_flag]) {
+        if (self.scratch.mismatch_flags.items()[post.did_field_error_flag]) {
             return error.TypeMismatch;
         }
 
@@ -2175,9 +2174,13 @@ const Unifier = struct {
         const range_start: u32 = @intCast(self.types_store.tags.len());
 
         for (self.scratch.in_both_tags.sliceRange(post.shared_tags_range)) |tags| {
+            // A tag both rows hold is pattern-only exactly when both rows
+            // hold it only because match patterns asked for it (design.md
+            // "Pattern-Only Tags").
             _ = try self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
+                .pattern_only = tags.a.pattern_only and tags.b.pattern_only,
             }});
         }
 
@@ -2258,7 +2261,10 @@ const Unifier = struct {
                     .vars = vars.*,
                     .direction = direction,
                 } });
-                try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var);
+                switch (direction) {
+                    .a_is_nominal => try self.unifyGuarded(nominal_backing_var, anon_tag_union.ext),
+                    .b_is_nominal => try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var),
+                }
                 return;
             } else {
                 // Anon has tags but nominal is empty
@@ -2309,8 +2315,12 @@ const Unifier = struct {
             .direction = direction,
         } });
 
-        // Now safe to proceed with full unification.
-        try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
+        // Now safe to proceed with full unification, each side keeping the
+        // role it has in `vars`.
+        switch (direction) {
+            .a_is_nominal => try self.unifyTwoTagUnions(vars, nominal_backing_tag_union, anon_tag_union),
+            .b_is_nominal => try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union),
+        }
     }
 
     fn unifyRecordWithNominal(
@@ -2383,13 +2393,23 @@ const Unifier = struct {
         // Unify the record fields
         try self.retainOuterRecordMismatch(vars, opened_backing, direction);
 
-        try self.unifyTwoRecords(
-            vars,
-            anon_record_fields,
-            anon_record_ext,
-            nominal_backing_record.fields,
-            nominal_backing_record.ext,
-        );
+        // Each side keeps the role it has in `vars`.
+        switch (direction) {
+            .a_is_nominal => try self.unifyTwoRecords(
+                vars,
+                nominal_backing_record.fields,
+                nominal_backing_record.ext,
+                anon_record_fields,
+                anon_record_ext,
+            ),
+            .b_is_nominal => try self.unifyTwoRecords(
+                vars,
+                anon_record_fields,
+                anon_record_ext,
+                nominal_backing_record.fields,
+                nominal_backing_record.ext,
+            ),
+        }
     }
 
     /// Retain only the outer record relation owned by the active diagnostic.
@@ -3570,7 +3590,7 @@ const Unifier = struct {
             const in_both_start: usize = @backingInt(partitioned.in_both.start);
             for (0..partitioned.in_both.len()) |i| {
                 // Re-fetch on each iteration since the backing array may have moved
-                const two_constraints = self.scratch.in_both_static_dispatch_constraints.items.items[in_both_start + i];
+                const two_constraints = self.scratch.in_both_static_dispatch_constraints.items()[in_both_start + i];
                 // TODO: Catch type mismatch and throw a custom error message?
                 try self.unifyStaticDispatchConstraint(receivers, two_constraints.a, two_constraints.b);
             }
@@ -3595,16 +3615,16 @@ const Unifier = struct {
         // Shared pairs validate callable compatibility. The partitioner places
         // every constraint that must survive into one of the retained ranges.
         const capacity = partitioned.only_in_a.len() + partitioned.only_in_b.len();
-        try self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
+        try self.types_store.static_dispatch_constraints.ensureUnusedCapacity(
             self.types_store.gpa,
             capacity,
         );
 
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
+            _ = self.types_store.static_dispatch_constraints.appendAssumeCapacity(only_a);
         }
         for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b)) |only_b| {
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_b);
+            _ = self.types_store.static_dispatch_constraints.appendAssumeCapacity(only_b);
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
@@ -3622,7 +3642,7 @@ const Unifier = struct {
     ) bool {
         if (kept.len != range.len()) return false;
         const original = self.types_store.static_dispatch_constraints.sliceRange(range);
-        const positions = indices.items.items[order.start..][0..order.len];
+        const positions = indices.items()[order.start..][0..order.len];
         for (kept, positions, 0..) |constraint, position, index| {
             if (position != index or !std.meta.eql(constraint, original[position])) return false;
         }
@@ -3657,7 +3677,7 @@ const Unifier = struct {
         // Track these vars as being unified (in separate list from general unification to match legacy mark semantics)
         _ = try self.scratch.constraint_visited_vars.append(self.scratch.gpa, a_constraint.fn_var);
         _ = try self.scratch.constraint_visited_vars.append(self.scratch.gpa, b_constraint.fn_var);
-        defer self.scratch.constraint_visited_vars.items.items.len -= 2;
+        defer self.scratch.constraint_visited_vars.shrinkRetainingCapacity(self.scratch.constraint_visited_vars.items().len - 2);
 
         // Unify the constraint function types
         try self.scheduleGuardedPair(a_constraint.fn_var, b_constraint.fn_var, .{ .record_method_conflict = .{
@@ -3692,7 +3712,7 @@ const Unifier = struct {
         retained_group_start: usize,
         constraint: StaticDispatchConstraint,
     ) Error!void {
-        for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
+        for (self.scratch.only_in_a_static_dispatch_constraints.items()[retained_group_start..]) |*existing| {
             if (!sameFixedLiteralClass(existing.origin, constraint.origin)) continue;
             existing.* = try mergeStaticDispatchConstraintMetadata(self.types_store, constraint, existing.*);
             try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
@@ -4275,13 +4295,6 @@ const RowKind = enum {
         };
     }
 
-    fn entry(comptime kind: RowKind, name: Ident.Idx, payload: kind.Payload()) kind.Entry() {
-        return switch (kind) {
-            .record => .{ .name = name, .presence = payload },
-            .tag_union => .{ .name = name, .args = payload },
-        };
-    }
-
     fn payloadOf(comptime kind: RowKind, e: kind.Entry()) kind.Payload() {
         return @field(e, @tagName(kind.payloadField()));
     }
@@ -4577,7 +4590,7 @@ pub const Scratch = struct {
         for (key.args) |arg| {
             _ = try self.persistent_opening_args.append(self.gpa, arg);
         }
-        errdefer self.persistent_opening_args.items.shrinkRetainingCapacity(start);
+        errdefer self.persistent_opening_args.shrinkRetainingCapacity(start);
         const entry_index: u32 = @intCast(self.persistent_openings.items.len);
         try self.persistent_openings.append(self.gpa, .{
             .decl = memo.decl,
@@ -4599,7 +4612,7 @@ pub const Scratch = struct {
     pub fn clearPersistentOpenings(self: *Scratch) void {
         self.persistent_opening_index.clearRetainingCapacity();
         self.persistent_openings.clearRetainingCapacity();
-        self.persistent_opening_args.items.clearRetainingCapacity();
+        self.persistent_opening_args.clearRetainingCapacity();
     }
 
     /// Init scratch
@@ -4696,37 +4709,37 @@ pub const Scratch = struct {
 
     /// Reset the scratch arrays, retaining the allocated memory
     pub fn reset(self: *Scratch) void {
-        self.unify_work_stack.items.clearRetainingCapacity();
-        self.mismatch_flags.items.clearRetainingCapacity();
+        self.unify_work_stack.clearRetainingCapacity();
+        self.mismatch_flags.clearRetainingCapacity();
         self.mismatch_evidence = .{};
-        self.gathered_fields.items.clearRetainingCapacity();
-        self.only_in_a_fields.items.clearRetainingCapacity();
-        self.only_in_b_fields.items.clearRetainingCapacity();
-        self.in_both_fields.items.clearRetainingCapacity();
-        self.absorbed_record_defaults.items.clearRetainingCapacity();
-        self.gathered_tags.items.clearRetainingCapacity();
+        self.gathered_fields.clearRetainingCapacity();
+        self.only_in_a_fields.clearRetainingCapacity();
+        self.only_in_b_fields.clearRetainingCapacity();
+        self.in_both_fields.clearRetainingCapacity();
+        self.absorbed_record_defaults.clearRetainingCapacity();
+        self.gathered_tags.clearRetainingCapacity();
         self.bounded_row_violation = null;
         self.rejected_roots = null;
-        self.only_in_a_tags.items.clearRetainingCapacity();
-        self.only_in_b_tags.items.clearRetainingCapacity();
-        self.in_both_tags.items.clearRetainingCapacity();
-        self.deferred_constraints.items.clearRetainingCapacity();
-        self.determined_literals.items.clearRetainingCapacity();
-        self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
-        self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
-        self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
-        self.a_static_dispatch_constraint_indices.items.clearRetainingCapacity();
-        self.b_static_dispatch_constraint_indices.items.clearRetainingCapacity();
-        self.fresh_vars.items.clearRetainingCapacity();
+        self.only_in_a_tags.clearRetainingCapacity();
+        self.only_in_b_tags.clearRetainingCapacity();
+        self.in_both_tags.clearRetainingCapacity();
+        self.deferred_constraints.clearRetainingCapacity();
+        self.determined_literals.clearRetainingCapacity();
+        self.only_in_a_static_dispatch_constraints.clearRetainingCapacity();
+        self.only_in_b_static_dispatch_constraints.clearRetainingCapacity();
+        self.in_both_static_dispatch_constraints.clearRetainingCapacity();
+        self.a_static_dispatch_constraint_indices.clearRetainingCapacity();
+        self.b_static_dispatch_constraint_indices.clearRetainingCapacity();
+        self.fresh_vars.clearRetainingCapacity();
         self.occurs_scratch.reset();
-        self.visited_vars.items.clearRetainingCapacity();
+        self.visited_vars.clearRetainingCapacity();
         // Clearing a hash map rewrites its whole metadata array, so an empty
         // index is left alone rather than paying for its retained capacity.
         if (self.visited_index.count() != 0) self.visited_index.clearRetainingCapacity();
         self.visited_index_pairs = 0;
-        self.constraint_visited_vars.items.clearRetainingCapacity();
+        self.constraint_visited_vars.clearRetainingCapacity();
         self.opened_nominals.clearRetainingCapacity();
-        self.opened_nominal_args.items.clearRetainingCapacity();
+        self.opened_nominal_args.clearRetainingCapacity();
         self.opened_nominal_persistable.clearRetainingCapacity();
         self.chain_duplicate_fields.clearRetainingCapacity();
         self.chain_duplicate_tags.clearRetainingCapacity();
@@ -4751,8 +4764,9 @@ pub const Scratch = struct {
         const gathered = self.rowList(kind, "gathered_");
         const start_int = gathered.len();
         const slice = multi_list.sliceRange(range);
-        for (slice.items(.name), slice.items(kind.payloadField())) |name, payload| {
-            _ = try gathered.append(self.gpa, kind.entry(name, payload));
+        // Whole entries are copied so a tag's pattern-only mark travels with it.
+        for (0..slice.len) |index| {
+            _ = try gathered.append(self.gpa, slice.get(index));
         }
         return gathered.rangeToEnd(@intCast(start_int));
     }
@@ -4760,17 +4774,18 @@ pub const Scratch = struct {
     /// Merge sorted extension entries into an already-sorted gathered range.
     /// Maintains sorted order; an entry already gathered keeps its first
     /// occurrence, and the repeat is recorded in the kind's chain-duplicate list.
+    /// A repeated tag names the same tag, so the kept occurrence is
+    /// pattern-only only when the repeat is too (design.md "Pattern-Only Tags").
     /// The range is updated in-place to reflect the new count.
     fn mergeSortedExtension(
         self: *Self,
         comptime kind: RowKind,
         range: *kind.Entry().SafeList.Range,
-        ext_names: []const Ident.Idx,
-        ext_payloads: []const kind.Payload(),
+        ext_entries: kind.Entry().SafeMultiList.Slice,
         ident_store: *const Ident.Store,
     ) std.mem.Allocator.Error!void {
-        std.debug.assert(ext_names.len == ext_payloads.len);
-        if (ext_names.len == 0) return;
+        if (ext_entries.len == 0) return;
+        const ext_names = ext_entries.items(.name);
 
         const gathered = self.rowList(kind, "gathered_");
         const chain_duplicates = self.rowList(kind, "chain_duplicate_");
@@ -4782,19 +4797,21 @@ pub const Scratch = struct {
         // Count the extension entries that are not already gathered, recording
         // each repeated one against its first occurrence.
         var new_count: usize = 0;
-        for (ext_names, ext_payloads) |ext_name, ext_payload| {
-            const first = for (current) |existing| {
-                if (existing.name.eql(ext_name)) break existing;
+        for (0..ext_entries.len) |ext_index| {
+            const ext_entry = ext_entries.get(ext_index);
+            const first = for (current) |*existing| {
+                if (existing.name.eql(ext_entry.name)) break existing;
             } else null;
             if (first) |existing| {
-                try chain_duplicates.append(self.gpa, .{ .first = kind.payloadOf(existing), .repeated = ext_payload });
+                if (comptime kind == .tag_union) existing.pattern_only = existing.pattern_only and ext_entry.pattern_only;
+                try chain_duplicates.append(self.gpa, .{ .first = kind.payloadOf(existing.*), .repeated = kind.payloadOf(ext_entry) });
             } else new_count += 1;
         }
 
         if (new_count == 0) return;
 
         // Allocate space for merged result
-        try gathered.items.ensureUnusedCapacity(self.gpa, new_count);
+        try gathered.ensureUnusedCapacity(self.gpa, new_count);
 
         // IMPORTANT: re-slice after the reserve—growing the gathered list can
         // reallocate its backing array, invalidating `current`.
@@ -4805,12 +4822,12 @@ pub const Scratch = struct {
         // 2. Then do an in-place merge of the two sorted regions
 
         // Append non-duplicate extension entries
-        for (ext_names, ext_payloads) |name, payload| {
+        for (ext_names, 0..) |name, ext_index| {
             const is_dup = for (current_after) |existing| {
                 if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
-                gathered.items.appendAssumeCapacity(kind.entry(name, payload));
+                _ = gathered.appendAssumeCapacity(ext_entries.get(ext_index));
             }
         }
 
@@ -4819,7 +4836,7 @@ pub const Scratch = struct {
         // Get the slice starting from range.start with the new total length
         const start_idx: usize = @backingInt(range.start);
         const total_len = current_len + new_count;
-        const items = gathered.items.items[start_idx..][0..total_len];
+        const items = gathered.items()[start_idx..][0..total_len];
 
         // In-place merge: we have [sorted_left | sorted_right]
         inPlaceMergeRow(kind.Entry(), items, current_len, ident_store);

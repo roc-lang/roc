@@ -1,32 +1,35 @@
 //! Debug-checked growable lists for mutable compiler stores.
 //!
-//! A guarded list has the same release representation as `std.ArrayList(T)`,
-//! but Debug builds track physical backing moves so stale span and pointer
-//! borrows fail deterministically at the point of guarded access.
+//! A guarded list has the same release representation as `SafeList(T)`, but
+//! Debug builds track physical backing moves so stale span and pointer borrows
+//! fail deterministically at the point of guarded access. Like a `SafeList`, a
+//! guarded list can borrow its items (`fromBorrowedSlice`): it reads and writes
+//! them in place, copies them on its first growth, and never frees them.
 
 const std = @import("std");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
+const SafeList = @import("safe_list.zig").SafeList;
 const SupersededBackings = @import("SupersededBackings.zig");
 const debug_guards = builtin.mode == .debug;
 
-/// Growable list wrapper that checks stale borrows in Debug and erases to `std.ArrayList` otherwise.
+/// Growable list wrapper that checks stale borrows in Debug and erases to `SafeList` otherwise.
 pub fn List(comptime T: type, comptime list_name: []const u8) type {
     return struct {
         const Self = @This();
         const Generation = if (debug_guards) u64 else void;
 
-        __guarded_backing: std.ArrayList(T) = .empty,
+        __guarded_backing: SafeList(T) = .{},
         __guarded_generation: Generation = if (debug_guards) 0 else {},
 
         pub const empty: Self = .{};
-        pub const Slice = std.ArrayList(T).Slice;
+        pub const Slice = []T;
 
         comptime {
             if (!debug_guards) {
-                std.debug.assert(@sizeOf(Self) == @sizeOf(std.ArrayList(T)));
-                std.debug.assert(@alignOf(Self) == @alignOf(std.ArrayList(T)));
+                std.debug.assert(@sizeOf(Self) == @sizeOf(SafeList(T)));
+                std.debug.assert(@alignOf(Self) == @alignOf(SafeList(T)));
             }
         }
 
@@ -35,36 +38,63 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
         }
 
         pub fn initCapacity(allocator: Allocator, capacity_: usize) Allocator.Error!Self {
-            return .{ .__guarded_backing = try std.ArrayList(T).initCapacity(allocator, capacity_) };
+            return .{ .__guarded_backing = try SafeList(T).initCapacity(allocator, capacity_) };
         }
 
+        /// A list that takes ownership of `backing`'s allocation.
         pub fn fromArrayList(backing: std.ArrayList(T)) Self {
-            return .{ .__guarded_backing = backing };
+            if (backing.capacity == 0) return .empty;
+            std.debug.assert(backing.capacity <= std.math.maxInt(u32));
+            return .{ .__guarded_backing = .{
+                .ptr = backing.items.ptr,
+                .length = @intCast(backing.items.len),
+                .capacity = @intCast(backing.capacity),
+            } };
         }
 
+        /// Hand this list's owned allocation over as an `ArrayList`, leaving
+        /// the list empty. A borrowed list's items belong to someone else, so
+        /// it is never taken this way.
         pub fn takeArrayList(self: *Self) std.ArrayList(T) {
             self.invalidateIfElementsCouldBeBorrowed();
             const backing = self.__guarded_backing;
-            self.__guarded_backing = .empty;
-            return backing;
+            self.__guarded_backing = .{};
+            if (backing.capacity == 0) {
+                std.debug.assert(backing.length == 0);
+                return .empty;
+            }
+            return .{
+                .items = backing.ptr[0..backing.length],
+                .capacity = backing.capacity,
+                .pointer_stability = .{},
+            };
         }
 
         pub fn fromOwnedSlice(slice: []T) Self {
-            return .{ .__guarded_backing = std.ArrayList(T).fromOwnedSlice(slice) };
+            return .{ .__guarded_backing = SafeList(T).fromOwnedSlice(slice) };
+        }
+
+        /// A borrowed list over `borrowed`, which outlives the list. The list
+        /// reads and writes `borrowed` in place, copies it on its first growth,
+        /// and never frees it.
+        pub fn fromBorrowedSlice(borrowed: []T) Self {
+            return .{ .__guarded_backing = SafeList(T).fromBorrowedSlice(borrowed) };
         }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
             self.invalidateIfElementsCouldBeBorrowed();
             self.__guarded_backing.deinit(allocator);
-            self.__guarded_backing = .empty;
+            self.__guarded_backing = .{};
         }
 
         pub fn len(self: *const Self) usize {
-            return self.__guarded_backing.items.len;
+            return self.__guarded_backing.length;
         }
 
+        /// How many items the list holds before its next growth moves them. A
+        /// borrowed list moves on its first growth, so this is its length.
         pub fn capacity(self: *const Self) usize {
-            return self.__guarded_backing.capacity;
+            return @max(self.__guarded_backing.capacity, self.__guarded_backing.length);
         }
 
         pub fn isEmpty(self: *const Self) bool {
@@ -73,17 +103,17 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
 
         pub fn append(self: *Self, allocator: Allocator, item: T) Allocator.Error!void {
             const old = self.moveStateBeforeGrowth();
-            try self.__guarded_backing.append(allocator, item);
+            _ = try self.__guarded_backing.append(allocator, item);
             self.bumpIfMoved(old);
         }
 
         pub fn appendAssumeCapacity(self: *Self, item: T) void {
-            self.__guarded_backing.appendAssumeCapacity(item);
+            _ = self.__guarded_backing.appendAssumeCapacity(item);
         }
 
         pub fn appendSlice(self: *Self, allocator: Allocator, values: []const T) Allocator.Error!void {
             const old = self.moveStateBeforeGrowth();
-            try self.__guarded_backing.appendSlice(allocator, values);
+            _ = try self.__guarded_backing.appendSlice(allocator, values);
             self.bumpIfMoved(old);
         }
 
@@ -94,7 +124,7 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
         }
 
         pub fn appendSliceAssumeCapacity(self: *Self, values: []const T) void {
-            self.__guarded_backing.appendSliceAssumeCapacity(values);
+            _ = self.__guarded_backing.appendSliceAssumeCapacity(values);
         }
 
         pub fn pop(self: *Self) ?T {
@@ -116,8 +146,8 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             additional_count: usize,
             superseded: *SupersededBackings,
         ) Allocator.Error!void {
-            const moved = try superseded.ensureUnusedCapacity(T, &self.__guarded_backing, allocator, additional_count);
-            if (debug_guards and moved and self.__guarded_backing.items.len != 0) self.__guarded_generation +%= 1;
+            const moved = try superseded.ensureUnusedSafeListCapacity(T, &self.__guarded_backing, allocator, additional_count);
+            if (debug_guards and moved and self.__guarded_backing.length != 0) self.__guarded_generation +%= 1;
         }
 
         pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, new_capacity: usize) Allocator.Error!void {
@@ -141,8 +171,7 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
         }
 
         pub fn clearAndFree(self: *Self, allocator: Allocator) void {
-            self.invalidateIfElementsCouldBeBorrowed();
-            self.__guarded_backing.clearAndFree(allocator);
+            self.deinit(allocator);
         }
 
         pub fn shrinkAndFree(self: *Self, allocator: Allocator, new_len: usize) void {
@@ -157,26 +186,27 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
         }
 
         pub fn get(self: *const Self, index: usize) T {
-            return self.__guarded_backing.items[index];
+            return self.__guarded_backing.items()[index];
         }
 
         pub fn getPtrImmediate(self: *Self, index: usize) *T {
-            return &self.__guarded_backing.items[index];
+            return &self.__guarded_backing.items()[index];
         }
 
         /// A read-only pointer to one element, for a caller that reads through
         /// it before anything can append to the list.
         pub fn getPtrConstImmediate(self: *const Self, index: usize) *const T {
-            return &self.__guarded_backing.items[index];
+            return &self.__guarded_backing.items()[index];
         }
 
         pub fn set(self: *Self, index: usize, value: T) void {
-            self.__guarded_backing.items[index] = value;
+            self.__guarded_backing.items()[index] = value;
         }
 
         pub fn replace(self: *Self, index: usize, value: T) T {
-            const old = self.__guarded_backing.items[index];
-            self.__guarded_backing.items[index] = value;
+            const items = self.__guarded_backing.items();
+            const old = items[index];
+            items[index] = value;
             return old;
         }
 
@@ -189,7 +219,7 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
         }
 
         fn spanOf(comptime mutable: bool, self: if (mutable) *Self else *const Self, start: usize, span_len: usize) GuardedSpan(T, list_name, mutable) {
-            assertRangeInBounds(list_name, self.__guarded_backing.items.len, start, span_len);
+            assertRangeInBounds(list_name, self.len(), start, span_len);
             if (debug_guards) {
                 return .{
                     .list = self,
@@ -198,12 +228,12 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
                     .generation = self.currentGeneration(),
                 };
             } else {
-                return self.__guarded_backing.items[start..][0..span_len];
+                return self.__guarded_backing.items()[start..][0..span_len];
             }
         }
 
         pub fn borrowPtr(self: *Self, index: usize) BorrowPtr(T, list_name) {
-            assertIndexInBounds(list_name, self.__guarded_backing.items.len, index);
+            assertIndexInBounds(list_name, self.len(), index);
             if (debug_guards) {
                 return .{
                     .list = self,
@@ -211,13 +241,13 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
                     .generation = self.currentGeneration(),
                 };
             } else {
-                return &self.__guarded_backing.items[index];
+                return &self.__guarded_backing.items()[index];
             }
         }
 
         pub fn dupeSpan(self: *const Self, allocator: Allocator, start: usize, span_len: usize) Allocator.Error![]T {
-            assertRangeInBounds(list_name, self.__guarded_backing.items.len, start, span_len);
-            return allocator.dupe(T, self.__guarded_backing.items[start..][0..span_len]);
+            assertRangeInBounds(list_name, self.len(), start, span_len);
+            return allocator.dupe(T, self.__guarded_backing.items()[start..][0..span_len]);
         }
 
         pub fn restoreLen(self: *Self, mark: usize) void {
@@ -225,11 +255,11 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
         }
 
         pub fn unsafeRawItemsForView(self: *const Self) []const T {
-            return self.__guarded_backing.items;
+            return self.__guarded_backing.items();
         }
 
         pub fn unsafeRawItemsMutForStore(self: *Self) []T {
-            return self.__guarded_backing.items;
+            return self.__guarded_backing.items();
         }
 
         fn currentGeneration(self: *const Self) u64 {
@@ -239,7 +269,7 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
 
         fn invalidateIfElementsCouldBeBorrowed(self: *Self) void {
             if (!debug_guards) return;
-            if (self.__guarded_backing.items.len != 0 or self.__guarded_backing.capacity != 0) {
+            if (self.__guarded_backing.length != 0 or self.__guarded_backing.capacity != 0) {
                 self.__guarded_generation +%= 1;
             }
         }
@@ -251,15 +281,15 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
 
         fn moveStateBeforeGrowth(self: *const Self) MoveState {
             return .{
-                .ptr = self.__guarded_backing.items.ptr,
-                .len = self.__guarded_backing.items.len,
+                .ptr = self.__guarded_backing.ptr,
+                .len = self.__guarded_backing.length,
             };
         }
 
         fn bumpIfMoved(self: *Self, old: MoveState) void {
             if (!debug_guards) return;
             if (old.len == 0) return;
-            if (old.ptr != self.__guarded_backing.items.ptr) {
+            if (old.ptr != self.__guarded_backing.ptr) {
                 self.__guarded_generation +%= 1;
             }
         }
@@ -290,17 +320,17 @@ fn GuardedSpan(comptime T: type, comptime list_name: []const u8, comptime mutabl
 
         pub fn at(self: Self, index: usize) T {
             self.assertElementAccess(index);
-            return self.list.__guarded_backing.items[self.start + index];
+            return self.list.__guarded_backing.items()[self.start + index];
         }
 
         pub fn atPtr(self: Self, index: usize) *T {
             self.assertElementAccess(index);
-            return &self.list.__guarded_backing.items[self.start + index];
+            return &self.list.__guarded_backing.items()[self.start + index];
         }
 
         pub fn set(self: Self, index: usize, value: T) void {
             self.assertElementAccess(index);
-            self.list.__guarded_backing.items[self.start + index] = value;
+            self.list.__guarded_backing.items()[self.start + index] = value;
         }
 
         pub fn assertValid(self: Self) void {
@@ -319,7 +349,7 @@ fn GuardedSpan(comptime T: type, comptime list_name: []const u8, comptime mutabl
         }
 
         fn assertCurrent(self: Self, operation: []const u8) void {
-            assertRangeInBounds(list_name, self.list.__guarded_backing.items.len, self.start, self.len);
+            assertRangeInBounds(list_name, self.list.__guarded_backing.length, self.start, self.len);
             if (self.list.__guarded_generation != self.generation) {
                 std.debug.panic(
                     "guarded list invalidated: {s}: {s}; borrowed start={d} len={d} generation={d} current_generation={d} current_len={d}",
@@ -330,7 +360,7 @@ fn GuardedSpan(comptime T: type, comptime list_name: []const u8, comptime mutabl
                         self.len,
                         self.generation,
                         self.list.__guarded_generation,
-                        self.list.__guarded_backing.items.len,
+                        self.list.__guarded_backing.length,
                     },
                 );
             }
@@ -351,16 +381,16 @@ pub fn BorrowPtr(comptime T: type, comptime list_name: []const u8) type {
 
         pub fn get(self: Self) T {
             self.assertCurrent("pointer get");
-            return self.list.__guarded_backing.items[self.index];
+            return self.list.__guarded_backing.items()[self.index];
         }
 
         pub fn set(self: Self, value: T) void {
             self.assertCurrent("pointer set");
-            self.list.__guarded_backing.items[self.index] = value;
+            self.list.__guarded_backing.items()[self.index] = value;
         }
 
         fn assertCurrent(self: Self, operation: []const u8) void {
-            assertIndexInBounds(list_name, self.list.__guarded_backing.items.len, self.index);
+            assertIndexInBounds(list_name, self.list.__guarded_backing.length, self.index);
             if (self.list.__guarded_generation != self.generation) {
                 std.debug.panic(
                     "guarded list invalidated: {s}: {s}; borrowed index={d} generation={d} current_generation={d} current_len={d}",
@@ -370,7 +400,7 @@ pub fn BorrowPtr(comptime T: type, comptime list_name: []const u8) type {
                         self.index,
                         self.generation,
                         self.list.__guarded_generation,
-                        self.list.__guarded_backing.items.len,
+                        self.list.__guarded_backing.length,
                     },
                 );
             }
@@ -582,10 +612,23 @@ test "GuardedList zero-length borrow does not false-positive after clear" {
 test "GuardedList release representation and borrow types are raw" {
     if (!debug_guards) {
         const U32List = List(u32, "test.release_layout");
-        try std.testing.expectEqual(@sizeOf(std.ArrayList(u32)), @sizeOf(U32List));
-        try std.testing.expectEqual(@alignOf(std.ArrayList(u32)), @alignOf(U32List));
+        try std.testing.expectEqual(@sizeOf(SafeList(u32)), @sizeOf(U32List));
+        try std.testing.expectEqual(@alignOf(SafeList(u32)), @alignOf(U32List));
         try std.testing.expect(BorrowSpan(u32, "test.release_span") == []const u32);
         try std.testing.expect(BorrowSpanMut(u32, "test.release_span_mut") == []u32);
         try std.testing.expect(BorrowPtr(u32, "test.release_ptr") == *u32);
     }
+}
+
+test "GuardedList borrowed list copies on growth and frees nothing it borrows" {
+    var backing = [_]u32{ 1, 2, 3 };
+    var list = List(u32, "test.borrowed").fromBorrowedSlice(&backing);
+    defer list.deinit(std.testing.allocator);
+
+    list.set(0, 10);
+    try std.testing.expectEqual(@as(u32, 10), backing[0]);
+    try list.append(std.testing.allocator, 4);
+    list.set(1, 20);
+    try std.testing.expectEqual(@as(u32, 2), backing[1]);
+    try std.testing.expectEqualSlices(u32, &.{ 10, 20, 3, 4 }, list.unsafeRawItemsForView());
 }

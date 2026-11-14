@@ -1002,7 +1002,7 @@ test "check - issue 11271 - polymorphic calls retain every omitted-default const
         var env = try TestEnv.init("Test", source);
         defer env.deinit();
         try env.assertDefType("xs", "List(Config)");
-        const omissions = env.module_env.record_omitted_defaults.items.items;
+        const omissions = env.module_env.record_omitted_defaults.items();
         try std.testing.expectEqual(case.fields_per_owner * case.owners, omissions.len);
         for (omissions) |omission| {
             const expr = env.module_env.store.getExpr(omission.expr);
@@ -1059,7 +1059,7 @@ test "check - issue 11271 - polymorphic omission preserves independent nominal a
     defer env.deinit();
     try env.assertDefType("numbers", "Config(U8)");
     try env.assertDefType("strings", "Config(Str)");
-    try std.testing.expectEqual(2, env.module_env.record_omitted_defaults.items.items.len);
+    try std.testing.expectEqual(2, env.module_env.record_omitted_defaults.items().len);
 }
 
 test "check - issue 11271 - merged constructions retain recursive-default rejection" {
@@ -1084,7 +1084,7 @@ test "check - issue 11024 - nested empty literals own their omitted defaults" {
     defer env.deinit();
     try env.assertDefType("xs", "List(Foo)");
 
-    const omissions = env.module_env.record_omitted_defaults.items.items;
+    const omissions = env.module_env.record_omitted_defaults.items();
     try std.testing.expectEqual(4, omissions.len);
     for (omissions) |omission| {
         try std.testing.expect(env.module_env.store.getExpr(omission.expr) == .e_empty_record);

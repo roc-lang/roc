@@ -172,7 +172,7 @@ NO CHANGE
 						(p-assign (ident "acc"))))
 				(s-let
 					(p-assign (ident "#interp_1"))
-					(e-call (constraint-fn-var 330)
+					(e-call (constraint-fn-var 324)
 						(e-lookup-local
 							(p-assign (ident "process")))
 						(e-lookup-local
@@ -215,7 +215,7 @@ NO CHANGE
 											(p-assign (ident "tag"))))
 									(s-let
 										(p-assign (ident "#interp_3"))
-										(e-call (constraint-fn-var 354)
+										(e-call (constraint-fn-var 348)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -261,7 +261,7 @@ NO CHANGE
 			(ty-lookup (name "Elem") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 392)
+		(e-call (constraint-fn-var 386)
 			(e-lookup-local
 				(p-assign (ident "process")))
 			(e-lookup-local
