@@ -13909,7 +13909,7 @@ const EvidencePass = struct {
             const scheme_use_sites = self.template_iterator_refs.scheme_use_sites[scheme_use_span.start .. scheme_use_span.start + scheme_use_span.len];
             for (scheme_use_sites, 0..) |site, i| {
                 const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_use_span.start + i], template_level);
-                try self.emitSchemeUseSiteEvidence(site.record_idx, @backingInt(site.checked_expr), chain);
+                try self.emitSchemeUseSiteEvidence(site.record_idx, @backingInt(site.checked_expr), chain, .commit);
             }
 
             const scope_site_span = self.template_iterator_refs.scope_site_spans[template_index];
@@ -13948,7 +13948,7 @@ const EvidencePass = struct {
             const scheme_span = self.template_iterator_refs.default_scheme_uses;
             for (self.template_iterator_refs.scheme_use_sites[scheme_span.start .. scheme_span.start + scheme_span.len], 0..) |site, i| {
                 const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_span.start + i], .empty);
-                try self.emitSchemeUseSiteEvidence(site.record_idx, @backingInt(site.checked_expr), chain);
+                try self.emitSchemeUseSiteEvidence(site.record_idx, @backingInt(site.checked_expr), chain, .commit);
             }
 
             const scope_span = self.template_iterator_refs.default_scope_sites;
@@ -16524,7 +16524,29 @@ const EvidencePass = struct {
                 try self.emitProcedureValueSiteEvidence(record_idx, site_key, chain);
                 return;
             }
-            try self.emitSchemeUseSiteEvidence(record_idx, site_key, chain);
+            // A constant's value can hold functions as data, which a read
+            // hands on before any of them is requested at a concrete type.
+            const constant_value = switch (rec.ref) {
+                .top_level_const,
+                .imported_const,
+                .selected_hoisted_const,
+                .platform_required_const,
+                => true,
+                .top_level_proc,
+                .imported_proc,
+                .hosted_proc,
+                .promoted_top_level_proc,
+                .platform_required_proc,
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                => false,
+            };
+            try self.emitSchemeUseSiteEvidence(record_idx, site_key, chain, if (constant_value) .from_callable else .commit);
             return;
         }
 
@@ -16625,11 +16647,16 @@ const EvidencePass = struct {
         });
     }
 
+    /// Publish a scheme use's evidence. `value_use` says how a value use
+    /// publishes an obligation nothing pins: a read of a constant leaves one
+    /// reachable through a stored function's callable type to that
+    /// function's eventual request (`UnpinnedRecordEvidence.from_callable`).
     fn emitSchemeUseSiteEvidence(
         self: *EvidencePass,
         record_idx: u32,
         site_key: u32,
         chain: []const ChainLevel,
+        value_use: UnpinnedRecordEvidence,
     ) Allocator.Error!void {
         if (self.site_seen.contains(site_key)) return;
 
@@ -16652,7 +16679,8 @@ const EvidencePass = struct {
         const unpinned: UnpinnedRecordEvidence = switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))) {
             .shared_value_use => .defer_resolution,
             .nested_function_use => .from_callable,
-            .value_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference => .commit,
+            .value_use => value_use,
+            .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference => .commit,
             .platform_requirement => unreachable, // platform solutions publish their source-free root edge, never expression-site evidence
             .where_method_use => unreachable, // rejected above
         };
