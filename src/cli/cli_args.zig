@@ -107,31 +107,7 @@ pub const Choice = struct {
 };
 
 /// The optimization strategy for the compilation of a Roc program
-pub const OptLevel = enum {
-    dev,
-    interpreter,
-    speed,
-    size,
-
-    /// What choosing the level means, for the help of flags that take one.
-    fn description(self: OptLevel) []const u8 {
-        return switch (self) {
-            .dev => "native dev backend, fast compilation",
-            .interpreter => "interpreted, no code generation",
-            .speed => "LLVM, optimized for execution speed",
-            .size => "LLVM, optimized for binary size",
-        };
-    }
-
-    /// Convert to the backend evaluation enum used by internal modules
-    pub fn toBackend(self: OptLevel) @import("eval").EvalBackend {
-        return switch (self) {
-            .interpreter => .interpreter,
-            .dev => .dev,
-            .size, .speed => .llvm,
-        };
-    }
-};
+pub const OptLevel = @import("lowering_policy.zig").OptLevel;
 
 /// Default optimization level for commands that favor fast compilation over
 /// fast output—`run`, `test`, `repl`, and `glue` all default here.

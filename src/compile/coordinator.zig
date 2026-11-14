@@ -1409,6 +1409,8 @@ pub const BoxyObjectLowering = struct {
     /// Whether that link composes the units' pieces (rather than placing
     /// their unit images with a fast dev link), so the units decode them.
     link_reads_pieces: bool = false,
+    /// The unit entries the compiler carries in its binary.
+    embedded: boxy_unit.EmbeddedUnits = .none,
 };
 
 /// The module objects of a `.boxy` compilation, each restored from the
@@ -1794,6 +1796,7 @@ const BoxyObjects = struct {
             .cache_manager = self.manager,
             .key = undefined,
             .want_pieces = want_pieces,
+            .embedded = self.lowering.embedded,
         } };
     }
 

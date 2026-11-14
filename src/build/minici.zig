@@ -302,6 +302,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-cli-platforms-boxy", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
     .{ .name = "run-test-builtin-bake-reproducible" },
+    .{ .name = "run-test-builtin-unit" },
     .{ .name = "run-test-downstream-package" },
     .{ .name = "run-test-wasm-static-lib" },
     .{ .name = "run-test-dylib" },

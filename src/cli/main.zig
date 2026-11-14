@@ -151,6 +151,13 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
 } else @import("watch");
 
 const cli_args = @import("cli_args.zig");
+const lowering_policy = @import("lowering_policy.zig");
+const PlatformEntrypointArtifact = lowering_policy.PlatformEntrypointArtifact;
+const CheckedLirRoots = lowering_policy.CheckedLirRoots;
+const checkedRuntimeLoweringConfig = lowering_policy.checkedRuntimeLoweringConfig;
+const postCheckInlineModeForOpt = lowering_policy.postCheckInlineModeForOpt;
+const specConstrCloneInliningForOpt = lowering_policy.specConstrCloneInliningForOpt;
+const inlineExpectModeForOpt = lowering_policy.inlineExpectModeForOpt;
 const default_app = @import("default_app.zig");
 const install_store = @import("install.zig");
 const host_symbols = @import("host_symbols.zig");
@@ -295,12 +302,8 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
     build_env.setSpecializationStrategy(opts.specialization_strategy);
     const object_target = roc_target.host_cpu.nativeTarget();
-    build_env.boxy_object_lowering = .{
-        .target = object_target,
-        .config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, object_target, false).target,
-        .opt = @tagName(cli_args.OptLevel.dev),
-        .inline_expects = inlineExpectModeForOpt(.dev) == .run,
-    };
+    build_env.boxy_object_lowering = lowering_policy.compileTimeObjectLowering(object_target);
+    build_env.boxy_object_lowering.?.embedded = embeddedBoxyUnits();
     if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
     if (opts.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
@@ -562,6 +565,19 @@ fn shimLibraryCacheFilename(ctx: *CliCtx, kind: ShimLibraryKind, target: RocTarg
         std.fmt.allocPrint(ctx.arena, "{s}_{s}_{s}.lib", .{ stem, @tagName(target), digest_hex[0..] })
     else
         std.fmt.allocPrint(ctx.arena, "lib{s}_{s}_{s}.a", .{ stem, @tagName(target), digest_hex[0..] });
+}
+
+/// The Boxy unit entries the compiler's build linked into `roc`: the
+/// Builtin module's unit for the target `roc` runs on, built by
+/// src/build/builtin_unit.zig, or none (design.md "Embedded Units").
+fn embeddedBoxyUnits() compile.boxy_embedded_units.Units {
+    if (builtin.is_test) return .none;
+    const linked = struct {
+        extern const roc_embedded_boxy_units: u8 align(compile.boxy_embedded_units.alignment);
+        extern const roc_embedded_boxy_units_len: usize;
+    };
+    const table: [*]align(compile.boxy_embedded_units.alignment) const u8 = @ptrCast(&linked.roc_embedded_boxy_units);
+    return .{ .table = table[0..linked.roc_embedded_boxy_units_len] };
 }
 
 /// The link inputs embedded in `roc` for one target. Cross-compilation
@@ -6374,20 +6390,6 @@ fn applySyntheticDefaultAppMapping(build_env: *BuildEnv, mapping: ?SyntheticDefa
     build_env.setStagedEntryUserPath(m.original_path);
 }
 
-const PlatformEntrypointArtifact = union(enum) {
-    /// Pointer-width-independent LIR consumed directly by the interpreter.
-    lir_image,
-    /// Target-specific machine code and readonly data consumed by the dev shim.
-    dev_run_image: DevRunImage,
-};
-
-/// A dev shim image's target, and whether the shim runs it under hot reload,
-/// which reserves a header at the start of every erased callable's capture.
-const DevRunImage = struct {
-    target: RocTarget,
-    hot_reload: bool,
-};
-
 fn lowerLirWithBuildEnv(
     ctx: *CliCtx,
     lir_allocator: Allocator,
@@ -10941,6 +10943,7 @@ const BoxyUnitTask = struct {
             .want_pieces = self.want_pieces,
             .test_unit = self.policy.test_units,
             .wasm_stack_checks = self.policy.wasm_stack_checks,
+            .embedded = embeddedBoxyUnits(),
         });
         errdefer built.deinit(self.gpa);
         return built;
@@ -13868,74 +13871,6 @@ test "only optimized builds prove uniqueness and drop string literal reference c
     }
 }
 
-fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
-    return switch (opt) {
-        .size, .speed => .wrappers,
-        .dev => lir.CheckedPipeline.dev_inline_mode,
-        .interpreter => .none,
-    };
-}
-
-/// Optimized builds let SpecConstr's value-aware clones chase known values
-/// through any direct call; dev builds confine that chase to iterator
-/// pipelines, which keeps post-check time and emitted program size bounded
-/// while still collapsing `Iter` loops. The interpreter never reaches
-/// SpecConstr (its inline mode is `.none`), so its value here is inert.
-fn specConstrCloneInliningForOpt(opt: cli_args.OptLevel) postcheck.MonotypeLifted.SpecConstr.CloneInlining {
-    return switch (opt) {
-        .size, .speed => .all_calls,
-        .dev, .interpreter => lir.CheckedPipeline.dev_spec_constr_clone_inlining,
-    };
-}
-
-/// Only optimized builds, which are what get deployed, keep `Dict`'s runtime
-/// seed (`TargetConfig.zero_dict_seed`).
-fn zeroDictSeedForOpt(opt: cli_args.OptLevel) bool {
-    return switch (opt) {
-        .size, .speed => false,
-        .dev, .interpreter => true,
-    };
-}
-
-/// Give dev procedures stable code keys for hot reload (`TargetConfig.site_code_keys`).
-fn siteCodeKeysForOpt(opt: cli_args.OptLevel) bool {
-    return switch (opt) {
-        .dev => true,
-        .size, .speed, .interpreter => false,
-    };
-}
-
-fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
-    return switch (opt) {
-        .size, .speed => true,
-        .dev, .interpreter => false,
-    };
-}
-
-fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
-    return switch (opt) {
-        .size, .speed => true,
-        .dev, .interpreter => false,
-    };
-}
-
-/// Whether the LIR rewrites that only speed up the produced program run.
-/// Dev builds exist to compile fast; `--opt=speed` and `--opt=size` are where
-/// the program's own speed is bought.
-fn optimizeLirForOpt(opt: cli_args.OptLevel) bool {
-    return switch (opt) {
-        .size, .speed => true,
-        .dev, .interpreter => false,
-    };
-}
-
-fn proveRangesForOpt(opt: cli_args.OptLevel) bool {
-    return switch (opt) {
-        .size, .speed => true,
-        .dev, .interpreter => false,
-    };
-}
-
 fn optimizedDbgWarningsForBuild(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -13950,96 +13885,6 @@ fn optimizedDbgWarningsForBuild(
         ),
         .dev, .interpreter => 0,
     };
-}
-
-fn inlineExpectModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineExpectMode {
-    return switch (opt) {
-        .size, .speed => .omit,
-        .dev, .interpreter => .run,
-    };
-}
-
-/// Which checked root definitions become LIR roots for a backend.
-const CheckedLirRoots = union(enum) {
-    /// Provided exports: LIR consumed by host
-    /// shims and interpreters (run, embedded builds, hot reload, glue).
-    platform_entrypoints: PlatformEntrypointArtifact,
-    /// Provided exports, with static data
-    /// exports materialized: LIR for linked outputs (native/LLVM builds).
-    linked_output,
-    /// Pre-selected expect/test roots with their plan metadata (roc test).
-    test_plan: struct {
-        requests: []const check.CheckedArtifact.RootRequest,
-        metadata: []const postcheck.Common.RootTestPlanMetadata,
-    },
-};
-
-/// The single "checked artifacts → LIR" adapter shared by every backend: run,
-/// build-LLVM, build-native, embedded, and test lowering all go through here.
-///
-/// Owns platform-root selection and the optimization-derived lowering option
-/// list so a new lowering option lands in every backend at once instead of in
-/// whichever hand-copied option lists remembered it.
-fn checkedRuntimeLoweringConfig(
-    roots: CheckedLirRoots,
-    opt: cli_args.OptLevel,
-    specialization_strategy: base.SpecializationStrategy,
-    target: RocTarget,
-    proc_debug_names: bool,
-) compile.build.RuntimeLoweringConfig {
-    return .{
-        .include_provided_data_exports = roots == .linked_output,
-        .include_internal_static_data = switch (roots) {
-            .linked_output => true,
-            .platform_entrypoints => |artifact| artifact == .dev_run_image,
-            .test_plan => false,
-        },
-        .target = .{
-            .target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
-            .erased_capture_prefix = devCapturePrefix(roots, opt, target),
-            .specialization_strategy = specialization_strategy,
-            .inline_mode = postCheckInlineModeForOpt(opt),
-            .specialize_arc_modes = optimizeLirForOpt(opt),
-            .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
-            .consume_dead_boxes = switch (roots) {
-                .linked_output => true,
-                .platform_entrypoints => |artifact| artifact == .dev_run_image,
-                .test_plan => opt == .dev,
-            },
-            .inline_expects = switch (roots) {
-                .test_plan => .run,
-                .platform_entrypoints, .linked_output => inlineExpectModeForOpt(opt),
-            },
-            .list_in_place_map = listInPlaceMapForOpt(opt),
-            .zero_dict_seed = zeroDictSeedForOpt(opt),
-            .site_code_keys = siteCodeKeysForOpt(opt),
-            .owned_proc_signatures = opt == .dev,
-            .tag_reachability = tagReachabilityForOpt(opt),
-            .prove_ranges = proveRangesForOpt(opt),
-            .reuse_boxes = optimizeLirForOpt(opt),
-            .thread_confined_rc = optimizeLirForOpt(opt),
-            .prove_uniqueness = optimizeLirForOpt(opt),
-            .immortal_string_literals = optimizeLirForOpt(opt),
-            .proc_debug_names = proc_debug_names,
-        },
-    };
-}
-
-/// The bytes a program's erased callables reserve at the start of their
-/// captures. Native dev code always supports a hot-reload session, so every
-/// native dev build, like compile-time evaluation, reserves the hot-reload
-/// prefix and compiles the same erased callables; other backends and the
-/// interpreter reserve none.
-fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocTarget) u32 {
-    if (opt != .dev) return 0;
-    switch (roots) {
-        .platform_entrypoints => |artifact| switch (artifact) {
-            .dev_run_image => {},
-            .lir_image => return 0,
-        },
-        .linked_output, .test_plan => {},
-    }
-    return if (backend.dev.isa.isaOfOrNull(target) != null) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
 }
 
 test "native test generic procedures use the ordinary native dev representation and ownership policy" {

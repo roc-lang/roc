@@ -12,6 +12,8 @@ const eval = @import("eval");
 const roc_target = @import("roc_target");
 const static_data_exports = @import("static_data");
 const object_cache = @import("boxy_object_cache.zig");
+const embedded_units = @import("boxy_embedded_units.zig");
+pub const EmbeddedUnits = embedded_units.Units;
 const boxy_interface = @import("boxy_interface.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const CacheData = @import("cache_module.zig").CacheModule.CacheData;
@@ -63,6 +65,9 @@ pub const Unit = struct {
     /// For a wasm target: whether the platform reserves low memory, so the
     /// unit's code checks its stack bounds (`object_cache.KeyInput.wasm_stack_checks`).
     wasm_stack_checks: bool = false,
+    /// The entries the compiler carries in its binary, which serve the unit
+    /// when its key is one of theirs (`boxy_embedded_units`).
+    embedded: embedded_units.Units = .none,
 };
 
 /// The kind of unit image a unit compiled for a target carries.
@@ -102,6 +107,8 @@ pub const Image = struct {
         owned,
         /// Both are slices of this mapped cache entry.
         mapped: CacheData,
+        /// Both are slices of an entry the compiler carries in its binary.
+        embedded,
     },
 
     pub fn deinit(self: Image, gpa: Allocator) void {
@@ -111,6 +118,7 @@ pub const Image = struct {
                 gpa.free(self.code_locations);
             },
             .mapped => |data| data.deinit(gpa),
+            .embedded => {},
         }
     }
 };
@@ -196,6 +204,12 @@ pub const Built = struct {
 /// (`object_cache.KeyInput.expect_sites`).
 /// `wasm_stack_checks` is the platform's stack-check mode on a wasm target.
 pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool, wasm_stack_checks: bool) Allocator.Error!object_cache.Key {
+    return object_cache.key(try objectKeyInput(gpa, digests, artifact, platform, opt, inline_expects, target, paired_platforms, run_image, expect_sites, wasm_stack_checks));
+}
+
+/// What `objectKey` keys `artifact`'s object by. Its `target` is a static
+/// string and its `opt` is `opt`.
+pub fn objectKeyInput(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool, wasm_stack_checks: bool) Allocator.Error!object_cache.KeyInput {
     std.debug.assert(!wasm_stack_checks or imageKind(target) == .wasm);
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
         const inputs = try gpa.alloc(object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.items().len);
@@ -210,7 +224,7 @@ pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *co
     var input = base.Sha256.init(.{});
     input.update(&try digests.objectInput(artifact));
     for (paired_platforms) |*paired| input.update(paired);
-    return object_cache.key(.{
+    return .{
         .object_input = input.finalResult(),
         .hosted_bindings = hosted_bindings,
         .target = @tagName(target),
@@ -219,7 +233,7 @@ pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *co
         .run_image = run_image,
         .expect_sites = expect_sites,
         .wasm_stack_checks = wasm_stack_checks,
-    });
+    };
 }
 
 /// Restore `key`'s entry, a unit compiled for `target`, from the per-module
@@ -369,12 +383,19 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
 
 /// File `entry` in the per-module Boxy object cache under `key`.
 pub fn store(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, entry: object_cache.Entry) Allocator.Error!void {
-    const manager = cache_manager orelse {
+    if (cache_manager == null) {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to store key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         return;
-    };
+    }
     const bytes = try object_cache.encode(gpa, entry);
     defer gpa.free(bytes);
+    storeBytes(cache_manager, key, bytes);
+}
+
+/// File the encoded entry `bytes` in the per-module Boxy object cache under
+/// `key`.
+fn storeBytes(cache_manager: ?*CacheManager, key: object_cache.Key, bytes: []const u8) void {
+    const manager = cache_manager orelse return;
     manager.storeFamilyBytes(.boxy_object, key.bytes, bytes, object_cache.scope, "boxy object");
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: stored object cache entry for key {s} ({d} bytes)\n", .{ &std.fmt.bytesToHex(key.bytes[0..8], .lower), bytes.len });
 }
@@ -414,64 +435,33 @@ fn dupeSymbols(gpa: Allocator, symbols: []const []const u8) Allocator.Error![]co
 /// Why a unit's object could not be built.
 pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError || static_data_exports.MaterializationError || error{NativeCompilationFailed};
 
-/// `unit`'s object, from the cache or built and filed there.
+/// `unit`'s object: an entry the compiler carries in its binary when the
+/// unit's key is one of theirs, or else from the cache or built and filed
+/// there.
 pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
     var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
     defer restore_scope.end();
-    if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.target, unit.interfaces, unit.config.boxy_function_unit != null)) |restored| {
-        // The view's owned export records, symbols, and test tables move into
-        // the returned `Built`; the view releases its remaining allocations.
-        var entry = restored.entry;
-        defer object_cache.deinitEntryView(gpa, entry);
-        // The mapping stays alive as the image's owner; otherwise it is
-        // released once the pieces are decoded.
-        const keeps_mapping = imageKind(unit.target) != .none;
-        defer if (!keeps_mapping) restored.data.deinit(gpa);
-        errdefer if (keeps_mapping) restored.data.deinit(gpa);
-        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
-        std.debug.assert(entry.image.len != 0 or !keeps_mapping);
-        if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
-            const fresh = try build(unit, module_name);
-            defer fresh.deinit(gpa);
-            if (fresh.pieces != null and unit.config.boxy_function_unit == null) {
-                const fresh_pieces = fresh.pieces.?;
-                const encoded = try backend.dev.UnitPieces.encode(gpa, fresh_pieces);
-                defer gpa.free(encoded);
-                if (!std.mem.eql(u8, encoded, entry.pieces)) {
-                    base.invariant("the cached pieces of module {s} differ from a fresh build of them: its key misses an input", .{module_name});
-                }
-            }
-            if (!std.mem.eql(u8, &fresh.exports_digest, &entry.exports_digest)) {
-                base.invariant("the cached exports of module {s} differ from a fresh build of them: its key misses an input", .{module_name});
-            }
-            if (!std.mem.eql(u8, fresh.function_metadata, entry.function_metadata)) {
-                base.invariant("the cached function metadata of module {s} differs from a fresh build: its key misses an input", .{module_name});
-            }
-            if (fresh.image) |image| if (!std.mem.eql(u8, image.bytes, entry.image)) {
-                base.invariant("the cached image of module {s} differs from a fresh build of it: its key misses an input", .{module_name});
-            };
-        }
-        const pieces: ?*backend.dev.UnitPieces.Pieces = if (unit.want_pieces and imageKind(unit.target) != .wasm) pieces: {
-            const decoded = try gpa.create(backend.dev.UnitPieces.Pieces);
-            errdefer gpa.destroy(decoded);
-            decoded.* = backend.dev.UnitPieces.decode(gpa, entry.pieces) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of module {s} were admitted but do not decode: {s}", .{ module_name, @errorName(err) }),
-            };
-            break :pieces decoded;
-        } else null;
-        errdefer if (pieces) |decoded| {
-            decoded.deinit();
-            gpa.destroy(decoded);
+    if (unit.embedded.find(unit.key)) |bytes| {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: embedded entry for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
+        // The compiler's build wrote these bytes with this compiler's
+        // encoder, for an ordinary unit of a target this compiler compiles.
+        const entry = object_cache.decodeView(gpa, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidEntry => base.invariant("the embedded entry of module {s} does not decode", .{module_name}),
         };
-        return try Built.fromRestoredEntry(
-            gpa,
-            &entry,
-            pieces,
-            if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .{ .mapped = restored.data } } else null,
-        );
+        std.debug.assert(entry.function_metadata.len == 0 and unit.config.boxy_function_unit == null);
+        if (std.debug.runtime_safety) std.debug.assert(imageReads(entry, imageKind(unit.target)));
+        recordInterfaces(unit.interfaces, entry) catch |err| {
+            object_cache.deinitEntryView(gpa, entry);
+            return err;
+        };
+        return try fromEntry(unit, module_name, entry, .embedded);
+    }
+    if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.target, unit.interfaces, unit.config.boxy_function_unit != null)) |restored| {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
+        return try fromEntry(unit, module_name, restored.entry, .{ .mapped = restored.data });
     }
     restore_scope.end();
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache miss for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
@@ -479,11 +469,113 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     errdefer built.deinit(gpa);
     var cache_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_cache);
     defer cache_scope.end();
-    // Compiler-only native units are consumed exclusively as images. Their
-    // extraction pieces are needed while building, never while restoring.
+    if (unit.cache_manager != null) {
+        const bytes = try encodeEntry(unit, built);
+        defer gpa.free(bytes);
+        storeBytes(unit.cache_manager, unit.key, bytes);
+    } else if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to store key {s}\n", .{&std.fmt.bytesToHex(unit.key.bytes[0..8], .lower)});
+    if (unit.want_pieces or built.pieces == null) return built;
+    var without_pieces = built;
+    built.pieces.?.deinit();
+    gpa.destroy(built.pieces.?);
+    without_pieces.pieces = null;
+    return without_pieces;
+}
+
+/// Where a restored entry's bytes live.
+const EntryOwner = union(enum) {
+    /// A mapping of its cache file, which the returned `Built`'s image keeps
+    /// alive when the target has images.
+    mapped: CacheData,
+    /// An entry the compiler carries in its binary.
+    embedded,
+};
+
+/// The object `entry`, `unit`'s restored entry whose exports are recorded,
+/// holds. The view's owned export records, symbols, and test tables move
+/// into the returned `Built`; the view releases its remaining allocations.
+fn fromEntry(unit: Unit, module_name: []const u8, restored_entry: object_cache.Entry, owner: EntryOwner) BuildError!Built {
+    const gpa = unit.gpa;
+    var entry = restored_entry;
+    defer object_cache.deinitEntryView(gpa, entry);
+    // A mapping stays alive as the image's owner; otherwise it is released
+    // once the pieces are decoded.
+    const keeps_mapping = imageKind(unit.target) != .none;
+    defer if (!keeps_mapping) switch (owner) {
+        .mapped => |data| data.deinit(gpa),
+        .embedded => {},
+    };
+    errdefer if (keeps_mapping) switch (owner) {
+        .mapped => |data| data.deinit(gpa),
+        .embedded => {},
+    };
+    std.debug.assert(entry.image.len != 0 or !keeps_mapping);
+    if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
+        const fresh = try build(unit, module_name);
+        defer fresh.deinit(gpa);
+        if (fresh.pieces != null and unit.config.boxy_function_unit == null) {
+            const fresh_pieces = fresh.pieces.?;
+            const encoded = try backend.dev.UnitPieces.encode(gpa, fresh_pieces);
+            defer gpa.free(encoded);
+            if (!std.mem.eql(u8, encoded, entry.pieces)) {
+                base.invariant("the {s} pieces of module {s} differ from a fresh build of them: its key misses an input", .{ @tagName(owner), module_name });
+            }
+        }
+        if (!std.mem.eql(u8, &fresh.exports_digest, &entry.exports_digest)) {
+            base.invariant("the {s} exports of module {s} differ from a fresh build of them: its key misses an input", .{ @tagName(owner), module_name });
+        }
+        if (!std.mem.eql(u8, fresh.function_metadata, entry.function_metadata)) {
+            base.invariant("the {s} function metadata of module {s} differs from a fresh build: its key misses an input", .{ @tagName(owner), module_name });
+        }
+        if (fresh.image) |image| if (!std.mem.eql(u8, image.bytes, entry.image)) {
+            base.invariant("the {s} image of module {s} differs from a fresh build of it: its key misses an input", .{ @tagName(owner), module_name });
+        };
+    }
+    const pieces: ?*backend.dev.UnitPieces.Pieces = if (unit.want_pieces and imageKind(unit.target) != .wasm) pieces: {
+        const decoded = try gpa.create(backend.dev.UnitPieces.Pieces);
+        errdefer gpa.destroy(decoded);
+        decoded.* = backend.dev.UnitPieces.decode(gpa, entry.pieces) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the {s} pieces of module {s} were admitted but do not decode: {s}", .{ @tagName(owner), module_name, @errorName(err) }),
+        };
+        break :pieces decoded;
+    } else null;
+    errdefer if (pieces) |decoded| {
+        decoded.deinit();
+        gpa.destroy(decoded);
+    };
+    return try Built.fromRestoredEntry(
+        gpa,
+        &entry,
+        pieces,
+        if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = switch (owner) {
+            .mapped => |data| .{ .mapped = data },
+            .embedded => .embedded,
+        } } else null,
+    );
+}
+
+/// `unit`'s object, lowered and compiled whatever the cache or the
+/// compiler's embedded entries hold, and its cache entry encoded exactly as
+/// `restoreOrBuild` files it: how the compiler's build makes an embedded
+/// entry (src/build/builtin_unit.zig). The unit wants no pieces, so that
+/// its image is built without a cache. The caller owns both.
+pub fn buildEntry(unit: Unit) BuildError!struct { built: Built, bytes: []u8 } {
+    std.debug.assert(!unit.want_pieces);
+    const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
+    const built = try build(unit, module_name);
+    errdefer built.deinit(unit.gpa);
+    return .{ .built = built, .bytes = try encodeEntry(unit, built) };
+}
+
+/// The cache entry of `built`, `unit`'s freshly built object, encoded.
+/// Compiler-only native units are consumed exclusively as images: their
+/// extraction pieces are needed while building, never while restoring.
+fn encodeEntry(unit: Unit, built: Built) Allocator.Error![]u8 {
+    const gpa = unit.gpa;
     const encoded = if (built.pieces != null and unit.config.boxy_function_unit == null) try backend.dev.UnitPieces.encode(gpa, built.pieces.?) else &.{};
     defer gpa.free(encoded);
-    try store(gpa, unit.cache_manager, unit.key, .{
+    return try object_cache.encode(gpa, .{
         .exports = built.exports,
         .exports_digest = built.exports_digest,
         .hosted_symbols = built.hosted_symbols,
@@ -494,12 +586,6 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         .expect_sites = built.expect_sites,
         .test_roots = built.test_roots,
     });
-    if (unit.want_pieces or built.pieces == null) return built;
-    var without_pieces = built;
-    built.pieces.?.deinit();
-    gpa.destroy(built.pieces.?);
-    without_pieces.pieces = null;
-    return without_pieces;
 }
 
 /// Lower and compile `unit`.
