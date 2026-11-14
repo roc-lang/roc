@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const problem = @import("problem.zig");
 const serde = @import("artifact_serialize.zig");
 const Allocator = std.mem.Allocator;
@@ -25,22 +26,22 @@ pub const Exhaustiveness = struct {
 
 /// Serializable diagnostics and names retained until checked evaluation finishes.
 pub const Templates = struct {
-    import_names: []ImportName = &.{},
-    exhaustiveness: []Exhaustiveness = &.{},
-    strings: []u8 = &.{},
-    missing_patterns: []serde.Span = &.{},
+    import_names: collections.SafeList(ImportName) = .{},
+    exhaustiveness: collections.SafeList(Exhaustiveness) = .{},
+    strings: collections.SafeList(u8) = .{},
+    missing_patterns: collections.SafeList(serde.Span) = .{},
 
     pub fn fromStore(allocator: Allocator, store: *const problem.Store) Allocator.Error!Templates {
         if (store.pending_static_exhaustiveness.items.len == 0) return .{};
         var result = Templates{};
         errdefer result.deinit(allocator);
-        result.exhaustiveness = try allocator.alloc(Exhaustiveness, store.pending_static_exhaustiveness.items.len);
-        result.strings = try allocator.dupe(u8, store.extra_strings_backing.items);
-        result.missing_patterns = try allocator.alloc(serde.Span, store.missing_patterns_backing.items.len);
-        for (result.missing_patterns, store.missing_patterns_backing.items) |*out, input| {
+        result.exhaustiveness = .fromOwnedSlice(try allocator.alloc(Exhaustiveness, store.pending_static_exhaustiveness.items.len));
+        result.strings = .fromOwnedSlice(try allocator.dupe(u8, store.extra_strings_backing.items));
+        result.missing_patterns = .fromOwnedSlice(try allocator.alloc(serde.Span, store.missing_patterns_backing.items.len));
+        for (result.missing_patterns.items(), store.missing_patterns_backing.items) |*out, input| {
             out.* = .{ .start = @intCast(input.start), .len = @intCast(input.count) };
         }
-        for (result.exhaustiveness, store.pending_static_exhaustiveness.items) |*out, input| {
+        for (result.exhaustiveness.items(), store.pending_static_exhaustiveness.items) |*out, input| {
             std.debug.assert(input.problem == .non_exhaustive_match or input.problem == .non_exhaustive_destructure);
             const fields: struct { type_display: problem.ExtraStringIdx, missing: problem.MissingPatternsRange, empirical: bool } = if (input.problem == .non_exhaustive_match) blk: {
                 const value = input.problem.non_exhaustive_match;
@@ -74,26 +75,26 @@ pub const Templates = struct {
                 return @as(u32, @bitCast(a.qualified)) < @as(u32, @bitCast(b.qualified));
             }
         }.lessThan);
-        allocator.free(self.import_names);
-        self.import_names = rows;
+        self.import_names.deinit(allocator);
+        self.import_names = .fromOwnedSlice(rows);
     }
 
     pub fn instantiateImportMapping(self: *const Templates, allocator: Allocator) Allocator.Error!ImportMapping {
         var mapping = ImportMapping.init(allocator);
         errdefer mapping.deinit();
-        try mapping.ensureTotalCapacity(@intCast(self.import_names.len));
-        for (self.import_names) |row| mapping.putAssumeCapacity(row.qualified, row.display);
+        try mapping.ensureTotalCapacity(@intCast(self.import_names.items().len));
+        for (self.import_names.items()) |row| mapping.putAssumeCapacity(row.qualified, row.display);
         return mapping;
     }
 
     pub fn instantiate(self: *const Templates, allocator: Allocator) Allocator.Error!problem.Store {
         var result = try problem.Store.init(allocator);
         errdefer result.deinit();
-        try result.extra_strings_backing.appendSlice(self.strings);
-        try result.missing_patterns_backing.ensureTotalCapacity(self.missing_patterns.len);
-        for (self.missing_patterns) |input| result.missing_patterns_backing.appendAssumeCapacity(.{ .start = input.start, .count = input.len });
-        try result.pending_static_exhaustiveness.ensureTotalCapacityPrecise(result.gpa, self.exhaustiveness.len);
-        for (self.exhaustiveness) |input| {
+        try result.extra_strings_backing.appendSlice(self.strings.items());
+        try result.missing_patterns_backing.ensureTotalCapacity(self.missing_patterns.items().len);
+        for (self.missing_patterns.items()) |input| result.missing_patterns_backing.appendAssumeCapacity(.{ .start = input.start, .count = input.len });
+        try result.pending_static_exhaustiveness.ensureTotalCapacityPrecise(result.gpa, self.exhaustiveness.items().len);
+        for (self.exhaustiveness.items()) |input| {
             result.pending_static_exhaustiveness.appendAssumeCapacity(.{
                 .kind = input.kind,
                 .mode = input.mode,
@@ -121,10 +122,10 @@ pub const Templates = struct {
     }
 
     pub fn deinit(self: *Templates, allocator: Allocator) void {
-        allocator.free(self.import_names);
-        allocator.free(self.exhaustiveness);
-        allocator.free(self.strings);
-        allocator.free(self.missing_patterns);
+        self.import_names.deinit(allocator);
+        self.exhaustiveness.deinit(allocator);
+        self.strings.deinit(allocator);
+        self.missing_patterns.deinit(allocator);
         self.* = .{};
     }
 

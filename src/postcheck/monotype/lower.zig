@@ -1912,8 +1912,8 @@ fn resolvedRecord(view: ModuleView, resolved: ResolvedUse) ResolvedRecord {
         .lookup => |expr| return resolvedRecord(view, .{ .source = view.bodies.resolvedRef(expr) orelse Common.invariant("checked lookup had no resolved value ref") }),
         .source => |id| {
             const raw = @backingInt(id);
-            if (raw >= view.resolved_refs.records.len) Common.invariant("checked lookup referenced a missing resolved value ref");
-            const record = view.resolved_refs.records[raw];
+            if (raw >= view.resolved_refs.records.items().len) Common.invariant("checked lookup referenced a missing resolved value ref");
+            const record = view.resolved_refs.records.items()[raw];
             return .{
                 .expr = record.expr,
                 .ref = record.ref,
@@ -2104,7 +2104,7 @@ const DispatchOperand = union(enum) {
 /// for a plan at a custom literal pattern, that pattern's equality test or
 /// literal conversion.
 fn dispatchPlanSite(view: ModuleView, plan_id: static_dispatch.StaticDispatchPlanId) ExprSite {
-    const node = view.static_dispatch_plans.plans[@backingInt(plan_id)].node;
+    const node = view.static_dispatch_plans.plans.items()[@backingInt(plan_id)].node;
     return switch (view.bodies.index().nodeKind(node)) {
         .expr => ExprSite.own(view, @fromBackingInt(node)),
         .pattern => if (view.static_dispatch_plans.lookupByNode(node) == plan_id)
@@ -2678,10 +2678,10 @@ fn checkedTargetSubstitution(site_view: ModuleView, builder: *Builder, node: sta
     const table = site_view.static_dispatch_plans;
     const start: usize = node.subst.start;
     const len: usize = node.subst.len;
-    if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
+    if (start > table.site_substitutions.items().len or len > table.site_substitutions.items().len - start) {
         Common.invariant("checked target substitution range was outside its checked module");
     }
-    return .{ .view = site_view, .tys = table.site_substitutions[start .. start + len], .alias = alias };
+    return .{ .view = site_view, .tys = table.site_substitutions.items()[start .. start + len], .alias = alias };
 }
 
 /// A materialized contract already names the checked targets and their nested
@@ -2861,17 +2861,17 @@ fn enterEvidenceScope(
     const owner = evidence.scope.owner;
     const view = builder.moduleForDigest(names.procTemplateModuleDigest(owner));
     const raw_scope = @backingInt(scope_id);
-    if (raw_scope >= view.templates.dispatch_scopes.len) {
+    if (raw_scope >= view.templates.dispatch_scopes.items().len) {
         Common.invariant("local procedure evidence scope was outside the checked scope table");
     }
-    const scope_record = view.templates.dispatch_scopes[raw_scope];
+    const scope_record = view.templates.dispatch_scopes.items()[raw_scope];
     if (scope_record.checked_expr != checked_expr) {
         Common.invariant("local procedure evidence scope did not own the checked local expression");
     }
     const params_start: usize = scope_record.evidence_params.start;
     const params_len: usize = scope_record.evidence_params.len;
-    if (params_start > view.templates.evidence_params_pool.len or
-        params_len > view.templates.evidence_params_pool.len - params_start)
+    if (params_start > view.templates.evidence_params_pool.items().len or
+        params_len > view.templates.evidence_params_pool.items().len - params_start)
     {
         Common.invariant("local procedure evidence scope requirements were outside the checked params pool");
     }
@@ -2901,7 +2901,7 @@ fn enterEvidenceScope(
             .view = view,
             .root = scope_record.scheme_root,
             .scheme_vars = scheme_vars,
-            .params = view.templates.evidence_params_pool[params_start .. params_start + params_len],
+            .params = view.templates.evidence_params_pool.items()[params_start .. params_start + params_len],
             .params_start = @intCast(params_start),
         },
         .subst = edge.subst,
@@ -4206,7 +4206,7 @@ fn specEvidenceShallowEql(
 
 fn codecEvidenceContent(evidence: CheckedSpecStructuralEvidence) ?static_dispatch.GeneratedCodecContentDigest {
     const id = evidence.evidence.generated_codec_derivation orelse return null;
-    return evidence.view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].content;
+    return evidence.view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(id)].content;
 }
 
 /// A codec edge is identified by its contract's content, wherever it was
@@ -5989,7 +5989,7 @@ const LiteralArgumentRootIndex = struct {
         errdefer counts.deinit(allocator);
         var total: u32 = 0;
         for (views) |*view| {
-            for (view.compile_time_roots.roots) |root| {
+            for (view.compile_time_roots.roots.items()) |root| {
                 const site = storedSite(root) orelse continue;
                 const entry = try counts.getOrPut(allocator, site);
                 if (!entry.found_existing) entry.value_ptr.* = .{ .start = 0, .len = 0 };
@@ -6006,7 +6006,7 @@ const LiteralArgumentRootIndex = struct {
         }
         const candidates = try allocator.alloc(Candidate, total);
         for (views, 0..) |*view, view_index| {
-            for (view.compile_time_roots.roots) |root| {
+            for (view.compile_time_roots.roots.items()) |root| {
                 const site = storedSite(root) orelse continue;
                 const range = counts.getPtr(site).?;
                 candidates[range.start + range.len] = .{ .view = @intCast(view_index), .root = root.id };
@@ -7077,7 +7077,7 @@ const Builder = struct {
                 }, index);
             }
 
-            for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
+            for (binding_view.table.bindings.items(), 0..) |binding, dispatch_index| {
                 const entry_index = declared_by_target.get(.{
                     .checked_module_digest = binding.target_checked_module.bytes,
                     .def_idx = @backingInt(binding.target_def),
@@ -7138,7 +7138,7 @@ const Builder = struct {
     }
 
     fn appendHostedCatalogFromView(self: *Builder, entries: *std.ArrayList(HostedCatalogEntry), view: ModuleView) Allocator.Error!void {
-        for (view.hosted_procs.procs) |proc| {
+        for (view.hosted_procs.procs.items()) |proc| {
             try entries.append(self.allocator, .{
                 .template = proc.template,
                 .external_symbol_name = try self.program.names.internExternalSymbolName(view.names.externalSymbolNameText(proc.external_symbol_name)),
@@ -12131,7 +12131,7 @@ const Builder = struct {
     fn platformRequirementFilling(self: *Builder) ?Common.PlatformRequirementFilling {
         var filling: ?Common.PlatformRequirementFilling = null;
         for (self.moduleViews()) |*view| {
-            for (view.platform_required_bindings.bindings) |binding| {
+            for (view.platform_required_bindings.bindings.items()) |binding| {
                 const this: Common.PlatformRequirementFilling = .{
                     .app_module = binding.app_value.artifact.bytes,
                     .relation = binding.relation.bytes,
@@ -12387,7 +12387,7 @@ const Builder = struct {
     fn codecEdgeIn(view: ModuleView, derivation: static_dispatch.StructuralDerivation, codec: check.ConstStore.StoredCodecEdge) Allocator.Error!?CheckedSpecStructuralEvidence {
         const dispatcher_ty = (try view.types.rootForKey(codec.dispatcher_key)) orelse return null;
         const callable_ty = (try view.types.rootForKey(codec.callable_key)) orelse return null;
-        for (view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
+        for (view.static_dispatch_plans.generated_codec_derivations.items(), 0..) |contract, index| {
             if (!std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) continue;
             return .{ .view = view, .evidence = .{
                 .derivation = derivation,
@@ -13261,8 +13261,8 @@ const Builder = struct {
         }
         const start: usize = evidence_span.span.start;
         const len: usize = evidence_span.span.len;
-        if (start > view.static_dispatch_plans.evidence_refs.len or
-            len > view.static_dispatch_plans.evidence_refs.len - start)
+        if (start > view.static_dispatch_plans.evidence_refs.items().len or
+            len > view.static_dispatch_plans.evidence_refs.items().len - start)
         {
             Common.invariant("root procedure evidence range was outside its checked module");
         }
@@ -13282,7 +13282,7 @@ const Builder = struct {
                 templateSchemaIn(view, &template),
                 subst,
                 view,
-                view.static_dispatch_plans.evidence_refs[start .. start + len],
+                view.static_dispatch_plans.evidence_refs.items()[start .. start + len],
                 .body_lowering,
             ),
         };
@@ -13480,7 +13480,7 @@ const Builder = struct {
             // reference carries the declaring module's content identity so a
             // stored function value built from it stays resolvable outside
             // materialization context (const-store restore).
-            .default_root = switch (view.nested_proc_sites.sites[@backingInt(site)].owner) {
+            .default_root = switch (view.nested_proc_sites.sites.items()[@backingInt(site)].owner) {
                 .template => null,
                 .default_root => .{ .bytes = view.module_identity.stable_hash },
             },
@@ -13501,7 +13501,7 @@ const Builder = struct {
         const site = if (self.nested_site_cache.get(address)) |cached|
             cached
         else blk: {
-            for (view.nested_proc_sites.sites) |candidate| {
+            for (view.nested_proc_sites.sites.items()) |candidate| {
                 if (candidate.checked_expr.get() != expr_id) continue;
                 // A default-root site (a lambda/closure inside a defaulted-field
                 // expression) is matched only while materializing a default; it
@@ -13516,7 +13516,7 @@ const Builder = struct {
                     .default_root => if (!in_default_expr) continue,
                 }
                 if (@import("builtin").mode == .debug) {
-                    for (view.nested_proc_sites.sites[@backingInt(candidate.site) + 1 ..]) |later| {
+                    for (view.nested_proc_sites.sites.items()[@backingInt(candidate.site) + 1 ..]) |later| {
                         if (later.checked_expr.get() != expr_id) continue;
                         const same_owner = switch (later.owner) {
                             .template => |site_owner| !in_default_expr and names.procedureTemplateRefEql(site_owner, owner),
@@ -13530,7 +13530,7 @@ const Builder = struct {
             }
             Common.invariant("nested function expression reached Monotype without a checked nested function site");
         };
-        if (@backingInt(site) >= view.nested_proc_sites.sites.len) {
+        if (@backingInt(site) >= view.nested_proc_sites.sites.items().len) {
             Common.invariant("nested function site id was outside the CheckedModule procedure-site table");
         }
         return site;
@@ -13914,10 +13914,10 @@ const Builder = struct {
         if (owned_scope) |scope| {
             try nested_ctx.graph.unify(root_node, try nested_ctx.lowerExprTypeNode(expr_id));
             const raw_site = @backingInt(nested.site);
-            if (raw_site >= nested_ctx.view.nested_proc_sites.sites.len) {
+            if (raw_site >= nested_ctx.view.nested_proc_sites.sites.items().len) {
                 Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
             }
-            switch (nested_ctx.view.nested_proc_sites.sites[raw_site].owner) {
+            switch (nested_ctx.view.nested_proc_sites.sites.items()[raw_site].owner) {
                 .template => try nested_ctx.instantiateTemplateDispatchRelations(
                     nested_ctx.view.templates.get(nested_ctx.owner_template.template),
                     scope,
@@ -28715,10 +28715,10 @@ const BodyContext = struct {
         scope_id: checked.DispatchScopeId,
     ) Allocator.Error!NodeId {
         const raw_scope = @backingInt(scope_id);
-        if (raw_scope >= self.view.templates.dispatch_scopes.len) {
+        if (raw_scope >= self.view.templates.dispatch_scopes.items().len) {
             Common.invariant("checked specialization relation named an unknown local scope");
         }
-        const scheme_root = self.view.templates.dispatch_scopes[raw_scope].scheme_root;
+        const scheme_root = self.view.templates.dispatch_scopes.items()[raw_scope].scheme_root;
         return try self.instNode(scheme_root);
     }
 
@@ -29001,7 +29001,7 @@ const BodyContext = struct {
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!?*DirectCalleeExpansion {
         self.builder.count("interface_relation_requests");
-        const record = self.view.resolved_refs.records[@backingInt(target)];
+        const record = self.view.resolved_refs.records.items()[@backingInt(target)];
         const procedure, const root_evidence = switch (record.ref) {
             .top_level_proc,
             .imported_proc,
@@ -29439,9 +29439,9 @@ const BodyContext = struct {
         scope_id: ?checked.DispatchScopeId,
     ) Allocator.Error!void {
         const span = template.dispatch_relations;
-        const refs = self.view.static_dispatch_plans.dispatch_relation_refs[span.start .. span.start + span.len];
-        const scopes = self.view.templates.dispatch_ref_scopes[span.start .. span.start + span.len];
-        const kinds = self.view.templates.dispatch_relation_kinds[span.start .. span.start + span.len];
+        const refs = self.view.static_dispatch_plans.dispatch_relation_refs.items()[span.start .. span.start + span.len];
+        const scopes = self.view.templates.dispatch_ref_scopes.items()[span.start .. span.start + span.len];
+        const kinds = self.view.templates.dispatch_relation_kinds.items()[span.start .. span.start + span.len];
         if (refs.len != scopes.len or refs.len != kinds.len) Common.invariant("checked template dispatch refs and relation metadata differed in length");
 
         // Resolve every plan in this scope before instantiating any of its type
@@ -29452,7 +29452,7 @@ const BodyContext = struct {
         var added_crash = false;
         for (refs, scopes) |plan_id, dispatch_scope| {
             if (!dispatchRefBelongsToScope(dispatch_scope, scope_id)) continue;
-            const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
+            const plan = self.view.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
             switch (self.dispatchRuntimePlan(plan)) {
                 .callable => {},
                 .crash => switch (self.view.bodies.index().nodeKind(plan.node)) {
@@ -29468,7 +29468,7 @@ const BodyContext = struct {
 
         for (refs, scopes, kinds) |plan_id, dispatch_scope, relation_kind| {
             if (!dispatchRefBelongsToScope(dispatch_scope, scope_id)) continue;
-            const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
+            const plan = self.view.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
             if (try self.checkedExprDivergesInLoweredRuntime(dispatchPlanSite(self.view, plan_id))) continue;
             if (relation_kind == .conversion) continue;
             const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
@@ -29503,7 +29503,7 @@ const BodyContext = struct {
     /// evidence resolves it to one.
     fn patternPlanCrashes(self: *const BodyContext, maybe_plan: ?static_dispatch.StaticDispatchPlanId) bool {
         const plan_id = maybe_plan orelse Common.invariant("custom literal pattern dispatch reached Monotype without a dispatch plan");
-        switch (self.view.static_dispatch_plans.plans[@backingInt(plan_id)].resolution) {
+        switch (self.view.static_dispatch_plans.plans.items()[@backingInt(plan_id)].resolution) {
             .checked_error, .@"unreachable" => return true,
             .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => {},
         }
@@ -29514,7 +29514,7 @@ const BodyContext = struct {
     fn recordSpecializationPatternPlanCrash(self: *BodyContext, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         if (!self.owns_specialization_pattern_plan_crashes) {
             const previous = self.specialization_pattern_plan_crashes orelse &.{};
-            const crashes = try self.allocator.alloc(bool, self.view.static_dispatch_plans.plans.len);
+            const crashes = try self.allocator.alloc(bool, self.view.static_dispatch_plans.plans.items().len);
             @memset(crashes, false);
             if (previous.len != 0) {
                 if (previous.len != crashes.len) Common.invariant("specialization pattern plan crash column length differed from the plan count");
@@ -32027,7 +32027,7 @@ const BodyContext = struct {
 
         if (from_plan) {
             const plan_id = task.maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
-            const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
+            const plan = self.view.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
             if (try self.closedDirectGraphFreeResultNode(task.checked_ret_ty, plan, task.expected_ret_node)) |ret_node| {
                 return .{ .ret = .{ .node = ret_node } };
             }
@@ -34868,7 +34868,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!LowerStep {
         const plan_id = maybe_plan orelse Common.invariant("divergent checked dispatch expression did not contain its checked plan");
-        const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
+        const plan = self.view.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
         const operands = try self.dispatchOperandExprs(plan);
         defer self.allocator.free(operands);
         return switch (self.dispatchRuntimePlan(plan)) {
@@ -34988,7 +34988,7 @@ const BodyContext = struct {
                 switch (task.kind) {
                     .for_ => |for_| {
                         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
-                        task.plan = self.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)];
+                        task.plan = self.view.static_dispatch_plans.iterator_for_plans.items()[@backingInt(plan_id)];
                         // An `iter` call that cannot run evaluates the
                         // iterable it receives and then crashes; a `next`
                         // call that cannot run crashes once `iter` has
@@ -36129,7 +36129,7 @@ const BodyContext = struct {
                 }
                 const plan_id = self.view.bodies.iteratorForPlan(@backingInt(interpolation.node)) orelse
                     Common.invariant("checked interpolation reached Monotype without an iterator plan");
-                task.iterator_plan = self.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)];
+                task.iterator_plan = self.view.static_dispatch_plans.iterator_for_plans.items()[@backingInt(plan_id)];
             },
             .value => {
                 const value = input.?.exprValue();
@@ -37072,7 +37072,7 @@ const BodyContext = struct {
         const expected_ret_cell = task.expected_ret_cell;
         const checked_ret_ty = task.checked_ret_ty;
         const plan_id = task.maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
-        const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
+        const plan = self.view.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
         switch (frame.cursor) {
             0 => {},
             dispatch_drafts_cursor => return try self.nextDispatchDraft(frame, task),
@@ -40674,7 +40674,7 @@ const BodyContext = struct {
     const IteratorRepresentationNames = Type.IteratorTopology;
 
     fn iteratorRepresentationNames(self: *BodyContext, owner: static_dispatch.IteratorOwner) Allocator.Error!IteratorRepresentationNames {
-        const topologies = self.view.static_dispatch_plans.iterator_topologies;
+        const topologies = self.view.static_dispatch_plans.iterator_topologies.items();
         if (topologies.len != std.enums.values(static_dispatch.IteratorOwner).len) {
             Common.invariant("checked module omitted an iterator representation topology");
         }
@@ -45939,10 +45939,10 @@ const BodyContext = struct {
 
     fn directCallTargetIsLocalProc(self: *const BodyContext, target: checked.ResolvedValueId) bool {
         const raw = @backingInt(target);
-        if (raw >= self.view.resolved_refs.records.len) {
+        if (raw >= self.view.resolved_refs.records.items().len) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
-        return switch (self.view.resolved_refs.records[raw].ref) {
+        return switch (self.view.resolved_refs.records.items()[raw].ref) {
             .local_proc => true,
             .platform_required_proc, .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .promoted_top_level_proc => false,
         };
@@ -45954,10 +45954,10 @@ const BodyContext = struct {
         fallback: checked.CheckedTypeId,
     ) checked.CheckedTypeId {
         const raw = @backingInt(target);
-        if (raw >= self.view.resolved_refs.records.len) {
+        if (raw >= self.view.resolved_refs.records.items().len) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
-        return switch (self.view.resolved_refs.records[raw].ref) {
+        return switch (self.view.resolved_refs.records.items()[raw].ref) {
             .platform_required_proc => |required| required.procedure.source_fn_ty_payload orelse
                 Common.invariant("platform-required procedure call missing relation-owned requested function type"),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .promoted_top_level_proc => fallback,
@@ -46459,10 +46459,10 @@ const BodyContext = struct {
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnSlot {
         const raw = @backingInt(target);
-        if (raw >= self.view.resolved_refs.records.len) {
+        if (raw >= self.view.resolved_refs.records.items().len) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
-        const record = self.view.resolved_refs.records[raw];
+        const record = self.view.resolved_refs.records.items()[raw];
         return switch (record.ref) {
             .local_proc => |local| if (local.is_alias)
                 try self.forwardedLocalAliasCalleeAtNode(local, record.expr, request_fn_node)
@@ -46520,7 +46520,7 @@ const BodyContext = struct {
             Common.invariant("generalized callable alias has no checked scheme scope");
         const edge = try self.evidenceForUseSiteAtNode(use_expr, request_fn_node);
         const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
-        const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
+        const scope = self.view.templates.dispatch_scopes.items()[@backingInt(scope_id)];
         const previous_instantiation = self.instantiation;
         const previous_evidence = self.evidence;
         self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
@@ -46615,17 +46615,17 @@ const BodyContext = struct {
 
     fn finalDirectTarget(self: *BodyContext, target: checked.ResolvedValueId) FinalDirectTarget {
         const raw = @backingInt(target);
-        if (raw >= self.view.resolved_refs.records.len) {
+        if (raw >= self.view.resolved_refs.records.items().len) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
         var view = self.view;
-        var record = view.resolved_refs.records[raw];
+        var record = view.resolved_refs.records.items()[raw];
         while (true) {
             switch (record.ref) {
                 .local_proc => |local| if (local.is_alias) {
                     const final = local.alias_target orelse
                         Common.invariant("callable alias has no published target");
-                    record = view.resolved_refs.records[@backingInt(final)];
+                    record = view.resolved_refs.records.items()[@backingInt(final)];
                     continue;
                 },
                 .top_level_proc,
@@ -46637,7 +46637,7 @@ const BodyContext = struct {
                     const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
                     const lookup = view.resolved_refs.lookupIdByExpr(template.forwarded_lookup.get().?) orelse
                         Common.invariant("forwarded procedure alias lookup had no resolved value");
-                    record = view.resolved_refs.records[@backingInt(lookup)];
+                    record = view.resolved_refs.records.items()[@backingInt(lookup)];
                     continue;
                 },
                 .platform_required_proc => |required| if (self.builder.forwardingCallableEvalForProcedureUse(required.procedure)) |alias| {
@@ -46645,7 +46645,7 @@ const BodyContext = struct {
                     const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
                     const lookup = view.resolved_refs.lookupIdByExpr(template.forwarded_lookup.get().?) orelse
                         Common.invariant("forwarded procedure alias lookup had no resolved value");
-                    record = view.resolved_refs.records[@backingInt(lookup)];
+                    record = view.resolved_refs.records.items()[@backingInt(lookup)];
                     continue;
                 },
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
@@ -46781,7 +46781,7 @@ const BodyContext = struct {
     ) Allocator.Error![]CaptureBinding {
         const site = try self.builder.nestedSiteForExpr(view, context.owner_template, context.declaration.expr, self.in_default_expr);
         const table = view.nested_proc_sites;
-        const captures = table.runtimeCaptures(table.sites[@backingInt(site)]);
+        const captures = table.runtimeCaptures(table.sites.items()[@backingInt(site)]);
         var bindings = try std.ArrayList(CaptureBinding).initCapacity(self.allocator, captures.len);
         errdefer bindings.deinit(self.allocator);
         for (captures) |capture| {
@@ -46829,7 +46829,7 @@ const BodyContext = struct {
     /// function bodies that is a local procedure: the checked method
     /// registry names it as a `.local_proc` target of this module.
     fn bindsLocalMethod(view: ModuleView, binder: BinderId) bool {
-        for (view.method_registry.entries) |entry| {
+        for (view.method_registry.entries.items()) |entry| {
             const target = entry.target orelse continue;
             if (target.module_idx != view.module_identity.module_idx) continue;
             switch (target.kind) {
@@ -47530,7 +47530,7 @@ const BodyContext = struct {
             Common.invariant("generalized callable alias has no checked scheme scope");
         const edge = try self.evidenceForUseSiteAtNode(task.use_expr, task.expected_node);
         const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
-        const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
+        const scope = self.view.templates.dispatch_scopes.items()[@backingInt(scope_id)];
         const saved = try self.allocator.create(SchemeAliasSavedScope);
         saved.* = .{ .instantiation = self.instantiation, .evidence = self.evidence };
         task.saved = saved;
@@ -52047,7 +52047,7 @@ const BodyContext = struct {
     /// function's captures follow.
     fn nestedSiteCaptureEntryNodes(self: *BodyContext, site: names.NestedProcSiteId) Allocator.Error![]NodeId {
         const table = self.view.nested_proc_sites;
-        const captures = table.runtimeCaptures(table.sites[@backingInt(site)]);
+        const captures = table.runtimeCaptures(table.sites.items()[@backingInt(site)]);
         if (captures.len == 0) return &.{};
         var bindings = try std.ArrayList(CaptureBinding).initCapacity(self.allocator, captures.len);
         defer bindings.deinit(self.allocator);
@@ -52131,10 +52131,10 @@ const BodyContext = struct {
         request_fn_node: NodeId,
     ) Allocator.Error!NestedSiteEvidence {
         const raw_site = @backingInt(nested.site);
-        if (raw_site >= self.view.nested_proc_sites.sites.len) {
+        if (raw_site >= self.view.nested_proc_sites.sites.items().len) {
             Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
         }
-        const site = self.view.nested_proc_sites.sites[raw_site];
+        const site = self.view.nested_proc_sites.sites.items()[raw_site];
         const owner_matches = switch (site.owner) {
             .template => |site_owner| !self.in_default_expr and
                 names.procedureTemplateRefEql(site_owner, self.owner_template),
@@ -52152,10 +52152,10 @@ const BodyContext = struct {
             .root => null,
             .generalized => |scope_id| blk: {
                 const raw_scope = @backingInt(scope_id);
-                if (raw_scope >= self.view.templates.dispatch_scopes.len) {
+                if (raw_scope >= self.view.templates.dispatch_scopes.items().len) {
                     Common.invariant("nested function site referenced an unknown checked dispatch scope");
                 }
-                break :blk if (self.view.templates.dispatch_scopes[raw_scope].checked_expr == expr_id.node())
+                break :blk if (self.view.templates.dispatch_scopes.items()[raw_scope].checked_expr == expr_id.node())
                     scope_id
                 else
                     null;
@@ -52173,15 +52173,15 @@ const BodyContext = struct {
             .generalized => Common.invariant("nested function site was lowered outside its checked lexical evidence scope"),
         };
         const raw_scope = @backingInt(scope_id);
-        const scope = self.view.templates.dispatch_scopes[raw_scope];
-        const params = self.view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
+        const scope = self.view.templates.dispatch_scopes.items()[raw_scope];
+        const params = self.view.templates.evidence_params_pool.items()[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
         const edge = switch (site.evidence_source) {
             .inherited => Common.invariant("nested procedure that owned a dispatch scope declared inherited evidence"),
             .checked_site => blk: {
                 const start: usize = site.evidence.start;
                 const len: usize = site.evidence.len;
-                if (start > self.view.static_dispatch_plans.evidence_refs.len or
-                    len > self.view.static_dispatch_plans.evidence_refs.len - start)
+                if (start > self.view.static_dispatch_plans.evidence_refs.items().len or
+                    len > self.view.static_dispatch_plans.evidence_refs.items().len - start)
                 {
                     Common.invariant("nested procedure checked evidence was outside the producer table");
                 }
@@ -52199,7 +52199,7 @@ const BodyContext = struct {
                         .{ .view = self.view, .root = scope.scheme_root, .scheme_vars = scheme_vars, .params = params, .params_start = scope.evidence_params.start },
                         subst,
                         self.view,
-                        self.view.static_dispatch_plans.evidence_refs[start .. start + len],
+                        self.view.static_dispatch_plans.evidence_refs.items()[start .. start + len],
                         .body_lowering,
                     ),
                 };
@@ -52398,7 +52398,7 @@ const BodyContext = struct {
     /// procedure, as its target or anywhere in that target's nested evidence.
     fn dispatchPlanSelectsLocalProc(self: *BodyContext, plan_id: ?static_dispatch.StaticDispatchPlanId) bool {
         const id = plan_id orelse return false;
-        const plan = self.view.static_dispatch_plans.plans[@backingInt(id)];
+        const plan = self.view.static_dispatch_plans.plans.items()[@backingInt(id)];
         return switch (plan.resolution) {
             .direct_closed => false,
             .direct_parametric => |direct| self.checkedEvidenceNodeSelectsLocalProc(direct.evidence),
@@ -52433,7 +52433,7 @@ const BodyContext = struct {
 
     fn checkedEvidenceSelectsLocalProc(self: *BodyContext, evidence: static_dispatch.CheckedEvidence) bool {
         const plans = self.view.static_dispatch_plans;
-        for (plans.evidence_refs[evidence.callable_contracts.start..][0..evidence.callable_contracts.len]) |contract| {
+        for (plans.evidence_refs.items()[evidence.callable_contracts.start..][0..evidence.callable_contracts.len]) |contract| {
             if (self.checkedEvidenceSelectsLocalProc(contract)) return true;
         }
         return switch (evidence.resolution) {
@@ -52508,7 +52508,7 @@ const BodyContext = struct {
     /// The checked `Try` result type of a literal's conversion call.
     fn literalConversionTryType(self: *BodyContext, plan_id: ?static_dispatch.StaticDispatchPlanId) checked.CheckedTypeId {
         const id = plan_id orelse Common.invariant("checked literal conversion reached Monotype without a dispatch plan");
-        const plan = self.view.static_dispatch_plans.plans[@backingInt(id)];
+        const plan = self.view.static_dispatch_plans.plans.items()[@backingInt(id)];
         if (plan.result_mode != .value) Common.invariant("checked literal conversion plan had a non-value result mode");
         return self.checkedFunctionType(plan.callable_ty).ret;
     }
@@ -53326,7 +53326,7 @@ const BodyContext = struct {
             // An interpolation's value is its conversion result's `Ok` payload.
             .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         } orelse return null;
-        const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
+        const plan = self.view.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
         return try self.closedDirectGraphFreeResultType(expr.ty, plan);
     }
 
@@ -53371,10 +53371,10 @@ const BodyContext = struct {
                 else
                     owner_view;
                 const raw_site = @backingInt(nested.site);
-                if (raw_site >= site_view.nested_proc_sites.sites.len) {
+                if (raw_site >= site_view.nested_proc_sites.sites.items().len) {
                     Common.invariant("stored nested function referenced an unknown checked site");
                 }
-                const site = site_view.nested_proc_sites.sites[raw_site];
+                const site = site_view.nested_proc_sites.sites.items()[raw_site];
                 switch (site.owner) {
                     .template => |site_owner| {
                         if (nested.default_root != null) {
@@ -53447,10 +53447,10 @@ const BodyContext = struct {
             }
             const scope_id = scope.generalized;
             const raw_scope = @backingInt(scope_id);
-            if (raw_scope >= owner_view.templates.dispatch_scopes.len) {
+            if (raw_scope >= owner_view.templates.dispatch_scopes.items().len) {
                 Common.invariant("stored function evidence referenced an unknown checked scope");
             }
-            const scope_record = owner_view.templates.dispatch_scopes[raw_scope];
+            const scope_record = owner_view.templates.dispatch_scopes.items()[raw_scope];
             const expected_parent: LexicalDispatchScope = if (scope_record.parent.get()) |parent|
                 .{ .generalized = parent }
             else
@@ -53626,7 +53626,7 @@ const BodyContext = struct {
                                 Common.invariant("stored structural evidence checked type identity changed during restoration");
                             }
                             const content = if (recorded.generated_codec_derivation.get()) |id|
-                                view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].content
+                                view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(id)].content
                             else
                                 null;
                             if (!std.meta.eql(content, recorded.generated_codec_content))
@@ -53823,15 +53823,15 @@ const BodyContext = struct {
         request_fn_node: NodeId,
     ) Allocator.Error!EvidenceChain {
         const raw_site = @backingInt(nested.site);
-        if (raw_site >= self.view.nested_proc_sites.sites.len) {
+        if (raw_site >= self.view.nested_proc_sites.sites.items().len) {
             Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
         }
-        const site = self.view.nested_proc_sites.sites[raw_site];
+        const site = self.view.nested_proc_sites.sites.items()[raw_site];
         const scope_id = switch (site.lexical_scope) {
             .root => return evidence,
             .generalized => |scope_id| scope_id,
         };
-        const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
+        const scope = self.view.templates.dispatch_scopes.items()[@backingInt(scope_id)];
         if (site.checked_expr == .none or scope.checked_expr != site.checked_expr.get().?) return evidence;
         switch (evidence.scope.lexical) {
             .generalized => |frame_scope| if (frame_scope != scope_id) {
@@ -53839,7 +53839,7 @@ const BodyContext = struct {
             },
             .root => Common.invariant("nested function that owns a dispatch scope was requested from its root frame"),
         }
-        const params = self.view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
+        const params = self.view.templates.evidence_params_pool.items()[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
         var resolved = evidence;
         resolved.vector = try self.resolveCallableEvidenceAtNode(self.view, params, evidence.vector, request_fn_node, .body_lowering);
         return resolved;
@@ -53877,7 +53877,7 @@ const BodyContext = struct {
                 }
                 const component_node = try path_memo.resolve(
                     self.allocator,
-                    view.templates.evidence_path_nodes,
+                    view.templates.evidence_path_nodes.items(),
                     param.path.last,
                     0,
                     request_fn_node,
@@ -53991,15 +53991,15 @@ const BodyContext = struct {
     fn scopeSchema(_: *BodyContext, view: ModuleView, maybe_scope: ?checked.DispatchScopeId) SchemeRequirements {
         const scope_id = maybe_scope orelse return emptySchema(view);
         const raw_scope = @backingInt(scope_id);
-        if (raw_scope >= view.templates.dispatch_scopes.len) {
+        if (raw_scope >= view.templates.dispatch_scopes.items().len) {
             Common.invariant("local procedure named a dispatch scope outside its checked template table");
         }
-        const scope = view.templates.dispatch_scopes[raw_scope];
+        const scope = view.templates.dispatch_scopes.items()[raw_scope];
         return .{
             .view = view,
             .root = scope.scheme_root,
             .scheme_vars = view.templates.scopeSchemeVars(&scope),
-            .params = view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len],
+            .params = view.templates.evidence_params_pool.items()[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len],
             .params_start = scope.evidence_params.start,
         };
     }
@@ -54200,8 +54200,8 @@ const BodyContext = struct {
         }
         const start: usize = evidence_span.span.start;
         const len: usize = evidence_span.span.len;
-        if (start > view.static_dispatch_plans.evidence_refs.len or
-            len > view.static_dispatch_plans.evidence_refs.len - start)
+        if (start > view.static_dispatch_plans.evidence_refs.items().len or
+            len > view.static_dispatch_plans.evidence_refs.items().len - start)
         {
             Common.invariant("root procedure evidence range was outside its checked module");
         }
@@ -54210,7 +54210,7 @@ const BodyContext = struct {
         const subst = try self.substitutionAtRequest(schema, request_node);
         return .{
             .subst = subst,
-            .vector = try self.deriveEvidenceVector(schema, subst, view, view.static_dispatch_plans.evidence_refs[start .. start + len], purpose),
+            .vector = try self.deriveEvidenceVector(schema, subst, view, view.static_dispatch_plans.evidence_refs.items()[start .. start + len], purpose),
         };
     }
 
@@ -54536,7 +54536,7 @@ const BodyContext = struct {
         else switch (primary) {
             .from_scheme, .unreachable_value, .checked_error => primary,
             .target, .structural, .from_callable => {
-                const contracts = site_view.static_dispatch_plans.evidence_refs[ref.callable_contracts.start..][0..ref.callable_contracts.len];
+                const contracts = site_view.static_dispatch_plans.evidence_refs.items()[ref.callable_contracts.start..][0..ref.callable_contracts.len];
                 const contract_frame: CheckedRefsFrame = .{
                     .refs = contracts,
                     .params = .{ .same = frame.param() },
@@ -54909,7 +54909,7 @@ const BodyContext = struct {
         if (roots.items.len == 0 or !self.draft.interface_replay.use_finished_summaries) {
             return try self.relateEvidenceContractsAt(schema, subst, contract);
         }
-        const pool = schema.view.templates.evidence_params_pool;
+        const pool = schema.view.templates.evidence_params_pool.items();
         if (schema.params_start > pool.len or schema.params.len > pool.len - schema.params_start or
             schema.params.ptr != pool[schema.params_start..].ptr)
         {
@@ -55484,10 +55484,10 @@ const BodyContext = struct {
         const table = self.view.static_dispatch_plans;
         const start: usize = node.subst.start;
         const len: usize = node.subst.len;
-        if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
+        if (start > table.site_substitutions.items().len or len > table.site_substitutions.items().len - start) {
             Common.invariant("direct dispatch target substitution range was outside its checked module");
         }
-        return try self.substitutionFromCheckedTypes(self.view, table.site_substitutions[start .. start + len]);
+        return try self.substitutionFromCheckedTypes(self.view, table.site_substitutions.items()[start .. start + len]);
     }
 
     /// A context instantiating `lookup`'s target, with the target's quantified
@@ -55631,7 +55631,7 @@ const BodyContext = struct {
             const ref_id = view.resolved_refs.lookupIdByExpr(lookup) orelse
                 Common.invariant("forwarded procedure alias lookup had no resolved value");
             const done: AliasComposition = .{ .subst = next, .vector = next_vector };
-            step = switch (view.resolved_refs.records[@backingInt(ref_id)].ref) {
+            step = switch (view.resolved_refs.records.items()[@backingInt(ref_id)].ref) {
                 .local_proc => |local| if (local.is_alias)
                     .{ .local = .{ .view = view, .lookup = local.expr, .dispatch_scope = local.dispatch_scope } }
                 else
@@ -56007,7 +56007,7 @@ const BodyContext = struct {
         }
         // Without a lowered declaration instance, the target's checked
         // declaration names the procedure template whose body declares it.
-        for (lookup.view.nested_proc_sites.sites) |site| {
+        for (lookup.view.nested_proc_sites.sites.items()) |site| {
             if (site.checked_expr.get() != local.expr) continue;
             return switch (site.owner) {
                 .template => |template| template,
@@ -56632,7 +56632,7 @@ const BodyContext = struct {
                 var independent_target = entry.target.*;
                 independent_target.instantiation = null;
                 independent_target.substitution = null;
-                const callables = schema.view.templates.evidence_param_callables[param.callable_contracts.start..][0..param.callable_contracts.len];
+                const callables = schema.view.templates.evidence_param_callables.items()[param.callable_contracts.start..][0..param.callable_contracts.len];
                 for (callables) |callable| {
                     var contract_param = param;
                     contract_param.callable_ty = callable;
@@ -56641,7 +56641,7 @@ const BodyContext = struct {
                 }
             } else if (contracts.len != 0) {
                 if (contracts.len != param.callable_contracts.len) Common.invariant("callable contracts differed from their checked schema");
-                const callables = schema.view.templates.evidence_param_callables[param.callable_contracts.start..][0..param.callable_contracts.len];
+                const callables = schema.view.templates.evidence_param_callables.items()[param.callable_contracts.start..][0..param.callable_contracts.len];
                 for (contracts, callables) |contract_entry, callable| {
                     var contract_param = param;
                     contract_param.callable_ty = callable;
@@ -59885,10 +59885,10 @@ const BodyContext = struct {
             Common.invariant("structural codec reached Monotype without its checked derivation contract");
         const derivation_id = checked_structural.evidence.generated_codec_derivation orelse
             Common.invariant("checked structural codec evidence had no generated derivation contract");
-        if (@backingInt(derivation_id) >= checked_structural.view.static_dispatch_plans.generated_codec_derivations.len) {
+        if (@backingInt(derivation_id) >= checked_structural.view.static_dispatch_plans.generated_codec_derivations.items().len) {
             Common.invariant("checked structural codec evidence referenced a missing generated derivation");
         }
-        const derivation = checked_structural.view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
+        const derivation = checked_structural.view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(derivation_id)];
         const kind: CodecKind = switch (structural.derivation.kind()) {
             .parser => .parser,
             .encoder => .encoder,
@@ -59916,10 +59916,10 @@ const BodyContext = struct {
         constructor_node: NodeId,
         shape_node: NodeId,
     ) Allocator.Error!void {
-        if (@backingInt(anchor.derivation) >= anchor.view.static_dispatch_plans.generated_codec_derivations.len) {
+        if (@backingInt(anchor.derivation) >= anchor.view.static_dispatch_plans.generated_codec_derivations.items().len) {
             Common.invariant("checked codec call anchor referenced a missing derivation");
         }
-        const derivation = anchor.view.static_dispatch_plans.generated_codec_derivations[@backingInt(anchor.derivation)];
+        const derivation = anchor.view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(anchor.derivation)];
         if (anchor.call_index >= derivation.calls.len) {
             Common.invariant("checked codec call anchor referenced a missing generated call");
         }
@@ -59944,7 +59944,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const active = self.active_codec_contract orelse
             Common.invariant("generated codec subject selection had no active contract");
-        const derivation = active.view.static_dispatch_plans.generated_codec_derivations[@backingInt(active.derivation)];
+        const derivation = active.view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(active.derivation)];
         if (derivation.body_shape_ty == derivation.shape_ty) return shape_node;
         const boundary_shape_node = active.shape_node;
         return if (self.graph.sameClass(boundary_shape_node, shape_node)) structural_node else shape_node;
@@ -60073,10 +60073,10 @@ const BodyContext = struct {
         kind: CodecKind,
         boundary: CodecContractBoundary,
     ) Allocator.Error!ActiveCodecContract {
-        if (@backingInt(derivation_id) >= checked_view.static_dispatch_plans.generated_codec_derivations.len) {
+        if (@backingInt(derivation_id) >= checked_view.static_dispatch_plans.generated_codec_derivations.items().len) {
             Common.invariant("checked codec anchor referenced a missing generated derivation");
         }
-        const derivation = checked_view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
+        const derivation = checked_view.static_dispatch_plans.generated_codec_derivations.items()[@backingInt(derivation_id)];
         const checked_kind: static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
             .parser => .parser,
             .encoder => .encoder,
@@ -66901,7 +66901,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .local_proc_context);
         defer timing_scope.end();
-        for (self.view.method_registry.entries) |entry| switch ((entry.target orelse continue).kind) {
+        for (self.view.method_registry.entries.items()) |entry| switch ((entry.target orelse continue).kind) {
             .local_proc => |local| {
                 if (local.context_anchor == statement_id) {
                     try self.registerLocalProcDeclaration(.{
@@ -67022,7 +67022,7 @@ const BodyContext = struct {
         const restored = self.restored_local_proc_scope orelse
             Common.invariant("local procedure use reached Monotype before its declaration context");
         var context_anchor: ?CIR.Statement.Idx = null;
-        for (view.method_registry.entries) |entry| switch ((entry.target orelse continue).kind) {
+        for (view.method_registry.entries.items()) |entry| switch ((entry.target orelse continue).kind) {
             .local_proc => |local| {
                 if (local.binder != binder or local.expr != expr) continue;
                 if (context_anchor) |existing| {
@@ -67080,7 +67080,7 @@ const BodyContext = struct {
         expr: CIR.Expr.Idx,
     ) Allocator.Error!RestoredLocalProcDeclaration {
         var site: ?checked.NestedProcSite = null;
-        for (view.nested_proc_sites.sites) |candidate| {
+        for (view.nested_proc_sites.sites.items()) |candidate| {
             if (candidate.checked_expr.get() != expr) continue;
             switch (candidate.owner) {
                 .template => if (self.in_default_expr) continue,
@@ -67099,10 +67099,10 @@ const BodyContext = struct {
             .root => .root,
             .generalized => |scope_id| blk: {
                 const raw_scope = @backingInt(scope_id);
-                if (raw_scope >= view.templates.dispatch_scopes.len) {
+                if (raw_scope >= view.templates.dispatch_scopes.items().len) {
                     Common.invariant("restored local procedure nested site named an unknown evidence scope");
                 }
-                const scope = view.templates.dispatch_scopes[raw_scope];
+                const scope = view.templates.dispatch_scopes.items()[raw_scope];
                 break :blk if (scope.checked_expr == expr)
                     (if (scope.parent.get()) |parent| .{ .generalized = parent } else .root)
                 else
@@ -69906,7 +69906,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     try checked_types.fillSyntheticTypeRoot(gpa, inner_ty, .{ .flex = .{} });
     const fn_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{outer_ty}, outer_ty);
     var scheme_vars = [_]checked.CheckedTypeId{outer_ty};
-    const templates = checked.CheckedProcedureTemplateTable{ .scheme_vars_pool = &scheme_vars };
+    const templates = checked.CheckedProcedureTemplateTable{ .scheme_vars_pool = .fromBorrowedSlice(&scheme_vars) };
     var template: checked.CheckedProcedureTemplate = undefined;
     template.checked_fn_root = fn_ty;
     template.scheme_vars = .{ .start = 0, .len = 1 };
@@ -71085,7 +71085,7 @@ fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
     // Fields"—const-store restore is the second sanctioned resolver of
     // default-root sites, after live default materialization).
     const wants_default_root = nested.default_root != null;
-    for (view.nested_proc_sites.sites) |site| {
+    for (view.nested_proc_sites.sites.items()) |site| {
         if (site.site != nested.site) continue;
         switch (site.owner) {
             .template => |site_owner| {
@@ -71172,7 +71172,7 @@ fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
 
 fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) static_dispatch.StaticDispatchCallPlan {
     const plan_id = dispatchPlanIdForRuntimeExpr(view, expr_id);
-    return view.static_dispatch_plans.plans[@backingInt(plan_id)];
+    return view.static_dispatch_plans.plans.items()[@backingInt(plan_id)];
 }
 
 fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) static_dispatch.StaticDispatchPlanId {
@@ -71183,7 +71183,7 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) static_
         .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored serialization runtime function did not reference a dispatch expression"),
     };
     const plan_raw = @backingInt(plan_id);
-    if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
+    if (plan_raw >= view.static_dispatch_plans.plans.items().len) Common.invariant("stored serialization dispatch plan is outside plan table");
     return plan_id;
 }
 

@@ -28,6 +28,8 @@ pub fn managedWriterFinish(aw: *std.Io.Writer.Allocating, managed: *std.array_li
 pub const SafeList = @import("safe_list.zig").SafeList;
 pub const SafeRange = @import("safe_list.zig").SafeRange;
 pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
+/// Open-addressed dedup index stored in its store's columns.
+pub const HashedProbeTable = @import("hashed_probe_table.zig").HashedProbeTable;
 pub const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
 pub const GuardedList = @import("GuardedList.zig");
 /// Backings a growing list replaced while readers may still hold slices of them.
@@ -144,6 +146,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("CompactWriter.zig"));
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
+    std.testing.refAllDecls(@import("hashed_probe_table.zig"));
     std.testing.refAllDecls(@import("GuardedList.zig"));
     std.testing.refAllDecls(@import("SupersededBackings.zig"));
     std.testing.refAllDecls(@import("serialization.zig"));

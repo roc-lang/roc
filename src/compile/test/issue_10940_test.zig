@@ -76,7 +76,7 @@ test "issue 10940: explicit roots do not require a default app entrypoint" {
     try build_env.build(main_path);
 
     const artifact = build_env.executableRootCheckedArtifact();
-    for (artifact.root_requests.runtime_requests) |root| {
+    for (artifact.root_requests.runtime_requests.items()) |root| {
         try std.testing.expect(root.kind != .runtime_entrypoint);
     }
 
@@ -117,7 +117,7 @@ test "issue 10940: a headerless default app still publishes main!" {
 
     const artifact = build_env.executableRootCheckedArtifact();
     var found_runtime_entrypoint = false;
-    for (artifact.root_requests.runtime_requests) |root| {
+    for (artifact.root_requests.runtime_requests.items()) |root| {
         if (root.kind == .runtime_entrypoint) {
             found_runtime_entrypoint = true;
         }
@@ -152,7 +152,7 @@ test "issue 10940: explicit roots do not automatically publish a defined main!" 
     try build_env.build(main_path);
 
     const artifact = build_env.executableRootCheckedArtifact();
-    for (artifact.root_requests.runtime_requests) |root| {
+    for (artifact.root_requests.runtime_requests.items()) |root| {
         try std.testing.expect(root.kind != .runtime_entrypoint);
     }
 }

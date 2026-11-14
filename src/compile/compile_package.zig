@@ -314,7 +314,7 @@ fn appendCheckOwnerEnvPublicDependencies(
     seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void),
     view: CheckedArtifact.ImportedModuleView,
 ) Allocator.Error!void {
-    for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+    for (view.public_api_dependencies.type_owner_artifacts.items()) |dependency_key| {
         const entry = try seen_public_dependencies.getOrPut(dependency_key);
         if (entry.found_existing) continue;
         entry.value_ptr.* = {};
