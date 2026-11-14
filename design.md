@@ -5177,6 +5177,20 @@ node's original inner-scope rank. The child-rank reduction cannot move a capture
 type back into an inner scope. Independent inner-scope variables remain eligible
 for generalization; captured variables wait for their owning boundary.
 
+Rank adjustment reaches a younger variable only through a variable its own
+generalization visits, so a node unification creates holds no child younger
+than itself. Unification creates nodes at the lower of its two operands'
+ranks: a row holding one operand's unshared tags or fields, or a copy of a
+merge destination's content. Such a node can hold the younger operand's
+variables, so unification lowers each direct child of a node it creates to
+the node's rank (`Unifier.freshParent`); a younger variable nested deeper is
+reached through that child when the child's own generalization visits it at
+its lowered rank. Otherwise a younger variable beneath an older value's row,
+such as the tail of a top-level value's tag row widened by a generalized
+function's use, would be quantified by that function while the value still
+shares it. Pinned by `src/check/test/issue_13011_test.zig`, the rank tests
+in `src/check/test/unify_test.zig`, and `test/cli/Issue13011StoreWrites.roc`.
+
 Roc generalization is exclusively rank-1. Quantification belongs to a value
 binding; an arbitrary expression does not acquire a scheme, and the result of
 calling a polymorphic function is a monotype even when that result contains a
