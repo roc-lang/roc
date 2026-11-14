@@ -9099,7 +9099,7 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
     for (app.compile_time_roots.roots.items()) |root| {
         const def = switch (root.source) {
             .def => |def| def,
-            .hoisted, .expr, .statement, .required_binding, .literal => continue,
+            .hoisted, .expr, .statement, .required_binding, .literal, .literal_argument => continue,
         };
         const pattern = env.store.getPattern(env.store.getDef(def).pattern);
         if (pattern != .assign) continue;
@@ -10180,7 +10180,7 @@ fn hashPatternExtractionRegionsForView(
             => true,
             .callable_binding => switch (root.source) {
                 .hoisted => true,
-                .def, .expr, .statement, .required_binding, .literal => false,
+                .def, .expr, .statement, .required_binding, .literal, .literal_argument => false,
             },
             .constant,
             .expect,

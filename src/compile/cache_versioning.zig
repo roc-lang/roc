@@ -44,7 +44,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 40 stores reproducible checking
+/// reflected in layout fingerprints. Version 41 stores reproducible checking
 /// and evaluation reports beside paired callable forwarding and request
 /// completion and cached literal argument roots for both strategies,
 /// body-local type context arguments, generated-codec recurrences,
@@ -56,13 +56,14 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// type stores listing their widening field names once, anonymous structure
 /// that every use shares when nothing visible can lift or widen it, literal
 /// conversion roots published for deferred literals, checked artifacts' type,
-/// scheme, blob and proc-base interning tables, and type tags that record
-/// whether only `match` branch patterns put them in their row, with each
-/// checking problem carrying the source regions its report highlights in
-/// place of a region per type variable. It rejects every earlier format,
-/// including the independent version 19 through 39 formats. Platform-pairing
-/// entries share it.
-const checked_envelope_version: u32 = 40;
+/// scheme, blob and proc-base interning tables, type tags that record
+/// whether only `match` branch patterns put them in their row, and literal
+/// argument roots whose source is their edge owner and which hold no
+/// expression, with each checking problem carrying the source regions its
+/// report highlights in place of a region per type variable. It rejects every
+/// earlier format, including the independent version 19 through 40 formats.
+/// Platform-pairing entries share it.
+const checked_envelope_version: u32 = 41;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment.
@@ -161,8 +162,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x6B, 0x0D, 0xC0, 0xDF, 0x0E, 0xB6, 0xB4, 0x49, 0xD4, 0x29, 0xED, 0x7F, 0x64, 0xCF, 0x36, 0x98,
-        0x13, 0xBF, 0x2E, 0x4E, 0xAA, 0x84, 0xC9, 0x8A, 0x20, 0x20, 0xA7, 0x64, 0x8E, 0xFF, 0x1D, 0x9F,
+        0x68, 0xD3, 0xFD, 0x8F, 0x0D, 0x28, 0x34, 0x08, 0x50, 0xB7, 0x4E, 0x3D, 0x25, 0x46, 0x97, 0xE5,
+        0xDA, 0x6D, 0x3A, 0x37, 0xA2, 0x5D, 0x24, 0xFC, 0x13, 0xAC, 0x54, 0xF8, 0xD4, 0xEB, 0x09, 0x89,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }
