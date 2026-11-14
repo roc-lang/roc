@@ -3251,7 +3251,7 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                 try pending.append(graph.allocator, .{ .at = .{ .checked_node = checked_root, .request_node = request_root } });
             },
             .relate_named => |pair| try graph.relateNamedInstances(pair.checked_node, pair.request_node),
-            .field_kind => |fields| graph.relateRecordFieldKind(fields.checked, fields.request),
+            .field_kind => |fields| try graph.relateRecordFieldKind(fields.checked, fields.request),
         }
         std.mem.reverse(DeferredConstructorStep, pending.items[start..]);
     }
@@ -3907,7 +3907,7 @@ fn relateCheckedMonoRequestNodeAt(
         frame.next += 1;
         switch (op) {
             .relate => |pair| try beginCheckedMonoRequestPair(graph, pair.checked, pair.request, row_width, true, seen, &ops, &frames),
-            .field_kind => |fields| graph.relateRecordFieldKind(fields.checked, fields.request),
+            .field_kind => |fields| try graph.relateRecordFieldKind(fields.checked, fields.request),
             .join_container => |pair| try graph.joinRelatedRequestContainer(pair.checked, pair.request),
             .named_instances => |pair| try graph.relateNamedInstances(pair.checked, pair.request),
             .unify => |pair| switch (row_width) {
