@@ -101,6 +101,9 @@ const TaskContext = struct {
     /// The procedure's shapes excluded it from this phase; the task runs only
     /// to verify that the phase indeed rewrites nothing, and never commits.
     verify_only: bool = false,
+    /// Static data reads the compile-time value guards will guard; see
+    /// `runPruneJoinParams`.
+    guarded_reads: ?*const std.DynamicBitSetUnmanaged = null,
     shard: ?LirStore = null,
     failed: bool = false,
     completed: bool = false,
@@ -143,7 +146,7 @@ const TaskContext = struct {
                 }
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },
-            .prune_join_params => try PruneJoinParams.runProc(&shard, self.proc, scratch_allocator),
+            .prune_join_params => try PruneJoinParams.runProc(&shard, self.proc, scratch_allocator, self.guarded_reads),
             .scalarize => try ScalarizeJoins.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(ScalarizeJoins.LaneScratch, lane)),
             .loop_append => try LoopAppendPromote.runProcInLane(&shard, self.layouts, self.proc, try laneScratch(LoopAppendPromote.LaneScratch, lane), analysis.?),
             .range => {
@@ -169,6 +172,33 @@ pub fn run(
     phase: Phase,
     executor: ?TaskExecutor.Executor,
     metrics: ?*ParallelMetrics,
+) Allocator.Error!void {
+    return runWithGuardedReads(allocator, store, layouts, phase, executor, metrics, null);
+}
+
+/// The `prune_join_params` phase of a program that reads compile-time values.
+/// `guarded_reads` holds each static data slot whose reads
+/// `comptime_value_guards.insert` will guard: such a read fails when the
+/// value's evaluation failed, so it is never a pure definition to delete.
+pub fn runPruneJoinParams(
+    allocator: Allocator,
+    store: *LirStore,
+    layouts: *layout.Store,
+    executor: ?TaskExecutor.Executor,
+    metrics: ?*ParallelMetrics,
+    guarded_reads: *const std.DynamicBitSetUnmanaged,
+) Allocator.Error!void {
+    return runWithGuardedReads(allocator, store, layouts, .prune_join_params, executor, metrics, guarded_reads);
+}
+
+fn runWithGuardedReads(
+    allocator: Allocator,
+    store: *LirStore,
+    layouts: *layout.Store,
+    phase: Phase,
+    executor: ?TaskExecutor.Executor,
+    metrics: ?*ParallelMetrics,
+    guarded_reads: ?*const std.DynamicBitSetUnmanaged,
 ) Allocator.Error!void {
     switch (phase) {
         .trmc => try Trmc.prepareLayouts(store, layouts),
@@ -202,6 +232,7 @@ pub fn run(
             .phase = phase,
             .proc = proc,
             .verify_only = !admitted,
+            .guarded_reads = guarded_reads,
         });
     }
     if (contexts.items.len == 0) return;

@@ -28651,9 +28651,11 @@ const Expected = struct {
     /// payloads) can generalize before the enclosing aggregate relates their
     /// instantiated use to its slot. Passing `expected_type` to those children
     /// would constrain the generalized scheme rather than that use. This
-    /// separate channel lets aggregate expressions project child slots early;
-    /// their owner still establishes the ordinary relation after the stored
-    /// value's check returns the instantiated value.
+    /// separate channel lets aggregate expressions project child slots early,
+    /// and lets a lambda child seed its parameters from the slot's function
+    /// type (`seedLambdaParamsFromContext`); their owner still establishes the
+    /// ordinary relation after the stored value's check returns the
+    /// instantiated value.
     contextual_type: ?ExpectedType = null,
     branch_result: ?Var = null,
     /// What `branch_result` is: a branch relates to an annotated result as a
@@ -30894,8 +30896,11 @@ fn abortExprTask(self: *Self, task: *ExprTask, env: *Env) void {
 /// function's static-dispatch evidence.
 fn storedValueVar(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!Var {
     const source_var = ModuleEnv.varFrom(expr_idx);
-    const resolved_source = self.types.resolveVar(source_var);
-    if (resolved_source.desc.rank != .generalized and !self.isBindingSchemeVar(source_var)) {
+    if (!self.isBindingSchemeVar(source_var)) {
+        // A generalized root reaches a quantified variable, so its binding
+        // boundary classified it as a scheme; a stored child that is no
+        // scheme therefore has a root its own scope still owns.
+        std.debug.assert(self.types.resolveVar(source_var).desc.rank != .generalized);
         return source_var;
     }
 
@@ -33626,21 +33631,14 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
         }
     }
 
-    // A lambda in call-argument position gets its parameters seeded from the
-    // parameter type the call expects there, before the body is checked.
-    // The body then checks against known parameter types, so dispatch on a
-    // parameter resolves inside the body and its diagnostics name concrete
-    // types. The seed is a skeleton over the parameter vars related to the
-    // expected type itself inside a commit probe: a non-matching expectation
-    // is rolled back and left to the call's own argument relation, which
-    // owns the final check and its diagnostic either way. Only the
-    // call-argument channel is seeded; a stored value's contextual slot
-    // relates to an instantiated use instead.
+    // Lambda Parameters Seeded From Context (design.md): a lambda without an
+    // annotation whose position supplies an expected function type (a call
+    // argument, or a stored value's aggregate slot) gets its parameters
+    // seeded from that type before the body is checked, so dispatch on a
+    // parameter resolves inside the body.
     if (state.mb_anno_func == null) {
         if (nested_expected.contextual_type) |contextual| {
-            if (contextual.context == .fn_call_arg) {
-                try self.seedLambdaParamsFromExpectedFn(lambda.args, contextual.var_, contextual.context, env, expr_region);
-            }
+            try self.seedLambdaParamsFromContext(lambda.args, contextual, env, expr_region);
         }
     }
 
@@ -37875,15 +37873,50 @@ fn publishUnaryDispatchExpr(
 /// function over the parameter vars (with a fresh return) is unified with the
 /// expected var inside a commit probe; a mismatch rolls back and records
 /// nothing, leaving the call's argument relation to report it.
-fn seedLambdaParamsFromExpectedFn(
+/// POLICY: Lambda Parameters Seeded From Context (design.md). Relate a
+/// skeleton over an unannotated lambda's parameter vars to the function type
+/// its position expects, before its body is checked:
+///
+///   - a call argument's expected parameter type, related as it is, since the
+///     call's own argument relation relates the lambda to it anyway;
+///   - a stored value's projected aggregate cell (a record field, tuple or
+///     list item, or tag payload), which is already the enclosing
+///     construction's own fresh shape copy;
+///   - a record update field's borrowed base field, read from the base row
+///     and copied (`copyExpectedShape`) so the base's own type is untouched.
+///
+/// Only a context that already names a type constructor seeds anything. The
+/// relation runs inside one commit probe: an expectation the lambda does not
+/// fit is rolled back with its copy and left to the owning relation, which
+/// reports the mismatch.
+fn seedLambdaParamsFromContext(
     self: *Self,
     args: CIR.Pattern.Span,
-    expected_var: Var,
-    context: problem.Context,
+    contextual: Expected.ExpectedType,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!void {
-    if (!self.varResolvesToKnownType(expected_var)) return;
+    if (contextual.context != .fn_call_arg and !contextual.projected_cell and contextual.record_field == null) return;
+    if (contextual.record_field == null and !self.varResolvesToKnownType(contextual.var_)) return;
+
+    var commit_probe = try self.beginCommitProbe(env);
+    var committed = false;
+    defer if (!committed) commit_probe.rollback();
+
+    const source = if (contextual.record_field) |name|
+        try self.borrowExpectedRecordField(contextual.var_, name, env) orelse return
+    else
+        contextual.var_;
+    if (contextual.record_field != null and !self.varResolvesToKnownType(source)) return;
+    // Error context is diagnostic recovery, never construction evidence.
+    if ((contextual.projected_cell or contextual.record_field != null) and self.types.mayContainErrorState()) {
+        self.var_set.clearRetainingCapacity();
+        const source_contains_error = try self.varContainsError(source, &self.var_set);
+        self.var_set.clearRetainingCapacity();
+        if (source_contains_error) return;
+    }
+    const expected_fn = if (contextual.record_field != null) try self.copyExpectedShape(source, env) else source;
+
     const arg_vars_top = try self.pushLambdaArgVars(args);
     const seed_args = blk: {
         defer self.scratch_vars.clearFrom(arg_vars_top);
@@ -37895,10 +37928,7 @@ fn seedLambdaParamsFromExpectedFn(
         .ret = seed_ret,
     } } }, env, region);
 
-    var commit_probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) commit_probe.rollback();
-    const result = try commit_probe.unifyInContext(expected_var, seed_fn_var, context);
+    const result = try commit_probe.unifyInContext(expected_fn, seed_fn_var, contextual.context);
     if (!result.isEstablished()) return;
     committed = true;
     try commit_probe.commit();
