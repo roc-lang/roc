@@ -1057,7 +1057,7 @@ pub const ReportBuilder = struct {
                     if (mismatch.leaf) |leaf| return self.buildInterpolationTieReport(tie, leaf);
                 }
                 self.method_conflict = mismatch.method_conflict;
-                self.record_gained_field = if (mismatch.record_tail_refusal) |refusal| refusal.kind == .added_field else false;
+                self.record_gained_field = if (mismatch.record_tail_refusal) |refusal| refusal == .added_field else false;
                 if (mismatch.leaf) |leaf| self.mismatch_leaf = .{ .root = mismatch.types, .leaf = leaf };
                 var report = try self.buildTypeMismatchForContext(mismatch);
                 errdefer report.deinit();
@@ -5810,16 +5810,16 @@ pub const ReportBuilder = struct {
     /// nothing more (design.md "Uncommitted Record Tails").
     fn appendRecordTailRefusal(self: *Self, report: *Report, refusal: problem_mod.RecordTailRefusal) Allocator.Error!void {
         try report.document.addLineBreaks(2);
-        switch (refusal.kind) {
-            .padded_nominal => {
-                const nominal = refusal.nominal orelse unreachable;
-                if (refusal.taken_apart) {
+        switch (refusal) {
+            .padded_nominal => |padded| {
+                const nominal = padded.nominal;
+                if (padded.taken_apart) {
                     try D.renderSlice(&.{
                         D.typeIdent(nominal).withAnnotation(.inline_code),
                         D.bytes("has more (anonymous) fields than the record this function takes apart, making it incompatible."),
                     }, self, report);
                     try report.document.addLineBreaks(2);
-                    if (refusal.omits_omittable_field) {
+                    if (padded.omits_omittable_field) {
                         try self.renderNominalPatternHint(report, nominal, "{s}.{{ ..., .. }}", true);
                     } else {
                         try self.renderNominalPatternHint(report, nominal, "{s}.{{ ... }}", false);
@@ -5833,8 +5833,7 @@ pub const ReportBuilder = struct {
                     try self.renderNominalConstructorHint(report, nominal, null);
                 }
             },
-            .compared_plain => {
-                const nominal = refusal.nominal orelse unreachable;
+            .compared_plain => |nominal| {
                 try D.renderSlice(&.{
                     D.bytes("The function that built this record compared or hashed it as a plain record, so it can't become a"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
@@ -5858,8 +5857,7 @@ pub const ReportBuilder = struct {
                     D.bytes(".").withNoPrecedingSpace(),
                 }, self, report);
             },
-            .compared_plain_tags => {
-                const nominal = refusal.nominal orelse unreachable;
+            .compared_plain_tags => |nominal| {
                 try D.renderSlice(&.{
                     D.bytes("The function that built this value compared or hashed it as a plain tag union, so it can't become a"),
                     D.typeIdent(nominal).withAnnotation(.inline_code),
@@ -5881,16 +5879,16 @@ pub const ReportBuilder = struct {
                     D.bytes(".").withNoPrecedingSpace(),
                 }, self, report);
             },
-            .added_field => {
-                const field = refusal.field orelse unreachable;
-                if (refusal.taken_apart) {
+            .added_field => |added| {
+                const field = added.field;
+                if (added.taken_apart) {
                     try D.renderSlice(&.{
                         D.bytes("This function takes apart a record that has no"),
                         D.ident(field).withAnnotation(.inline_code),
                         D.bytes("field, so it can't take a record that has one."),
                     }, self, report);
                     try report.document.addLineBreaks(2);
-                    if (refusal.nominal) |nominal| {
+                    if (added.nominal) |nominal| {
                         try self.renderNominalPatternHint(report, nominal, "{s}.{{ ..., .. }}", true);
                     } else {
                         try D.renderSlice(&.{
@@ -5909,7 +5907,7 @@ pub const ReportBuilder = struct {
                         D.bytes("field. The function it came from built it without one, and a record can't gain fields after it's built."),
                     }, self, report);
                     try report.document.addLineBreaks(2);
-                    if (refusal.nominal) |nominal| {
+                    if (added.nominal) |nominal| {
                         try self.renderNominalConstructorHint(report, nominal, field);
                     } else {
                         try D.renderSlice(&.{
@@ -5923,8 +5921,8 @@ pub const ReportBuilder = struct {
                     }
                 }
             },
-            .plain_record => try self.renderPlainRowRefusal(report, refusal, .record),
-            .plain_tag_union => try self.renderPlainRowRefusal(report, refusal, .tag_union),
+            .plain_record => |plain_row| try self.renderPlainRowRefusal(report, plain_row, .record),
+            .plain_tag_union => |plain_row| try self.renderPlainRowRefusal(report, plain_row, .tag_union),
         }
     }
 
@@ -5935,8 +5933,8 @@ pub const ReportBuilder = struct {
     /// with the nominal's record syntax (design.md "Uncommitted Record
     /// Tails"). A nominal with anonymous fields is converted only by building
     /// it, so that fix is offered only where the plain record is the value.
-    fn renderPlainRowRefusal(self: *Self, report: *Report, refusal: problem_mod.RecordTailRefusal, comptime row: enum { record, tag_union }) Allocator.Error!void {
-        const nominal = refusal.nominal orelse unreachable;
+    fn renderPlainRowRefusal(self: *Self, report: *Report, refusal: problem_mod.RecordTailRefusal.PlainRow, comptime row: enum { record, tag_union }) Allocator.Error!void {
+        const nominal = refusal.nominal;
         const plain = switch (row) {
             .record => "plain record",
             .tag_union => "plain tag union",

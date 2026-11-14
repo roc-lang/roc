@@ -16278,7 +16278,7 @@ const EvidencePass = struct {
         // that row ends: at this use, the value its method's copy is called on
         // (design.md "Methods On Open Rows").
         if (param.constraint.receiver == .open_row_value) {
-            const func = self.types.resolveThroughAliases(fresh_fn).desc.content.unwrapFunc() orelse unreachable;
+            const func = self.types.resolveThroughAliases(fresh_fn).desc.content.unwrapFunc() orelse unreachable; // a requirement's method variable is a function type
             return try self.evidenceContext(param, self.types.sliceVars(func.args)[0], fresh_fn);
         }
         return try self.evidenceContext(param, fresh_dispatcher, fresh_fn);
@@ -31517,7 +31517,17 @@ pub const CheckedModuleArtifact = struct {
                 .alias => |alias| current = alias.backing,
                 .record => |record| current = record.ext,
                 .tag_union => |tag_union| current = tag_union.ext,
-                else => return current == slot_ty,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                .empty_tag_union,
+                .field_kind,
+                => return current == slot_ty,
             }
         }
     }

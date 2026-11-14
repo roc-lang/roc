@@ -1185,11 +1185,7 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                         // carries real information).
                         const display: enum { hidden, anonymous, source_name, generated_name, row_name } = blk: {
                             if (self.holdsOpenRowValue(flex.var_)) break :blk .row_name;
-                            // A tail constrained only by the `is_eq` and
-                            // `to_hash` an open row's derivation gives it is
-                            // satisfied by the closed row an output stands
-                            // for, so it is implicit openness too.
-                            const implicit_openness = self.polarity == .pos and self.constraintsAreRowDerivations(flex.payload.constraints);
+                            const implicit_openness = self.polarity == .pos and flex.payload.constraints.len() == 0;
                             if (flex.payload.name) |ident_idx| {
                                 const name = self.getIdent(ident_idx);
                                 if (name.len > 0 and name[0] != '#') {
@@ -1662,13 +1658,6 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
             try self.count_pending.append(tag_union.ext);
         },
     }
-}
-
-/// Whether every constraint in `range` is an `is_eq` or `to_hash`, the
-/// obligations deriving those methods over an open row gives its tail.
-fn constraintsAreRowDerivations(self: *const TypeWriter, range: types_mod.StaticDispatchConstraint.SafeList.Range) bool {
-    _ = self;
-    return range.len() == 0;
 }
 
 /// Whether `var_` is a row variable holding a requirement for the record or

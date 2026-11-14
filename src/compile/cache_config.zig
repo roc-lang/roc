@@ -374,15 +374,14 @@ pub const Constants = struct {
     ///      interning tables; combines with the independent 187 entry change.
     /// 190: type tags record whether they are in their row only because `match`
     ///      branch patterns asked for them.
-    /// 191: on top of the 190 entry layout, uncommitted record and tag tails
+    /// 191: combines the independent 189 and 190 entry changes.
+    /// 192: on top of the 191 entry layout, uncommitted record and tag tails
     ///      replace per-use structure, checked variables record uncommitted
     ///      record tails, type stores list no widening field names, quantified
     ///      record tails are restricted at every use, record pattern tails are
     ///      marked, nominal declarations record padding, method requirements on
     ///      open rows are held on the row variable for the whole record or tag
     ///      union, and snapshots record which value a requirement is about.
-    /// 192: combines the independent 191 entry changes: uncommitted record and
-    ///      tag tails with the checked-artifact interning tables.
     pub const CACHE_VERSION = 192;
 };
 
