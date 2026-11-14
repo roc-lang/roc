@@ -29,10 +29,13 @@ const invariant = types.invariant;
 /// The plans and stored types built so far, by the program type they are of.
 pub const ConstSchema = struct {
     plans: collections.DenseMapUnmanaged(TypeId, LirProgram.ConstPlanId) = .empty,
+    /// The type each plan is of: the inverse of `plans`.
+    plan_types: collections.DenseMapUnmanaged(LirProgram.ConstPlanId, TypeId) = .empty,
     types: collections.DenseMapUnmanaged(TypeId, const_store.ConstTypeId) = .empty,
 
     pub fn deinit(self: *ConstSchema, allocator: Allocator) void {
         self.plans.deinit(allocator);
+        self.plan_types.deinit(allocator);
         self.types.deinit(allocator);
     }
 };
@@ -103,6 +106,7 @@ const PlanWalk = struct {
         const id: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.result.const_plans.items.len));
         try program.result.const_plans.append(allocator, .pending);
         try program.const_schema.plans.put(allocator, ty, id);
+        try program.const_schema.plan_types.put(allocator, id, ty);
         try self.frames.append(allocator, .{ .ty = ty, .id = id, .ids_start = self.ids.items.len, .variants_start = self.variants.items.len });
         return id;
     }

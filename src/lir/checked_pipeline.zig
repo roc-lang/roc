@@ -90,6 +90,8 @@ pub const boxyTemplateWorkerIdentity = postcheck.Boxy.Lower.templateWorkerIdenti
 /// What reading a `.boxy` program's function values takes after lowering.
 pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
 pub const BoxyFunctionMetadata = postcheck.Boxy.StoredFn;
+/// The constant schema of the roots the checked-value writer completes.
+pub const BoxyValueSchema = postcheck.Boxy.ValueSchema;
 /// The names the modules of one link give their workers and nominal types.
 pub const BoxyModuleNames = postcheck.Boxy.Types.ModuleNames;
 

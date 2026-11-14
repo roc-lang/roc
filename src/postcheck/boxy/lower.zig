@@ -3742,10 +3742,10 @@ pub fn poolSlice(comptime T: type, pool: []const T, span: anytype) []const T {
     return pool[span.start..][0..span.len];
 }
 
-/// Lower the requested roots and everything they reach.
-pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
-    base.dev_diagnostics.traceBoxyWork("boxy lowering");
-    var step_started: i96 = if (input.timing) |timing| timing.now() else 0;
+/// A program of `input`'s options with no module registered and nothing
+/// lowered yet. The caller owns it: `Program.release` frees all but its
+/// `result`.
+fn createProgram(allocator: Allocator, input: Input) Allocator.Error!*Program {
     var result = try LirProgram.Result.init(allocator, input.target_usize);
     const program = allocator.create(Program) catch |err| {
         result.deinit();
@@ -3769,14 +3769,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .list_in_place_map = input.list_in_place_map,
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
-    var retained = false;
-    defer if (!retained) {
-        program.release();
-        allocator.destroy(program);
-    };
-    // Scratch must not follow a Program retained for function metadata.
-    defer program.finishErrorTypes();
-    errdefer program.result.deinit();
     program.result.store.runtime_contract = .boxy;
     program.layouts = .{
         .allocator = allocator,
@@ -3787,13 +3779,19 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, input.target_usize);
     program.static_descs.table_identities = input.stored_functions;
     program.static_descs.table_owner = input.function_unit orelse @splat(0);
+    return program;
+}
 
+/// Register the program's modules (`Input.modules`) and index what each
+/// declares that lowering looks up by module.
+fn registerModules(program: *Program) Allocator.Error!void {
+    const allocator = program.allocator;
+    const input = program.input;
     _ = try program.modules.add(checked.importedView(input.modules.root.module));
     for (input.modules.imports) |view| _ = try program.modules.add(view);
     for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
     program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
     @memset(program.body_indexed, false);
-    base.dev_diagnostics.countTestWork(.boxy_body_index_available_modules, program.modules.views.items.len);
     for (program.modules.views.items) |view| {
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
         for (view.view.exported_procedure_bindings.bindings) |*binding| {
@@ -3806,6 +3804,45 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
         }
     }
+}
+
+/// A program of `modules` that lowers nothing, whose types, layouts and
+/// constant schema answer how a value of a closed checked type is stored
+/// (`ValueSchema`). Its types convert exactly as a compile-time program's
+/// over the same modules do. `destroySchemaProgram` frees it.
+pub fn createSchemaProgram(allocator: Allocator, modules: Common.CheckedModules, target_usize: base.target.TargetUsize) Allocator.Error!*Program {
+    const program = try createProgram(allocator, .{ .modules = modules, .roots = .{}, .target_usize = target_usize, .compile_time = true });
+    errdefer destroySchemaProgram(program);
+    try registerModules(program);
+    try solvePlatformIdentities(program);
+    return program;
+}
+
+/// Free a program `createSchemaProgram` made.
+pub fn destroySchemaProgram(program: *Program) void {
+    const allocator = program.allocator;
+    program.finishErrorTypes();
+    program.release();
+    program.result.deinit();
+    allocator.destroy(program);
+}
+
+/// Lower the requested roots and everything they reach.
+pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
+    base.dev_diagnostics.traceBoxyWork("boxy lowering");
+    var step_started: i96 = if (input.timing) |timing| timing.now() else 0;
+    const program = try createProgram(allocator, input);
+    var retained = false;
+    defer if (!retained) {
+        program.release();
+        allocator.destroy(program);
+    };
+    // Scratch must not follow a Program retained for function metadata.
+    defer program.finishErrorTypes();
+    errdefer program.result.deinit();
+
+    try registerModules(program);
+    base.dev_diagnostics.countTestWork(.boxy_body_index_available_modules, program.modules.views.items.len);
     try solvePlatformIdentities(program);
     try seedSourceFiles(program);
     try initHosted(program);

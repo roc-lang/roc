@@ -11,6 +11,8 @@ pub const Body = @import("body.zig");
 pub const Match = @import("match.zig");
 /// Stored function values of compile-time evaluation.
 pub const StoredFn = @import("stored_fn.zig");
+/// The constant schema of the roots the checked-value writer completes.
+pub const ValueSchema = @import("value_schema.zig").ValueSchema;
 
 /// Lower checked modules to LIR under `.boxy`.
 pub const run = Lower.run;
