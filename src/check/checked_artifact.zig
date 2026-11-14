@@ -13849,8 +13849,8 @@ const EvidencePass = struct {
             if (self.templateEvidenceSchemeVar(template.*, &template_defs)) |scheme_var| {
                 const schema = try self.publishScheme(scheme_var);
                 template.scheme_vars = schema.vars;
-                template.evidence_params = if (self.isCallableBindingWrapper(template.*))
-                    try self.appendReturnedCallableEvidenceParams(schema.params)
+                template.evidence_params = if (self.wrapperReturnsBindingValue(template.*))
+                    try self.appendReturnedValueEvidenceParams(schema.params)
                 else
                     schema.params;
                 const template_params = self.evidence_params_pool.items[template.evidence_params.start..][0..template.evidence_params.len];
@@ -13865,8 +13865,9 @@ const EvidencePass = struct {
                     template.callable_determines_scheme = signature_vars.len == schema.vars.len;
                 }
             } else {
-                // Constant-evaluation wrappers retain the value's type variables,
-                // but have no caller-supplied dispatch parameters of their own.
+                // An expression root's wrapper retains its value's type
+                // variables, but nothing reads the root at another
+                // instantiation, so it has no dispatch parameters.
                 template.scheme_vars = try self.appendSchemeVars(self.templateSchemeVar(template.*, &template_defs));
                 template.evidence_params = .{};
             }
@@ -14257,21 +14258,26 @@ const EvidencePass = struct {
         }
     }
 
-    fn isCallableBindingWrapper(self: *EvidencePass, template: CheckedProcedureTemplate) bool {
+    /// Whether `template` is the wrapper of a top-level binding whose scheme
+    /// is the binding's own: a callable binding's or a constant's.
+    fn wrapperReturnsBindingValue(self: *EvidencePass, template: CheckedProcedureTemplate) bool {
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
-                break :blk root.kind == .callable_binding and root.source_pattern == .none;
+                break :blk root.source_pattern == .none and switch (root.kind) {
+                    .callable_binding, .constant => true,
+                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument, .expect, .repl_expr => false,
+                };
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => false,
         };
     }
 
-    /// A callable binding's wrapper takes no arguments and returns the
-    /// binding's callable, so a dispatcher at a path over that callable is at
-    /// the same path below the wrapper's return. The parameters keep the
-    /// binding's scheme order, which a use's evidence follows.
-    fn appendReturnedCallableEvidenceParams(self: *EvidencePass, params: artifact_serialize.Span) Allocator.Error!artifact_serialize.Span {
+    /// A binding's wrapper takes no arguments and returns the binding's
+    /// value, so a dispatcher at a path over that value is at the same path
+    /// below the wrapper's return. The parameters keep the binding's scheme
+    /// order, which a use's evidence follows.
+    fn appendReturnedValueEvidenceParams(self: *EvidencePass, params: artifact_serialize.Span) Allocator.Error!artifact_serialize.Span {
         const start: u32 = @intCast(self.evidence_params_pool.items.len);
         for (params.start..params.start + params.len) |index| {
             var param = self.evidence_params_pool.items[index];
@@ -14303,12 +14309,15 @@ const EvidencePass = struct {
         return .{ .start = start, .len = params.len };
     }
 
-    /// Only procedure definitions, hoisted source-pattern roots, and callable
-    /// bindings bind an evidence chain. A callable binding's wrapper produces
-    /// the binding's callable for a use, which supplies the binding's
-    /// dispatch parameters exactly as a use of a procedure does. Constant and
-    /// expression entry wrappers evaluate their values without receiving the
-    /// value's dispatch parameters as arguments.
+    /// Procedure definitions, hoisted source-pattern roots, callable bindings
+    /// and constants bind an evidence chain. A callable binding's or a
+    /// constant's wrapper produces the binding's value for a use, which
+    /// supplies the binding's dispatch parameters exactly as a use of a
+    /// procedure does: a constant whose type keeps a variable is computed at
+    /// each instantiation it is read at, and a requirement on that variable
+    /// has no implementation until a read fixes it. A constant whose type is
+    /// closed has no such parameter. Expression entry wrappers evaluate their
+    /// values without dispatch parameters.
     fn templateEvidenceSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
@@ -14319,7 +14328,10 @@ const EvidencePass = struct {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
                 if (root.source_pattern.get()) |pattern| break :blk ModuleEnv.varFrom(pattern);
-                break :blk if (root.kind == .callable_binding) rootSchemeVar(root) else null;
+                break :blk switch (root.kind) {
+                    .callable_binding, .constant => rootSchemeVar(root),
+                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument, .expect, .repl_expr => null,
+                };
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => null,
         };

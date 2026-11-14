@@ -8226,15 +8226,21 @@ requirement tables and synthetic binding ownership. A committed import survives
 later rolled-back cache hits. No cache hit recopies a type graph or re-enumerates
 the source requirements.
 
-Procedure definitions, hoisted source-pattern roots, and callable bindings
-carry evidence parameters on their procedure templates; constant and
-expression entry wrappers do not, because they evaluate a value without a
-caller's dispatch parameters. A callable binding's entry wrapper is a
-zero-argument procedure returning the binding's callable, and a runtime use of
-a pending binding calls it, supplying the binding's evidence as any procedure
-use does. Its parameters are the binding's scheme parameters in the binding's
+Procedure definitions, hoisted source-pattern roots, callable bindings, and
+constants carry evidence parameters on their procedure templates; expression
+entry wrappers do not, because they evaluate a value without a caller's
+dispatch parameters. A callable binding's or a constant's entry wrapper is a
+zero-argument procedure returning the binding's value, and a use that computes
+the binding calls it, supplying the binding's evidence as any procedure use
+does. Its parameters are the binding's scheme parameters in the binding's
 order, and each scheme-callable path is the binding's path below the wrapper's
-`fn_ret`.
+`fn_ret`. A constant whose type is closed has no scheme parameter. A constant
+whose type keeps a variable (`effects = { send: send }` with `send = |x|
+x.concat("!")`) is computed at each instantiation it is read at ("Compile-Time
+Evaluation Strategy"), and a requirement on that variable has no
+implementation until a read fixes it: the read's evidence supplies it, in the
+read's own module or in a module that imports the constant
+(`test/cli/ImportedGenericRecord.roc`).
 
 Every procedure evidence parameter also carries an explicit dispatcher source.
 The source is exactly one of: a checked component path over the procedure's
@@ -8714,12 +8720,13 @@ requires an explicit instantiated root edge with its own evidence. A root has
 no calling site, so Monotype and Boxy lowering both take a root's evidence,
 including its captured codec requirements, from the request's root evidence.
 
-Constant-evaluation entry wrappers retain the evaluated value's quantified type
-variables without accepting its dispatch requirements as wrapper arguments.
-Procedure definitions and hoisted source-pattern roots bind evidence chains;
-constant and expression wrappers resolve their bodies without caller-supplied
-evidence. Call-edge evidence analysis and use-site enumeration consume the same
-explicit root classification.
+A constant's entry wrapper retains the evaluated value's quantified type
+variables and accepts the requirements on them as wrapper arguments, as a
+callable binding's does. Procedure definitions, hoisted source-pattern roots,
+callable bindings, and constants bind evidence chains; expression wrappers
+resolve their bodies without caller-supplied evidence. Call-edge evidence
+analysis and use-site enumeration consume the same explicit root
+classification.
 
 Completed generated codec proof graphs also carry a producer-proven identity
 for specialization reuse. Type-role keys and call metadata select candidates; equality
