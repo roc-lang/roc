@@ -7323,7 +7323,9 @@ test "erased owner resolution re-derives a reuse source that became an alias" {
     const proc_id = try f.addProc(&.{owner}, body, erased_callable);
     try testing.expectError(error.Certification, f.certify());
 
-    try erased_owner.resolveProcReuseSources(f.allocator, &f.store, &f.layouts, proc_id);
+    var scratch = erased_owner.Scratch.init(f.allocator);
+    defer scratch.deinit();
+    try erased_owner.resolveProcReuseSources(&scratch, &f.store, &f.layouts, proc_id);
     try testing.expectEqual(owner, f.store.stmtRow(f.store.getCFStmtImmediate(call).assign_call_erased.data).reuse_source.?);
     try f.certify();
 }

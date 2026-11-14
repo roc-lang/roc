@@ -269,6 +269,11 @@ pub const TargetConfig = struct {
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
     tag_reachability: bool = false,
+    /// The consumer reads the cold-default marks of switches on `bool_likely`
+    /// conditions, so the `branch_expectation` pass runs. Only the LLVM
+    /// backend reads them; dev builds, the interpreter and compile-time
+    /// evaluation turn this off.
+    reads_branch_expectations: bool = true,
     /// Elide checks proven always-safe by unsigned value-range analysis. This
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
@@ -1476,6 +1481,7 @@ pub const LirPolicy = struct {
     thread_confined_rc: bool,
     layout_request_const_plans: bool,
     tag_reachability: bool,
+    reads_branch_expectations: bool,
     prove_ranges: bool,
 
     pub fn fromTarget(target: TargetConfig) LirPolicy {
@@ -2224,15 +2230,17 @@ fn finishLoweredOutput(
     var erased_owner_scope = PassStepScope.begin(target.timing, .erased_owner);
     if (target.specialization_strategy != .lss) {
         const store = &lowered.lir_result.store;
+        var scratch = ErasedOwner.Scratch.init(allocator);
+        defer scratch.deinit();
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
-            try ErasedOwner.resolveProcReuseSources(allocator, store, &lowered.lir_result.layouts, proc_id);
+            try ErasedOwner.resolveProcReuseSources(&scratch, store, &lowered.lir_result.layouts, proc_id);
         }
     }
     erased_owner_scope.end();
     // Branch expectations are read off the lowered switches before any
     // rewrite reshapes them.
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation, pass_timing);
+    if (target.reads_branch_expectations) try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation, pass_timing);
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).

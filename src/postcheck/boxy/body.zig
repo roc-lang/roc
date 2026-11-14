@@ -1508,7 +1508,7 @@ pub const Builder = struct {
 
     /// The recipe `composeDictionary` interns.
     fn dictionaryRecipe(self: *Builder, entry: WorkerId, inputs: []const Word) Allocator.Error!Tables.Recipe {
-        if (self.program.inputCount(entry) != inputs.len) invariant("a dictionary's captures differ from its entry's inputs");
+        if (std.debug.runtime_safety and self.program.inputCount(entry) != inputs.len) invariant("a dictionary's captures differ from its entry's inputs");
         if (inputs.len == 0) return .{ .callable = .{ .entry = entry, .captures = &.{} } };
         const captures = try self.program.arena.allocator().alloc(Word, 1);
         captures[0] = try self.tableWord(entry, inputs);
@@ -1517,7 +1517,7 @@ pub const Builder = struct {
 
     /// The word of `callee`'s type table at the inputs `inputs`.
     pub fn tableWord(self: *Builder, callee: WorkerId, inputs: []const Word) Allocator.Error!Word {
-        if (self.program.inputCount(callee) != inputs.len) invariant("a type table's inputs differ from its worker's");
+        if (std.debug.runtime_safety and self.program.inputCount(callee) != inputs.len) invariant("a type table's inputs differ from its worker's");
         return .{ .recipe = try self.recipes.intern(.{ .table = .{ .worker = callee, .inputs = inputs } }) };
     }
 

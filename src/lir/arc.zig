@@ -826,15 +826,17 @@ fn requireHoleParamsBorrowed(store: *const LirStore, layouts: *const layout_mod.
 fn recordProcedureFacts(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
     const proc_count = store.procSpecCount();
     try recordTailGroups(store, solution);
+    var words = std.ArrayList(u32).empty;
+    defer words.deinit(store.allocator);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         if (store.getProcSpecImmediate(proc).arcBody() == null) continue;
         const sig = solution.sigOf(proc);
         const rows = solution.sigTable().retConditionsOf(sig);
-        const words = try store.allocator.alloc(u32, rows.len);
-        defer store.allocator.free(words);
-        for (rows, words) |row, *word| word.* = @bitCast(row);
-        const conditions = try store.addU32Span(words);
+        words.clearRetainingCapacity();
+        try words.ensureTotalCapacity(store.allocator, rows.len);
+        for (rows) |row| words.appendAssumeCapacity(@bitCast(row));
+        const conditions = try store.addU32Span(words.items);
         const spec = store.getProcSpecPtr(proc);
         spec.rc_read_only_params = sig.read_only_params;
         spec.rc_ret_unique = sig.ret_unique;
@@ -7136,8 +7138,9 @@ const Inserter = struct {
     }
 
     /// The walked graph in the shared solver's form: edges by node index and
-    /// their reverse, each node's read bits and the raw, group, and value-use
-    /// bits its definition rebinds, and each edge's kills.
+    /// their reverse, the raw, group, and value-use bits each node's
+    /// definition rebinds, and each edge's kills. The read bits are left
+    /// empty; `solveLiveness` sets them from the nodes' reads.
     fn livenessStructure(self: *const Inserter, graph: *const ReadBeforeRebindGraph, allocator: Allocator) ResourceError!arc_liveness.Graph {
         const node_count = graph.nodes.items.len;
         const succ_starts = try allocator.alloc(u32, node_count + 1);
@@ -7168,7 +7171,7 @@ const Inserter = struct {
             }
             def_starts[index + 1] = @intCast(defs.items.len);
         }
-        var structure = arc_liveness.Graph{
+        return .{
             .succ_starts = succ_starts,
             .succs = succs,
             .pred_starts = preds.starts,
@@ -7181,8 +7184,6 @@ const Inserter = struct {
             .kills = kills.items,
             .bit_len = self.domain().livenessBitLen(),
         };
-        try setLivenessReads(&structure, graph, allocator);
-        return structure;
     }
 
     /// Replaces the structure's read bits with the nodes' current reads.
@@ -7658,10 +7659,12 @@ const Inserter = struct {
             return LIR.RcHelper.fromConcrete(.{ .op = op, .layout_idx = local_layout });
         }
         const helper = self.rcHelperForLayout(op, local_layout);
-        if (self.layouts.rcHelperPlan(helper) == .noop) {
-            if (comptime builtin.mode == .debug and builtin.target.os.tag == .freestanding) {
+        // Resolving the helper's plan only checks an invariant, so release
+        // builds skip it.
+        if (builtin.mode == .debug and self.layouts.rcHelperPlan(helper) == .noop) {
+            if (comptime builtin.target.os.tag == .freestanding) {
                 invariant("{s}", .{"ARC attempted to emit a noop RC helper for a refcounted local"});
-            } else if (comptime builtin.mode == .debug) {
+            } else {
                 var buffer: std.Io.Writer.Allocating = .init(self.store.allocator);
                 defer buffer.deinit();
                 debug_print.writeProc(self.store.allocator, self.store, self.layouts, self.current_proc, &buffer.writer) catch {};
@@ -7683,7 +7686,6 @@ const Inserter = struct {
                     if (self.current_rewrite_stmt) |stmt_id| self.store.getCFStmt(stmt_id) else null,
                 });
             }
-            unreachable; // ARC requests RC helpers only for refcounted locals, whose helper plan is never noop
         }
         return LIR.RcHelper.fromConcrete(helper);
     }

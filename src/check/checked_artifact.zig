@@ -1190,10 +1190,22 @@ pub const RootRequestTable = struct {
 
         var forwarding_roots = try callable_eval_templates.forwardingRoots(allocator, compile_time_roots.roots.items().len);
         defer forwarding_roots.deinit(allocator);
+        // The roots a compile-time request already names. Each root appends
+        // at most one request below and is visited once, so only requests
+        // made before the loop can name a root it reaches.
+        var requested_roots = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, compile_time_roots.roots.items().len);
+        defer requested_roots.deinit(allocator);
+        for (requests.items) |request| {
+            if (request.abi != .compile_time) continue;
+            const id = request.compile_time_root.get() orelse continue;
+            if (@backingInt(id) >= requested_roots.bit_length) checkedArtifactInvariant("compile-time request root id was outside the root table", .{});
+            requested_roots.set(@backingInt(id));
+        }
         for (compile_time_roots.roots.items()) |root| {
             if (!compileTimeRootRequestIsEligible(root)) continue;
             if (forwarding_roots.isSet(@backingInt(root.id))) continue;
-            if (compileTimeRootHasRootRequest(requests.items, root)) {
+            if (builtin.mode == .debug) std.debug.assert(requested_roots.isSet(@backingInt(root.id)) == compileTimeRootHasRootRequest(requests.items, root));
+            if (requested_roots.isSet(@backingInt(root.id))) {
                 continue;
             }
             try appendRoot(&requests, allocator, .{
@@ -1547,11 +1559,20 @@ const CompileTimeRequestScheduler = struct {
         var sorted = std.ArrayList(RootRequest).empty;
         errdefer sorted.deinit(self.allocator);
 
+        // Every request whose indegree has reached zero, lowest index first.
+        // An indegree never rises again, so a request stays ready until it
+        // is emitted.
+        var ready = ReadyRequests.initContext({});
+        defer ready.deinit(self.allocator);
+        for (self.indegrees, 0..) |indegree, i| {
+            if (indegree == 0) try ready.push(self.allocator, i);
+        }
+
         while (sorted.items.len < self.entries.len) {
             // Hoisted roots can read each other ("Dependency-Ordered
             // Compile-Time Evaluation"): with none ready, the next is a
             // member of a group that depends on no other unemitted root.
-            const next = self.nextReadyRequestIndex() orelse try self.nextGroupRequestIndex();
+            const next = self.nextReadyRequestIndex(&ready) orelse try self.nextGroupRequestIndex();
             self.emitted[next] = true;
             try sorted.append(self.allocator, self.entries[next].request);
 
@@ -1560,13 +1581,34 @@ const CompileTimeRequestScheduler = struct {
                     checkedArtifactInvariant("compile-time root dependency edge underflowed during scheduling", .{});
                 }
                 self.indegrees[dependent] -= 1;
+                if (self.indegrees[dependent] == 0) try ready.push(self.allocator, dependent);
             }
         }
 
         return try sorted.toOwnedSlice(self.allocator);
     }
 
-    fn nextReadyRequestIndex(self: *const CompileTimeRequestScheduler) ?usize {
+    const ReadyRequests = std.PriorityQueue(usize, void, readyRequestOrder);
+
+    fn readyRequestOrder(_: void, a: usize, b: usize) std.math.Order {
+        return std.math.order(a, b);
+    }
+
+    /// The lowest-index unemitted request with no unemitted dependency.
+    fn nextReadyRequestIndex(self: *const CompileTimeRequestScheduler, ready: *ReadyRequests) ?usize {
+        // A request a group emitted while its indegree was nonzero is still
+        // queued once that indegree reaches zero.
+        while (ready.peek()) |i| {
+            if (!self.emitted[i]) break;
+            _ = ready.pop();
+        }
+        const next = ready.pop();
+        if (builtin.mode == .debug) std.debug.assert(next == self.scanReadyRequestIndex());
+        return next;
+    }
+
+    /// `nextReadyRequestIndex` by a scan of every request.
+    fn scanReadyRequestIndex(self: *const CompileTimeRequestScheduler) ?usize {
         for (self.entries, 0..) |_, i| {
             if (self.emitted[i]) continue;
             if (self.indegrees[i] != 0) continue;
@@ -24590,6 +24632,22 @@ pub const LiteralConversionRoot = extern struct {
     }
 };
 
+/// The root `CompileTimeRootTable.lookupIdByPattern` finds for a top-level
+/// pattern (`CompileTimeRootTable.roots_by_pattern`).
+pub const PatternRoot = extern struct {
+    pattern: u32,
+    root: ComptimeRootId,
+
+    fn order(entry: PatternRoot, key: u32) std.math.Order {
+        return std.math.order(entry.pattern, key);
+    }
+
+    fn lessThan(_: void, a: PatternRoot, b: PatternRoot) bool {
+        if (a.pattern != b.pattern) return a.pattern < b.pattern;
+        return @backingInt(a.root) < @backingInt(b.root);
+    }
+};
+
 /// The body nodes a compile-time root evaluates (`CompileTimeRoot.bodyParts`).
 pub const RootBodyParts = struct {
     expr: ?CIR.Expr.Idx = null,
@@ -24623,10 +24681,15 @@ pub const CompileTimeRootTable = struct {
     /// The conversion root of each literal whose conversion is independent of
     /// specialization, by the literal's CIR node, ascending.
     literal_conversions: collections.SafeList(LiteralConversionRoot) = .{},
+    /// For each pattern a root other than a hoisted validation root binds,
+    /// the first such root, by pattern, ascending. Every root added after
+    /// the module's roots are published binds no pattern.
+    roots_by_pattern: collections.SafeList(PatternRoot) = .{},
 
     pub const Serialized = extern struct {
         roots: SerializedSlice(CompileTimeRoot) = .{},
         literal_conversions: SerializedSlice(LiteralConversionRoot) = .{},
+        roots_by_pattern: SerializedSlice(PatternRoot) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -24761,7 +24824,33 @@ pub const CompileTimeRootTable = struct {
 
         try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items);
 
-        return .{ .roots = .fromOwnedSlice(try roots.toOwnedSlice(allocator)) };
+        const roots_by_pattern = try patternRootIndex(allocator, roots.items);
+        errdefer allocator.free(roots_by_pattern);
+        return .{
+            .roots = .fromOwnedSlice(try roots.toOwnedSlice(allocator)),
+            .roots_by_pattern = .fromOwnedSlice(roots_by_pattern),
+        };
+    }
+
+    fn patternRootIndex(allocator: Allocator, roots: []const CompileTimeRoot) Allocator.Error![]PatternRoot {
+        var entries = std.ArrayList(PatternRoot).empty;
+        errdefer entries.deinit(allocator);
+        for (roots) |entry| {
+            if (entry.kind == .hoisted_validation) continue;
+            const pattern = entry.pattern.get() orelse continue;
+            try entries.append(allocator, .{ .pattern = @backingInt(pattern), .root = entry.id });
+        }
+        std.mem.sort(PatternRoot, entries.items, {}, PatternRoot.lessThan);
+        // Root ids ascend in table order, so the first entry of each pattern
+        // is the first root binding it.
+        var unique: usize = 0;
+        for (entries.items) |entry| {
+            if (unique != 0 and entries.items[unique - 1].pattern == entry.pattern) continue;
+            entries.items[unique] = entry;
+            unique += 1;
+        }
+        entries.shrinkRetainingCapacity(unique);
+        return try entries.toOwnedSlice(allocator);
     }
 
     /// The conversion root of the literal at a CIR node (an expression, or a
@@ -24782,6 +24871,13 @@ pub const CompileTimeRootTable = struct {
     }
 
     pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {
+        const found: ?ComptimeRootId = if (artifact_serialize.binarySearchByKey(PatternRoot, u32, self.roots_by_pattern.items(), @backingInt(pattern), PatternRoot.order)) |entry| entry.root else null;
+        if (builtin.mode == .debug) std.debug.assert(found == self.scanIdByPattern(pattern));
+        return found;
+    }
+
+    /// `lookupIdByPattern` by a scan of every root.
+    fn scanIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {
         for (self.roots.items()) |entry| {
             if (entry.kind == .hoisted_validation) continue;
             if (entry.pattern != .none and entry.pattern.get().? == pattern) return entry.id;
@@ -24840,6 +24936,7 @@ pub const CompileTimeRootTable = struct {
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
         self.roots.deinit(allocator);
         self.literal_conversions.deinit(allocator);
+        self.roots_by_pattern.deinit(allocator);
         self.* = .{};
     }
 
@@ -31001,7 +31098,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 227);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 228);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -36999,8 +37096,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x4D, 0x76, 0xC4, 0x96, 0xE2, 0x82, 0xEE, 0xE7, 0xD2, 0x75, 0xF9, 0x06, 0x3B, 0xAD, 0x33, 0x08,
-        0x2B, 0x75, 0x2F, 0x8B, 0x7C, 0xBB, 0x40, 0x59, 0x61, 0x0B, 0x8A, 0x99, 0xE7, 0x56, 0x88, 0xBA,
+        0x3D, 0x1C, 0x72, 0xE4, 0x00, 0x7F, 0x4E, 0x04, 0x98, 0x8E, 0x90, 0x81, 0x9C, 0x50, 0x64, 0x2B,
+        0xA2, 0x2E, 0x23, 0x28, 0xF9, 0xB7, 0x8E, 0x24, 0x8E, 0x83, 0x69, 0x7C, 0x1A, 0x09, 0xBA, 0xD7,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -15264,7 +15264,8 @@ construction and no Boxy runtime work. Its code and cached entries have no Boxy 
 explicit runtime contract, set by its producer and retained by images; only a
 Boxy producer can authorize descriptor operations. Store construction enforces
 this contract, and consumers use it without discovering a strategy by scanning
-procedures. CTFE always carries the specialized contract.
+procedures. A compile-time program carries the contract of the evaluator that
+lowered it.
 
 Erasure in LSS erases the identity of a callable, not its argument and result
 representations. Lambda Solved's `abi_fn` supplies those exact types; direct
@@ -15283,11 +15284,11 @@ to drive the trampoline, just as for ordinary calls. Specialized results pass
 unchanged through these tail positions; representation conversions execute as
 LIR before returning, never as runtime descriptor operations.
 
-Compile-time evaluation is not a runtime lowering-strategy selection. CTFE
-always uses `.lss`, including when the enclosing runtime compilation explicitly
-selects `.boxy`. Runtime strategy flags, cache entries, and host wrappers must
-not route a compile-time root through Boxy or reuse Boxy-lowered LIR as a CTFE
-result.
+Compile-time evaluation follows its own rule ("Compile-Time Evaluation
+Strategy"): the `.boxy` compile-time evaluator completes every root that
+neither holds a function value nor reads one under either strategy, and the
+selected strategy's evaluator completes the rest, so a `.boxy` compilation
+evaluates every root as `.boxy` programs (`finalizeProgramBoxy`).
 
 Compiler progress text follows the selected strategy. `.lss` reports the
 lambda-set-specializing work as `Specializing`. `.boxy` reports the same
@@ -16827,8 +16828,8 @@ compile-time evaluator's under either strategy, so the compilation lowers and
 compiles each procedure its compile-time roots reach once, and a checked
 module holds the same values whichever strategy completed it ("Compile-Time
 Evaluation Under `.lss`"). A module finalized on its own, outside a program
-session (the baked Builtin's among them), splits each batch of its roots
-between the two evaluators as `lowerEvalAndFinishRoots` describes.
+session (the baked Builtin's among them), is a program of that module alone
+and splits its roots between the two evaluators the same way.
 The `.boxy` compile-time evaluator (`evaluateRootsBoxy`) orders the pending
 roots by the values they read,
 computed from the checked modules alone (`eval/checked_root_graph.zig`: a
@@ -21878,6 +21879,10 @@ Roc marks one through `bool_likely : Bool -> Bool`, the identity on its
 operand: the `branch_expectation` pass, first of the procedure-local
 rewrites, marks cold the default of every Bool switch whose condition is a
 `bool_likely` result, reached through pure aliases from a single definition.
+The pass runs only for consumers that read the mark
+(`TargetConfig.reads_branch_expectations`, set by each caller): LLVM
+consumers do, and dev builds, the interpreter and compile-time evaluation
+skip it.
 `List.get` and `List.set` guard their unchecked operation this way, so a
 bounds check's miss arm is cold wherever those inline. The marker stays an
 ordinary identity low-level, and the range prover reads through it to the

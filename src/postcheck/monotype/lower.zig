@@ -8983,7 +8983,7 @@ const Builder = struct {
             if (request_accounting == .count) self.count("template_hits");
             const existing = self.lowered_templates.get(hit.fn_id) orelse
                 Common.invariant("Monotype specialization index found a local template missing from lowering state");
-            if (!try specEvidenceVectorEql(self.allocator, existing.evidence, spec_evidence)) {
+            if (std.debug.runtime_safety and !try specEvidenceVectorEql(self.allocator, existing.evidence, spec_evidence)) {
                 Common.invariant("Monotype specialization hit disagreed on dispatch evidence");
             }
             if (stored_source_topology) |requested| {
@@ -10822,7 +10822,7 @@ const Builder = struct {
                     } else {
                         try source_ctx.graph.unify(active_root.request_fn_node, request_fn_node);
                     }
-                    if (!(try source_ctx.graph.sameFunctionInterface(active_root.request_fn_node, request_fn_node))) {
+                    if (std.debug.runtime_safety and !(try source_ctx.graph.sameFunctionInterface(active_root.request_fn_node, request_fn_node))) {
                         Common.invariant("recursive root request did not join its complete function interface");
                     }
                     self.promoteFnSignatureRelation(active_root.fn_id, signature_relation);
@@ -10993,7 +10993,7 @@ const Builder = struct {
             } else {
                 try source_ctx.graph.unify(draftTemplateSpecLookupRequestNode(spec), request_fn_node);
             }
-            if (!(try source_ctx.graph.sameFunctionInterface(draftTemplateSpecLookupRequestNode(spec), request_fn_node))) {
+            if (std.debug.runtime_safety and !(try source_ctx.graph.sameFunctionInterface(draftTemplateSpecLookupRequestNode(spec), request_fn_node))) {
                 Common.invariant("recursive draft template request did not join its complete function interface");
             }
             if (signature_relation == .exact_graph) {
@@ -13803,13 +13803,13 @@ const Builder = struct {
                     spec.initial_request_arg_classes,
                     request_fn_node,
                 );
-                if (!(try source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node))) {
+                if (std.debug.runtime_safety and !(try source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node))) {
                     Common.invariant("recursive draft nested request did not join its complete function interface");
                 }
             } else {
                 const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                 try source_ctx.graph.unify(spec_fn_node, request_fn_node);
-                if (!(try source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node))) {
+                if (std.debug.runtime_safety and !(try source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node))) {
                     Common.invariant("draft nested request did not join its complete function interface");
                 }
             }
@@ -15677,7 +15677,7 @@ const Builder = struct {
             if (spec.eager_resolution.get()) |eager| {
                 const eager_ty = try sealer.sealType(eager.fn_ty);
                 const eager_request_ty = try sealer.sealNode(eager.request_fn_node);
-                if (!try graph.types.typeEql(
+                if (std.debug.runtime_safety and !try graph.types.typeEql(
                     graph.name_store,
                     eager_ty,
                     eager_request_ty,
@@ -20738,6 +20738,7 @@ const BodyDraftStore = struct {
     }
 
     fn assertGraphStateDiscarded(self: *const BodyDraftStore) void {
+        if (!std.debug.runtime_safety) return;
         self.assertTypeCellsSealed();
         if (self.stored_capture_witnesses.items.len != 0 or
             self.stored_capture_witness_indices.count() != 0 or
@@ -21789,10 +21790,12 @@ const FinalIdOffsets = struct {
     fn coreSpanStart(self: FinalIdOffsets, kind: DraftCoreKind, start: u32, len: u32, identity_start: u32) u32 {
         if (len == 0) return 0;
         const mapped_start = self.core(kind, start, identity_start);
-        var offset: u32 = 1;
-        while (offset < len) : (offset += 1) {
-            if (self.core(kind, start + offset, identity_start) != mapped_start + offset) {
-                Common.invariant("retained body draft span was not one contiguous ownership range");
+        if (std.debug.runtime_safety) {
+            var offset: u32 = 1;
+            while (offset < len) : (offset += 1) {
+                if (self.core(kind, start + offset, identity_start) != mapped_start + offset) {
+                    Common.invariant("retained body draft span was not one contiguous ownership range");
+                }
             }
         }
         return mapped_start;
