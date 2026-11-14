@@ -32,7 +32,8 @@
 //! compiler files for the same key: it keys and builds the Builtin's unit
 //! through `boxy_unit.restoreOrBuild`, the run-time path, into a cache of its
 //! own, and requires the filed entry to be byte-identical to the table's
-//! entry for that key, and the table to serve that key.
+//! entry for that key, the table to serve that key, and the table's
+//! digests of the Builtin to be the ones hashing it gives.
 
 const std = @import("std");
 const backend = @import("backend");
@@ -60,7 +61,7 @@ pub fn main(init: std.process.Init) MainError!void {
     if (args.len != 3) return error.ExpectedArguments;
     const target = try parseTarget(args[2]);
     const table = if (backend.dev.isa.isaOfOrNull(target) == null)
-        try embedded_units.encode(gpa, build_options.compiler_compatibility_hash, &.{})
+        try embedded_units.encode(gpa, build_options.compiler_compatibility_hash, &.{}, &.{})
     else
         try builtinUnitTable(gpa, io, target);
     defer gpa.free(table);
@@ -89,7 +90,7 @@ const BuiltinUnit = struct {
         // differently and the table does not serve it.
         self.* = .{
             .builtins = builtins,
-            .digests = try compile.boxy_interface.Digests.init(gpa, io, &.{&builtins.checked_artifact}),
+            .digests = try compile.boxy_interface.Digests.init(gpa, io, &.{&builtins.checked_artifact}, .none),
             .interfaces = eval.CompileTimeFinalization.ExportInterfaces.init(gpa, io),
             .lowering = lowering_policy.compileTimeObjectLowering(target),
         };
@@ -99,6 +100,20 @@ const BuiltinUnit = struct {
     fn deinit(self: *BuiltinUnit) void {
         self.interfaces.deinit();
         self.digests.deinit();
+    }
+
+    /// The Builtin's digests under its link name, which the table records
+    /// so the compiler does not hash the Builtin in every process.
+    fn module(self: *BuiltinUnit) std.mem.Allocator.Error!embedded_units.Module {
+        const artifact = &self.builtins.checked_artifact;
+        return .{
+            .artifact = artifact.key.bytes,
+            .link_name = self.digests.nameOf(artifact.key.bytes),
+            .digests = .{
+                .interface = try self.digests.interfaceOf(artifact),
+                .object_input = try self.digests.objectInput(artifact),
+            },
+        };
     }
 
     fn keyInput(self: *BuiltinUnit, gpa: std.mem.Allocator) std.mem.Allocator.Error!object_cache.KeyInput {
@@ -136,7 +151,7 @@ fn builtinUnitTable(gpa: std.mem.Allocator, io: std.Io, target: RocTarget) MainE
     const result = try boxy_unit.buildEntry(unit);
     defer result.built.deinit(gpa);
     defer gpa.free(result.bytes);
-    return try embedded_units.encode(gpa, build_options.compiler_compatibility_hash, &.{.{ .input = input, .entry = result.bytes }});
+    return try embedded_units.encode(gpa, build_options.compiler_compatibility_hash, &.{try builtin_unit.module()}, &.{.{ .input = input, .entry = result.bytes }});
 }
 
 /// Build the Builtin's unit for `target` through the run-time path into a
@@ -181,6 +196,24 @@ fn verify(gpa: std.mem.Allocator, io: std.Io, table_path: []const u8, target: Ro
     defer manager.allocator.free(filed.bytes);
     if (!std.mem.eql(u8, filed.bytes, embedded)) {
         std.log.err("the embedded Builtin unit ({d} bytes) differs from the entry the run-time path filed ({d} bytes)", .{ embedded.len, filed.bytes.len });
+        return error.EmbeddedEntryDiffers;
+    }
+
+    const module = try builtin_unit.module();
+    const digests = units.moduleDigests(module.artifact, module.link_name) orelse {
+        std.log.err("the table holds no digests for the Builtin under its link name", .{});
+        return error.EmbeddedEntryDiffers;
+    };
+    if (!std.meta.eql(digests, module.digests)) {
+        std.log.err("the embedded digests of the Builtin differ from hashing it", .{});
+        return error.EmbeddedEntryDiffers;
+    }
+    // A link given the table keys the Builtin from its digests alike.
+    var served_digests = try compile.boxy_interface.Digests.init(gpa, io, &.{&builtins.checked_artifact}, units);
+    defer served_digests.deinit();
+    const served_key = try boxy_unit.objectKey(gpa, &served_digests, &builtins.checked_artifact, null, builtin_unit.lowering.opt, builtin_unit.lowering.inline_expects, target, &.{}, false, false, false);
+    if (!std.mem.eql(u8, &served_key.bytes, &key.bytes)) {
+        std.log.err("the Builtin keyed from the embedded digests differs from its key", .{});
         return error.EmbeddedEntryDiffers;
     }
 

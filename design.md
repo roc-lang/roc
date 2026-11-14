@@ -16764,11 +16764,20 @@ therefore embeds nothing unless built with `-Dembed-builtin-unit=true`, so
 iterating on the compiler does not pay for it; every other optimize mode
 embeds by default.
 
+The table also carries the Builtin's digests (`boxy_interface.Digests`):
+its interface digest and its object input, which, since it imports
+nothing, are its own part of its digests alone, recorded with its checked
+artifact key and its link name. `Digests.add` gives a module whose
+artifact key and link name equal a recorded pair those digests instead of
+hashing its public surface and stored values in every process; any other
+pair (another Builtin, or the Builtin named by content) hashes as usual.
+
 `zig build run-test-builtin-unit` builds the unit through `restoreOrBuild`
 into an empty cache and requires the filed entry to be byte-identical to
-the tool's table entry and the table to serve its key; `ROC_VERIFY_BOXY_OBJECT_REUSE`
+the tool's table entry, the table to serve its key, and the embedded
+digests to be the ones hashing the Builtin gives; `ROC_VERIFY_BOXY_OBJECT_REUSE`
 rebuilds the embedded entry inside the compiler itself and compares it like
-a restored one.
+a restored one, and hashes the Builtin to compare its embedded digests.
 
 #### Unit Pieces And Whole-Program Dead Code
 

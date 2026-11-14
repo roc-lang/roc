@@ -1503,7 +1503,7 @@ const BoxyObjects = struct {
             .function_cache = .{ .allocator = coordinator.gpa, .io = coordinator.roc_ctx.std_io },
             .lowering = unit_lowering,
             .manager = manager,
-            .digests = .{ .gpa = coordinator.gpa, .io = coordinator.roc_ctx.std_io, .names = .{} },
+            .digests = .{ .gpa = coordinator.gpa, .io = coordinator.roc_ctx.std_io, .names = .{}, .embedded = lowering.embedded },
             .interfaces = undefined,
             .owned_interfaces = if (lowering.interfaces == null) .init(coordinator.gpa, coordinator.roc_ctx.std_io) else null,
             .session = try coordinator.postCheckExecutor().begin(),
@@ -4717,7 +4717,8 @@ pub const Coordinator = struct {
                 if (mod.checkedArtifact()) |artifact| try artifacts.append(self.gpa, artifact);
             }
         }
-        return try boxy_interface.Digests.init(self.gpa, self.roc_ctx.std_io, artifacts.items);
+        const embedded: boxy_unit.EmbeddedUnits = if (self.boxy_object_lowering) |lowering| lowering.embedded else .none;
+        return try boxy_interface.Digests.init(self.gpa, self.roc_ctx.std_io, artifacts.items, embedded);
     }
 
     fn checkedModuleCacheKey(

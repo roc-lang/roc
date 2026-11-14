@@ -19,6 +19,9 @@
 //!     compiler compatibility hash ([32]u8,
 //!     `build_options.compiler_compatibility_hash` of the executable that
 //!     built the entries),
+//!     module count (u32), then for each module whose digests the table
+//!     holds: its checked artifact key, its link name, its interface digest
+//!     and its object input (`boxy_interface.Digests`), [32]u8 each;
 //!     unit count (u32), then for each unit
 //!         object input ([32]u8), flags (u8: inline expects, run image,
 //!         expect sites, wasm stack checks), target name and opt name (each
@@ -34,7 +37,7 @@ const object_cache = @import("boxy_object_cache.zig");
 const Allocator = std.mem.Allocator;
 
 /// The table format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 
 const magic = "RBXE";
 
@@ -57,12 +60,8 @@ pub const Units = struct {
     /// its image at an `object_cache.image_alignment` address.
     pub fn find(self: Units, key: object_cache.Key) ?[]const u8 {
         if (self.table.len == 0) return null;
-        var reader: Reader = .{ .bytes = self.table };
-        std.debug.assert(std.mem.eql(u8, reader.take(magic.len), magic));
-        std.debug.assert(reader.word32() == format_version);
-        // The build makes the table with an executable of the compiler's
-        // own compatibility identity.
-        std.debug.assert(std.mem.eql(u8, reader.take(32), &build_options.compiler_compatibility_hash));
+        var reader = self.modules();
+        for (0..reader.word32()) |_| _ = reader.take(module_record_len);
         const count = reader.word32();
         for (0..count) |_| {
             const object_input = reader.take(32)[0..32].*;
@@ -84,7 +83,48 @@ pub const Units = struct {
         }
         return null;
     }
+
+    /// The digests the table holds for the module whose checked artifact
+    /// key is `artifact` when its link names it `link_name`.
+    pub fn moduleDigests(self: Units, artifact: [32]u8, link_name: [32]u8) ?ModuleDigests {
+        if (self.table.len == 0) return null;
+        var reader = self.modules();
+        for (0..reader.word32()) |_| {
+            const record = reader.take(module_record_len);
+            if (!std.mem.eql(u8, record[0..32], &artifact) or !std.mem.eql(u8, record[32..64], &link_name)) continue;
+            return .{ .interface = record[64..96].*, .object_input = record[96..128].* };
+        }
+        return null;
+    }
+
+    /// A reader at the table's module count.
+    fn modules(self: Units) Reader {
+        var reader: Reader = .{ .bytes = self.table };
+        std.debug.assert(std.mem.eql(u8, reader.take(magic.len), magic));
+        std.debug.assert(reader.word32() == format_version);
+        // The build makes the table with an executable of the compiler's
+        // own compatibility identity.
+        std.debug.assert(std.mem.eql(u8, reader.take(32), &build_options.compiler_compatibility_hash));
+        return reader;
+    }
 };
+
+/// A module's digests (`boxy_interface.Digests`) under one link name, for
+/// a module that imports nothing: its interface digest and its object
+/// input, which a module with imports would extend with theirs.
+pub const ModuleDigests = struct {
+    interface: [32]u8,
+    object_input: [32]u8,
+};
+
+/// One module whose digests the compiler's build embeds.
+pub const Module = struct {
+    artifact: [32]u8,
+    link_name: [32]u8,
+    digests: ModuleDigests,
+};
+
+const module_record_len = 4 * 32;
 
 const flag_inline_expects: u8 = 1;
 const flag_run_image: u8 = 2;
@@ -98,14 +138,21 @@ pub const Unit = struct {
     entry: []const u8,
 };
 
-/// The table of `units`, built by an executable whose compatibility hash
-/// is `compiler_compatibility_hash`. The caller owns the result.
-pub fn encode(allocator: Allocator, compiler_compatibility_hash: [32]u8, units: []const Unit) Allocator.Error![]u8 {
+/// The table of `modules`' digests and `units`, built by an executable
+/// whose compatibility hash is `compiler_compatibility_hash`. The caller
+/// owns the result.
+pub fn encode(allocator: Allocator, compiler_compatibility_hash: [32]u8, modules: []const Module, units: []const Unit) Allocator.Error![]u8 {
     var bytes: std.ArrayList(u8) = .empty;
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, magic);
     try appendInt(&bytes, allocator, u32, format_version);
     try bytes.appendSlice(allocator, &compiler_compatibility_hash);
+    try appendInt(&bytes, allocator, u32, @intCast(modules.len));
+    for (modules) |module| {
+        for ([_]*const [32]u8{ &module.artifact, &module.link_name, &module.digests.interface, &module.digests.object_input }) |digest| {
+            try bytes.appendSlice(allocator, digest);
+        }
+    }
     try appendInt(&bytes, allocator, u32, @intCast(units.len));
     var header_len = bytes.items.len;
     for (units) |unit| header_len += 32 + 1 + 1 + unit.input.target.len + 1 + unit.input.opt.len + 16;
@@ -169,14 +216,15 @@ const Reader = struct {
     }
 };
 
-test "an embedded entry is found by its key under this compiler, and placed as a cache file places it" {
+test "an embedded entry is found by its key under this compiler, and placed as a cache file places it, and a module's digests by its key and link name" {
     const gpa = std.testing.allocator;
     const input: object_cache.KeyInput = .{ .object_input = @splat(7), .target = "x64musl", .opt = "dev", .inline_expects = true };
     var other = input;
     other.object_input = @splat(8);
     const first_entry = "first entry bytes";
     const second_entry = "second";
-    const encoded = try encode(gpa, build_options.compiler_compatibility_hash, &.{
+    const module: Module = .{ .artifact = @splat(1), .link_name = @splat(2), .digests = .{ .interface = @splat(3), .object_input = @splat(4) } };
+    const encoded = try encode(gpa, build_options.compiler_compatibility_hash, &.{module}, &.{
         .{ .input = input, .entry = first_entry },
         .{ .input = other, .entry = second_entry },
     });
@@ -193,4 +241,6 @@ test "an embedded entry is found by its key under this compiler, and placed as a
     miss.expect_sites = true;
     try std.testing.expectEqual(null, units.find(object_cache.key(miss)));
     try std.testing.expectEqual(null, Units.none.find(object_cache.key(input)));
+    try std.testing.expectEqual(module.digests, units.moduleDigests(module.artifact, module.link_name).?);
+    try std.testing.expectEqual(null, units.moduleDigests(module.artifact, @splat(5)));
 }
