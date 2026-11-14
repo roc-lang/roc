@@ -260,8 +260,9 @@ const CliBuildEnvOptions = struct {
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
     /// The strategy the command's runtime program lowers under
-    /// (`Coordinator.specialization_strategy`).
-    specialization_strategy: base.SpecializationStrategy = .lss,
+    /// (`Coordinator.specialization_strategy`), which every command names: a
+    /// command with no runtime consumer names `.boxy`, as `roc check` does.
+    specialization_strategy: base.SpecializationStrategy,
     /// The bundle URL a URL/installed root came from; becomes the root's
     /// package identity in place of the extracted path.
     root_source_url: ?[]const u8 = null,
@@ -7720,7 +7721,8 @@ fn discoverAndAddBundleInputs(
     // Create a BuildEnv to parse headers and discover modules via the
     // Coordinator. Bundling compiles the workspace to discover transitive
     // modules; it uses the checked-module cache like every other pipeline.
-    var build_env = try initCliBuildEnv(ctx, .{ .max_threads = 1 });
+    // A bundle has no runtime consumer.
+    var build_env = try initCliBuildEnv(ctx, .{ .max_threads = 1, .specialization_strategy = .boxy });
     defer build_env.deinit();
 
     // Run the build—the Coordinator discovers all transitive module dependencies
@@ -18568,7 +18570,8 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
         ctx.gpa,
         ctx.coreCtx(),
         backend_kind,
-        currentRuntimeSpecializationStrategy(repl_args.specialization_strategy, repl_args.opt),
+        // A REPL evaluation is a compile-time root with no runtime consumer.
+        .boxy,
     );
     defer session.deinit();
 
@@ -21432,6 +21435,8 @@ fn rocDeps(ctx: *CliCtx, args: cli_args.DepsArgs) CliMainError!void {
 
     var build_env = try initCliBuildEnv(ctx, .{
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+        // Dependency resolution has no runtime consumer.
+        .specialization_strategy = .boxy,
         .root_source_url = resolved_source.url,
     });
     defer build_env.deinit();

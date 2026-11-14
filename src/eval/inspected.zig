@@ -649,14 +649,22 @@ pub const ParseOptions = struct {
     /// A Builtin artifact the caller already published and keeps owning.
     pre_published_builtin: ?PrePublishedBuiltin = null,
     problem_reporting: ComptimeProblemReporting = .ignore_comptime_problems,
-    ctfe_options: ?*const CompileTimeFinalization.Options = null,
+    /// The strategy whose evaluator completes the compile-time roots of the
+    /// program and of every import published with it
+    /// (`CompileTimeFinalization.Options.strategy`). The harness's runtime
+    /// programs lower under `.lss` unless a caller asks otherwise, so its
+    /// publication does too; a caller with no runtime consumer names `.boxy`.
+    strategy: base.SpecializationStrategy = .lss,
+    /// Receives the compile-time events of the program's own roots.
+    event_callback: ?CompileTimeFinalization.EventCallback = null,
     /// Filesystem access for `import "path" as x : Str`/`: List(U8)`
     /// statements; the REPL passes its real `CoreCtx`.
     roc_ctx: ?CoreCtx = null,
 };
 
 /// Same as `parseProgram` with published-roots-only selection, reusing a
-/// Builtin artifact the caller has already published.
+/// Builtin artifact the caller has already published. `strategy`'s
+/// evaluator completes the program's compile-time roots.
 pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
     allocator: Allocator,
     io: std.Io,
@@ -665,11 +673,13 @@ pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
     imports: []const ModuleSource,
     pre_published_builtin: PrePublishedBuiltin,
     roc_ctx: ?CoreCtx,
+    strategy: base.SpecializationStrategy,
 ) Error!ParsedResources {
     return parseProgram(allocator, source_kind, source, imports, .{
         .io = io,
         .roots = .published_only,
         .pre_published_builtin = pre_published_builtin,
+        .strategy = strategy,
         .roc_ctx = roc_ctx,
     });
 }
@@ -1241,7 +1251,8 @@ pub fn devEvalTopLevelExpects(
 /// Publish a program for an interactive compile-time evaluation while retaining
 /// the exact checked resources that own both its diagnostics and finalized
 /// `ConstStore` values. Unlike the runtime inspected-program helpers, this does
-/// not publish or lower an executable root.
+/// not publish or lower an executable root. `strategy`'s evaluator completes
+/// the program's compile-time roots, the interactive root among them.
 pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
     allocator: Allocator,
     io: std.Io,
@@ -1250,17 +1261,16 @@ pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
     imports: []const ModuleSource,
     pre_published_builtin: PrePublishedBuiltin,
     roc_ctx: ?CoreCtx,
+    strategy: base.SpecializationStrategy,
     event_callback: ?CompileTimeFinalization.EventCallback,
 ) Error!ParsedResources {
-    const ctfe_options: CompileTimeFinalization.Options = .{
-        .event_callback = event_callback,
-    };
     return parseProgram(allocator, source_kind, source, imports, .{
         .io = io,
         .roots = .comptime_repl,
         .pre_published_builtin = pre_published_builtin,
         .problem_reporting = .report_comptime_problems,
-        .ctfe_options = &ctfe_options,
+        .strategy = strategy,
+        .event_callback = event_callback,
         .roc_ctx = roc_ctx,
     });
 }
@@ -1342,6 +1352,13 @@ pub fn parseProgram(
 
     var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, source_modules);
     defer typed_cir_modules.deinit();
+    // One strategy completes every module published here, so each module
+    // holds the representation its readers' evaluator restores.
+    const import_ctfe_options: CompileTimeFinalization.Options = .{ .strategy = options.strategy };
+    const ctfe_options: CompileTimeFinalization.Options = .{
+        .strategy = options.strategy,
+        .event_callback = options.event_callback,
+    };
     const import_artifacts = try publishImportArtifacts(
         allocator,
         options.io,
@@ -1351,6 +1368,7 @@ pub fn parseProgram(
         &builtin_module_owned_by_artifact,
         pre_published_builtin,
         options.problem_reporting,
+        &import_ctfe_options,
     );
     errdefer {
         for (import_artifacts) |*artifact| artifact.deinit(allocator);
@@ -1408,10 +1426,7 @@ pub fn parseProgram(
                 .eval, .inspected, .comptime_repl => .top_level,
                 .published_only => .selected,
             },
-            .compile_time_finalizer = if (options.ctfe_options) |ctfe_options|
-                CompileTimeFinalization.finalizerWithOptions(ctfe_options)
-            else
-                CompileTimeFinalization.finalizer(),
+            .compile_time_finalizer = CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
             .problem_store = switch (options.problem_reporting) {
                 .ignore_comptime_problems => null,
                 .report_comptime_problems => &main_checked.checker.problems,
@@ -1897,6 +1912,7 @@ fn publishImportArtifacts(
     builtin_module_owned_by_artifact: *bool,
     pre_published_builtin: ?PrePublishedBuiltin,
     problem_reporting: ComptimeProblemReporting,
+    ctfe_options: *const CompileTimeFinalization.Options,
 ) Error![]check.CheckedArtifact.CheckedModuleArtifact {
     const extra_module_count = extra_modules.len;
     var artifacts = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifact).empty;
@@ -1929,7 +1945,7 @@ fn publishImportArtifacts(
                 .module_env_storage = .{ .static_builtin = builtin_module.?.env },
                 .hoisted_roots = .none,
                 .io = io,
-                .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+                .compile_time_finalizer = CompileTimeFinalization.finalizerWithOptions(ctfe_options),
             },
         );
         builtin_module_owned_by_artifact.* = true;
@@ -1973,7 +1989,7 @@ fn publishImportArtifacts(
                     .imports = published_keys.items,
                     .available_artifacts = available_artifacts,
                     .hoisted_roots = .none,
-                    .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+                    .compile_time_finalizer = CompileTimeFinalization.finalizerWithOptions(ctfe_options),
                     .problem_store = switch (problem_reporting) {
                         .ignore_comptime_problems => null,
                         .report_comptime_problems => &extra_modules[extra_i].checker.problems,

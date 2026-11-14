@@ -15363,9 +15363,10 @@ const SpecializationStrategy = enum {
 
 The command-line spelling is `--specialize=yes` for `.lss` and
 `--specialize=no` for `.boxy`. Every command accepts the flag. A command with
-no runtime consumer (`roc check`, `roc docs`, `roc bump`, the language
-server) ignores it and compiles under `.boxy`, whose compile-time evaluator
-completes every root. If the flag is omitted, `--opt=speed` uses `.lss` and
+no runtime consumer (`roc check`, `roc docs`, `roc bump`, `roc bundle`,
+`roc repl`, the language server) ignores it and compiles under `.boxy`, whose
+compile-time evaluator completes every root. If the flag is omitted,
+`--opt=speed` uses `.lss` and
 every other optimization level (`dev`, `interpreter`, `size`) uses `.boxy`
 (`currentRuntimeSpecializationStrategy`); an explicit flag selects the
 strategy at any level. The `--opt` flag still
@@ -16943,6 +16944,23 @@ module holds the same values whichever strategy completed it ("Compile-Time
 Evaluation Under `.lss`"). A module finalized on its own, outside a program
 session (the baked Builtin's among them), splits each batch of its roots
 between the two evaluators as `lowerEvalAndFinishRoots` describes.
+
+Every producer of checked modules names its strategy; the finalization option
+has no default. One rule decides it everywhere: the strategy of the runtime
+program that consumes the modules, and `.boxy` when nothing lowers them for
+runtime. The coordinator's compilations take it from their command
+(`BuildEnv.setSpecializationStrategy`). The REPL session
+(`roc repl` and the REPL WebAssembly module) evaluates each expression as a
+compile-time root and lowers no runtime program, so it names `.boxy`. The
+playground, whose expressions run as `.lss` runtime programs, names `.lss`,
+as the snapshot tool's REPL programs and the eval harness's programs do by
+the harness's default (`Inspected.ParseOptions.strategy`); a harness program
+lowered under `.boxy` reopens its modules for the Boxy representation of
+their function values. The snapshot tool's documentation snapshots name
+`.boxy`, as `roc docs` does. The Builtin bake names `.lss` and
+`complete_baked_module`, which adds the Boxy representation of every root
+holding a function value ("Stored Function Values").
+
 The `.boxy` compile-time evaluator (`evaluateRootsBoxy`) orders the pending
 roots by the values they read,
 computed from the checked modules alone (`eval/checked_root_graph.zig`: a
