@@ -745,7 +745,7 @@ pub fn assertLastDefTypeWithWarnings(
 }
 
 /// Construct a ReportBuilder wired to this TestEnv's allocator, module env,
-/// checker snapshots, problems, and regions. All test call sites are
+/// checker snapshots and problems. All test call sites are
 /// identical, so this single helper avoids repeating the nine arguments.
 fn initReportBuilder(self: *TestEnv) Allocator.Error!report_mod.ReportBuilder {
     return report_mod.ReportBuilder.init(
@@ -757,7 +757,6 @@ fn initReportBuilder(self: *TestEnv) Allocator.Error!report_mod.ReportBuilder {
         "test",
         &.{},
         &self.checker.import_mapping,
-        &self.checker.regions,
         null,
     );
 }

@@ -4514,8 +4514,10 @@ the source/import key and explicit format versions.
 Checking records its problems in the checker's problem store and evaluation
 appends its own to the same store. An entry stores them as `CheckedReports`:
 every problem with the store's strings, the count of checking's, the snapshots
-and regions checking's problems render with (copied out of the checker before
-it is released), and the checker's import display names. The snapshots keep
+checking's problems render with (copied out of the checker before it is
+released), and the checker's import display names. Each problem carries the
+source regions its report highlights, recorded where the problem is created;
+a report reads no other region than those and the module's CIR node regions. The snapshots keep
 their frozen captures and node formats beside the text the miss rendered, so a
 snapshot whose text was never rendered renders on demand with the module's
 names, the stored import display names and the module's default sources, the
