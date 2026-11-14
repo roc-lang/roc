@@ -405,13 +405,17 @@ pub const CodecComposition = struct { family: u32, bound: []const TypeId, recipe
 
 /// The scope a local procedure's function value is built in: the worker
 /// declaring it, the procedure's worker there, and the declaring worker's
-/// scheme types and hidden words as this body holds them.
+/// scheme types and type table as this body holds them.
 const LocalProcScope = struct {
     declaring: WorkerId,
     worker: WorkerId,
     bound: []const TypeId,
-    descs: []const Word,
-    /// A reserved recipe stands for each slot still being built.
+    /// The declaring worker's table, through which the procedure reads its
+    /// scope; null for a declaring worker without inputs.
+    table: ?Word,
+    /// From a declaration context, its dictionaries and literal arguments,
+    /// which the procedure's types are read with; a reserved recipe stands
+    /// for each slot still being built. Empty otherwise.
     dicts: []const Word,
     literals: []const Word,
     /// The declaration context the words come from, when the declaring
@@ -500,17 +504,13 @@ pub const Builder = struct {
     store: *LirStore,
     frame_locals: std.ArrayList(LocalId) = .empty,
     binders: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
-    /// The descriptor local of each scope variable, read from the worker's
-    /// type table on first use (`inputLocal`).
-    var_descs: []OptionalLocal = &.{},
-    /// The dictionaries in scope (`Worker.scope_dictionary_indices` order),
-    /// read from the type table on first use.
-    dict_locals: []OptionalLocal = &.{},
-    /// The literal arguments in scope (`Worker.literal_scopes` order): an
-    /// immortal callable per literal requirement producing the literal's converted
-    /// value (design.md "Literal Arguments"), read from the type table on
-    /// first use.
-    literal_locals: []OptionalLocal = &.{},
+    /// Where this worker's scope inputs are (`Tables.InputLayout`), once its
+    /// table is taken (`beginTable`): the descriptors of its scope's
+    /// variables, its dictionaries (`Worker.dict_scopes` order), then its
+    /// literal arguments (`Worker.literal_scopes` order), each an immortal
+    /// callable producing a literal's converted value (design.md "Literal
+    /// Arguments"). Each is read on first use (`materialize`).
+    layout: Tables.InputLayout = .{},
     /// The thunk composed for each `literal_argument` root this body reads.
     /// Set while `enterEdge` builds a frame's call instance, whose
     /// dictionaries the frame composes as it reads them, and whose
@@ -687,20 +687,18 @@ pub const Builder = struct {
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
         try program.module(worker.module).bodies().demandIndex();
-        const bound = try program.arena.allocator().alloc(TypeId, worker.scheme_vars.len);
-        for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
         // An integer list worker's body, and its lambdas', is lowered with
         // the list item variable bound to its integer type (design.md
         // "Pre-Specialized Integer List Workers"): every value of the item
         // type is static.
-        if (worker.list_int) |list_int| bound[list_int.slot] = try program.store.primitive(list_int.item.primitive());
+        const env = (try program.scopeEnv(id)).*;
         return .{
             .program = program,
             .allocator = program.allocator,
             .worker_id = id,
             .module = worker.module,
             .view = program.module(worker.module),
-            .env = .{ .module = worker.module, .vars = worker.scheme_vars, .bound = bound },
+            .env = env,
             .store = &program.result.store,
             .tail_calls = lir_core.TailCallBuilder.init(program.allocator, worker.proc),
             .recipes = Tables.Recipes.init(program.allocator),
@@ -1366,45 +1364,132 @@ pub const Builder = struct {
 
     // -- Words --
 
-    /// Input word `index` of this worker: in input order, the descriptors of
-    /// its scheme variables (`var_descs`), its dictionaries (`dict_locals`),
-    /// then its literal arguments (`literal_locals`).
+    /// The counts of this worker's scope inputs.
+    pub fn scopeCounts(self: *const Builder) Tables.InputCounts {
+        return self.layout.scopeCounts();
+    }
+
+    /// Scope input `index` of this worker: in scope order, the descriptors
+    /// of its variables, its dictionaries, then its literal arguments. One
+    /// its creator's scope holds is read through its creator's table.
     pub fn inputWord(self: *Builder, index: usize) Allocator.Error!Word {
-        return .{ .recipe = try self.recipes.intern(.{ .input = @intCast(index) }) };
+        return .{ .recipe = switch (self.layout.locate(@intCast(index))) {
+            .input => |input| try self.recipes.intern(.{ .input = input }),
+            .inherited => |inherited| try self.recipes.intern(.{ .inherited = inherited }),
+        } };
     }
 
-    /// The input word of `dict_locals[position]`.
+    /// The input word of dictionary `position` of this worker's scope.
     pub fn dictInputWord(self: *Builder, position: usize) Allocator.Error!Word {
-        if (position >= self.dict_locals.len) invariant("a dictionary input names a dictionary its worker does not take");
-        return try self.inputWord(self.var_descs.len + position);
+        const counts = self.scopeCounts();
+        if (position >= counts.dicts) invariant("a dictionary input names a dictionary its worker does not take");
+        return try self.inputWord(counts.descs + position);
     }
 
-    /// The input word of `literal_locals[position]`.
+    /// The input word of literal argument `position` of this worker's scope.
     pub fn literalInputWord(self: *Builder, position: usize) Allocator.Error!Word {
-        if (position >= self.literal_locals.len) invariant("a literal input names a literal argument its worker does not take");
-        return try self.inputWord(self.var_descs.len + self.dict_locals.len + position);
+        const counts = self.scopeCounts();
+        if (position >= counts.literals) invariant("a literal input names a literal argument its worker does not take");
+        return try self.inputWord(counts.descs + counts.dicts + position);
     }
 
-    /// The input words of descriptors `var_descs[start..end]`.
+    /// The input words of the descriptors of scope variables `start..end`.
     pub fn descInputWords(self: *Builder, start: usize, end: usize) Allocator.Error![]Word {
         const words = try self.program.arena.allocator().alloc(Word, end - start);
         for (words, start..) |*word, index| word.* = try self.inputWord(index);
         return words;
     }
 
-    /// Every input word of this worker, in input order.
+    /// Every input word of this worker's table, in input order.
     pub fn allInputWords(self: *Builder) Allocator.Error![]Word {
-        const words = try self.program.arena.allocator().alloc(Word, self.program.inputCount(self.worker_id));
-        for (words, 0..) |*word, index| word.* = try self.inputWord(index);
+        const words = try self.program.arena.allocator().alloc(Word, self.layout.inputCount());
+        for (words, 0..) |*word, index| word.* = .{ .recipe = try self.recipes.intern(.{ .input = @intCast(index) }) };
         return words;
     }
 
-    /// The input words of `dict_locals[start..]` then `literal_locals[literal_start..]`.
+    /// The input words of this worker's dictionaries from `start` on, then
+    /// of its literal arguments from `literal_start` on.
     pub fn dictLiteralInputWords(self: *Builder, start: usize, literal_start: usize) Allocator.Error![]Word {
-        const words = try self.program.arena.allocator().alloc(Word, self.dict_locals.len - start + self.literal_locals.len - literal_start);
-        for (words[0 .. self.dict_locals.len - start], start..) |*word, position| word.* = try self.dictInputWord(position);
-        for (words[self.dict_locals.len - start ..], literal_start..) |*word, position| word.* = try self.literalInputWord(position);
+        const counts = self.scopeCounts();
+        const words = try self.program.arena.allocator().alloc(Word, counts.dicts - start + counts.literals - literal_start);
+        for (words[0 .. counts.dicts - start], start..) |*word, position| word.* = try self.dictInputWord(position);
+        for (words[counts.dicts - start ..], literal_start..) |*word, position| word.* = try self.literalInputWord(position);
         return words;
+    }
+
+    /// The type table of worker `scope`, which is this worker or one of its
+    /// chain of creators: a lambda's creator is `WorkerKey.lambda.outer`.
+    /// Null for a worker without inputs, which has no table.
+    pub fn scopeTableWord(self: *Builder, scope: WorkerId) Allocator.Error!?Word {
+        if (self.program.inputCount(scope) == 0) return null;
+        var levels: u32 = 0;
+        var current = self.worker_id;
+        while (current != scope) : (levels += 1) {
+            switch (self.program.worker(current).key) {
+                .lambda => |key| current = key.outer,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a scope's table is read outside its chain of lambdas"),
+            }
+        }
+        if (self.table_local == null) invariant("a worker without a type table read a scope's table");
+        // One level up is this table's own first input.
+        if (levels == 1) return .{ .recipe = try self.recipes.intern(.{ .input = 0 }) };
+        return .{ .recipe = try self.recipes.intern(.{ .scope_table = levels }) };
+    }
+
+    /// The inputs of a lambda worker `callee`'s table: the table of its
+    /// creator `scope_table` when the callee reads its creator's scope
+    /// through one, then `own`, the inputs its own scope adds.
+    pub fn lambdaInputs(self: *Builder, callee: WorkerId, scope_table: ?Word, own: []const Word) Allocator.Error![]const Word {
+        const inputs_layout = self.program.inputLayout(callee);
+        if (inputs_layout.scope_table != (scope_table != null)) invariant("a lambda's table is given its creator's table exactly when its creator has one");
+        if (inputs_layout.own.total() != own.len) invariant("a lambda's own inputs differ from its scope's");
+        const table = scope_table orelse return own;
+        return try std.mem.concat(self.program.arena.allocator(), Word, &.{ &.{table}, own });
+    }
+
+    /// The inputs of worker `callee`'s table given its whole scope's inputs
+    /// `scope` in scope order: for a lambda, its creator's table at the part
+    /// of `scope` its creator's scope is, then the inputs its own scope
+    /// adds. Its creator's table is composed here, and its creator's own
+    /// creator's before that, which is how a function value restored from
+    /// its stored inputs rebuilds the chain.
+    pub fn scopeInputs(self: *Builder, callee: WorkerId, scope: []const Word) Allocator.Error![]const Word {
+        const arena = self.program.arena.allocator();
+        const counts = self.program.inputLayout(callee).scopeCounts();
+        if (scope.len != counts.total()) invariant("a scope's inputs differ from its worker's");
+        // The callee, then each creator whose scope it reads through a table.
+        var chain: std.ArrayList(WorkerId) = .empty;
+        defer chain.deinit(self.allocator);
+        var current = callee;
+        while (true) {
+            try chain.append(self.allocator, current);
+            if (!self.program.inputLayout(current).scope_table) break;
+            current = self.program.worker(current).key.lambda.outer;
+        }
+        var creator_table: ?Word = null;
+        var index = chain.items.len;
+        while (index > 0) {
+            index -= 1;
+            const worker = chain.items[index];
+            const worker_layout = self.program.inputLayout(worker);
+            // A creator's scope is a part of each scope extending it: its
+            // variables lead, and its dictionaries and literal arguments
+            // trail.
+            const part = worker_layout.scopeCounts();
+            const descs = scope[0..part.descs];
+            const dicts = scope[counts.descs + counts.dicts - part.dicts ..][0..part.dicts];
+            const literals = scope[counts.descs + counts.dicts + counts.literals - part.literals ..];
+            const own = try std.mem.concat(arena, Word, &.{ descs[worker_layout.inherited.descs..], dicts[0..worker_layout.own.dicts], literals[0..worker_layout.own.literals] });
+            const inputs: []const Word = if (worker_layout.scope_table)
+                try self.lambdaInputs(worker, creator_table, own)
+            else if (worker_layout.inherited.total() == 0)
+                own
+            else
+                invariant("a lambda inheriting a scope reads it through no table");
+            if (index == 0) return inputs;
+            creator_table = try self.tableWord(worker, inputs);
+        }
+        unreachable; // the chain holds the callee, which returns
     }
 
     /// The word of `ty`'s descriptor: a static descriptor of a closed type
@@ -1414,7 +1499,10 @@ pub const Builder = struct {
     pub fn descWord(self: *Builder, ty: TypeId) Allocator.Error!Word {
         if (try self.closed(ty) and !try self.program.composedInBody(ty)) return .{ .static = .{ .desc = ty } };
         switch (self.program.store.get(ty)) {
-            .variable => |index| return try self.inputWord(index),
+            .variable => |index| {
+                if (index >= self.scopeCounts().descs) invariant("a scope variable's descriptor is not among its worker's inputs");
+                return try self.inputWord(index);
+            },
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => {},
         }
         return .{ .recipe = try self.descRecipe(ty) };
@@ -1547,7 +1635,10 @@ pub const Builder = struct {
         const id = self.recipes.resolve(named);
         if (self.recipe_locals.get(id)) |known| return known;
         const local = switch (self.recipes.get(id)) {
-            .input => |index| return try self.inputLocal(index),
+            .input => |index| try self.inputLocal(index),
+            // This worker's own table is the hidden argument it holds.
+            .scope_table => |levels| if (levels == 0) self.table_local orelse invariant("a worker without a type table read its own table") else try self.slotLocal(id),
+            .inherited => try self.slotLocal(id),
             .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => if (try self.readsInputs(id))
                 try self.slotLocal(id)
             else
@@ -1586,7 +1677,7 @@ pub const Builder = struct {
             }
             const recipe = self.recipes.get(id);
             switch (recipe) {
-                .input => break :walk true,
+                .input, .inherited, .scope_table => break :walk true,
                 .desc => |desc| if (!self.program.store.isClosed(desc.ty)) break :walk true,
                 .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => {},
             }
@@ -1608,7 +1699,7 @@ pub const Builder = struct {
 
     /// The word recipe `id`, which reads no input, is: evaluated now.
     fn foldWord(self: *Builder, id: Tables.RecipeId) Allocator.Error!StaticDescs.CaptureWord {
-        if (self.fold == null) self.fold = Tables.Evaluation.init(self.program, .{ .building = &self.recipes }, &.{}, 0);
+        if (self.fold == null) self.fold = Tables.Evaluation.init(self.program, .{ .building = &self.recipes }, &.{}, .{}, null);
         return try self.fold.?.word(id);
     }
 
@@ -1620,7 +1711,9 @@ pub const Builder = struct {
         try self.slots.append(self.allocator, id);
         const local = try self.closedLocal(switch (self.recipes.get(id)) {
             .callable => try self.erasedLayout(),
-            .desc, .args_desc, .table, .update_plan, .adapt_plan, .names_block => .opaque_ptr,
+            .desc, .args_desc, .table, .scope_table, .update_plan, .adapt_plan, .names_block => .opaque_ptr,
+            // A descriptor, or a dictionary's or literal argument's callable.
+            .inherited => |index| if (index < self.layout.inherited.descs) .opaque_ptr else try self.erasedLayout(),
             .tag_index, .field_index => .u32,
             .input => invariant("an input has no slot of its own"),
         });
@@ -1651,20 +1744,11 @@ pub const Builder = struct {
     }
 
     /// Take this worker's inputs from its type table `table`, its one
-    /// hidden argument (`tables.zig`): the descriptors of its variables,
-    /// its dictionaries, then its literal arguments, each read in the entry
-    /// chain on first use (`inputLocal`).
-    pub fn beginTable(self: *Builder, table: LocalId, dict_count: usize) Allocator.Error!void {
-        const arena = self.program.arena.allocator();
-        const input_count = self.program.inputCount(self.worker_id);
-        const desc_count = self.program.descCount(self.worker_id);
+    /// hidden argument (`tables.zig`), each read in the entry chain on first
+    /// use (`inputLocal`).
+    pub fn beginTable(self: *Builder, table: LocalId) Allocator.Error!void {
         self.table_local = table;
-        self.var_descs = try arena.alloc(OptionalLocal, desc_count);
-        self.dict_locals = try arena.alloc(OptionalLocal, dict_count);
-        self.literal_locals = try arena.alloc(OptionalLocal, input_count - desc_count - dict_count);
-        @memset(self.var_descs, .none);
-        @memset(self.dict_locals, .none);
-        @memset(self.literal_locals, .none);
+        self.layout = self.program.inputLayout(self.worker_id);
     }
 
     /// The needs list of this worker's tables, once its body is lowered.
@@ -1674,34 +1758,25 @@ pub const Builder = struct {
             if (self.slots.items.len != 0) invariant("a worker without inputs read a table slot");
             return null;
         }
-        return try self.recipes.needs(self.program.arena.allocator(), self.allocator, input_count, self.program.descCount(self.worker_id), self.slots.items);
+        return try self.recipes.needs(self.program.arena.allocator(), self.allocator, input_count, self.slots.items);
     }
 
-    /// The local holding input `index` (`inputWord`), read from this
-    /// worker's type table in the entry chain on first use.
+    /// The local holding table input `index`, read from this worker's type
+    /// table in the entry chain (`materialize` reads each once).
     fn inputLocal(self: *Builder, index: u32) Allocator.Error!LocalId {
-        const dict = index -% @as(u32, @intCast(self.var_descs.len));
-        const literal = dict -% @as(u32, @intCast(self.dict_locals.len));
-        const known = if (index < self.var_descs.len)
-            &self.var_descs[index]
-        else if (dict < self.dict_locals.len)
-            &self.dict_locals[dict]
-        else if (literal < self.literal_locals.len)
-            &self.literal_locals[literal]
-        else
-            invariant("an input word names an input its worker does not take");
-        if (known.get()) |local| return local;
         const table = self.table_local orelse invariant("a worker without a type table read an input");
-        const local = try self.closedLocal(if (index < self.var_descs.len) .opaque_ptr else try self.erasedLayout());
+        if (index >= self.layout.inputCount()) invariant("an input word names an input its worker does not take");
+        const first_own: u32 = @intFromBool(self.layout.scope_table);
+        // The creator's table, then descriptors, then callables.
+        const local = try self.closedLocal(if (index < first_own + self.layout.own.descs) .opaque_ptr else try self.erasedLayout());
         try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .table_entry = .{ .table = table, .index = index } }), .next = undefined } });
-        known.* = .some(local);
         return local;
     }
 
     /// The local holding the descriptor of scope variable `index`.
     pub fn varDesc(self: *Builder, index: usize) Allocator.Error!LocalId {
-        if (index >= self.var_descs.len) invariant("a scope variable's descriptor is not among its worker's inputs");
-        return try self.inputLocal(@intCast(index));
+        if (index >= self.scopeCounts().descs) invariant("a scope variable's descriptor is not among its worker's inputs");
+        return try self.materialize(try self.inputWord(index));
     }
 
     // -- Body --
@@ -1733,7 +1808,7 @@ pub const Builder = struct {
         const entry = self.entry_hole;
         if (self.program.inputCount(self.worker_id) != 0) {
             const table = try self.closedLocal(.opaque_ptr);
-            try self.beginTable(table, worker.dictionary_params.len);
+            try self.beginTable(table);
         }
         const params = try self.allocator.alloc(LocalId, worker.params.len);
         defer self.allocator.free(params);
@@ -2076,11 +2151,10 @@ pub const Builder = struct {
         // Captures: values, then the type table, unless the procedure's
         // calls pass it (`Program.perCall`).
         const capture_ptr = try self.closedLocal(.opaque_ptr);
-        const dict_count = worker.own_dicts + worker.capturedDictionaryCount();
         const per_call = self.program.perCall(self.worker_id);
         // A procedure whose calls pass its table reads it from its argument
         // record, before the captured values whose types it describes.
-        const own_record: ?LocalId = if (per_call) try self.ownScopeArgs(worker, dict_count) else null;
+        const own_record: ?LocalId = if (per_call) try self.ownScopeArgs(worker) else null;
         const captured_words: usize = if (self.program.inputCount(self.worker_id) != 0 and !per_call) 1 else 0;
         const capture_count = worker.capture_types.len + captured_words;
         var capture_values: []LocalId = &.{};
@@ -2114,7 +2188,7 @@ pub const Builder = struct {
                 }
             }
         }
-        if (captured_words != 0 and self.table_local == null) try self.beginTable(capture_values[worker.capture_types.len], dict_count);
+        if (captured_words != 0 and self.table_local == null) try self.beginTable(capture_values[worker.capture_types.len]);
         defer if (capture_count != 0) self.allocator.free(capture_values);
         for (worker.captures, worker.capture_types, 0..) |capture, capture_ty, index| {
             const binder = capture.pattern;
@@ -2191,7 +2265,7 @@ pub const Builder = struct {
         if (has_table) {
             const table = try self.closedLocal(.opaque_ptr);
             try self.emitEntry(.{ .assign_ref = .{ .target = table, .op = LIR.RefOp.field(record, 1), .next = undefined } });
-            try self.beginTable(table, 0);
+            try self.beginTable(table);
         }
         var args: std.ArrayList(LocalId) = .empty;
         defer args.deinit(self.allocator);
@@ -2313,8 +2387,6 @@ pub const Builder = struct {
     pub fn lowerConvertBody(self: *Builder, from: TypeId, to: TypeId) Allocator.Error!void {
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
-        self.var_descs = &.{};
-        self.dict_locals = &.{};
         const param = try self.localOf(from, .param);
         const ret_layout = try self.program.layouts.layoutOf(to);
         const body_start = try self.newHole();
@@ -2428,7 +2500,7 @@ pub const Builder = struct {
     /// The argument record of a procedure whose calls pass its type table
     /// (`Program.perCall`): the table, which this reads first, then the
     /// explicit arguments.
-    pub fn ownScopeArgs(self: *Builder, worker: lower.Worker, dict_count: usize) Allocator.Error!LocalId {
+    pub fn ownScopeArgs(self: *Builder, worker: lower.Worker) Allocator.Error!LocalId {
         // The record is read through its own descriptor, which the table
         // determines; the table is read through the descriptor of just the
         // leading word first.
@@ -2437,7 +2509,7 @@ pub const Builder = struct {
         const prefix_desc = try self.argsDesc(1, &.{});
         const table = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .dyn = .{ .target = table, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = prefix_desc, .field_index = .{ .immediate = 0 } } }), .next = undefined } });
-        try self.beginTable(table, dict_count);
+        try self.beginTable(table);
         const full_desc = try self.argsDesc(1, try self.descWords(worker.params));
         try self.emitEntry(.{ .assign_ref = .{ .target = desc_hole, .op = LIR.RefOp.local(full_desc), .next = undefined } });
         const product = try self.productShapeFields(1, worker.params);
@@ -2470,7 +2542,7 @@ pub const Builder = struct {
         }
         // The captured values' types are read from the table, so it is read
         // before them.
-        if (word_count != 0) try self.beginTable(values[worker.capture_types.len], worker.own_dicts + worker.capturedDictionaryCount());
+        if (word_count != 0) try self.beginTable(values[worker.capture_types.len]);
         for (worker.capture_types, 0..) |ty, index| {
             const local = try self.localOf(ty, .view);
             try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = .{ .immediate = @intCast(capture_record_leading_words + word_count + index) } } }), .next = undefined } });
@@ -2556,8 +2628,6 @@ pub const Builder = struct {
         const request = worker.static_data_request.?;
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
-        self.var_descs = &.{};
-        self.dict_locals = &.{};
         const ret_layout = try self.program.layouts.layoutOf(worker.ret);
         const body_start = try self.newHole();
         self.hole = body_start;
@@ -2590,8 +2660,6 @@ pub const Builder = struct {
         const request = worker.root_request.?;
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
-        self.var_descs = &.{};
-        self.dict_locals = &.{};
         const params = try self.allocator.alloc(LocalId, worker.params.len);
         defer self.allocator.free(params);
         for (params, worker.params) |*param, param_ty| param.* = try self.localOf(param_ty, .param);
@@ -2677,7 +2745,7 @@ pub const Builder = struct {
         var table_arg: [1]LocalId = undefined;
         if (has_table) {
             table_arg[0] = try self.closedLocal(.opaque_ptr);
-            try self.beginTable(table_arg[0], 0);
+            try self.beginTable(table_arg[0]);
         }
         var ret_layout: layout.Idx = undefined;
         if (try self.closed(worker.ret)) {
@@ -2722,14 +2790,13 @@ pub const Builder = struct {
 
     pub fn lowerMethodEntry(self: *Builder, target: WorkerId) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        const target_worker = self.program.worker(target).*;
         // The entry captures its type table, whose inputs are the target's:
         // its descriptors, then its dictionaries, then its literal
         // arguments.
         const has_table = self.program.inputCount(self.worker_id) != 0;
         var start = try self.beginErasedWorker(if (has_table) &.{.opaque_ptr} else &.{});
         defer self.allocator.free(start.captures);
-        if (has_table) try self.beginTable(start.captures[0], target_worker.dictionary_params.len);
+        if (has_table) try self.beginTable(start.captures[0]);
         const inputs = try self.allInputWords();
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .call = .{ .target = target, .inputs = inputs } });
     }
@@ -2739,7 +2806,7 @@ pub const Builder = struct {
         const worker = self.currentWorker().*;
         var start = try self.beginErasedWorker(&.{.opaque_ptr});
         defer self.allocator.free(start.captures);
-        try self.beginTable(start.captures[0], 0);
+        try self.beginTable(start.captures[0]);
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural = method });
     }
 
@@ -2752,7 +2819,7 @@ pub const Builder = struct {
         const worker = self.currentWorker().*;
         var start = try self.beginErasedWorker(&.{.opaque_ptr});
         defer self.allocator.free(start.captures);
-        try self.beginTable(start.captures[0], 0);
+        try self.beginTable(start.captures[0]);
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural_map = map });
     }
 
@@ -2804,7 +2871,6 @@ pub const Builder = struct {
     pub fn lowerCrashDictionary(self: *Builder, kind: lower.CrashDictionary) Allocator.Error!void {
         const start = try self.beginErasedWorker(&.{});
         defer self.allocator.free(start.captures);
-        self.var_descs = &.{};
         const body_start = try self.newHole();
         self.hole = body_start;
         try self.emitDispatchCrash(kind);
@@ -2841,7 +2907,6 @@ pub const Builder = struct {
         const worker = self.currentWorker().*;
         var start = try self.beginErasedWorker(&.{});
         defer self.allocator.free(start.captures);
-        self.var_descs = &.{};
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .callable_eval = binding });
     }
 
@@ -3239,7 +3304,7 @@ pub const Builder = struct {
                 const values = try self.popValues(closure.count);
                 defer self.allocator.free(values);
                 const worker = self.program.worker(closure.worker).*;
-                const inputs: []const Word = if (self.program.perCall(closure.worker)) &.{} else try std.mem.concat(self.program.arena.allocator(), Word, &.{ closure.descs, closure.dicts });
+                const inputs: []const Word = if (self.program.perCall(closure.worker)) &.{} else try self.scopeInputs(closure.worker, try std.mem.concat(self.program.arena.allocator(), Word, &.{ closure.descs, closure.dicts }));
                 const packed_closure = try self.staticClosure(closure.worker, values, closure.capture_types, inputs, !try self.allClosed(worker.capture_types), null);
                 try self.pushValue(try self.adaptValue(packed_closure, closure.worker_ty, closure.ty));
             },
@@ -4327,7 +4392,9 @@ pub const Builder = struct {
             .static => return try self.materialize(word),
             .recipe => |named| switch (self.recipes.get(self.recipes.resolve(named))) {
                 .input => |index| index,
-                .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => return try self.materialize(word),
+                // A literal argument of the creator's scope is read through
+                // its table, like any other word of it.
+                .inherited, .scope_table, .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => return try self.materialize(word),
             },
         };
         const table = self.table_local orelse invariant("a worker without a type table read a literal argument");
@@ -4439,9 +4506,6 @@ pub const Builder = struct {
         const worker = self.currentWorker().*;
         const start = try self.beginErasedWorker(&.{});
         defer self.allocator.free(start.captures);
-        self.var_descs = &.{};
-        self.dict_locals = &.{};
-        self.literal_locals = &.{};
         var ret_layout: layout.Idx = undefined;
         if (try self.closed(worker.ret)) {
             ret_layout = try self.program.layouts.layoutOf(worker.ret);
@@ -4481,9 +4545,6 @@ pub const Builder = struct {
         const worker = self.currentWorker().*;
         const start = try self.beginErasedWorker(&.{});
         defer self.allocator.free(start.captures);
-        self.var_descs = &.{};
-        self.dict_locals = &.{};
-        self.literal_locals = &.{};
         const ret_layout = try self.program.layouts.layoutOf(worker.ret);
         const body_start = try self.newHole();
         self.hole = body_start;
@@ -4989,27 +5050,24 @@ pub const Builder = struct {
     }
 
     /// What the function value of a local procedure at one use packs: the
-    /// procedure's worker, the values it captures and their types, then the
-    /// hidden words it captures (descriptors, then dictionaries and literal
-    /// arguments). A generalized procedure instantiated at the use has the
+    /// procedure's worker, the values it captures and their types, then its
+    /// table's inputs (`Tables.InputLayout`). A generalized procedure instantiated at the use has the
     /// procedure's type there, `own_ty`, which the use's own type `use_ty`
     /// may store differently.
     pub const LocalProcClosure = struct {
         callee: WorkerId,
         values: []const LocalId,
         capture_types: []const TypeId,
-        descs: []const Word,
-        words: []const Word,
+        /// The callee's table's inputs; none for a procedure whose calls
+        /// pass its table (`Program.perCall`).
+        inputs: []const Word,
+        /// The declaring worker's table, which a call passing the callee's
+        /// table gives it.
+        scope_table: ?Word,
         adapt: ?struct { own_ty: TypeId, use_ty: TypeId } = null,
         /// Static methods capture only other checked local procedures. Their
         /// edges are traversed after reserving the callable, never as LIR values.
         static_scope: ?LocalProcScope = null,
-
-        /// The callee's inputs: the descriptors, then the other words.
-        /// Caller frees.
-        pub fn inputs(self: LocalProcClosure, allocator: Allocator) Allocator.Error![]Word {
-            return try std.mem.concat(allocator, Word, &.{ self.descs, self.words });
-        }
     };
 
     const StaticCallable = struct {
@@ -5030,8 +5088,7 @@ pub const Builder = struct {
     /// substitution when a dispatch selects an imported body-local method.
     pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView) Allocator.Error!LocalId {
         const closure = (try self.localProcClosureAt(local, use_ty, evidence, edge, subst, site, false)) orelse return try self.localProcValue(local);
-        const inputs = try closure.inputs(self.allocator);
-        defer self.allocator.free(inputs);
+        const inputs = closure.inputs;
         const packed_closure = if (try self.allClosed(closure.capture_types))
             try self.packClosure(closure.callee, closure.values, closure.capture_types, inputs)
         else
@@ -5054,7 +5111,7 @@ pub const Builder = struct {
         if (closure.values.len != 0) invariant("an immortal function value captures a value, which methods never do");
         const scope = closure.static_scope orelse invariant("a static callable has no producer capture context");
         const arena = self.program.arena.allocator();
-        const inputs = try closure.inputs(arena);
+        const inputs = closure.inputs;
         for (self.static_callables.items) |active| {
             if (active.closure.callee != closure.callee or active.closure.static_scope.?.declaration != scope.declaration or
                 !std.meta.eql(active.closure.adapt, closure.adapt) or !std.mem.eql(TypeId, active.closure.capture_types, closure.capture_types) or
@@ -5168,7 +5225,7 @@ pub const Builder = struct {
             } else try self.program.converter().sealedScheme(self.module, variable);
         }
         try self.resolveOwnKinds(lambda_ty, scheme, own_types);
-        const descs = try std.mem.concat(arena, Word, &.{ scope.descs, try self.descWords(own_types) });
+        const own_descs = try self.descWords(own_types);
         const dicts = try arena.alloc(Word, scheme.dictionaries.len);
         const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
         for (scheme.dictionaries, dicts) |param_index, *dict| {
@@ -5191,7 +5248,7 @@ pub const Builder = struct {
             defer self.allocator.free(bound_all);
             try self.derivedLiteralArgs(callee, bound_all, literals);
         }
-        const words = try std.mem.concat(arena, Word, &.{ dicts, scope.dicts, literals, scope.literals });
+        const inputs = try self.lambdaInputs(callee, scope.table, try std.mem.concat(arena, Word, &.{ own_descs, dicts, literals }));
         // The procedure's type at this use, in this worker's variables.
         const use_bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(use_bound);
@@ -5202,8 +5259,8 @@ pub const Builder = struct {
             .callee = callee,
             .values = values,
             .capture_types = per_call_worker.capture_types,
-            .descs = descs,
-            .words = words,
+            .inputs = inputs,
+            .scope_table = scope.table,
             .adapt = .{ .own_ty = procedure_ty, .use_ty = use_ty },
             .static_scope = if (static_captures) scope else null,
         };
@@ -5347,18 +5404,13 @@ pub const Builder = struct {
                 }
             };
             const declaring = self.program.worker(scope_worker).*;
-            var declaring_dicts: usize = 0;
-            for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
-            var declaring_literals: usize = 0;
-            for (declaring.literal_scopes) |scope| declaring_literals += scope.len;
-            const words = try self.dictLiteralInputWords(self.dict_locals.len - declaring_dicts, self.literal_locals.len - declaring_literals);
             return .{
                 .declaring = scope_worker,
                 .worker = found,
                 .bound = self.env.bound[0..declaring.scheme_vars.len],
-                .descs = try self.descInputWords(0, declaring.scheme_vars.len),
-                .dicts = words[0..declaring_dicts],
-                .literals = words[declaring_dicts..],
+                .table = try self.scopeTableWord(scope_worker),
+                .dicts = &.{},
+                .literals = &.{},
                 .declaration = null,
             };
         };
@@ -5375,11 +5427,14 @@ pub const Builder = struct {
         const dicts = try self.program.arena.allocator().alloc(Word, context.dicts.len);
         for (dicts, 0..) |*dict, slot| dict.* = try self.declarationDictionary(context, slot);
         const words = try self.declarationWords(context);
+        // The declaring worker is a procedure template, whose table's inputs
+        // are its scope.
+        const table: ?Word = if (self.program.inputCount(context.worker) == 0) null else try self.tableWord(context.worker, try std.mem.concat(self.program.arena.allocator(), Word, &.{ words.descs, dicts, words.literals }));
         return .{
             .declaring = context.worker,
             .worker = worker,
             .bound = context.bound,
-            .descs = words.descs,
+            .table = table,
             .dicts = dicts,
             .literals = words.literals,
             .declaration = context,
@@ -5520,7 +5575,7 @@ pub const Builder = struct {
         if (local.is_alias) invariant("an alias is used only after its declaration binds it");
         const closure = try self.localProcClosure(local);
         // A procedure whose calls pass its table captures none.
-        const inputs: []const Word = if (self.program.perCall(closure.callee)) &.{} else try closure.inputs(self.program.arena.allocator());
+        const inputs = closure.inputs;
         // A value built from entry locals only is built once, in the entry
         // chain, for every reference; one reading a value the body computes
         // is built where it is referenced.
@@ -5566,14 +5621,14 @@ pub const Builder = struct {
                 value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
             }
         }
-        const descs = scope.descs;
-        const dicts = try std.mem.concat(self.program.arena.allocator(), Word, &.{ scope.dicts, scope.literals });
+        // A procedure whose calls pass its table captures none.
+        const inputs: []const Word = if (self.program.perCall(target)) &.{} else try self.lambdaInputs(target, scope.table, &.{});
         return .{
             .callee = target,
             .values = values,
             .capture_types = target_worker.capture_types,
-            .descs = descs,
-            .words = dicts,
+            .inputs = inputs,
+            .scope_table = scope.table,
             .static_scope = if (static_captures) scope else null,
         };
     }
@@ -5666,20 +5721,12 @@ pub const Builder = struct {
         }
         try self.fillLiteralArgs(null, .{ .use = call.func }, words[own_types.len + scheme.dictionaries.len ..]);
         // The call passes the procedure's table: its inputs are the
-        // declaring scope's descriptors then its own, its own dictionaries
-        // then the declaring scope's, and likewise its literal arguments.
+        // declaring worker's table, then its own scheme's descriptors,
+        // dictionaries and literal arguments.
         const declared = try self.localProcClosure(local);
         const target = self.program.worker(declared.callee).*;
-        const outer_dicts = target.capturedDictionaryCount();
         if (target.own_descs != own_types.len or target.own_dicts != scheme.dictionaries.len or target.own_literals != scheme.literal_requirements.len) invariant("a local procedure call's own words differ from its worker's");
-        const table_inputs = try std.mem.concat(self.program.arena.allocator(), Word, &.{
-            declared.descs,
-            words[0..own_types.len],
-            words[own_types.len..][0..scheme.dictionaries.len],
-            declared.words[0..outer_dicts],
-            words[own_types.len + scheme.dictionaries.len ..],
-            declared.words[outer_dicts..],
-        });
+        const table_inputs = try self.lambdaInputs(declared.callee, declared.scope_table, words);
         try self.push(.{ .finish_local_call = .{
             .closure = closure,
             .words = try self.program.arena.allocator().dupe(Word, &.{try self.tableWord(declared.callee, table_inputs)}),
@@ -6226,7 +6273,7 @@ pub const Builder = struct {
     /// Restore a completed function as immutable code and capture references.
     pub fn restoreStoredFn(self: *Builder, source: lower.ConstSource, recipe: []const u8, captures: []const checked.ConstNodeId) Allocator.Error!void {
         const decoded = try StoredFn.decode(self, recipe);
-        const shape = StoredFn.captureShape(self.program, decoded.worker);
+        const shape = try StoredFn.captureShape(self.program, decoded.worker);
         const arena = self.program.arena.allocator();
         if (captures.len != shape.values.len) invariant("a stored function's captures differ from its worker's");
         if (!try self.allClosed(shape.values) and decoded.capture_descs.len != captures.len) invariant("a stored dynamic capture record has the wrong descriptor arity");
@@ -8860,7 +8907,7 @@ pub const Builder = struct {
         const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.isEmpty()) null else scheme) else null;
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
-        const values = try self.allocator.alloc(LocalId, captures.len + self.var_descs.len + self.dict_locals.len);
+        const values = try self.allocator.alloc(LocalId, captures.len);
         defer self.allocator.free(values);
         for (captures, capture_types, 0..) |capture, *capture_ty, index| {
             capture_ty.* = try self.capturedType(capture.pattern, try self.patternType(capture.pattern));
@@ -8868,16 +8915,13 @@ pub const Builder = struct {
         }
         try self.declared_captures.put(self.allocator, lambda_expr, try self.program.arena.allocator().dupe(LocalId, values[0..captures.len]));
         const callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty, generalized);
-        // A generalized lambda that is not a local procedure is instantiated
-        // where it is constructed: its function value captures its own
-        // scheme's descriptors and dictionaries after the enclosing scope's.
-        const enclosing_dicts = try self.dictLiteralInputWords(0, 0);
-        var descs: []const Word = try self.descInputWords(0, self.var_descs.len);
-        var dicts: []const Word = enclosing_dicts;
-        var own_descs: std.ArrayList(Word) = .empty;
-        defer own_descs.deinit(self.allocator);
-        var own_dicts: std.ArrayList(Word) = .empty;
-        defer own_dicts.deinit(self.allocator);
+        // The function value captures the lambda's table, whose inputs are
+        // this worker's table, through which it reads this scope, then the
+        // inputs its own scope adds. A generalized lambda that is not a
+        // local procedure is instantiated where it is constructed: its own
+        // scheme's descriptors, dictionaries and literal arguments are those.
+        var own_words: std.ArrayList(Word) = .empty;
+        defer own_words.deinit(self.allocator);
         if (generalized) |scheme| if (!scheme.per_call) {
             // A variable the construction's checked instantiation fixes takes
             // that type; one it fixes none for (no use relates the value's
@@ -8886,7 +8930,6 @@ pub const Builder = struct {
             const subst = self.siteSubstitution(expr_id);
             if (subst.len != 0 and subst.len != scheme.scheme_vars.len) invariant("a generalized lambda's construction substitution differs from its scheme");
             const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
-            try own_descs.appendSlice(self.allocator, descs);
             const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
             defer self.allocator.free(own_types);
             for (own_types, scheme.scheme_vars, 0..) |*own_ty, variable, index| {
@@ -8896,32 +8939,28 @@ pub const Builder = struct {
                     try self.program.converter().sealedScheme(self.module, variable);
             }
             try self.resolveOwnKinds(self.bodies().exprType(expr_id), scheme, own_types);
-            for (own_types) |own_ty| try own_descs.append(self.allocator, try self.descWord(own_ty));
+            for (own_types) |own_ty| try own_words.append(self.allocator, try self.descWord(own_ty));
             const scope_id = (try self.program.localScope(self.module, lambda_expr)).?;
             const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
             for (scheme.dictionaries) |param_index| {
                 if (param_index >= evidence.len) invariant("a generalized lambda's construction evidence does not cover its dictionaries");
-                try own_dicts.append(self.allocator, try self.paramDictionary(evidence, param_index, context));
+                try own_words.append(self.allocator, try self.paramDictionary(evidence, param_index, context));
             }
-            try own_dicts.appendSlice(self.allocator, enclosing_dicts[0..self.dict_locals.len]);
             // Its own scheme's literal arguments, from the construction's
-            // edge, then the enclosing scope's. A construction with no checked
-            // instantiation has no edge: no use instantiated the lambda, so
-            // nothing calls it, and like a `from_scheme` dictionary each
-            // argument is a crash nothing reads.
+            // edge. A construction with no checked instantiation has no
+            // edge: no use instantiated the lambda, so nothing calls it, and
+            // like a `from_scheme` dictionary each argument is a crash
+            // nothing reads.
             const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = expr_id });
             if (literal_args.len == scheme.literal_requirements.len) {
-                for (literal_args) |source| try own_dicts.append(self.allocator, try self.literalArg(source));
+                for (literal_args) |source| try own_words.append(self.allocator, try self.literalArg(source));
             } else {
                 if (subst.len != 0) invariant("a generalized lambda's instantiated construction has no literal arguments for its scheme's literal_requirements");
-                for (scheme.literal_requirements) |_| try own_dicts.append(self.allocator, try self.unreadLiteralArg());
+                for (scheme.literal_requirements) |_| try own_words.append(self.allocator, try self.unreadLiteralArg());
             }
-            try own_dicts.appendSlice(self.allocator, enclosing_dicts[self.dict_locals.len..]);
-            descs = own_descs.items;
-            dicts = own_dicts.items;
         };
         // A procedure whose calls pass its table captures none.
-        const inputs: []const Word = if (self.program.perCall(callee)) &.{} else try std.mem.concat(self.program.arena.allocator(), Word, &.{ descs, dicts });
+        const inputs: []const Word = if (self.program.perCall(callee)) &.{} else try self.lambdaInputs(callee, try self.scopeTableWord(self.worker_id), own_words.items);
         if (try self.allClosed(capture_types)) {
             try self.pushValue(try self.packClosure(callee, values[0..captures.len], capture_types, inputs));
         } else {

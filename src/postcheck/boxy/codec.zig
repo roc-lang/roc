@@ -1418,7 +1418,7 @@ const Gen = struct {
     /// The inputs of the family's workers: the descriptors of its types,
     /// which this worker's are.
     fn familyInputs(self: *Gen) Allocator.Error![]Body.Word {
-        return try self.b.descInputWords(0, self.b.var_descs.len);
+        return try self.b.descInputWords(0, self.b.scopeCounts().descs);
     }
 
     /// Renamed name `index` of the family's names.
@@ -1462,7 +1462,7 @@ const Gen = struct {
         const params = try b.allocator.alloc(LocalId, worker.params.len + @intFromBool(has_table));
         if (has_table) {
             params[worker.params.len] = try b.closedLocal(.opaque_ptr);
-            try b.beginTable(params[worker.params.len], 0);
+            try b.beginTable(params[worker.params.len]);
         }
         for (params[0..worker.params.len], worker.params) |*param, ty| param.* = try b.localOf(ty, .param);
         const ret_layout = try self.resultLayout(worker.ret);
@@ -1509,7 +1509,7 @@ const Gen = struct {
                 try b.emitEntry(.{ .assign_struct = .{ .target = capture.*, .fields = LIR.LocalSpan.empty(), .next = undefined } });
             }
         }
-        if (has_table) try b.beginTable(start.captures[worker.capture_types.len], 0);
+        if (has_table) try b.beginTable(start.captures[worker.capture_types.len]);
         return try self.finishErasedStart(worker, start);
     }
 

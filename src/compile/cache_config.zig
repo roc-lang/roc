@@ -386,7 +386,10 @@ pub const Constants = struct {
     /// 192: literal argument roots record their edge owner as their own root
     ///      source and hold no expression.
     /// 193: combines the two independent 192 entries.
-    pub const CACHE_VERSION = 193;
+    /// 194: a Boxy lambda's type table refers to its creator's table instead
+    ///      of repeating its creator's inputs, in needs lists, stored function
+    ///      recipes and compiler-only function metadata.
+    pub const CACHE_VERSION = 194;
 };
 
 /// Configuration for the Roc cache system.
