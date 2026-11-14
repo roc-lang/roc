@@ -2361,7 +2361,22 @@ const Inserter = struct {
             => arcInvariant("ARC attached representation-shell fields to a non-local alias"),
         }
         const target_layout = self.store.getLocal(assign.target).layout_idx;
-        if (self.layouts.getLayout(target_layout).tag != .struct_) arcInvariant("ARC representation shell did not have struct layout");
+        switch (self.layouts.getLayout(target_layout).tag) {
+            // A tag union view's one slot is slot 0 of its own layout.
+            .struct_, .tag_union => {},
+            .scalar,
+            .box,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .closure,
+            .erased_callable,
+            .zst,
+            .hole,
+            .ptr,
+            .dynamic,
+            => arcInvariant("ARC representation shell did not have struct or tag union layout"),
+        }
         var absent = std.ArrayList(u32).empty;
         defer absent.deinit(self.emission_allocator);
         if (all_rc_fields_absent) {
@@ -10869,6 +10884,53 @@ test "RC nested field take keeps a retain when a later view reads the taken fiel
     try f.run();
 
     try testing.expect(f.countRc(taken_b, .incref) >= 1);
+}
+
+test "RC tag union view read after its slot was taken names that slot absent" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    // record = { 0: [Z, S(Str)], 1: Str }. The union leaves the record by a
+    // take, and the union is then read again only for its discriminant,
+    // which lives in the record's inline bytes.
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.tag_str },
+        .{ .index = 1, .layout = .str },
+    });
+    const payload = try f.local(.str);
+    const tag = try f.local(f.tag_str);
+    const c = try f.local(.str);
+    const record = try f.local(record_layout);
+    const taken_tag = try f.local(f.tag_str);
+    const tag_result = try f.local(.i64);
+    const view = try f.local(f.tag_str);
+    const discriminant = try f.local(.u32);
+    const taken_c = try f.local(.str);
+    const c_result = try f.local(.i64);
+
+    const ret = try f.ret(discriminant);
+    const consume_c = try f.assignCall(c_result, &.{taken_c}, ret);
+    const read_c = try f.assignRefField(taken_c, record, 1, consume_c);
+    const read_discriminant = try f.assignDiscriminant(discriminant, view, read_c);
+    const read_view = try f.assignRefField(view, record, 0, read_discriminant);
+    const consume_tag = try f.assignCall(tag_result, &.{taken_tag}, read_view);
+    const read_tag = try f.assignRefField(taken_tag, record, 0, consume_tag);
+    const make_record = try f.assignStruct(record, &.{ tag, c }, read_tag);
+    const make_c = try f.assignStr(c, "c", make_record);
+    const make_tag = try f.assignTag(tag, 1, payload, make_c);
+    const body = try f.assignStr(payload, "payload", make_tag);
+    _ = try f.addProc(&.{}, body, .u32);
+    try f.run();
+
+    // Both fields leave the record by takes, and the union read for its
+    // discriminant copies only the record's representation of a slot the
+    // record no longer holds.
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken_tag, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken_c, .incref));
+    try f.expectRc(record, 0, 0, 0);
+    try f.expectRc(view, 0, 0, 0);
+    const shell = (try residualShellOf(&f, view)).?;
+    defer testing.allocator.free(shell);
+    try testing.expectEqualSlices(u32, &.{0}, shell);
 }
 
 test "RC specialization: fields taken from one dying record select the owned variant together" {
