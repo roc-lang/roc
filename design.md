@@ -4818,8 +4818,17 @@ the source/import key and explicit format versions.
 Checking records its problems in the checker's problem store and evaluation
 appends its own to the same store. An entry stores them as `CheckedReports`:
 every problem with the store's strings, the count of checking's, the snapshots
-and regions checking's problems render with (copied out of the checker before
-it is released), and the checker's import display names. The snapshots keep
+checking's problems render with (copied out of the checker before it is
+released), and the checker's import display names. Each problem carries the
+source regions its report highlights, recorded where the problem is created;
+a report reads no other region than those and the module's CIR node regions.
+While it checks, the checker has the region each type variable reports
+problems at without storing one per variable (`VarRegions`): a variable that
+is a CIR node has its node's region; every later variable is given its region
+once, when it is created, so consecutive variables sharing a region are one
+run; and a variable an instantiation copied from a same-module definition
+records the variable it was copied from and has that variable's region. A
+variable an instantiation maps to without creating it keeps its own. The snapshots keep
 their frozen captures and node formats beside the text the miss rendered, so a
 snapshot whose text was never rendered renders on demand with the module's
 names, the stored import display names and the module's default sources, the
@@ -5212,6 +5221,20 @@ function's directed effect dependencies observes that enclosing rank, not the
 node's original inner-scope rank. The child-rank reduction cannot move a captured
 type back into an inner scope. Independent inner-scope variables remain eligible
 for generalization; captured variables wait for their owning boundary.
+
+A rank is 14 bits, so `Rank.deepest` is 16,383 and source can nest at most
+16,382 generalization scopes below the outermost rank. A scope the checker
+would enter inside one at `Rank.deepest` gets no rank of its own
+(`VarPool.pushRank`): the module reports once that its definitions are nested
+too deeply to generalize, pointing at the definition or expression whose scope
+first went past the limit, and checking continues with the scope at the
+enclosing rank, not generalized when it ends. The scope's value (each member
+of a recursive group) is retired to an erroneous value expression, so
+publication and lowering never read a definition that should have been
+generalized and was not. That continuation is diagnostic recovery on an
+already-reported error, so it is a mechanism (Solver-Mutating Rewrites). The limit is a property of the descriptor's representation, not of
+any walk's storage (Stack Safety): no stage's call depth or storage depends on
+it.
 
 Roc generalization is exclusively rank-1. Quantification belongs to a value
 binding; an arbitrary expression does not acquire a scheme, and the result of
@@ -7585,8 +7608,8 @@ operands and the result to be one type, calling `plus`, `minus`, `times`,
 `div_by`, `div_trunc_by`, and `rem_by` at `a, a -> a`. A method of one of those
 names whose second parameter or result is another type, such as
 `times : Duration, I64 -> Duration`, is callable only as an ordinary method
-call (`duration.times(3)`); `duration * 3` is a type mismatch between the
-operands.
+call (`duration.times(3)`); `duration * 3` is an error, reported once as the
+method having an incompatible type (Closed Operator Rejection, below).
 
 These contracts let inference propagate information before a method has been
 selected. Either operand of a comparison or arithmetic operator determines the
@@ -7627,6 +7650,70 @@ type, a type with arguments, a method of this module (whose uses carry
 definition dependencies and instantiation records), a signature of any other
 shape, and an effectful method. Accepted and rejected sides are pinned in
 `closed_operator_test.zig`.
+
+Closed method call resolution is the same mechanism for a method call. When a
+call's receiver has already resolved to a nominal type when the call is
+checked, that type is declared in another module, and that module declares
+the method as a pure function whose parameters and result are all nominal
+types taking no arguments, the first being the receiver's type, with one
+parameter per call argument after it, the call is resolved where it is
+checked (`closedMethodCall`): the checked node names this module's copy of the
+declaration's own callable, and no constraint, per-use function type, carrier
+variable, or dispatch-queue entry exists for it. The constraint a call
+otherwise makes is `receiver, args -> result` over fresh argument and result
+variables. Relating it to the signature, which has no type variables and
+whose first parameter is the receiver's type, could only give each fresh
+variable its parameter's type, so it establishes nothing a fresh copy of the
+parameter types does not, and rejects nothing. Each argument is checked
+against a fresh variable holding its parameter's type, and the call's type
+receives a fresh copy of the declared result once every argument is
+accepted, so a rejected argument relation never reaches the declaration's
+signature, which every call of the method shares. Of the records an ordinary
+method call makes, a closed call keeps only its hoisting proof
+(`noteHoistDispatchDependency`), keyed by the declaration's callable: its
+target is never a local procedure, so the proof always holds, and keeping it
+keeps a compile-time condition warning reported where it otherwise is. It
+needs none of the others: `own_dispatch_exprs` attributes a queued
+relation's resolution and failure to its expression, and a closed call has no
+queued relation; an `expect` watcher asks whether the selected callable is
+effectful, and the method is pure; a scheme requirement candidate becomes a
+requirement only while its receiver is still a flexible variable, and an
+ambiguity candidate is judged only while its receiver still carries
+constraints, and a nominal receiver is neither. The call still drains the
+relations queued before it, as an ordinary call's eager resolution does, so
+those settle at the same point. Every other call keeps its ordinary
+constraint: a receiver whose type is not yet known or is not a nominal type,
+a method of this module, a signature with type variables or a type with
+arguments anywhere in it, a different number of arguments than the signature
+has, an effectful method, a derived method, and a declaration with no
+callable value or an erroneous annotation. The checked node is consumed
+exactly as a closed operator's is. Accepted and rejected sides are pinned in
+`closed_method_call_test.zig`.
+
+Closed operator rejection is the same mechanism for an operator whose method
+can never meet its contract. When an arithmetic or ordering operator's left
+operand has resolved to a nominal type that takes no arguments, and that
+type's method has a final signature (declared in another module, or annotated
+in this one, whose annotation is predeclared as its scheme before any body is
+checked) that is a pure function over nominal types taking no arguments other
+than the operator's contract at that type (`T, T -> T`, or `T, T -> Bool`),
+the operator is rejected where it is checked, before its operands are related
+(`classifyOperatorMethodSignature`). Such a signature has no type
+variables, so relating an instance of it to the contract fails whatever the
+right operand is; the rejection relates a fresh copy of the signature to the
+contract at the left operand's type, reports the failure exactly as the drain
+reports a failed operator constraint, and retires the operator exactly as the
+drain does. It accepts nothing the ordinary path rejects and rejects nothing
+the ordinary path accepts: the only difference is that the right operand is
+never related to the left, so `duration * 3` reports the method's signature
+and not also the literal `3` as a `Duration`. Every other operator keeps its
+ordinary path: a left operand that is not yet a nominal type or takes
+arguments, a defaulted left operand, an unannotated method of this module,
+a signature with type variables or of any other shape, an effectful method, a
+derived method, a declaration with no callable value or an erroneous
+annotation, and any operator checked inside a probe. The accepted (contract)
+side is pinned in `closed_operator_test.zig`, the rejected side in
+`custom_num_type_test.zig` and `test/cli/OperatorMethodMismatch.roc`.
 
 A where alias (`a.Sortable : where [...]`) is a source-level abbreviation for a
 set of method constraints, not a type. Its declaration solves to its receiver: a
@@ -15588,6 +15675,31 @@ its dictionary at its own requirement, to another worker or around a
 recursive call, therefore passes the word it was given, and the type tables
 of a recursion's levels are one table.
 
+The rule holds for every scope whose requirement discharges another's, not
+only for a worker's own. A scope the lowering enters while it lowers a body
+(a scheme alias's or an exact procedure alias's scope at one of its uses, a
+literal chain's frame, a declaration context) holds each dictionary at the
+interface its own requirement names, at the types the scope was entered with
+(`AliasScope.requirements`): the edge that entered the scope built the
+dictionary for exactly that parameter. Evidence read inside the scope that
+hands the dictionary on (an alias's forwarded lookup, a frame's edge into the
+next frame, the requirements of a literal conversion's target, a local
+procedure's own scheme) adapts it from that interface to the consumer's, and
+a dispatch through it calls it at that interface (`Builder.scopeInterface`).
+An alias can state its requirement at a narrower row than the procedure it
+forwards to requires (`narrow : b -> [Ok(Str), Err(Str), Extra] where
+[b.status : b -> [Ok(Str), Err(Str)]]` bound to a procedure whose requirement
+names `[Ok(Str), Err(Str), Extra]`), so any step of an alias chain can be an
+adapter. A literal's own conversion, the dispatch a literal chain lowers
+inside its innermost frame, has a signature checking fixes, error row
+included (a `from_numeral` requirement stating another row is a type
+mismatch), so it reads its result as the dictionary stored it; it is called
+at its scope's interface all the same.
+`test/cli/WidenClosedImplAliasScope.roc`,
+`test/cli/WidenClosedTryImplAliasScope.roc`, and
+`test/cli/WidenClosedImplLiteralChain.roc` run the alias scopes and the
+literal chain frames.
+
 A conversion between two CLOSED types is a static row conversion: a worker
 of the converting module (`WorkerKey.convert`, keyed by the source and
 destination types), lowered as ordinary LIR—a switch on the source
@@ -16197,7 +16309,13 @@ declared in a function body is a local procedure of that body: its dispatch
 calls the procedure's function value at the dispatch's instantiation, and its
 dictionary is that value. A target reached through an exact procedure alias
 takes the substitution and evidence each alias's forwarded lookup recorded in
-the alias's scope, alias by alias.
+the alias's scope, alias by alias; each alias's scope holds its dictionaries
+at the alias's own requirements, and a lookup that hands one on adapts it to
+the next scope's (Sealed Result Rows). The dictionary of a method bound to an
+alias, like that of a target whose instantiation follows from its callable,
+is the target's entry at the instantiation so composed, adapted from the
+target's own type there to its consumer's interface as any other target's is
+(`test/cli/WidenClosedImplMethodAlias.roc`).
 
 Evidence the checker leaves to the concrete callable (`from_callable`, a
 target `derived_from_callable`, nested `from_callable` evidence) and the

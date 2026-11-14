@@ -1561,7 +1561,6 @@ pub fn parseCheckModule(
         module_env,
         imported_envs,
         auto_imported_types,
-        &module_env.store.regions,
         builtin_ctx,
     );
     checker.fixupTypeWriter();

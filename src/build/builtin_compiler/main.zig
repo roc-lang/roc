@@ -385,7 +385,6 @@ fn compileModule(
         module_env,
         imported_envs.items,
         &module_envs,
-        &module_env.store.regions,
         builtin_ctx,
     );
     checker.fixupTypeWriter();
@@ -409,7 +408,6 @@ fn compileModule(
             source_path,
             imported_envs.items,
             &checker.import_mapping,
-            &checker.regions,
             null,
         );
         defer report_builder.deinit();

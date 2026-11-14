@@ -686,16 +686,18 @@ fn stepAlias(ctx: *CopyContext, frame: *AliasFrame) std.mem.Allocator.Error!bool
                 }
                 // The backing copy leads the run, matching the alias layout's
                 // backing-then-args ordering.
-                const dest_vars_span = try ctx.dest_store.appendVars(machine.values.items[frame.values_base..]);
-                machine.values.items.len = frame.values_base;
                 const translated_origin = try ctx.copyOriginModule(frame.source.origin_module);
-                try finishFrame(ctx, frame.fill, Content{ .alias = Alias{
-                    .ident = types_mod.TypeIdent{ .ident_idx = frame.translated_ident },
-                    .vars = .{ .nonempty = dest_vars_span },
-                    .origin_module = translated_origin,
-                    .source_decl = frame.source.source_decl,
-                    .source_arg_count = frame.source.source_arg_count,
-                } });
+                const copied_vars = machine.values.items[frame.values_base..];
+                const content = try ctx.dest_store.mkAliasWithPackedSourceDecl(
+                    types_mod.TypeIdent{ .ident_idx = frame.translated_ident },
+                    copied_vars[0],
+                    copied_vars[1..],
+                    frame.source.source_arg_count,
+                    translated_origin,
+                    frame.source.source_decl,
+                );
+                machine.values.items.len = frame.values_base;
+                try finishFrame(ctx, frame.fill, content);
                 return true;
             },
         }

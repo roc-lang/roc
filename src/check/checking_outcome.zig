@@ -32,7 +32,6 @@ problems: []const problem.Problem = &.{},
 pending: []const problem.Store.PendingStaticExhaustiveness = &.{},
 extra_strings: []const u8 = &.{},
 missing_patterns: []const problem.ExtraStringIdx = &.{},
-regions: []const base.Region = &.{},
 contents: []const snapshot.SnapshotContent = &.{},
 node_formats: []const snapshot.NodeFormat = &.{},
 captures: []const snapshot.Capture = &.{},
@@ -51,7 +50,6 @@ pub const Serialized = extern struct {
     pending: serde.SerializedSlice(problem.Store.PendingStaticExhaustiveness) = .{},
     extra_strings: serde.SerializedSlice(u8) = .{},
     missing_patterns: serde.SerializedSlice(problem.ExtraStringIdx) = .{},
-    regions: serde.SerializedSlice(base.Region) = .{},
     contents: serde.SerializedSlice(snapshot.SnapshotContent) = .{},
     node_formats: serde.SerializedSlice(snapshot.NodeFormat) = .{},
     captures: serde.SerializedSlice(snapshot.Capture) = .{},
@@ -118,7 +116,6 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: ?*const dependenci
         .pending = checker.problems.pending_static_exhaustiveness.items,
         .extra_strings = checker.problems.extra_strings_backing.items,
         .missing_patterns = checker.problems.missing_patterns_backing.items,
-        .regions = checker.regions.items(),
         .contents = snapshots.contents.items(),
         .node_formats = snapshots.node_formats.items,
         .captures = snapshots.captures.items,
@@ -147,8 +144,7 @@ pub fn sourcesMatch(self: Self, scope: *const dependencies.Scope) bool {
 /// exhaustiveness recipes. Ordinary publication and reporting decide failures.
 pub fn install(self: Self, checker: anytype) Allocator.Error!void {
     try self.installProblems(&checker.problems);
-    checker.regions.clearRetainingCapacity();
-    try self.installRendering(checker.gpa, &checker.snapshots, &checker.regions, snapshot.FormatContext.of(&checker.type_writer));
+    try self.installRendering(checker.gpa, &checker.snapshots, snapshot.FormatContext.of(&checker.type_writer));
 }
 
 /// Append the stored problems, deferred exhaustiveness recipes and the strings
@@ -160,19 +156,17 @@ pub fn installProblems(self: Self, store: *problem.Store) Allocator.Error!void {
     try store.missing_patterns_backing.appendSlice(self.missing_patterns);
 }
 
-/// Fill an empty snapshot store and region list with the snapshots and
-/// regions the stored problems render with. Snapshots whose text was not
+/// Fill an empty snapshot store with the snapshots the stored problems render
+/// with; each problem carries the source regions it highlights. Snapshots whose text was not
 /// preserved render on demand with `format_context`, the module's names,
 /// import display names and default sources.
 pub fn installRendering(
     self: Self,
     allocator: Allocator,
     snapshots: *snapshot.Store,
-    regions: *base.Region.List,
     format_context: snapshot.FormatContext,
 ) Allocator.Error!void {
     snapshots.format_context = format_context;
-    _ = try regions.appendSlice(allocator, self.regions);
     _ = try snapshots.contents.appendSlice(allocator, self.contents);
     try snapshots.node_formats.appendSlice(allocator, self.node_formats);
     try snapshots.captures.appendSlice(allocator, self.captures);

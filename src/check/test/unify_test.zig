@@ -103,7 +103,7 @@ const TestEnv = struct {
             .unify_scratch = &self.scratch,
             .occurs_scratch = &self.occurs_scratch,
         };
-        return try unify_mod.unify(&env, a, b, .{});
+        return try unify_mod.unify(&env, a, b, .{ .actual_region = base.Region.zero() });
     }
 
     fn unifyWithOptions(self: *Self, a: Var, b: Var, opts: unify_mod.Options) std.mem.Allocator.Error!Result {
@@ -117,7 +117,9 @@ const TestEnv = struct {
             .unify_scratch = &self.scratch,
             .occurs_scratch = &self.occurs_scratch,
         };
-        return try unify_mod.unify(&env, a, b, opts);
+        var region_opts = opts;
+        region_opts.actual_region = base.Region.zero();
+        return try unify_mod.unify(&env, a, b, region_opts);
     }
 
     /// Helper to call the write-no-report unify variant from TestEnv.

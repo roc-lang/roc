@@ -333,12 +333,14 @@ test "nominal views preserve scoped actuals aliases and owned unknowns without s
     const inner_app = try f.application(inner, &.{associated_a});
     const inner_var = try f.store.freshFromContent(.{ .structure = .{ .nominal_type = inner_app } });
     const alias_backing = try f.tuple(&.{outer_a});
-    const alias = try f.store.freshFromContent(.{ .alias = .{
-        .ident = .{ .ident_idx = try f.ident("Alias") },
-        .vars = .{ .nonempty = try f.store.appendVars(&.{ alias_backing, outer_a, unknown }) },
-        .source_arg_count = 1,
-        .origin_module = fixture_module,
-    } });
+    const alias = try f.store.freshFromContent(try f.store.mkAliasWithPackedSourceDecl(
+        .{ .ident_idx = try f.ident("Alias") },
+        alias_backing,
+        &.{ outer_a, unknown },
+        1,
+        fixture_module,
+        .none,
+    ));
     const outer = try f.declaration("Outer", &.{outer_a}, try f.tuple(&.{ inner_var, outer_a, unknown, alias }));
     const app = try f.application(outer, &.{actual_a});
     const before = f.store.len();
@@ -557,12 +559,14 @@ test "nominal views blocker dependency proof includes hidden alias arguments and
     const a = try f.rigid("a");
     const actual = try f.store.fresh();
     const unit = try f.store.freshFromContent(.{ .structure = .empty_record });
-    const alias = try f.store.freshFromContent(.{ .alias = .{
-        .ident = .{ .ident_idx = try f.ident("Hidden") },
-        .vars = .{ .nonempty = try f.store.appendVars(&.{ unit, a }) },
-        .source_arg_count = 0,
-        .origin_module = fixture_module,
-    } });
+    const alias = try f.store.freshFromContent(try f.store.mkAliasWithPackedSourceDecl(
+        .{ .ident_idx = try f.ident("Hidden") },
+        unit,
+        &.{a},
+        0,
+        fixture_module,
+        .none,
+    ));
     const presence = try f.store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = try f.store.appendRecordFields(&.{.{ .name = try f.ident("field"), .presence = .unknown(a, unit) }}),
         .ext = unit,

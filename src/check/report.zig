@@ -65,6 +65,7 @@ const UnmatchablePattern = problem_mod.UnmatchablePattern;
 const MatchAltBinderMissing = problem_mod.MatchAltBinderMissing;
 const DiscardedVarUpdate = problem_mod.DiscardedVarUpdate;
 const ComptimeCondition = problem_mod.ComptimeCondition;
+const GeneralizationNestingTooDeep = problem_mod.GeneralizationNestingTooDeep;
 
 // Type declaration errors
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
@@ -166,9 +167,6 @@ pub const ReportBuilder = struct {
     other_modules: []const *const ModuleEnv,
     platform_requirement_source: ?PlatformRequirementSource,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
-    /// The checker's full region list, which includes regions for type variables
-    /// created during type checking that don't have corresponding CIR nodes.
-    checker_regions: *const Region.List,
     diff_fields: SnapshotRecordFieldSafeList,
     diff_tags: SnapshotTagSafeList,
     typo_suggestions: diff.TypoSuggestion.ArrayList,
@@ -200,7 +198,6 @@ pub const ReportBuilder = struct {
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
-        checker_regions: *const Region.List,
         platform_requirement_source: ?PlatformRequirementSource,
     ) Allocator.Error!Self {
         return .{
@@ -211,7 +208,6 @@ pub const ReportBuilder = struct {
             .snapshots = snapshots,
             .problems = problems,
             .import_mapping = import_mapping,
-            .checker_regions = checker_regions,
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
@@ -231,7 +227,7 @@ pub const ReportBuilder = struct {
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
     ) Allocator.Error!Self {
-        return init(gpa, module_env, module_env, null, problems, filename, other_modules, import_mapping, &module_env.store.regions, null);
+        return init(gpa, module_env, module_env, null, problems, filename, other_modules, import_mapping, null);
     }
 
     /// Deinit report builder, only fields it owns
@@ -255,22 +251,6 @@ pub const ReportBuilder = struct {
     }
 
     // Helpers
-
-    /// Look up a region by index using the checker's full region list.
-    /// The checker's regions include both CIR node regions and regions for type variables
-    /// created during type checking. Returns null only if the index is beyond even
-    /// the checker's region list (shouldn't happen in normal operation).
-    fn getRegionSafe(self: *const Self, region_idx: Region.Idx) ?*Region {
-        if (@backingInt(region_idx) >= self.checker_regions.len()) return null;
-        return self.checker_regions.get(region_idx);
-    }
-
-    /// Add source code highlighting for a variable's region.
-    /// Consolidates the common pattern of: get region -> calc info -> add to document.
-    fn addSourceHighlight(self: *Self, report: *Report, region_idx: Region.Idx) Allocator.Error!void {
-        const region = self.getRegionSafe(region_idx) orelse return;
-        return self.addSourceHighlightRegion(report, region.*);
-    }
 
     /// Add source code highlighting for a region.
     /// The declaration region of a defaulted field's default expression,
@@ -345,12 +325,10 @@ pub const ReportBuilder = struct {
 
     /// Add source code highlighting for a variable's region.
     /// Consolidates the common pattern of: get region -> calc info -> add to document.
-    fn addFocusedSourceHighlight(self: *Self, report: *Report, outer_region_idx: Region.Idx, inner_region_idx: Region.Idx) Allocator.Error!void {
-        const outer_region = self.getRegionSafe(outer_region_idx) orelse return;
-        const outer_region_info = self.module_env.calcRegionInfo(outer_region.*);
+    fn addFocusedSourceHighlight(self: *Self, report: *Report, outer_region: Region, inner_region: Region) Allocator.Error!void {
+        const outer_region_info = self.module_env.calcRegionInfo(outer_region);
 
-        const inner_region = self.getRegionSafe(inner_region_idx) orelse return;
-        const inner_region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(inner_region.*));
+        const inner_region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(inner_region));
 
         const display_region = SourceCodeDisplayRegion{
             .line_text = outer_region_info.calculateLineText(self.source, self.module_env.getLineStarts()),
@@ -376,22 +354,9 @@ pub const ReportBuilder = struct {
 
     // Generic Reports
 
-    /// Convert a type into a type var
-    pub fn regionIdxFrom(idx: anytype) Region.Idx {
-        std.debug.assert(@TypeOf(idx) == Var or @TypeOf(idx) == CIR.Expr.Idx or @TypeOf(idx) == CIR.Pattern.Idx or @TypeOf(idx) == CIR.Node.Idx);
-        return @fromBackingInt(@intCast(@backingInt(idx)));
-    }
-
     const ProblemRegion = union(enum) {
-        simple: Region.Idx,
         direct: Region,
-        focused: struct { outer: Region.Idx, highlight: Region.Idx },
-    };
-
-    /// Region for source highlighting - can be either a Region.Idx or a direct Region
-    const SourceHighlightRegion = union(enum) {
-        idx: Region.Idx,
-        region: Region,
+        focused: struct { outer: Region, highlight: Region },
     };
 
     /// A lightweight document fragment for building error report text.
@@ -644,9 +609,6 @@ pub const ReportBuilder = struct {
 
         // Add the region to highlight
         switch (region) {
-            .simple => |region_idx| {
-                try self.addSourceHighlight(&report, region_idx);
-            },
             .direct => |direct_region| {
                 try self.addSourceHighlightRegion(&report, direct_region);
             },
@@ -791,7 +753,6 @@ pub const ReportBuilder = struct {
 
         // Add the region to highlight
         switch (region) {
-            .simple => |region_idx| try self.addSourceHighlight(&report, region_idx),
             .direct => |direct_region| try self.addSourceHighlightRegion(&report, direct_region),
             .focused => |ctx| try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight),
         }
@@ -827,9 +788,6 @@ pub const ReportBuilder = struct {
 
         // Add the region to highlight
         switch (region) {
-            .simple => |region_idx| {
-                try self.addSourceHighlight(&report, region_idx);
-            },
             .direct => |direct_region| {
                 try self.addSourceHighlightRegion(&report, direct_region);
             },
@@ -1040,7 +998,7 @@ pub const ReportBuilder = struct {
                 // default identities (design.md "Defaulted Fields"—two
                 // separately written defaults never merge).
                 if (try self.findFieldDefaultMismatch(mismatch.types)) |fdm| {
-                    return self.buildIncompatibleDefaultsReport(mismatch.types, fdm);
+                    return self.buildIncompatibleDefaultsReport(mismatch.types, mismatch.actual_region, fdm);
                 }
                 // A use that gave one interpolation's values different types
                 // is reported as that, whatever relation exposed it.
@@ -1214,6 +1172,7 @@ pub const ReportBuilder = struct {
             .match_alt_binder_missing => |data| return self.buildMatchAltBinderMissingReport(data),
             .discarded_var_update => |data| return self.buildDiscardedVarUpdateReport(data),
             .comptime_condition => |data| return self.buildComptimeConditionReport(data),
+            .generalization_nesting_too_deep => |data| return self.buildGeneralizationNestingTooDeepReport(data),
         }
     }
 
@@ -1222,41 +1181,41 @@ pub const ReportBuilder = struct {
     /// Build a type mismatch's report for the context it occurred in.
     fn buildTypeMismatchForContext(self: *Self, mismatch: TypeMismatch) Allocator.Error!Report {
         return switch (mismatch.context) {
-            .if_condition => self.buildNonBoolReport(mismatch.types, "if", "condition must evaluate to a"),
-            .if_branch => |ctx| self.buildIfBranchReport(mismatch.types, ctx),
-            .match_pattern => |ctx| self.buildMatchPatternReport(mismatch.types, ctx),
-            .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, ctx),
-            .match_branch => |ctx| self.buildMatchBranchReport(mismatch.types, ctx),
-            .list_entry => |ctx| self.buildListEntryReport(mismatch.types, ctx),
+            .if_condition => self.buildNonBoolReport(mismatch.types, mismatch.actual_region, "if", "condition must evaluate to a"),
+            .if_branch => |ctx| self.buildIfBranchReport(mismatch.types, mismatch.actual_region, ctx),
+            .match_pattern => |ctx| self.buildMatchPatternReport(mismatch.types, mismatch.actual_region, ctx),
+            .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, mismatch.actual_region, ctx),
+            .match_branch => |ctx| self.buildMatchBranchReport(mismatch.types, mismatch.actual_region, ctx),
+            .list_entry => |ctx| self.buildListEntryReport(mismatch.types, mismatch.actual_region, ctx),
             .interpolation_part => |region| self.buildGenericMismatchAtRegion(mismatch.types, .{ .direct = region }),
-            .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
-            .fn_call_non_function => |ctx| self.buildFnCallNonFunction(mismatch.types, ctx),
+            .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, mismatch.actual_region, ctx),
+            .fn_call_non_function => |ctx| self.buildFnCallNonFunction(mismatch.types, mismatch.actual_region, ctx),
             .fn_call_arg => |ctx| self.buildIncompatibleFnCallArg(mismatch.types, ctx),
             .fn_call_args_conflict => |ctx| self.buildFnCallArgsConflict(mismatch.types, ctx),
-            .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .lhs),
-            .binop_rhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .rhs),
+            .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, mismatch.actual_region, ctx, .lhs),
+            .binop_rhs => |ctx| self.buildBinopReport(mismatch.types, mismatch.actual_region, ctx, .rhs),
             .try_operator_expr => |ctx| self.buildTryOperatorExprReport(mismatch.types, ctx),
             .try_operator_value => |ctx| self.buildTryOperatorValueReport(mismatch.types, ctx),
-            .statement_value => self.buildStatementValueReport(mismatch.types),
-            .early_return => self.buildEarlyReturnReport(mismatch.types),
-            .try_operator => |ctx| self.buildTryOperatorReport(mismatch.types, ctx),
+            .statement_value => self.buildStatementValueReport(mismatch.types, mismatch.actual_region),
+            .early_return => self.buildEarlyReturnReport(mismatch.types, mismatch.actual_region),
+            .try_operator => |ctx| self.buildTryOperatorReport(mismatch.types, mismatch.actual_region, ctx),
             .nominal_constructor => |ctx| switch (ctx.backing_type) {
-                .tag => self.buildInvalidNominalTag(mismatch.types),
-                .record => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Record", "I'm having trouble with this nominal type that wraps a record.", "The record I found is:"),
-                .tuple => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Tuple", "I'm having trouble with this nominal type that wraps a tuple.", "The tuple I found is:"),
-                .value => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Type", "I'm having trouble with this nominal type.", "The value I found has type:"),
+                .tag => self.buildInvalidNominalTag(mismatch.types, mismatch.actual_region),
+                .record => self.buildInvalidNominalBacking(mismatch.types, mismatch.actual_region, "Invalid Nominal Record", "I'm having trouble with this nominal type that wraps a record.", "The record I found is:"),
+                .tuple => self.buildInvalidNominalBacking(mismatch.types, mismatch.actual_region, "Invalid Nominal Tuple", "I'm having trouble with this nominal type that wraps a tuple.", "The tuple I found is:"),
+                .value => self.buildInvalidNominalBacking(mismatch.types, mismatch.actual_region, "Invalid Nominal Type", "I'm having trouble with this nominal type.", "The value I found has type:"),
             },
             .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
             .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
-            .expect => self.buildNonBoolReport(mismatch.types, "expect", "statement must evaluate to a"),
-            .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
-            .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
-            .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
+            .expect => self.buildNonBoolReport(mismatch.types, mismatch.actual_region, "expect", "statement must evaluate to a"),
+            .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.actual_region, mismatch.evidence, ctx),
+            .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.actual_region, mismatch.evidence, ctx),
+            .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, mismatch.actual_region, ctx),
             .predeclared_use => |ctx| self.buildPredeclaredUse(mismatch.types, ctx),
             .platform_requirement, .platform_requirement_return => |ctx| {
                 const is_return = mismatch.context == .platform_requirement_return;
                 var report = try self.makeMismatchReport(
-                    ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
+                    ProblemRegion{ .direct = mismatch.actual_region },
                     &.{ D.bytes("The platform requires "), D.ident(ctx.required_ident), D.bytes(if (is_return) " to return a specific type." else " to have a specific type.") },
                     &.{D.bytes(if (is_return) "This function currently returns:" else "Here it has the type:")},
                     mismatch.types.actual_snapshot,
@@ -1271,7 +1230,7 @@ pub const ReportBuilder = struct {
                 return report;
             },
             .type_annotation => return try self.makeMismatchReport(
-                ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
+                ProblemRegion{ .direct = mismatch.actual_region },
                 &.{D.bytes("This expression is used in an unexpected way.")},
                 &.{D.bytes("It has the type:")},
                 mismatch.types.actual_snapshot,
@@ -1304,8 +1263,8 @@ pub const ReportBuilder = struct {
                 mismatch.types.expected_snapshot,
                 &.{&.{D.bytes("A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.")}},
             ),
-            .record_destructure => return try self.buildRecordDestructureMismatch(mismatch.types),
-            .none => return try self.buildGenericMismatch(mismatch.types),
+            .record_destructure => return try self.buildRecordDestructureMismatch(mismatch.types, mismatch.actual_region),
+            .none => return try self.buildGenericMismatch(mismatch.types, mismatch.actual_region),
         };
     }
 
@@ -1354,8 +1313,8 @@ pub const ReportBuilder = struct {
         }
     }
 
-    fn buildGenericMismatch(self: *Self, types: TypePair) Allocator.Error!Report {
-        return self.buildGenericMismatchAtRegion(types, .{ .simple = regionIdxFrom(types.actual_var) });
+    fn buildGenericMismatch(self: *Self, types: TypePair, actual_region: Region) Allocator.Error!Report {
+        return self.buildGenericMismatchAtRegion(types, .{ .direct = actual_region });
     }
 
     fn buildGenericMismatchAtRegion(self: *Self, types: TypePair, region: ProblemRegion) Allocator.Error!Report {
@@ -1373,11 +1332,11 @@ pub const ReportBuilder = struct {
     /// Build a report for a record-destructure pattern that fails to match its
     /// value (e.g. `{ x, y } = { x: 1, y: 2, z: 3 }`). Here the pattern is the
     /// `expected` side and the value is the `actual` side.
-    fn buildRecordDestructureMismatch(self: *Self, types: TypePair) Allocator.Error!Report {
+    fn buildRecordDestructureMismatch(self: *Self, types: TypePair, actual_region: Region) Allocator.Error!Report {
         // The pattern is the `expected` side, the value the `actual` side.
         self.record_pattern_hint = .{ .pattern = types.expected_snapshot, .value = types.actual_snapshot };
         return try self.makeMismatchReport(
-            ProblemRegion{ .simple = regionIdxFrom(types.actual_var) },
+            ProblemRegion{ .direct = actual_region },
             &.{D.bytes("This expression is used in an unexpected way.")},
             &.{D.bytes("It has the type:")},
             types.actual_snapshot,
@@ -1488,9 +1447,9 @@ pub const ReportBuilder = struct {
     /// Build a report for an `if` condition or `expect` statement that is not a
     /// `Bool`. `keyword` names the construct and `requirement` continues the
     /// sentence after it.
-    fn buildNonBoolReport(self: *Self, types: TypePair, keyword: []const u8, requirement: []const u8) Allocator.Error!Report {
+    fn buildNonBoolReport(self: *Self, types: TypePair, actual_region: Region, keyword: []const u8, requirement: []const u8) Allocator.Error!Report {
         return try self.makeBadTypeReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
+            .{ .direct = actual_region },
             &.{
                 D.bytes("This"),
                 D.bytes(keyword).withAnnotation(.inline_code),
@@ -1516,13 +1475,13 @@ pub const ReportBuilder = struct {
 
     /// Build a report for a branch of an `if` or `match` (named by `keyword`)
     /// whose type does not match. `branch_index_0` is the 0-based branch index.
-    fn buildBranchReport(self: *Self, types: TypePair, branch_index_0: u32, keyword: []const u8, hints: []const []const Doc) Allocator.Error!Report {
+    fn buildBranchReport(self: *Self, types: TypePair, actual_region: Region, branch_index_0: u32, keyword: []const u8, hints: []const []const Doc) Allocator.Error!Report {
         const branch_index = branch_index_0 + 1;
         // The first branch has no previous branches, so a mismatch there is
         // against the type the whole expression is expected to have.
         const is_first = branch_index_0 == 0;
         return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
+            .{ .direct = actual_region },
             if (is_first) &.{
                 D.bytes("The first branch of this"),
                 D.bytes(keyword).withAnnotation(.inline_code),
@@ -1565,12 +1524,12 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for if branch type mismatch
-    fn buildIfBranchReport(self: *Self, types: TypePair, ctx: Context.IfBranchContext) Allocator.Error!Report {
-        return self.buildBranchReport(types, ctx.branch_index, "if", &.{});
+    fn buildIfBranchReport(self: *Self, types: TypePair, actual_region: Region, ctx: Context.IfBranchContext) Allocator.Error!Report {
+        return self.buildBranchReport(types, actual_region, ctx.branch_index, "if", &.{});
     }
 
     /// Build a report for match pattern type mismatch
-    fn buildMatchPatternReport(self: *Self, types: TypePair, ctx: Context.MatchPatternContext) Allocator.Error!Report {
+    fn buildMatchPatternReport(self: *Self, types: TypePair, actual_region: Region, ctx: Context.MatchPatternContext) Allocator.Error!Report {
         const branch_index = ctx.branch_index + 1;
         if (branch_index == 1) {
             const title_parts: []const Doc =
@@ -1595,8 +1554,8 @@ pub const ReportBuilder = struct {
             self.record_pattern_hint = .{ .pattern = types.actual_snapshot, .value = types.expected_snapshot };
             return try self.makeMismatchReport(
                 ProblemRegion{ .focused = .{
-                    .outer = regionIdxFrom(ctx.match_expr),
-                    .highlight = regionIdxFrom(types.actual_var),
+                    .outer = self.can_ir.store.getExprRegion(ctx.match_expr),
+                    .highlight = actual_region,
                 } },
                 title_parts,
                 actual_parts,
@@ -1644,8 +1603,8 @@ pub const ReportBuilder = struct {
             self.record_pattern_hint = .{ .pattern = types.actual_snapshot, .value = types.expected_snapshot };
             return try self.makeMismatchReport(
                 ProblemRegion{ .focused = .{
-                    .outer = regionIdxFrom(ctx.match_expr),
-                    .highlight = regionIdxFrom(types.actual_var),
+                    .outer = self.can_ir.store.getExprRegion(ctx.match_expr),
+                    .highlight = actual_region,
                 } },
                 title_parts,
                 actual_parts,
@@ -1664,8 +1623,8 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for match branch type mismatch
-    fn buildMatchBranchReport(self: *Self, types: TypePair, ctx: Context.MatchBranchContext) Allocator.Error!Report {
-        return self.buildBranchReport(types, ctx.branch_index, "match", &.{
+    fn buildMatchBranchReport(self: *Self, types: TypePair, actual_region: Region, ctx: Context.MatchBranchContext) Allocator.Error!Report {
+        return self.buildBranchReport(types, actual_region, ctx.branch_index, "match", &.{
             &.{
                 D.bytes("All branches in a"),
                 D.bytes("match").withAnnotation(.inline_code),
@@ -1682,15 +1641,15 @@ pub const ReportBuilder = struct {
         });
     }
 
-    fn buildMatchAltBinderReport(self: *Self, types: TypePair, ctx: Context.MatchAltBinderContext) Allocator.Error!Report {
+    fn buildMatchAltBinderReport(self: *Self, types: TypePair, actual_region: Region, ctx: Context.MatchAltBinderContext) Allocator.Error!Report {
         const branch_index = ctx.branch_index + 1;
         const pattern_index = ctx.pattern_index + 1;
         const first_pattern_index = ctx.first_pattern_index + 1;
 
         return try self.makeMismatchReport(
             ProblemRegion{ .focused = .{
-                .outer = regionIdxFrom(ctx.match_expr),
-                .highlight = regionIdxFrom(types.actual_var),
+                .outer = self.can_ir.store.getExprRegion(ctx.match_expr),
+                .highlight = actual_region,
             } },
             &.{
                 D.bytes("The"),
@@ -1734,7 +1693,7 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for list entry type mismatch
-    fn buildListEntryReport(self: *Self, types: TypePair, ctx: Context.ListEntryContext) Allocator.Error!Report {
+    fn buildListEntryReport(self: *Self, types: TypePair, actual_region: Region, ctx: Context.ListEntryContext) Allocator.Error!Report {
         const elem_idx = ctx.elem_index;
         const title: []const Doc = if (ctx.list_length == 2)
             &.{D.bytes("The two elements in this list have incompatible types.")}
@@ -1750,7 +1709,7 @@ pub const ReportBuilder = struct {
             };
 
         return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
+            .{ .direct = actual_region },
             title,
             &.{
                 D.bytes("The"),
@@ -1779,11 +1738,11 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for bool binop type error (and/or)
-    fn buildBinopReport(self: *Self, types: TypePair, ctx: Context.BinopContext, side: enum { lhs, rhs }) Allocator.Error!Report {
+    fn buildBinopReport(self: *Self, types: TypePair, actual_region: Region, ctx: Context.BinopContext, side: enum { lhs, rhs }) Allocator.Error!Report {
         const op_str = if (ctx.operator == .@"or") "or" else "and";
         const side_str = if (side == .lhs) "left" else "right";
         return try self.makeBadTypeReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
+            .{ .direct = actual_region },
             &.{D.bytes("I'm having trouble with this bool operation.")},
             &.{
                 D.bytes("Both sides of"),
@@ -1807,7 +1766,7 @@ pub const ReportBuilder = struct {
     /// Build a report for invalid try operator expression
     fn buildTryOperatorExprReport(self: *Self, types: TypePair, ctx: Context.TryOperatorContext) Allocator.Error!Report {
         return try self.makeBadTypeReport(
-            .{ .simple = regionIdxFrom(ctx.expr) },
+            .{ .direct = self.can_ir.store.getExprRegion(ctx.expr) },
             &.{
                 D.bytes("The"),
                 D.bytes("?").withAnnotation(.inline_code),
@@ -1835,9 +1794,9 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for statement value type error
-    fn buildStatementValueReport(self: *Self, types: TypePair) Allocator.Error!Report {
+    fn buildStatementValueReport(self: *Self, types: TypePair, actual_region: Region) Allocator.Error!Report {
         return try self.makeBadTypeReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
+            .{ .direct = actual_region },
             &.{D.bytes("This expression produces a value, but it's not being used.")},
             &.{D.bytes("It has the type:")},
             types.actual_snapshot,
@@ -1857,9 +1816,9 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for early return type mismatch
-    fn buildEarlyReturnReport(self: *Self, types: TypePair) Allocator.Error!Report {
+    fn buildEarlyReturnReport(self: *Self, types: TypePair, actual_region: Region) Allocator.Error!Report {
         return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
+            .{ .direct = actual_region },
             &.{
                 D.bytes("This"),
                 D.bytes("return").withAnnotation(.inline_code),
@@ -1883,7 +1842,7 @@ pub const ReportBuilder = struct {
     /// Build a report for a `?` whose unwrapped value does not match what its position expects
     fn buildTryOperatorValueReport(self: *Self, types: TypePair, ctx: Context.TryOperatorContext) Allocator.Error!Report {
         return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(ctx.expr) },
+            .{ .direct = self.can_ir.store.getExprRegion(ctx.expr) },
             &.{
                 D.bytes("This"),
                 D.bytes("?").withAnnotation(.inline_code),
@@ -1902,7 +1861,7 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for a `?` whose early return does not match the function body
-    fn buildTryOperatorReport(self: *Self, types: TypePair, ctx: Context.TryReturnContext) Allocator.Error!Report {
+    fn buildTryOperatorReport(self: *Self, types: TypePair, actual_region: Region, ctx: Context.TryReturnContext) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
@@ -1911,7 +1870,7 @@ pub const ReportBuilder = struct {
             D.bytes("may return early with a type that doesn't match the function body."),
         }, self, &report, &report.headline);
 
-        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try self.addSourceHighlightRegion(&report, actual_region);
         try report.document.addLineBreak();
 
         const has_error_payload_type = try self.addTryErrorPayloadType(&report, types);
@@ -2033,6 +1992,7 @@ pub const ReportBuilder = struct {
     fn buildFnCallNonFunction(
         self: *Self,
         types: TypePair,
+        actual_region: Region,
         ctx: Context.FnCallNonFunctionContext,
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Not A Function", "", .runtime_error);
@@ -2055,7 +2015,7 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         }
 
-        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try self.addSourceHighlightRegion(&report, actual_region);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2072,6 +2032,7 @@ pub const ReportBuilder = struct {
     fn buildIncompatibleFnCallArity(
         self: *Self,
         types: TypePair,
+        actual_region: Region,
         ctx: Context.FnCallArityContext,
     ) Allocator.Error!Report {
         const title = blk: {
@@ -2108,7 +2069,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add region
-        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try self.addSourceHighlightRegion(&report, actual_region);
         try report.document.addLineBreak();
 
         if (ctx.fn_name) |fn_name| {
@@ -2152,8 +2113,8 @@ pub const ReportBuilder = struct {
         if (ctx.fn_name) |fn_name_ident| {
             return try self.makeMismatchReport(
                 .{ .focused = .{
-                    .outer = regionIdxFrom(ctx.call_expr),
-                    .highlight = regionIdxFrom(ctx.arg_var),
+                    .outer = self.can_ir.store.getExprRegion(ctx.call_expr),
+                    .highlight = ctx.arg_region,
                 } },
                 &.{
                     D.bytes("The"),
@@ -2174,7 +2135,7 @@ pub const ReportBuilder = struct {
             );
         } else {
             return try self.makeMismatchReport(
-                .{ .simple = regionIdxFrom(ctx.arg_var) },
+                .{ .direct = ctx.arg_region },
                 &.{
                     D.bytes("The"),
                     D.num_ord(ctx.arg_index + 1),
@@ -2245,7 +2206,7 @@ pub const ReportBuilder = struct {
         try docs.append(D.bytes("have types that conflict with each other."));
         try D.renderSliceInto(docs.items, self, &report, &report.headline);
 
-        try self.addSourceHighlight(&report, regionIdxFrom(ctx.first_var));
+        try self.addSourceHighlightRegion(&report, ctx.first_region);
         try report.document.addLineBreak();
         docs.clearRetainingCapacity();
         try docs.append(D.bytes("The"));
@@ -2256,7 +2217,7 @@ pub const ReportBuilder = struct {
         try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(types.expected_snapshot)));
         try report.document.addLineBreaks(2);
 
-        try self.addSourceHighlight(&report, regionIdxFrom(ctx.second_var));
+        try self.addSourceHighlightRegion(&report, ctx.second_region);
         try report.document.addLineBreak();
         docs.clearRetainingCapacity();
         try docs.append(D.bytes("But the"));
@@ -2286,6 +2247,7 @@ pub const ReportBuilder = struct {
     fn buildInvalidNominalTag(
         self: *Self,
         types: TypePair,
+        actual_region: Region,
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Invalid Nominal Tag", "I'm having trouble with this nominal tag.", .runtime_error);
         errdefer report.deinit();
@@ -2307,10 +2269,8 @@ pub const ReportBuilder = struct {
         else
             null;
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(types.actual_var)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-            try report.document.addLineBreak();
-        }
+        try self.addSourceRegionOf(&report.document, actual_region, .error_highlight);
+        try report.document.addLineBreak();
 
         // Show the invalid tag
         try report.document.addText("The tag is:");
@@ -2372,6 +2332,7 @@ pub const ReportBuilder = struct {
     fn buildInvalidNominalBacking(
         self: *Self,
         types: TypePair,
+        actual_region: Region,
         title: []const u8,
         headline: []const u8,
         found_intro: []const u8,
@@ -2379,10 +2340,8 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, title, headline, .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(types.actual_var)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-            try report.document.addLineBreak();
-        }
+        try self.addSourceRegionOf(&report.document, actual_region, .error_highlight);
+        try report.document.addLineBreak();
 
         const actual_type = try report.addOwnedString(try self.getFormattedString(types.actual_snapshot));
         const expected_type = try report.addOwnedString(try self.getFormattedString(types.expected_snapshot));
@@ -2407,7 +2366,7 @@ pub const ReportBuilder = struct {
         // expected = first argument, actual = second argument
         if (ctx.fn_name) |fn_name_ident| {
             return try self.makeMismatchReport(
-                .{ .simple = regionIdxFrom(ctx.second_arg_var) },
+                .{ .direct = ctx.second_arg_region },
                 &.{
                     D.bytes("The"),
                     D.num_ord(ctx.first_arg_index + 1),
@@ -2438,7 +2397,7 @@ pub const ReportBuilder = struct {
             );
         } else {
             return try self.makeMismatchReport(
-                .{ .simple = regionIdxFrom(ctx.second_arg_var) },
+                .{ .direct = ctx.second_arg_region },
                 &.{
                     D.bytes("The"),
                     D.num_ord(ctx.first_arg_index + 1),
@@ -2726,10 +2685,9 @@ pub const ReportBuilder = struct {
         self: *Self,
         report: *Report,
         owner_region: ?Region,
-        fn_var: Var,
+        fn_region: Region,
     ) Allocator.Error!void {
-        const region: Region = owner_region orelse
-            (self.getRegionSafe(@fromBackingInt(@backingInt(fn_var))) orelse return).*;
+        const region: Region = owner_region orelse fn_region;
         try self.addSourceRegionOf(&report.document, region, .error_highlight);
         try report.document.addLineBreak();
     }
@@ -2742,6 +2700,7 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!Report {
         if (try self.buildLiteralMismatchReport(data.origin, .{
             .dispatcher_var = data.dispatcher_var,
+            .dispatcher_region = data.dispatcher_region,
             .dispatcher_snapshot = data.dispatcher_snapshot,
             .num_literal = data.num_literal,
             .string_literal_region = data.string_literal_region,
@@ -2764,7 +2723,7 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
-        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_region);
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
@@ -2801,6 +2760,7 @@ pub const ReportBuilder = struct {
         if (data.origin.literalKind() != null) {
             if (try self.buildLiteralMismatchReport(data.origin, .{
                 .dispatcher_var = data.dispatcher_var,
+                .dispatcher_region = data.dispatcher_region,
                 .dispatcher_snapshot = data.dispatcher_snapshot,
                 .num_literal = data.num_literal,
                 .string_literal_region = data.string_literal_region,
@@ -2888,7 +2848,7 @@ pub const ReportBuilder = struct {
             D.bytes("in it."),
         }, self, &report, &report.headline);
 
-        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_region);
 
         const row_str = try report.addOwnedString(try self.getFormattedString(row_extension.row_snapshot));
         try D.renderSlice(&.{
@@ -2993,7 +2953,7 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
-        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_region);
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
@@ -3224,10 +3184,8 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.fn_var)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-            try report.document.addLineBreak();
-        }
+        try self.addSourceRegionOf(&report.document, data.fn_region, .error_highlight);
+        try report.document.addLineBreak();
 
         try D.renderSlice(&.{
             D.bytes("The method is being selected for this type:"),
@@ -3260,10 +3218,8 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.fn_var)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-            try report.document.addLineBreak();
-        }
+        try self.addSourceRegionOf(&report.document, data.fn_region, .error_highlight);
+        try report.document.addLineBreak();
 
         try D.renderSlice(&.{
             D.bytes("The method is being selected for this type:"),
@@ -3314,6 +3270,7 @@ pub const ReportBuilder = struct {
     /// literal was used as.
     const LiteralMismatch = struct {
         dispatcher_var: Var,
+        dispatcher_region: Region,
         dispatcher_snapshot: SnapshotContentIdx,
         num_literal: ?types_mod.NumeralInfo,
         string_literal_region: ?Region,
@@ -3359,8 +3316,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Mismatch", "This string literal is being used where a non-string type is needed.", .runtime_error);
         errdefer report.deinit();
 
-        const literal_region = data.string_literal_region orelse
-            (if (self.getRegionSafe(@fromBackingInt(@intCast(@backingInt(data.dispatcher_var))))) |r| r.* else Region.zero());
+        const literal_region = data.string_literal_region orelse data.dispatcher_region;
         const region_info = self.module_env.calcRegionInfo(literal_region);
 
         try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
@@ -3425,7 +3381,7 @@ pub const ReportBuilder = struct {
 
         // Get the region of the dispatcher (the type that was expected)
         // This might be different if the type came from somewhere else (e.g., a type annotation)
-        const dispatcher_region = if (self.getRegionSafe(@fromBackingInt(@intCast(@backingInt(data.dispatcher_var))))) |r| r.* else Region.zero();
+        const dispatcher_region = data.dispatcher_region;
 
         try self.addSourceRegionTo(&report.document, num_region_info, .error_highlight);
         try report.document.addLineBreak();
@@ -3688,7 +3644,7 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
 
-        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_region);
 
         try D.renderSlice(&.{
             D.bytes("The type is:"),
@@ -3734,7 +3690,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Does Not Support Map", "This type does not have an unambiguous direct tag payload for compiler-derived mapping.", .runtime_error);
         errdefer report.deinit();
 
-        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_region);
 
         const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
@@ -3769,7 +3725,7 @@ pub const ReportBuilder = struct {
             D.bytes("method."),
         }, self, &report, &report.headline);
 
-        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_region);
 
         const snapshot_str = try report.addOwnedString(try self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
@@ -3970,7 +3926,7 @@ pub const ReportBuilder = struct {
             else if (ctx.source_region) |region|
                 .{ .direct = region }
             else
-                .{ .simple = regionIdxFrom(ctx.constraint_var) },
+                .{ .direct = ctx.constraint_region },
             &.{
                 D.bytes("The"),
                 D.ident(ctx.method_name).withAnnotation(.inline_code),
@@ -4001,7 +3957,7 @@ pub const ReportBuilder = struct {
         self: *Self,
         field_name: Ident.Idx,
         available_fields: []const Ident.Idx,
-        source_region: SourceHighlightRegion,
+        source_region: Region,
         is_record_update: bool,
     ) Allocator.Error!Report {
         // Get a sorted list of the most similar field names
@@ -4024,10 +3980,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source highlight
-        switch (source_region) {
-            .idx => |idx| try self.addSourceHighlight(&report, idx),
-            .region => |region| try self.addSourceHighlightRegion(&report, region),
-        }
+        try self.addSourceHighlightRegion(&report, source_region);
 
         // Render typo suggestions directly
         try report.document.addLineBreak();
@@ -4117,6 +4070,7 @@ pub const ReportBuilder = struct {
     fn buildIncompatibleDefaultsReport(
         self: *Self,
         types: TypePair,
+        actual_region: Region,
         fdm: diff.FieldDefaultMismatch,
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Incompatible Defaults", "", .runtime_error);
@@ -4130,7 +4084,7 @@ pub const ReportBuilder = struct {
             D.bytes("default in both of these types, but they are two different defaults\u{2014}two separately written defaults never merge, even when their values look the same."),
         }, self, &report, &report.headline);
 
-        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try self.addSourceHighlightRegion(&report, actual_region);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{D.bytes("One type is:")}, self, &report);
@@ -4458,7 +4412,7 @@ pub const ReportBuilder = struct {
     fn buildOptionalFieldAccessReport(
         self: *Self,
         field_name: Ident.Idx,
-        source_region: SourceHighlightRegion,
+        source_region: Region,
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
@@ -4468,10 +4422,7 @@ pub const ReportBuilder = struct {
             D.bytes("field is optional, but it is being accessed as if it is always present."),
         }, self, &report, &report.headline);
 
-        switch (source_region) {
-            .idx => |idx| try self.addSourceHighlight(&report, idx),
-            .region => |region| try self.addSourceHighlightRegion(&report, region),
-        }
+        try self.addSourceHighlightRegion(&report, source_region);
 
         try report.document.addLineBreak();
         try report.document.addReflowingText("An optional field may be missing from the record. Use ");
@@ -4489,6 +4440,7 @@ pub const ReportBuilder = struct {
     fn buildRecordAccess(
         self: *Self,
         types: TypePair,
+        actual_region: Region,
         evidence: TypeMismatchEvidence,
         ctx: Context.RecordAccessContext,
     ) Allocator.Error!Report {
@@ -4500,7 +4452,7 @@ pub const ReportBuilder = struct {
         };
         const record = try self.snapshots.?.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
 
-        const region = ProblemRegion{ .simple = regionIdxFrom(types.actual_var) };
+        const region = ProblemRegion{ .direct = actual_region };
         switch (record) {
             .not_a_record => {
                 return try self.makeBadTypeReport(
@@ -4542,7 +4494,7 @@ pub const ReportBuilder = struct {
                     if (name.eql(ctx.field_name) and presence == .optional) {
                         return try self.buildOptionalFieldAccessReport(
                             ctx.field_name,
-                            SourceHighlightRegion{ .region = ctx.field_region },
+                            ctx.field_region,
                         );
                     }
                 }
@@ -4550,7 +4502,7 @@ pub const ReportBuilder = struct {
                 return try self.buildTypoSuggestionsReport(
                     ctx.field_name,
                     actual_slice.items(.name),
-                    SourceHighlightRegion{ .region = ctx.field_region },
+                    ctx.field_region,
                     false,
                 );
             },
@@ -4561,6 +4513,7 @@ pub const ReportBuilder = struct {
     fn buildRecordUpdate(
         self: *Self,
         types: TypePair,
+        actual_region: Region,
         evidence: TypeMismatchEvidence,
         ctx: Context.RecordUpdateContext,
     ) Allocator.Error!Report {
@@ -4580,7 +4533,7 @@ pub const ReportBuilder = struct {
         switch (expected_record) {
             .not_a_record => {
                 return try self.makeBadTypeReport(
-                    ProblemRegion{ .simple = ctx.record_region_idx },
+                    ProblemRegion{ .direct = ctx.record_region },
                     &.{D.bytes("This is not a record, so it does not have any fields to update.")},
                     &.{D.bytes("It is:")},
                     types.expected_snapshot,
@@ -4591,7 +4544,7 @@ pub const ReportBuilder = struct {
             },
             .empty_record => {
                 return try self.makeCustomReport(
-                    ProblemRegion{ .simple = ctx.record_region_idx },
+                    ProblemRegion{ .direct = ctx.record_region },
                     if (ctx.record_name) |record_name| &.{
                         D.bytes("The"),
                         D.ident(record_name).withAnnotation(.inline_code),
@@ -4630,13 +4583,13 @@ pub const ReportBuilder = struct {
                         // Should be impossible for the thing we're updating to
                         // not have the field, but if so show a generic message.
                         std.debug.assert(false);
-                        return try self.buildGenericMismatch(types);
+                        return try self.buildGenericMismatch(types, actual_region);
                     },
                     .empty_record, .not_a_record => {
                         // Should be impossible for the thing we're updating to
                         // not be a record, but if so show a generic message.
                         std.debug.assert(false);
-                        return try self.buildGenericMismatch(types);
+                        return try self.buildGenericMismatch(types, actual_region);
                     },
                 };
 
@@ -4670,7 +4623,7 @@ pub const ReportBuilder = struct {
                         mismatch.root.actual_snapshot = actual_field.content;
                     }
                     return try self.makeMismatchReport(
-                        ProblemRegion{ .simple = ctx.field_region_idx },
+                        ProblemRegion{ .direct = ctx.field_region },
                         &.{
                             D.bytes("The type of the field"),
                             D.ident(ctx.field_name).withAnnotation(.inline_code),
@@ -4707,7 +4660,7 @@ pub const ReportBuilder = struct {
                     return try self.buildTypoSuggestionsReport(
                         ctx.field_name,
                         expected_field_names,
-                        SourceHighlightRegion{ .idx = ctx.record_region_idx },
+                        ctx.record_region,
                         true,
                     );
                 }
@@ -4719,10 +4672,11 @@ pub const ReportBuilder = struct {
     fn buildRecursiveDef(
         self: *Self,
         types: TypePair,
+        actual_region: Region,
         ctx: problem_mod.Context.RecursiveDef,
     ) Allocator.Error!Report {
         return try self.makeMismatchReport(
-            ProblemRegion{ .simple = regionIdxFrom(types.actual_var) },
+            ProblemRegion{ .direct = actual_region },
             if (ctx.def_name) |def_name|
                 &.{
                     D.bytes("The recursive definition"),
@@ -4778,9 +4732,7 @@ pub const ReportBuilder = struct {
             D.bytes("type."),
         }, self, &report, &report.headline);
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-        }
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
 
         try report.document.addLineBreak();
         try D.renderSlice(&.{
@@ -4807,9 +4759,7 @@ pub const ReportBuilder = struct {
             D.bytes("like a nominal type, but it is an alias of a type that is not nominal."),
         }, self, &report, &report.headline);
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-        }
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
 
         try report.document.addLineBreak();
         try D.renderSlice(&.{
@@ -4831,9 +4781,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Compiler Bug", "An internal compiler error occurred while checking this nominal type usage.", .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-        }
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
 
         try report.document.addLineBreak();
         try D.renderSlice(&.{
@@ -5222,10 +5170,8 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline),
         }
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.decl_var)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-            try report.document.addLineBreak();
-        }
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
+        try report.document.addLineBreak();
 
         try D.renderSlice(&.{
             D.bytes("Its definition is:"),
@@ -5276,10 +5222,8 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Infinite Type", "I am inferring a weird self-referential type.", .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-            try report.document.addLineBreak();
-        }
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
+        try report.document.addLineBreak();
 
         try D.renderSlice(&.{
             D.bytes("Here is my best effort at writing down the type. You will see"),
@@ -5360,10 +5304,8 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         }
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-            try report.document.addLineBreak();
-        }
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
+        try report.document.addLineBreak();
 
         try D.renderSlice(&.{
             D.bytes("Here is the type I'm inferring. You will see"),
@@ -5488,10 +5430,8 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Polymorphic Value", "This top-level value still has an unresolved polymorphic type.", .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
-            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
-            try report.document.addLineBreak();
-        }
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
+        try report.document.addLineBreak();
 
         const type_str = try report.addOwnedString(try self.getFormattedString(data.snapshot));
         try report.document.addLineBreak();
@@ -6392,10 +6332,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Add source region highlighting
-        if (self.getRegionSafe(@fromBackingInt(@intCast(@backingInt(data.match_expr))))) |match_region| {
-            try self.addSourceHighlightRegion(&report, match_region.*);
-            try report.document.addLineBreak();
-        }
+        try self.addSourceHighlightRegion(&report, self.can_ir.store.getExprRegion(data.match_expr));
+        try report.document.addLineBreak();
 
         const condition_type = self.problems.getExtraString(data.condition_type);
         try D.renderSlice(&.{
@@ -6440,7 +6378,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Non Exhaustive Destructure", "This destructuring pattern doesn't cover all possible cases.", .runtime_error);
         errdefer report.deinit();
 
-        try self.addSourceHighlight(&report, regionIdxFrom(data.pattern));
+        try self.addSourceHighlightRegion(&report, self.can_ir.store.getPatternRegion(data.pattern));
         try report.document.addLineBreak();
 
         const value_type = self.problems.getExtraString(data.value_type);
@@ -6612,7 +6550,7 @@ pub const ReportBuilder = struct {
             D.bytes("pattern does not."),
         }, self, &report, &report.headline);
 
-        try self.addSourceHighlight(&report, regionIdxFrom(data.missing_pattern));
+        try self.addSourceHighlightRegion(&report, self.can_ir.store.getPatternRegion(data.missing_pattern));
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -6656,6 +6594,13 @@ pub const ReportBuilder = struct {
         try report.document.addCodeBlock(try report.addOwnedString(reassignment));
 
         return report;
+    }
+
+    fn buildGeneralizationNestingTooDeepReport(self: *Self, data: GeneralizationNestingTooDeep) Allocator.Error!Report {
+        return self.buildHighlightedRegionReport("Definitions Nested Too Deeply", "This definition is nested inside too many other definitions for the compiler to generalize its type.", .runtime_error, data.region, &.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Move some of the enclosing definitions to the top level."),
+        });
     }
 
     fn buildComptimeConditionReport(self: *Self, data: ComptimeCondition) Allocator.Error!Report {

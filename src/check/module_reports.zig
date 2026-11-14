@@ -88,7 +88,6 @@ pub fn appendTypes(
         filename,
         other_modules,
         &checker.import_mapping,
-        &checker.regions,
         platform_requirement_source,
     );
     defer builder.deinit();
@@ -100,7 +99,7 @@ pub fn appendTypes(
 /// Appends the reports a checked module's checking and compile-time evaluation
 /// produced, rendered from the problems its checked cache entry stores with
 /// the same builders and inputs the compilation that stored them used:
-/// checking's problems with its snapshots and regions, then evaluation's.
+/// checking's problems with its snapshots, then evaluation's.
 pub fn appendStored(
     gpa: Allocator,
     reports: *std.ArrayList(Report),
@@ -119,11 +118,9 @@ pub fn appendStored(
     if (checking_count != 0) {
         var snapshots = try snapshot.Store.initCapacity(gpa, stored.outcome.contents.len);
         defer snapshots.deinit();
-        var regions = base.Region.List{};
-        defer regions.deinit(gpa);
         // Snapshots render with the names, import display names and default
         // sources the checker's type writer rendered them with.
-        try stored.instantiateRendering(gpa, &snapshots, &regions, .{
+        try stored.instantiateRendering(gpa, &snapshots, .{
             .idents = env.getIdentStoreConst(),
             .import_mapping = import_mapping,
             .default_source = ModuleEnv.typeWriterDefaultSource,
@@ -138,7 +135,6 @@ pub fn appendStored(
             filename,
             other_modules,
             &import_mapping,
-            &regions,
             platform_requirement_source,
         );
         defer builder.deinit();

@@ -429,7 +429,6 @@ pub fn canonicalizeAndTypeCheckModule(
         env,
         imported_envs,
         module_envs_out,
-        &env.store.regions,
         module_builtin_ctx,
     );
     checker.fixupTypeWriter();
@@ -580,7 +579,6 @@ pub fn typeCheckModule(
         imported_envs,
         owner_envs,
         &module_envs_map,
-        &env.store.regions,
         module_builtin_ctx,
     );
     checker.platform_requirements = platform_requirements;
