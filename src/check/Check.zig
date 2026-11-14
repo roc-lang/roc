@@ -41849,7 +41849,7 @@ fn beginCommitProbe(self: *Self, env: *Env) std.mem.Allocator.Error!CommitProbe 
     // the unified descriptors), so capturing only the current rank's list would
     // miss entries.
     self.probe_var_pool_lens.clearRetainingCapacity();
-    const rank_count = @backingInt(env.rank()) + 1;
+    const rank_count = @as(usize, @backingInt(env.rank())) + 1;
     try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
     for (0..rank_count) |rank_idx| {
         const rank: Rank = @fromBackingInt(@intCast(rank_idx));

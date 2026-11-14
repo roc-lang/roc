@@ -1,7 +1,7 @@
-//! Coverage for the generalization nesting limit: a rank is 16 bits, so a
+//! Coverage for the generalization nesting limit: a rank is 14 bits, so a
 //! generalization scope nested inside one at `Rank.deepest` gets no rank of
 //! its own, and the module reports that once. Reaching `Rank.deepest` takes
-//! 65,534 nested scopes, so these tests lower the deepest rank the checker's
+//! 16,382 nested scopes, so these tests lower the deepest rank the checker's
 //! envs give a scope; the counting is the same at any limit.
 
 const types = @import("types");
@@ -25,7 +25,7 @@ const nested_functions =
     \\}
 ;
 
-fn rankAt(depth: u16) Rank {
+fn rankAt(depth: u14) Rank {
     return @fromBackingInt(depth);
 }
 

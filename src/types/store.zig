@@ -556,6 +556,8 @@ pub const Store = struct {
             const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(index));
             const storage = self.resolveStorageRoot(slotIdxToVar(slot_idx));
             if (storage.storage_var != slotIdxToVar(slot_idx)) self.slots.set(slot_idx, .{ .redirect = storage.storage_var });
+            // No generalization pass is running, so no stored word is marked.
+            std.debug.assert(!self.descs.getWord(storage.desc_idx).marked());
             live_descs.set(@backingInt(storage.desc_idx));
         }
 
@@ -1138,6 +1140,9 @@ pub const Store = struct {
     }
 
     fn setDescRowUnguarded(self: *Self, idx: DescStore.Idx, row: Desc.Row) Allocator.Error!void {
+        // A whole row replaces the word, so it must not replace one a
+        // generalization pass has marked.
+        std.debug.assert(!self.descs.getWord(idx).marked());
         try self.journalDescWrite(idx);
         if (self.settled_descs.contains(idx) and !DescStore.sameContent(self.descs.getRow(idx), row)) {
             self.settled_descs.clear();
@@ -1168,8 +1173,14 @@ pub const Store = struct {
         self.class_watch.noteWrite(idx);
     }
 
+    /// Journal descriptor `idx`'s row without its generalization marks: a
+    /// rollback runs outside any generalization pass, where no descriptor is
+    /// marked, so the row it restores is never marked either.
     fn journalDescRow(self: *Self, idx: DescStore.Idx) Allocator.Error!void {
-        try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.getRow(idx) });
+        var old = self.descs.getRow(idx);
+        old.word.generalizing = false;
+        old.word.rank_adjusted = false;
+        try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = old });
     }
 
     /// Record the class of each of `vars` as settled. The caller guarantees
@@ -2695,6 +2706,40 @@ pub const Store = struct {
         if (word.flags.frozen) return;
         word.rank = rank;
         try self.setDescWord(desc_idx, word);
+    }
+
+    // generalization marks //
+
+    /// Set the `generalizing` mark of descriptor `desc_idx`
+    /// (`types.Descriptor.Word`). A mark is a generalization pass's scratch,
+    /// which the pass clears before it returns, so a mark write is neither
+    /// journaled nor reported to class watches: no probe opens or rolls back
+    /// while a pass runs, and a journaled row never carries a mark
+    /// (`journalDescRow`).
+    pub fn markGeneralizing(self: *Self, desc_idx: DescStore.Idx) void {
+        self.debugAssertUnsealed();
+        var word = self.descs.getWord(desc_idx);
+        word.generalizing = true;
+        self.descs.setWord(desc_idx, word);
+    }
+
+    /// Set the `rank_adjusted` mark of descriptor `desc_idx`; see
+    /// `markGeneralizing`.
+    pub fn markRankAdjusted(self: *Self, desc_idx: DescStore.Idx) void {
+        self.debugAssertUnsealed();
+        var word = self.descs.getWord(desc_idx);
+        word.rank_adjusted = true;
+        self.descs.setWord(desc_idx, word);
+    }
+
+    /// Clear both generalization marks of descriptor `desc_idx`; see
+    /// `markGeneralizing`.
+    pub fn clearGeneralizationMarks(self: *Self, desc_idx: DescStore.Idx) void {
+        self.debugAssertUnsealed();
+        var word = self.descs.getWord(desc_idx);
+        word.generalizing = false;
+        word.rank_adjusted = false;
+        self.descs.setWord(desc_idx, word);
     }
 
     // word readers //

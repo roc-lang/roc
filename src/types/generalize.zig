@@ -63,8 +63,8 @@ const RankFill = struct {
     desc_idx: DescStoreIdx,
 };
 
-/// One suspended step of rank adjustment. A frame is pushed only after its var
-/// is marked in `rank_adjusted_vars`, so a cyclic type re-reaching that var
+/// One suspended step of rank adjustment. A frame is pushed only after its
+/// var's class is marked `rank_adjusted`, so a cyclic type re-reaching that var
 /// short-circuits on the mark instead of descending again—the same cycle
 /// termination the recursion used.
 ///
@@ -143,8 +143,6 @@ pub const Generalizer = struct {
     gpa: std.mem.Allocator,
     /// Borrowed reference to the type store
     store: *TypesStore,
-    /// Tracks which variables we've already adjusted (for handling recursive types)
-    rank_adjusted_vars: @import("collections").DenseMap(Var, void),
     /// The vars at the rank being generalized, each with the rank it had when
     /// the pass began, ordered by that rank. Only ranks the pass's vars hold
     /// are visited, so a pass costs its own vars however deeply ranks nest.
@@ -152,8 +150,6 @@ pub const Generalizer = struct {
     /// Scratch for `groupByRank`: the vars starting at the rank being
     /// generalized, in queue order.
     at_rank_vars: std.ArrayListUnmanaged(RankedVar) = .empty,
-    /// Map of which variables we are generalizing this pass
-    vars_to_generalized: @import("collections").DenseMap(Var, void),
     /// Suspended steps of rank adjustment, innermost last. The walk descends
     /// on this heap stack rather than the native one, so the depth it can
     /// reach is bounded only by available memory.
@@ -178,8 +174,6 @@ pub const Generalizer = struct {
         return .{
             .gpa = gpa,
             .store = store,
-            .rank_adjusted_vars = @import("collections").DenseMap(Var, void).init(gpa),
-            .vars_to_generalized = @import("collections").DenseMap(Var, void).init(gpa),
             .rank_frames = .empty,
             .pending_ranks = .empty,
         };
@@ -216,15 +210,11 @@ pub const Generalizer = struct {
     /// Reset the state of the generalizer
     pub fn reset(self: *Self) void {
         self.tmp_vars.clearRetainingCapacity();
-        self.rank_adjusted_vars.clearRetainingCapacity();
-        self.vars_to_generalized.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *Self, _: std.mem.Allocator) void {
         self.tmp_vars.deinit(self.gpa);
         self.at_rank_vars.deinit(self.gpa);
-        self.rank_adjusted_vars.deinit();
-        self.vars_to_generalized.deinit();
         self.rank_frames.deinit(self.gpa);
         self.pending_ranks.deinit(self.gpa);
     }
@@ -271,9 +261,16 @@ pub const Generalizer = struct {
         self.reset();
 
         const vars_to_generalize = var_pool.getVarsForRank(rank_to_generalize);
-        try self.vars_to_generalized.ensureUnusedCapacity(@intCast(vars_to_generalize.len));
         try self.tmp_vars.ensureUnusedCapacity(self.gpa, vars_to_generalize.len);
         try self.at_rank_vars.ensureUnusedCapacity(self.gpa, vars_to_generalize.len);
+
+        // The pass marks the classes it generalizes and the ones whose rank
+        // it has adjusted in their descriptor words (`Descriptor.Word`).
+        // Every class it marks is one of `tmp_vars`, and each is unmarked
+        // again before the pass returns, however it returns.
+        errdefer for (self.tmp_vars.items) |ranked| {
+            self.store.clearGeneralizationMarks(self.store.resolveDescIdx(ranked.var_));
+        };
 
         // Copy all variables at this rank into the temporary list, resolving redirects
         for (vars_to_generalize) |var_| {
@@ -281,12 +278,16 @@ pub const Generalizer = struct {
             if (builtin.mode == .debug and @backingInt(resolved.word.rank) > rank_to_generalize_int) {
                 std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @backingInt(resolved.word.rank), rank_to_generalize_int });
             }
+            // No earlier pass left a mark behind, and this one has adjusted
+            // no rank yet.
+            std.debug.assert(!resolved.word.rank_adjusted);
             self.tmp_vars.appendAssumeCapacity(.{ .var_ = resolved.var_, .rank = resolved.word.rank });
-            // Only add to vars_to_generalized if not already generalized.
-            // A var that was already generalized in a previous pass should not be
-            // re-processed (which could incorrectly change its rank).
+            // Only a var not already generalized is one this pass
+            // generalizes. A var that was already generalized in a previous
+            // pass should not be re-processed (which could incorrectly change
+            // its rank).
             if (resolved.word.rank != .generalized) {
-                try self.vars_to_generalized.put(resolved.var_, {});
+                self.store.markGeneralizing(resolved.desc_idx);
             }
         }
 
@@ -310,6 +311,7 @@ pub const Generalizer = struct {
                 break;
             }
             const resolved = self.store.resolveVarWord(ranked.var_);
+            if (resolved.word.marked()) self.store.clearGeneralizationMarks(resolved.desc_idx);
             if (resolved.is_root) {
                 try var_pool.addVarToRank(resolved.var_, resolved.word.rank);
             }
@@ -319,6 +321,7 @@ pub const Generalizer = struct {
         // These either escaped (rank lowered) or can be generalized (rank unchanged).
         for (self.tmp_vars.items[current_start..]) |ranked| {
             const resolved = self.store.resolveVarWord(ranked.var_);
+            if (resolved.word.marked()) self.store.clearGeneralizationMarks(resolved.desc_idx);
             if (resolved.is_root) {
                 const resolved_rank_int = @backingInt(resolved.word.rank);
                 // Adjustment only lowers ranks; a rank above the one being
@@ -398,7 +401,7 @@ pub const Generalizer = struct {
     /// calls must respect that constraint.
     ///
     /// ## Recursion handling:
-    /// - `rank_adjusted_vars` tracks variables we've already processed to handle cycles
+    /// - The `rank_adjusted` mark tracks variables we've already processed to handle cycles
     /// - For recursive types like `type List a = [Nil, Cons a (List a)]`, we mark the
     ///   variable as "seen" immediately before descending, preventing infinite loops
     ///
@@ -448,7 +451,7 @@ pub const Generalizer = struct {
         const resolved = self.store.resolveVarWord(var_);
 
         // Check if this variable is one we're trying to generalize at this rank
-        const is_var_to_generalize = self.vars_to_generalized.contains(resolved.var_);
+        const is_var_to_generalize = resolved.word.generalizing;
 
         // Early return for already-processed vars to handle recursive types.
         // A var reached again while its own walk is still in progress (a
@@ -459,7 +462,7 @@ pub const Generalizer = struct {
         // one that sweep rejects; capping the in-progress contribution at
         // `group_rank` keeps adjustment from ever raising a rank. A var that
         // already settled holds a rank no higher than `group_rank`.
-        if (is_var_to_generalize and self.rank_adjusted_vars.contains(resolved.var_)) {
+        if (is_var_to_generalize and resolved.word.rank_adjusted) {
             try self.pending_ranks.append(self.gpa, resolved.word.rank.min(group_rank));
             return true;
         }
@@ -479,7 +482,7 @@ pub const Generalizer = struct {
         if (@backingInt(resolved.word.rank) > @backingInt(group_rank)) {
             try self.store.setDescRank(resolved.desc_idx, group_rank);
         }
-        try self.rank_adjusted_vars.put(resolved.var_, {});
+        self.store.markRankAdjusted(resolved.desc_idx);
 
         // Only a var whose children the walk visits needs its content.
         switch (resolved.word.kind) {
@@ -733,7 +736,7 @@ pub const VarPool = struct {
     /// the `popRank` that pairs with its push, before any scope with a rank.
     declined_scopes: u32 = 0,
     /// The deepest rank a scope gets. Always `Rank.deepest` outside tests,
-    /// which lower it to reach the limit without nesting 65,534 scopes.
+    /// which lower it to reach the limit without nesting 16,382 scopes.
     deepest_rank: Rank = .deepest,
 
     pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!Self {
@@ -766,7 +769,7 @@ pub const VarPool = struct {
 
     // Ensure the var pool has ranks up to and including `next_rank`
     pub fn ensureRanksThrough(self: *Self, next_rank: Rank) std.mem.Allocator.Error!void {
-        const required_len = @backingInt(next_rank) + 1;
+        const required_len = @as(usize, @backingInt(next_rank)) + 1;
         while (self.ranks.items.len < required_len) {
             try self.ranks.append(try VarArrayList.initCapacity(self.allocator, 16));
         }
@@ -774,7 +777,7 @@ pub const VarPool = struct {
 
     // Get a slice of ranks, up to and including the current rank
     pub fn slice(self: *Self) []const VarArrayList {
-        return self.ranks.items[0 .. @backingInt(self.current_rank) + 1];
+        return self.ranks.items[0 .. @as(usize, @backingInt(self.current_rank)) + 1];
     }
 
     /// Enter a nested generalization scope at the next rank. A scope entered
@@ -813,7 +816,7 @@ pub const VarPool = struct {
     /// Both pools must be at the same current_rank.
     pub fn mergeFrom(self: *Self, other: *const VarPool) std.mem.Allocator.Error!void {
         std.debug.assert(self.current_rank == other.current_rank);
-        const upper = @backingInt(self.current_rank) + 1;
+        const upper = @as(usize, @backingInt(self.current_rank)) + 1;
         for (0..upper) |rank_idx| {
             try self.ranks.items[rank_idx].appendSlice(other.ranks.items[rank_idx].items);
         }
