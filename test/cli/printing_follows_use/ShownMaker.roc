@@ -11,4 +11,11 @@ ShownMaker := [].{
 		}
 		(Str.inspect(c), n)
 	}
+
+	peek = |{ id } as r| {
+		_ = id
+		Str.inspect(r)
+	}
+
+	peek_alias = peek
 }

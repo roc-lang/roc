@@ -15,7 +15,20 @@ Tagged := { id : U64 }.{
 
 	to_inspect : Tagged -> Str
 	to_inspect = |t| Str.concat("tagged ", t.id.to_str())
+
+	# A method bound to an alias of a function with an open row.
+	shown = show
 }
+
+# A nominal record with an anonymous field: its `id` is not the first field
+# of its layout.
+Padded := { _ : U32, id : U64 }.{
+	to_inspect : Padded -> Str
+	to_inspect = |p| Str.concat("padded ", p.id.to_str())
+}
+
+padded : Padded
+padded = Padded.{ id: 5 }
 
 Light := [Red, Green].{
 	is_eq : Light, Light -> Bool
@@ -93,6 +106,15 @@ show = |l| {
 	Str.inspect(l)
 }
 
+read_id = |l| l.id
+
+apply = |f, x| f(x)
+
+# Top-level aliases of functions with open rows.
+show_alias = show
+
+same_alias = same
+
 # A function annotated to return a nominal type makes the record it builds
 # and compares that type before the comparison is decided.
 make_pair : U64, U64 -> (Bool, Tagged)
@@ -127,3 +149,82 @@ expect !OpenRowMethods.is_red(Green)
 expect OpenRowMethods.red_foo(Light.Green)
 expect show(one) == "tagged 1"
 expect make_pair(1, 2).0
+
+# An alias of a function answers each use of the alias with the type that use
+# supplies (design.md "Procedure Aliases").
+expect {
+	fv = show
+	fv(one) == "tagged 1"
+}
+
+expect {
+	a = show
+	b = a
+	b(one) == "tagged 1"
+}
+
+expect show_alias(one) == "tagged 1"
+
+expect OpenRowMethods.show_alias(one) == "tagged 1"
+
+expect {
+	fv = OpenRowMethods.show
+	fv(one) == "tagged 1"
+}
+
+expect {
+	fv = show
+	(fv(one), fv({ id: 3 })) == ("tagged 1", "{ id: 3.0 }")
+}
+
+expect {
+	fv = show
+	apply(fv, one) == "tagged 1"
+}
+
+expect {
+	fv = show
+	List.map([one], fv) == ["tagged 1"]
+}
+
+expect {
+	fv = show
+	r = { f: fv }
+	(r.f)(one) == "tagged 1"
+}
+
+expect one.shown() == "tagged 1"
+
+expect {
+	fv = same
+	fv(one, two) and !fv({ id: 1 }, { id: 2 })
+}
+
+expect same_alias(one, two)
+
+expect {
+	fv = read_foo
+	fv(one, two)
+}
+
+expect {
+	fv = is_red
+	!fv(Green) and fv(Red)
+}
+
+# A padded nominal record through an alias: the field is read from the whole
+# value's layout.
+expect {
+	fv = show
+	fv(padded) == "padded 5"
+}
+
+expect {
+	fv = read_id
+	fv(padded) == 5
+}
+
+expect {
+	fv = read_id
+	List.map([padded], fv) == [5]
+}

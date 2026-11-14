@@ -154,6 +154,10 @@ pub const Task = union(enum) {
     end_loop,
     /// Leave the innermost scheme alias scope (`Builder.alias_scopes`).
     leave_alias_scope,
+    /// Lower the forwarded lookup `expr` of a generalized scheme alias, in
+    /// the alias's scope, at the function type `ty` of the alias's use
+    /// (`Builder.lowerAliasUse`).
+    forwarded_lookup: struct { expr: ExprId, ty: TypeId },
     /// Leave the frames a literal chain entered (`SavedScope`).
     restore_scope: SavedScope,
     /// A loop whose pattern checking rejected, its iterable evaluated:
@@ -454,9 +458,13 @@ const AliasChain = struct {
     literal_source: AliasLiterals,
     /// A literal chain's frames, which stay entered under the target's.
     chain_frame: bool,
-    /// The function type of the use the chain serves. A dispatch edge's
-    /// recorded substitutions fix every variable, so it names none.
-    call_fn: ?TypeId,
+    /// The function type of the use the chain serves: the use's own type,
+    /// or the callable a dispatch edge instantiated the alias's scheme at
+    /// (`EvidenceTargetInstantiation.alias`). Every alias of the chain has
+    /// the type of its forwarded lookup, so this is the type the procedure
+    /// the chain reaches is used at, which fills its row nodes
+    /// (`Program.fillRowNodes`).
+    call_fn: TypeId,
 };
 
 const StaticWordContext = struct {
@@ -3090,6 +3098,17 @@ pub const Builder = struct {
                 const scope = self.alias_scopes.pop().?;
                 self.env = scope.saved_env;
             },
+            .forwarded_lookup => |lookup| if (self.hole == null) {
+                try self.pushValue(try self.localOf(lookup.ty, .frame));
+            } else {
+                try self.push(.{ .restore_region = self.region });
+                self.region = self.bodies().expr(lookup.expr).source_region;
+                if (self.bodies().resolvedRef(lookup.expr)) |id| {
+                    try self.lowerResolvedValueAt(lookup.expr, self.resolvedRef(id).ref, lookup.ty);
+                } else {
+                    try self.lowerOwnExpr(lookup.expr);
+                }
+            },
             .restore_scope => |saved| {
                 self.module = saved.module;
                 self.view = saved.view;
@@ -4778,6 +4797,14 @@ pub const Builder = struct {
 
     /// The value a lookup `expr_id` resolved to `ref` reads.
     fn lowerResolvedValue(self: *Builder, expr_id: ExprId, ref: checked.ResolvedValueRef) Allocator.Error!void {
+        try self.lowerResolvedValueAt(expr_id, ref, null);
+    }
+
+    /// `lowerResolvedValue` with a procedure the lookup names used at the
+    /// function type `at`: for the forwarded lookup of a generalized scheme
+    /// alias, the type of the alias's use, which is the lookup's at that use
+    /// (`lowerAliasUse`), and otherwise (null) the lookup's own type.
+    fn lowerResolvedValueAt(self: *Builder, expr_id: ExprId, ref: checked.ResolvedValueRef, at: ?TypeId) Allocator.Error!void {
         switch (ref) {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => |binding| {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
@@ -4793,24 +4820,30 @@ pub const Builder = struct {
                 return try self.restoreConstUse(expr_id, selected.const_use, try self.constReadType(expr_id));
             },
             .local_proc => |local| {
-                if (local.is_alias) return try self.lowerAliasUse(expr_id, local);
-                return try self.pushValue(try self.localProcUseValue(expr_id, local));
+                if (local.is_alias) {
+                    if (self.binders.get(local.binder)) |value| return try self.pushValue(value);
+                    return try self.lowerAliasUse(expr_id, local, at orelse try self.exprType(expr_id));
+                }
+                return try self.pushValue(try self.localProcUseValue(expr_id, local, at orelse try self.exprType(expr_id)));
             },
-            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use, null),
-            .platform_required_proc => |required| return try self.procedureValue(expr_id, required.procedure, required),
+            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use, null, at orelse try self.exprType(expr_id)),
+            .platform_required_proc => |required| return try self.procedureValue(expr_id, required.procedure, required, at orelse try self.exprType(expr_id)),
             .platform_required_const => |required| return try self.restoreConstUse(expr_id, required.const_use, try self.constReadType(expr_id)),
-            .platform_required_checked_error => return try self.crashValue("runtime error", try self.exprType(expr_id)),
+            .platform_required_checked_error => return try self.crashValue("runtime error", at orelse try self.exprType(expr_id)),
             .platform_required_declaration => invariant("a platform requirement reached lowering unpaired with its app binding"),
         }
     }
 
-    /// A use `expr_id` of a scheme alias: the value its declaration bound,
-    /// or, for an alias with a generalized scheme, its right-hand side
-    /// lowered in the alias's scope as this use instantiates it (its
-    /// variables bound to the use's types, its dictionaries to the use's
-    /// evidence).
-    fn lowerAliasUse(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding) Allocator.Error!void {
-        if (self.binders.get(local.binder)) |value| return try self.pushValue(value);
+    /// A use `expr_id`, at function type `use_ty`, of a scheme alias with a
+    /// generalized scheme (one without is bound where it is declared): its
+    /// right-hand side lowered in the alias's scope as this use instantiates
+    /// it (its variables bound to the use's types, its
+    /// dictionaries to the use's evidence). The right-hand side is the
+    /// alias's forwarded lookup, whose type is the alias's own: at this use
+    /// it is `use_ty`, so the procedure it names is used at `use_ty`, and
+    /// each row node of that procedure takes the type at its position there
+    /// (design.md "Procedure Aliases").
+    fn lowerAliasUse(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding, use_ty: TypeId) Allocator.Error!void {
         const scope_id = local.dispatch_scope orelse invariant("an alias without a generalized scheme is bound where it is declared");
         const scheme = try self.localScheme(scope_id);
         const outer_count = self.env.vars.len;
@@ -4821,7 +4854,7 @@ pub const Builder = struct {
         for (generic_bound[scheme.scheme_vars.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
         const alias_ty = self.bodies().exprType(local.expr);
         const generic_fn = try self.program.converter().convert(self.module, alias_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
-        const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.exprType(expr_id) }}, outer_count + scheme.scheme_vars.len);
+        const related = try self.relateVariablesPartial(&.{.{ generic_fn, use_ty }}, outer_count + scheme.scheme_vars.len);
         defer self.allocator.free(related);
         const bound = try self.program.arena.allocator().alloc(TypeId, vars.len);
         // A variable the use's type does not relate takes the use's checked
@@ -4848,18 +4881,18 @@ pub const Builder = struct {
         try self.alias_scopes.append(self.allocator, .{ .params = scheme.dictionaries, .dicts = dicts, .literals = literals, .literal_requirements = scheme.literal_requirements, .saved_env = self.env });
         self.env = .{ .module = self.module, .vars = vars, .bound = bound };
         try self.push(.leave_alias_scope);
-        try self.push(.{ .own_expr = local.expr });
+        try self.push(.{ .forwarded_lookup = .{ .expr = local.expr, .ty = use_ty } });
     }
 
     /// The function value a use `expr_id` of a local procedure denotes. A
     /// generalized local procedure whose calls pass its own scheme's
     /// instantiation is, as a value, instantiated where it is used: the
     /// value captures the use's descriptors and dictionaries of its scheme.
-    pub fn localProcUseValue(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
+    pub fn localProcUseValue(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding, use_ty: TypeId) Allocator.Error!LocalId {
         // A use checking recorded no evidence for (one inside a rejected
         // expression, evaluated only for its effects) resolves the
         // procedure's dictionaries from its types.
-        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id }, self.siteSubstitution(expr_id), null);
+        return try self.localProcInstanceValue(local, use_ty, self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id }, self.siteSubstitution(expr_id), null);
     }
 
     /// What the function value of a local procedure at one use packs: the
@@ -5587,12 +5620,12 @@ pub const Builder = struct {
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 
-    /// A procedure used as a function value: an immortal callable of its
-    /// dictionary entry, capturing the use site's hidden arguments.
-    pub fn procedureValue(self: *Builder, expr_id: ExprId, use: checked.ProcedureUseTemplate, required: ?checked.PlatformRequiredProcedureResolvedRef) Allocator.Error!void {
+    /// A procedure used as a function value at function type `use_ty`: an
+    /// immortal callable of its dictionary entry, capturing the use site's
+    /// hidden arguments.
+    pub fn procedureValue(self: *Builder, expr_id: ExprId, use: checked.ProcedureUseTemplate, required: ?checked.PlatformRequiredProcedureResolvedRef, use_ty: TypeId) Allocator.Error!void {
         const callee = try self.procedureUseCallee(use);
-        if (callee == .callable_eval) return try self.push(.{ .restore_callable_eval = .{ .module = callee.callable_eval.module, .template = callee.callable_eval.template, .ty = try self.exprType(expr_id) } });
-        const use_ty = try self.exprType(expr_id);
+        if (callee == .callable_eval) return try self.push(.{ .restore_callable_eval = .{ .module = callee.callable_eval.module, .template = callee.callable_eval.template, .ty = use_ty } });
         const target = callee.target();
         const instance = try self.procedureUseInstance(callee, expr_id, required, use_ty);
         defer self.allocator.free(instance.hidden);
@@ -7221,7 +7254,7 @@ pub const Builder = struct {
             .evidence = evidence,
             .literal_source = literal_source,
             .chain_frame = chain_frame,
-            .call_fn = null,
+            .call_fn = try self.convert(node.instantiation.alias),
         });
     }
 
@@ -7397,13 +7430,10 @@ pub const Builder = struct {
                     }
                     // A platform requirement's lookup records no
                     // instantiation of the app's procedure.
-                    if (tag == .platform_required_proc) {
-                        if (chain.call_fn) |call_fn| return try self.requiredInstanceAt(callee, ref, lookup_subst, call_fn, .literal);
-                    }
+                    if (tag == .platform_required_proc) return try self.requiredInstanceAt(callee, ref, lookup_subst, chain.call_fn, .literal);
                     // The procedure the chain reaches: its substitution and
                     // evidence are the lookup's.
                     const target = self.program.worker(callee).*;
-                    if (chain.call_fn == null and lookup_subst.len == 0 and target.scheme_vars.len != 0) invariant("an alias's forwarded lookup's substitution differs from its target's scheme");
                     const owned_bound = try self.boundTypesAt(callee, lookup_subst, chain.call_fn);
                     defer self.allocator.free(owned_bound);
                     const target_bound = try arena.dupe(TypeId, owned_bound);
@@ -7434,15 +7464,15 @@ pub const Builder = struct {
             };
             // A platform requirement bound to the app's alias enters that
             // alias's scope as a use with no recorded instantiation.
-            if (lookup_ref == .platform_required_proc) if (chain.call_fn) |call_fn| {
-                const scope = try self.requiredAliasScope(next, lookup_ref.platform_required_proc, call_fn);
+            if (lookup_ref == .platform_required_proc) {
+                const scope = try self.requiredAliasScope(next, lookup_ref.platform_required_proc, chain.call_fn);
                 bound = scope.bound;
                 dicts = scope.dicts;
                 literals = &.{};
                 literal_source = .derived;
                 alias_step = next;
                 continue;
-            };
+            }
             if (lookup_subst.len != next.vars.len) invariant("an alias's forwarded lookup's substitution differs from the next alias's scope");
             const next_bound = try arena.alloc(TypeId, lookup_subst.len);
             for (lookup_subst, next_bound) |checked_ty, *ty| ty.* = try self.convert(checked_ty);
@@ -9878,11 +9908,13 @@ pub const Builder = struct {
                 }
                 // A scheme alias with a generalized scheme binds nothing:
                 // each use lowers its right-hand side at the use's
-                // instantiation (`lowerAliasUse`).
+                // instantiation (`lowerAliasUse`). A scheme with no variable
+                // is generalized too when the alias's type holds an
+                // uncommitted tag tail, which each use copies and may lift.
                 if (self.bodies().binder(decl.pattern).is_scheme_alias) {
                     if (try self.program.localScope(self.module, decl.expr)) |scope_id| {
                         const scheme = try self.localScheme(scope_id);
-                        if (!scheme.isEmpty()) return;
+                        if (!scheme.isEmpty() or try self.program.holdsUncommittedTagTail(self.module, self.bodies().exprType(decl.expr))) return;
                     }
                 }
                 // A value that diverges binds nothing.

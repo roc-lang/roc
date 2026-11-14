@@ -12972,8 +12972,16 @@ closed type marked with the position (`Store.tailNode`, a distinct type only
 for descriptors), and an instantiation's scope converts to the use's whole
 value. A call fills it with the type at that position of
 its actual function type (Bool, primitive or builtin nominal, as
-`[False, True]` for a tag union, whose tags the body builds by position); a use with no actual type
-there fills it with the node over the use's other bindings, the plain value.
+`[False, True]` for a tag union, whose tags the body builds by position). A
+use through an exact procedure alias has one too: an alias has the type of
+its forwarded lookup, so the alias's type at the use is the procedure's
+there, whether the use is a call, a value, or a dispatch edge whose
+instantiation went through the alias (see "Procedure Aliases"). Only a use
+with no actual type there fills it with the node over the use's other
+bindings, the plain value: a dispatch edge checking instantiated no callable
+for (`EvidenceTargetInstantiation.monomorphic`), whose use is the target's
+own checked type, and a root, which its wrapper calls at the root's own
+type.
 Every descriptor the body takes of a type containing such a node reads that
 input, so the position of a field or tag (`field_index`, `tag_index`) comes
 from the whole value's closed type through its nominal wrapper, and `dyn_eq`,
@@ -19595,7 +19603,18 @@ literal chain's edge, a platform requirement the app binds to an alias, and a
 root (`Body.aliasChainInstance`; a dispatch edge's scope comes from
 `through_alias`). A platform requirement and a root record no instantiation, so
 the use's function type relates the alias's variables and the requirement's or
-root's evidence fills its scope.
+root's evidence fills its scope. Each alias of a chain has the type of its
+forwarded lookup, so the chain is walked at one function type, which is the
+final procedure's at the use: the use's own type, or for a dispatch edge the
+callable checking instantiated the alias's scheme at
+(`EvidenceTargetInstantiation.alias`). That type fills the procedure's row
+nodes (see "Methods On Open Rows"), so a function reached through an alias
+prints what each use supplies, as it does called directly. A use of a
+generalized local alias lowers the alias's forwarded lookup in the alias's
+scope as the use instantiates it, and the procedure the lookup names (or the
+next alias) is used at the alias's type at that use. A local alias whose
+binding is not generalized is bound once where it is declared, at its one
+checked type, which its uses fix.
 
 A method bound to an exact alias dispatches to the procedure the alias chain
 reaches, and the method target records the alias binding it was reached
