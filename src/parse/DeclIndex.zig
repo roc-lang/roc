@@ -641,6 +641,12 @@ pub fn addImportAliasDecl(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Id
     try self.addOpenName(scope_idx, .import_alias, ident, decl_idx, false);
 }
 
+/// Whether any value-binding declaration (a definition, or an annotation with
+/// or without a body) of `item` is associated with `owner`.
+pub fn hasAssocValueDecl(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) bool {
+    return self.assoc_value_decls.contains(.{ .owner = owner, .item = item });
+}
+
 /// Return all associated value declarations for an owner type path and item name.
 pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) NameBucket {
     const bucket = self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse return .{};

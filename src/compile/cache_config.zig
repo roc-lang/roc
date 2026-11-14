@@ -383,7 +383,10 @@ pub const Constants = struct {
     /// 191: combines the independent 189 and 190 entry changes.
     /// 192: combines the two independent 191 entries, so it includes the 188,
     ///      189 and 190 changes.
-    pub const CACHE_VERSION = 192;
+    /// 192: literal argument roots record their edge owner as their own root
+    ///      source and hold no expression.
+    /// 193: combines the two independent 192 entries.
+    pub const CACHE_VERSION = 193;
 };
 
 /// Configuration for the Roc cache system.
