@@ -890,14 +890,9 @@ pub fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLi
     return null;
 }
 
-fn isUndefinedFunctionNamed(self: *const Self, sym: WasmLinking.SymInfo, name: []const u8) bool {
-    if (sym.kind != .function or !sym.isUndefined()) return false;
-    const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse return false;
-    return std.mem.eql(u8, sym_name, name);
-}
-
 fn resolveUndefinedFunctionSymbols(
     self: *Self,
+    undefined_functions: *UndefinedSymbols,
     name: []const u8,
     defined_function_index: u32,
     defined_flags: u32,
@@ -910,20 +905,20 @@ fn resolveUndefinedFunctionSymbols(
     if (defined_local_index >= self.func_type_indices.items.len) return error.InvalidSection;
     const defined_type = self.func_type_indices.items[defined_local_index];
 
-    var first_match: ?u32 = null;
-    for (self.linking.symbol_table.items, 0..) |sym, i| {
-        if (!self.isUndefinedFunctionNamed(sym, name)) continue;
+    const pending = undefined_functions.map.getPtr(name) orelse return null;
+    for (pending.items) |sym_idx| {
+        const sym = self.linking.symbol_table.items[sym_idx];
         if (sym.index >= self.imports.items.len) return error.InvalidSection;
         if (self.imports.items[sym.index].type_idx != defined_type) {
             return error.FunctionTypeMismatch;
         }
-        if (first_match == null) first_match = @intCast(i);
     }
 
-    if (first_match == null) return null;
-
-    for (self.linking.symbol_table.items) |*sym| {
-        if (!self.isUndefinedFunctionNamed(sym.*, name)) continue;
+    var matches = undefined_functions.take(name).?;
+    defer matches.deinit(undefined_functions.gpa);
+    const first_match = matches.items[0];
+    for (matches.items) |sym_idx| {
+        const sym = &self.linking.symbol_table.items[sym_idx];
         const imported_function_index = sym.index;
         for (self.table_func_indices.items) |*table_function_index| {
             if (table_function_index.* == imported_function_index) {
@@ -943,20 +938,21 @@ fn resolveUndefinedFunctionSymbols(
     return first_match;
 }
 
-/// Tracks the currently-undefined data symbols in one module, grouped by
-/// resolved name, so `resolveUndefinedDataSymbols` can find and rewrite them in
-/// amortized O(1) instead of rescanning the whole symbol table for each defined
-/// data symbol. Index lists are kept in ascending order (symbols are recorded
-/// as they are appended), so the head of each list is the first-match index.
-const UndefinedDataSymbols = struct {
+/// Tracks the currently-undefined symbols of one kind (data or function) in
+/// one module, grouped by resolved name, so `resolveUndefinedDataSymbols` and
+/// `resolveUndefinedFunctionSymbols` can find and rewrite them in amortized
+/// O(1) instead of rescanning the whole symbol table for each defined symbol.
+/// Index lists are kept in ascending order (symbols are recorded as they are
+/// appended), so the head of each list is the first-match index.
+const UndefinedSymbols = struct {
     gpa: Allocator,
     map: std.StringHashMap(std.ArrayList(u32)),
 
-    fn init(gpa: Allocator) UndefinedDataSymbols {
+    fn init(gpa: Allocator) UndefinedSymbols {
         return .{ .gpa = gpa, .map = std.StringHashMap(std.ArrayList(u32)).init(gpa) };
     }
 
-    fn deinit(self: *UndefinedDataSymbols) void {
+    fn deinit(self: *UndefinedSymbols) void {
         var it = self.map.valueIterator();
         while (it.next()) |list| list.deinit(self.gpa);
         self.map.deinit();
@@ -964,7 +960,7 @@ const UndefinedDataSymbols = struct {
 
     /// Record an undefined data symbol at `index` under `name`. Indices are
     /// recorded in ascending order.
-    fn add(self: *UndefinedDataSymbols, name: []const u8, index: u32) Allocator.Error!void {
+    fn add(self: *UndefinedSymbols, name: []const u8, index: u32) Allocator.Error!void {
         const gop = try self.map.getOrPut(name);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(self.gpa, index);
@@ -973,7 +969,7 @@ const UndefinedDataSymbols = struct {
     /// Remove and return the ascending index list of undefined data symbols for
     /// `name`, transferring ownership to the caller. The symbols become defined
     /// once rewritten, so their entry is dropped from this index.
-    fn take(self: *UndefinedDataSymbols, name: []const u8) ?std.ArrayList(u32) {
+    fn take(self: *UndefinedSymbols, name: []const u8) ?std.ArrayList(u32) {
         const entry = self.map.fetchRemove(name) orelse return null;
         return entry.value;
     }
@@ -981,7 +977,7 @@ const UndefinedDataSymbols = struct {
 
 fn resolveUndefinedDataSymbols(
     self: *Self,
-    undefined_data: *UndefinedDataSymbols,
+    undefined_data: *UndefinedSymbols,
     name: []const u8,
     segment_index: u32,
     data_offset: u32,
@@ -1696,12 +1692,19 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
 
     // Group self's currently-undefined data symbols by name so merging a
     // defined data symbol can resolve them without rescanning the table.
-    var undefined_data = UndefinedDataSymbols.init(gpa);
+    var undefined_data = UndefinedSymbols.init(gpa);
     defer undefined_data.deinit();
+    var undefined_functions = UndefinedSymbols.init(gpa);
+    defer undefined_functions.deinit();
     for (self.linking.symbol_table.items, 0..) |sym, i| {
-        if (sym.kind != .data or !sym.isUndefined()) continue;
+        if (!sym.isUndefined()) continue;
+        const index = switch (sym.kind) {
+            .data => &undefined_data,
+            .function => &undefined_functions,
+            .global, .section, .event, .table => continue,
+        };
         const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
-        try undefined_data.add(sym_name, @intCast(i));
+        try index.add(sym_name, @intCast(i));
     }
 
     for (source.linking.symbol_table.items, 0..) |src_sym, src_sym_idx| {
@@ -1726,11 +1729,16 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                         .index = func_remap[src_sym.index],
                     });
                     symbol_remap[src_sym_idx] = new_sym_idx;
+                    const new_sym = self.linking.symbol_table.items[new_sym_idx];
+                    if (new_sym.isUndefined()) {
+                        if (new_sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items)) |name| try undefined_functions.add(name, new_sym_idx);
+                    }
                 } else {
                     // Defined function in source—add as defined in self.
                     if (!src_sym.isLocal()) {
                         if (src_name) |name| {
                             if (try self.resolveUndefinedFunctionSymbols(
+                                &undefined_functions,
                                 name,
                                 func_remap[src_sym.index],
                                 src_sym.flags,

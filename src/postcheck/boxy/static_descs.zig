@@ -572,60 +572,6 @@ pub const StaticDescs = struct {
         return slot;
     }
 
-    /// A closed declared-order capture record's descriptor, emitted directly
-    /// as target data. Each child is an explicit descriptor pointer slot.
-    pub fn argumentRecordSlot(self: *StaticDescs, record_layout: layout.Idx, children: []const LIR.StaticDataId) Allocator.Error!LIR.StaticDataId {
-        const dl = desc_format.TypeDesc.layout(self.width);
-        const fl = desc_format.Field.layout(self.width);
-        const reserved = try self.addSlotWithNode(dl.size, dl.alignment);
-        const layouts = self.layouts.layouts;
-        const committed = layouts.getLayout(record_layout);
-        const record = committed.getStruct().idx;
-        var refcounted: u32 = 0;
-        for (children, 0..) |_, i| {
-            const field = layouts.getStructFieldLayoutByOriginalIndex(record, @intCast(i));
-            if (layouts.layoutContainsRefcounted(layouts.getLayout(field))) refcounted += 1;
-        }
-        const count: u32 = @intCast(children.len);
-        const fields_size = fl.size * count;
-        const entries = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, @backingInt(reserved.slot), 2), fields_size + if (refcounted == 0) @as(u32, 0) else 4 * (refcounted + 1), fl.alignment, null);
-        var pointers: std.ArrayList(Pointer) = .empty;
-        defer pointers.deinit(self.allocator);
-        const bytes = @constCast(self.exports.items[entries].bytes);
-        var rc_index: u32 = 0;
-        for (children, 0..) |child, raw| {
-            const i: u32 = @intCast(raw);
-            const field = layouts.getStructFieldLayoutByOriginalIndex(record, i);
-            writeU32(bytes, i * fl.size + fl.of(.offset), layouts.getStructFieldOffsetByOriginalIndex(record, i));
-            writeU32(bytes, i * fl.size + fl.of(.field_index), i);
-            writeU32(bytes, i * fl.size + fl.of(.field_slot), i);
-            try pointers.append(self.allocator, .{ .offset = i * fl.size + fl.of(.desc), .target = self.nodeOfSlot(child) });
-            if (layouts.layoutContainsRefcounted(layouts.getLayout(field))) {
-                writeU32(bytes, fields_size + 4 * (rc_index + 1), i);
-                rc_index += 1;
-            }
-        }
-        if (refcounted != 0) writeU32(bytes, fields_size, refcounted);
-        try self.setRelocations(entries, pointers.items);
-        const header = @constCast(self.exports.items[reserved.node].bytes);
-        writeU32(header, dl.of(.size), layouts.layoutSize(committed));
-        writeU32(header, dl.of(.alignment), @intCast(committed.alignment(layouts.targetUsize()).toByteUnits()));
-        writeU32(header, dl.of(.count), count);
-        header[dl.of(.kind)] = @backingInt(desc_format.Kind.tuple);
-        header[dl.of(.sort_key)] = @backingInt(committed.sortKey());
-        header[dl.of(.flags)] = @bitCast(desc_format.Flags{ .declared_order = true, .contains_refcounted = refcounted != 0 });
-        try self.setRelocations(reserved.node, &.{.{ .offset = dl.of(.entries), .target = entries }});
-        return reserved.slot;
-    }
-
-    fn nodeOfSlot(self: *const StaticDescs, slot: LIR.StaticDataId) ExportIndex {
-        for (self.exports.items) |item| if (item.value_id == slot) {
-            std.debug.assert(item.relocations.len == 1);
-            return @backingInt(item.relocations[0].target.data_symbol);
-        };
-        types.invariant("a static descriptor slot has no descriptor node");
-    }
-
     fn addSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{

@@ -4832,10 +4832,12 @@ test "LIR statements and procs carry resolved source locations" {
     const store = &lowered_source.lowered.lir_result.store;
     try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_sources.unsafeRawItemsForView().len);
     try std.testing.expectEqual(store.getProcSpecs().len, store.proc_locs.unsafeRawItemsForView().len);
-    try std.testing.expect(store.proc_debug_names.unsafeRawItemsForView().len > 0);
-    for (store.proc_debug_names.unsafeRawItemsForView()) |entry| {
-        try std.testing.expect(entry.proc < store.getProcSpecs().len);
+    try std.testing.expectEqual(store.getProcSpecs().len, store.proc_debug_names.unsafeRawItemsForView().len);
+    var named: usize = 0;
+    for (store.proc_debug_names.unsafeRawItemsForView()) |string| {
+        if (string != .none) named += 1;
     }
+    try std.testing.expect(named > 0);
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
