@@ -24571,12 +24571,27 @@ balance at one—borrowed reads of its unclaimed bytes remain legitimate—and a
 complete claim set marks that unit spent: a terminal treats it as balanced and
 a jump's carry check exempts it, while anything less fails as an unspent stored
 unit. A claim set that becomes complete while the value still holds further
-explicit units settles at once: the spent unit leaves the balance and the claim
-set empties, because the remaining units are intact and a dismantle of another
-of them, such as through a second owned alias of a retained record, starts a
-claim set of its own. Only the last unit keeps its complete claims outstanding.
+explicit units settles at once: the spent unit leaves the balance and its
+claims leave with it, and a dismantle of another unit, such as through a
+second owned alias of a retained record, has claims of its own. Only the last
+unit keeps its complete claims outstanding.
+A dismantle of another unit may also start before the first one completes:
+an owned copy of a record bound by a retained alias, such as a join cell
+written with the record's retained value, shares the record's value with a
+unit of its own, and it can give its fields away while the record has given
+some of its own fields away and keeps the rest for later. Every unit stores
+one unit of each refcounted field, so the claims of all the value's units
+together count, per field, how many of its units gave that field away. A
+claim is valid while that count stays below the value's units, and a read of
+the field while some unit still holds it. The certifier keeps the counts as
+nested claim layers: the first holds the fields claimed at least once, the
+next those claimed at least twice, and so on, so a claim joins the first
+layer missing its field, the first layer is always the first to complete,
+and its completion settles one unit and moves the next layer up. Join
+summaries carry every layer.
 A claimed container can be neither consumed, moved into an aggregate, nor
-released whole. Claims and complete read chains cross join quotients on the
+released whole while it holds no intact unit beyond its partly dismantled
+ones. Claims and complete read chains cross join quotients on the
 summary: owned entries carry their container's claim set, and every live entry
 carries sparse lender, aggregate-holder, and immediate payload-source
 provenance independently of its current balance. This preserves the
