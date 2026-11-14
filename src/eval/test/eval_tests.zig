@@ -693,6 +693,19 @@ const core_tests = [_]TestCase{
         .name = "optional record field: generalized constructor adopts optional slot layout",
         .source_kind = .module,
         .source =
+        \\make = |x, y| { a: x, b: y }
+        \\
+        \\record : { a ?: U8, b ?: U8 }
+        \\record = make(5, 20)
+        \\
+        \\main = (record.?a ?? 0) + (record.?b ?? 0)
+        ,
+        .expected = .{ .inspect_str = "25" },
+    },
+    .{
+        .name = "optional record field: a use of a generalized constructor gains no optional slot",
+        .source_kind = .module,
+        .source =
         \\make = |value| { a: value }
         \\
         \\record : { a ?: U8, b ?: U8 }
@@ -700,10 +713,31 @@ const core_tests = [_]TestCase{
         \\
         \\main = (record.?a ?? 0) + (record.?b ?? 20)
         ,
-        .expected = .{ .inspect_str = "25" },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "optional record field: construction width preserves nested iterator values",
+        .source_kind = .module,
+        .source =
+        \\wrap = |items, extra| { it: items.iter(), extra }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped : { it : Iter(U64), extra ?: U64 }
+        \\    wrapped = wrap(items, 4)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum + (wrapped.?extra ?? 0)
+        \\}
+        \\
+        \\main = sum_it([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "optional record field: a use of a constructor holding an iterator gains no optional slot",
         .source_kind = .module,
         .source =
         \\wrap = |items| { it: items.iter() }
@@ -721,7 +755,7 @@ const core_tests = [_]TestCase{
         \\
         \\main = sum_it([1, 2, 3])
         ,
-        .expected = .{ .inspect_str = "6" },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "optional record field: generalized update cannot change a committed optional slot",
