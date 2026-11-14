@@ -26143,8 +26143,25 @@ program it runs against the limits, which bytebox does not enforce.
 
 Compile-time constants use checked finalization after the coordinator's
 frontend tasks have completed. Standalone checking clients complete their
-prepared modules directly. This path is unaffected by the runtime
-`--specialize` flag:
+prepared modules directly. The compilation's strategy decides which of two
+evaluators completes each root ("Compile-Time Evaluation Strategy"). The
+`.boxy` evaluator completes every root of a `.boxy` compilation, and of an
+`.lss` compilation every root that neither holds a function value nor reads
+one, along with every literal argument root:
+
+```text
+checked CIR
+  -> checking seals the solver store and records selected roots
+  -> frontend task completion (coordinated compilations)
+  -> Boxy lowering of the roots' templates
+  -> LIR
+  -> ARC insertion
+  -> native dev backend on native compiler hosts
+  -> store eval result in ConstStore
+```
+
+The Solved program of an `.lss` compilation completes the roots holding a
+function value and the roots reading one:
 
 ```text
 checked CIR
@@ -26172,9 +26189,11 @@ uncalled constrained polymorphic function does not force its body, but checking
 finalization evaluates the selected body itself and stores its `Str` result in
 the root payload. This payload is not a source-visible top-level constant and is
 not installed in the module's const-template tables. An effectful REPL body is a
-checking error; it is never silently demoted to a runtime root. Runtime backend
-selection and specialization settings therefore do not affect ordinary REPL
-expression evaluation. The finalizer replays `dbg` observations in root request
+checking error; it is never silently demoted to a runtime root. A REPL
+evaluation has no runtime consumer, so its session names `.boxy` and the
+`.boxy` evaluator completes its roots: runtime backend selection and
+specialization settings do not affect ordinary REPL expression evaluation.
+The finalizer replays `dbg` observations in root request
 order and forwards observations from the `.repl_expr` root to the REPL's
 structured event stream; observations from other compile-time roots are not
 misattributed to the current interactive expression.
@@ -26188,9 +26207,9 @@ logical Lambda Mono expressions, or any source-level IR.
 The only interpreter path is for compiler hosts that cannot run generated native
 code: freestanding compiler builds, and every host the dev backend has no code
 generator for (`host_lir_codegen_available`), currently wasm32 and 32-bit ARM
-and x86. This decision is made from the compiler's own build target. The Roc
-program target selected by `roc --target` does not affect the compile-time
-evaluation strategy. The interpreter evaluates at the compiler host's pointer
+and x86. This decision is made from the compiler's own build target, under
+either strategy. The Roc program target selected by `roc --target` does not
+affect it. The interpreter evaluates at the compiler host's pointer
 width, and a program target of another width receives the completed values
 re-encoded at its own layouts, exactly as a 64-bit host's values reach a
 32-bit target. Roc exposes no pointer-width type, so a value means the same at
@@ -26204,11 +26223,15 @@ empirical exhaustiveness diagnostics, literal conversion diagnostics, or
 stored constants is a compiler bug in one of the evaluators or
 in the data they consume.
 
-Runtime `.boxy` builds do not make compile-time roots use boxy lowering.
-Compile-time finalization continues to lower the requested compile-time roots
-through the existing Monotype/Lambda/LIR path, interpret the result, and store
-checked values in `ConstStore`. This keeps `roc check` and compile-time
-evaluation independent of runtime backend and specialization choices.
+Both evaluators store the same checked values in `ConstStore`, so a checked
+module holds the same values whichever strategy completed it. A function
+value alone is stored in the representation of the strategy that completed
+it ("Stored Function Values"), which is why a root holding one, and every
+root reading it, belongs to the evaluator of the compilation's own strategy.
+`roc check` and every other compilation with no runtime consumer name
+`.boxy`, so the `.boxy` evaluator completes all of their roots. The
+code-generation backend `--opt` selects affects compile-time evaluation only
+through the strategy it defaults to.
 
 Check-only ARC insertion runs the borrow-inference solver in its single-variant
 form. A shared host/runtime LIR program instead applies its declared runtime
