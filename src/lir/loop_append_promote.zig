@@ -1368,12 +1368,18 @@ const Pass = struct {
         }
         if (rewrite_site_count == 0) return false;
 
-        // A write-less entry (a parameter that doubles as a proc argument)
-        // would leave the slack parameter uninitialized on that path.
+        // A chain parameter that is also a procedure argument (the loop of a
+        // tail-recursive procedure) is entered by jumps that write nothing:
+        // the argument already holds the incoming list. Each such entry gets
+        // a measurement of the argument in front of its jump.
+        var argument_entries = std.ArrayList(ArgumentEntry).empty;
+        defer argument_entries.deinit(allocator);
         {
-            var it = chain_params.keyIterator();
-            while (it.next()) |param| {
-                if (proc_args.contains(param.*)) return false;
+            const proc_body = self.store.getProcSpecImmediate(proc_id).body.get().?;
+            var it = chain_params.iterator();
+            while (it.next()) |entry| {
+                if (!proc_args.contains(entry.key_ptr.*)) continue;
+                if (!try self.planArgumentEntries(scan, &carriers, proc_body, entry.value_ptr.*, entry.key_ptr.*, &argument_entries)) return false;
             }
         }
 
@@ -1465,8 +1471,135 @@ const Pass = struct {
         if (rewrite_site_count == 0) return false;
 
         // Qualified: thread the slack.
-        try self.apply(scan, &chain_defs, &chain_params, has_sets, loop_stmt, list_param, max_join_id, new_locals);
+        try self.apply(scan, &chain_defs, &chain_params, argument_entries.items, has_sets, loop_stmt, list_param, max_join_id, new_locals);
         return true;
+    }
+
+    /// A jump that enters a loop whose parameter is a procedure argument
+    /// without writing that parameter.
+    const ArgumentEntry = struct {
+        param: LocalId,
+        jump: CFStmtId,
+    };
+
+    /// Whether the loop `owner` can carry metadata for `param`, a chain
+    /// parameter that is also an argument of the procedure, collecting the
+    /// jumps that enter the loop from outside its body into `entries`.
+    ///
+    /// Inside the body (the statements reachable from the join's body
+    /// without returning to its head), every jump back to the head must
+    /// write `param`. A back edge that leaves it unwritten passes the
+    /// head's list along implicitly, a use that control-flow use ordering
+    /// does not see, so a consumption earlier in that iteration could be
+    /// judged the list's last use. Outside the body (the statements
+    /// reachable from the procedure's start without entering it), the
+    /// argument is the list on every path to the loop: nothing there writes
+    /// `param` or defines or reads a chain carrier through a chain edge,
+    /// so the only metadata the loop needs from that region is the
+    /// measurement each entry jump receives. The two regions share no
+    /// statement, so no statement runs both before metadata exists and
+    /// under it.
+    fn planArgumentEntries(
+        self: *Pass,
+        scan: *const Scan,
+        carriers: *const collections.DenseMap(LocalId, void),
+        proc_body: CFStmtId,
+        owner: CFStmtId,
+        param: LocalId,
+        entries: *std.ArrayList(ArgumentEntry),
+    ) ResourceError!bool {
+        const allocator = self.allocator;
+        const loop = self.store.getCFStmtImmediate(owner).join;
+        var join_bodies = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(allocator);
+        defer join_bodies.deinit();
+        for (scan.joins.items) |info| {
+            const join = self.store.getCFStmtImmediate(info.stmt).join;
+            try join_bodies.put(join.id, join.body);
+        }
+
+        var body_region = collections.DenseMap(CFStmtId, bool).init(allocator);
+        defer body_region.deinit();
+        var back_edges = std.ArrayList(CFStmtId).empty;
+        defer back_edges.deinit(allocator);
+        try self.walkParamWrites(loop.body, loop.id, param, &join_bodies, &body_region, &back_edges);
+        for (back_edges.items) |jump| {
+            if (!body_region.get(jump).?) return false;
+        }
+
+        var outer_region = collections.DenseMap(CFStmtId, bool).init(allocator);
+        defer outer_region.deinit();
+        var entry_jumps = std.ArrayList(CFStmtId).empty;
+        defer entry_jumps.deinit(allocator);
+        try self.walkParamWrites(proc_body, loop.id, param, &join_bodies, &outer_region, &entry_jumps);
+        {
+            var it = outer_region.iterator();
+            while (it.next()) |entry| {
+                if (body_region.contains(entry.key_ptr.*)) return false;
+                switch (self.store.getCFStmtImmediate(entry.key_ptr.*).*) {
+                    .set_local => |s| if (s.target == param) return false,
+                    .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .dyn, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
+                }
+            }
+        }
+        for (scan.edges.items) |edge| {
+            if (!outer_region.contains(edge.stmt)) continue;
+            if (carriers.contains(edge.source) or carriers.contains(edge.target)) return false;
+        }
+        for (entry_jumps.items) |jump| try entries.append(allocator, .{ .param = param, .jump = jump });
+        return true;
+    }
+
+    /// Walk forward from `root`, entering the bodies of joins other than
+    /// `loop_id` through the jumps that target them and stopping at jumps
+    /// to `loop_id`, which are collected into `loop_jumps`. `region` maps
+    /// every statement reached to whether every path from `root` to it
+    /// passes an initializing write of `param`.
+    fn walkParamWrites(
+        self: *Pass,
+        root: CFStmtId,
+        loop_id: LIR.JoinPointId,
+        param: LocalId,
+        join_bodies: *const collections.DenseMap(LIR.JoinPointId, CFStmtId),
+        region: *collections.DenseMap(CFStmtId, bool),
+        loop_jumps: *std.ArrayList(CFStmtId),
+    ) ResourceError!void {
+        const allocator = self.allocator;
+        const Item = struct { stmt: CFStmtId, written: bool };
+        var work = std.ArrayList(Item).empty;
+        defer work.deinit(allocator);
+        var successors = std.ArrayList(CFStmtId).empty;
+        defer successors.deinit(allocator);
+        try work.append(allocator, .{ .stmt = root, .written = false });
+        while (work.pop()) |item| {
+            const entry = try region.getOrPut(item.stmt);
+            if (entry.found_existing) {
+                // A statement's state only falls from written to unwritten,
+                // so each is revisited at most once.
+                if (!entry.value_ptr.* or item.written) continue;
+                entry.value_ptr.* = false;
+            } else {
+                entry.value_ptr.* = item.written;
+            }
+            const written = entry.value_ptr.*;
+            switch (self.store.getCFStmtImmediate(item.stmt).*) {
+                .jump => |jump| {
+                    if (jump.target == loop_id) {
+                        if (!entry.found_existing) try loop_jumps.append(allocator, item.stmt);
+                    } else {
+                        try work.append(allocator, .{ .stmt = join_bodies.get(jump.target).?, .written = written });
+                    }
+                },
+                .set_local => |s| try work.append(allocator, .{
+                    .stmt = s.next,
+                    .written = written or (s.mode == .initialize_join_param and s.target == param),
+                }),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .dyn, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .ret, .crash => {
+                    successors.clearRetainingCapacity();
+                    try body_clone.appendSuccessorsInOrder(self.store, &successors, item.stmt, allocator, .{ .join_body = false });
+                    for (successors.items) |successor| try work.append(allocator, .{ .stmt = successor, .written = written });
+                },
+            }
+        }
     }
 
     // Rewrite
@@ -1511,6 +1644,7 @@ const Pass = struct {
         scan: *Scan,
         chain_defs: *collections.DenseMap(LocalId, u32),
         chain_params: *collections.DenseMap(LocalId, CFStmtId),
+        argument_entries: []const ArgumentEntry,
         has_sets: bool,
         loop_stmt: CFStmtId,
         list_param: LocalId,
@@ -1795,7 +1929,7 @@ const Pass = struct {
             if (edge.kind != .param_write) continue;
             if (!chain_params.contains(edge.target)) continue;
             const slack_param = slack_params.get(edge.target).?;
-            var original = self.store.getCFStmtImmediate(edge.stmt).set_local;
+            const original = self.store.getCFStmtImmediate(edge.stmt).set_local;
             const original_origin = self.store.stmtOrigin(edge.stmt);
             const origin = promoteOrigin(original_origin);
             if (edge.flow == .carried) {
@@ -1823,44 +1957,75 @@ const Pass = struct {
                 } }, origin);
             } else {
                 std.debug.assert(edge.flow == .entry);
-                // Entry edge: acquire the incoming ownership unit before
-                // measuring it, just as for an outside alias definition.
-                const incoming = try self.freshLocal(self.store.getLocal(edge.source).layout_idx, new_locals);
-                original.value = incoming;
-                const measured = try self.freshLocal(.u64, new_locals);
-                var forward = try self.store.addCFStmt(.{ .set_local = original }, original_origin);
-                var owned: ?LocalId = null;
-                if (has_sets) {
-                    const measured_owned = try self.freshLocal(.u64, new_locals);
-                    owned = measured_owned;
-                    const owned_param = owned_params.get(edge.target).?;
-                    try self.noteOwnedDef(owned_param, .{ .local = measured_owned });
-                    if (edge.target == list_param) try self.noteLoopEdge(loop_stmt, original.next, measured_owned);
-                    forward = try self.store.addCFStmt(.{ .set_local = .{
-                        .target = owned_param,
-                        .value = measured_owned,
-                        .mode = .initialize_join_param,
-                        .next = forward,
-                    } }, origin);
-                }
-                const write_slack = try self.store.addCFStmt(.{ .set_local = .{
-                    .target = slack_param,
-                    .value = measured,
-                    .mode = .initialize_join_param,
-                    .next = forward,
-                } }, origin);
-                const seed = try self.seedMetadata(incoming, measured, owned, write_slack, new_locals, origin);
-                try self.store.replaceCFStmt(edge.stmt, .{ .assign_low_level = .{
-                    .target = incoming,
-                    .op = .list_map_prepare_reuse,
-                    .rc_effect = try self.store.addRcEffect(LowLevelOp.list_map_prepare_reuse.rcEffect()),
-                    .args = try self.store.addLocalSpan(&.{edge.source}),
-                    .next = seed,
-                } }, origin);
+                try self.wireEntryWrite(edge.stmt, edge.target, edge.source, original.next, original_origin, slack_param, if (has_sets) owned_params.get(edge.target).? else null, loop_stmt, list_param, new_locals);
             }
         }
 
+        // An argument entry hands the loop the procedure argument its
+        // parameter already holds, so the jump is preceded by an entry write
+        // of that argument into its own parameter.
+        for (argument_entries) |entry| {
+            const jump_origin = self.store.stmtOrigin(entry.jump);
+            const jump = try self.store.addCFStmt(self.store.getCFStmt(entry.jump), jump_origin);
+            try self.wireEntryWrite(entry.jump, entry.param, entry.param, jump, jump_origin, slack_params.get(entry.param).?, if (has_sets) owned_params.get(entry.param).? else null, loop_stmt, list_param, new_locals);
+        }
+
         try self.noteSlackChains(scan, chain_params, &slack_params, has_sets);
+    }
+
+    /// Replace `stmt`, a write of `source` into the chain parameter `param`
+    /// continuing at `next`, with an entry write: acquire the incoming
+    /// ownership unit before measuring it, just as for an outside alias
+    /// definition, then write the measured metadata beside the list.
+    fn wireEntryWrite(
+        self: *Pass,
+        stmt: CFStmtId,
+        param: LocalId,
+        source: LocalId,
+        next: CFStmtId,
+        write_origin: LIR.StmtOrigin,
+        slack_param: LocalId,
+        owned_param: ?LocalId,
+        loop_stmt: CFStmtId,
+        list_param: LocalId,
+        new_locals: *std.ArrayList(LocalId),
+    ) ResourceError!void {
+        const origin = promoteOrigin(write_origin);
+        const incoming = try self.freshLocal(self.store.getLocal(source).layout_idx, new_locals);
+        const measured = try self.freshLocal(.u64, new_locals);
+        var forward = try self.store.addCFStmt(.{ .set_local = .{
+            .target = param,
+            .value = incoming,
+            .mode = .initialize_join_param,
+            .next = next,
+        } }, write_origin);
+        var owned: ?LocalId = null;
+        if (owned_param) |flag_param| {
+            const measured_owned = try self.freshLocal(.u64, new_locals);
+            owned = measured_owned;
+            try self.noteOwnedDef(flag_param, .{ .local = measured_owned });
+            if (param == list_param) try self.noteLoopEdge(loop_stmt, next, measured_owned);
+            forward = try self.store.addCFStmt(.{ .set_local = .{
+                .target = flag_param,
+                .value = measured_owned,
+                .mode = .initialize_join_param,
+                .next = forward,
+            } }, origin);
+        }
+        const write_slack = try self.store.addCFStmt(.{ .set_local = .{
+            .target = slack_param,
+            .value = measured,
+            .mode = .initialize_join_param,
+            .next = forward,
+        } }, origin);
+        const seed = try self.seedMetadata(incoming, measured, owned, write_slack, new_locals, origin);
+        try self.store.replaceCFStmt(stmt, .{ .assign_low_level = .{
+            .target = incoming,
+            .op = .list_map_prepare_reuse,
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.list_map_prepare_reuse.rcEffect()),
+            .args = try self.store.addLocalSpan(&.{source}),
+            .next = seed,
+        } }, origin);
     }
 
     /// The owned-flag local a chain-op definition of `target` must write, or
@@ -5407,4 +5572,231 @@ test "promote skips metadata topology for a read-only loop beside an unrelated a
     try testing.expectEqual(before, @import("use_order.zig").topology_builds);
     try testing.expect(store.getCFStmtImmediate(append).* == .assign_call);
     try testing.expectEqual(@as(usize, 1), store.getLocalSpan(store.getCFStmtImmediate(loop).join.params).len);
+}
+
+test "promote measures a tail-recursive loop's argument at its entry and versions the loop" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+
+    // The shape plain TCE gives a tail-recursive procedure: the loop's
+    // parameter is the procedure's own argument, and the remainder enters
+    // the loop without writing it.
+    // proc(out):
+    //   loop J(out):
+    //     body: a = ref out; s = list_set(a, 0, 9); b = ref s
+    //           set out := b; jump J
+    //     remainder: jump J
+    const out = try store.addLocal(.{ .layout_idx = f.list });
+    const a = try store.addLocal(.{ .layout_idx = f.list });
+    const s = try store.addLocal(.{ .layout_idx = f.list });
+    const b = try store.addLocal(.{ .layout_idx = f.list });
+    const join_id = f.freshJoinPointId();
+
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const back_set = try store.addCFStmt(.{ .set_local = .{
+        .target = out,
+        .value = b,
+        .mode = .initialize_join_param,
+        .next = back_jump,
+    } }, .test_fixture);
+    const alias_b = try store.addCFStmt(.{ .assign_ref = .{ .target = b, .op = .local(s), .next = back_set } }, .test_fixture);
+    const site = try addSetSite(&f, s, a, alias_b);
+    const alias_a = try store.addCFStmt(.{ .assign_ref = .{ .target = a, .op = .local(out), .next = site } }, .test_fixture);
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const loop = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{out}),
+        .body = alias_a,
+        .remainder = entry_jump,
+    } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(4),
+        .args = try store.addLocalSpan(&.{out}),
+        .body = .some(loop),
+        .ret_layout = f.list,
+    }, .none);
+
+    try run(store, &f.layouts);
+
+    const head = store.getCFStmtImmediate(loop).join;
+    const params = store.getLocalSpan(head.params);
+    try testing.expectEqual(@as(usize, 3), params.len);
+    try testing.expectEqual(out, GuardedList.at(params, 0));
+    const limit_param = GuardedList.at(params, 1);
+    const owned_param = GuardedList.at(params, 2);
+
+    // The entry acquires the argument's unit, measures it, and writes the
+    // list and both metadata parameters before jumping to the head.
+    const prepare = store.getCFStmtImmediate(head.remainder).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_map_prepare_reuse, prepare.op);
+    try testing.expectEqual(out, GuardedList.at(store.getLocalSpan(prepare.args), 0));
+    const incoming = prepare.target;
+    var measured_slack = false;
+    var measured_owned = false;
+    var wrote_limit = false;
+    var wrote_owned = false;
+    var wrote_list = false;
+    var current = prepare.next;
+    while (true) {
+        switch (store.getCFStmtImmediate(current).*) {
+            .assign_low_level => |st| {
+                const operand = GuardedList.at(store.getLocalSpan(st.args), 0);
+                if (st.op == .list_slack_unique) measured_slack = operand == incoming;
+                if (st.op == .list_owned_unique) measured_owned = operand == incoming;
+                current = st.next;
+            },
+            .set_local => |st| {
+                try testing.expect(st.mode == .initialize_join_param);
+                if (st.target == limit_param) wrote_limit = true;
+                if (st.target == owned_param) wrote_owned = true;
+                if (st.target == out) wrote_list = st.value == incoming;
+                current = st.next;
+            },
+            .jump => |st| {
+                try testing.expectEqual(join_id, st.target);
+                break;
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    try testing.expect(measured_slack and measured_owned and wrote_limit and wrote_owned and wrote_list);
+
+    // The head dispatches on the flag measured at the entry; the copy stores
+    // in place and returns to itself.
+    const dispatch = store.getCFStmtImmediate(head.body).switch_stmt;
+    try testing.expectEqual(owned_param, dispatch.cond);
+    try testing.expectEqual(alias_a, dispatch.default_branch);
+    const copy = store.getCFStmtImmediate(GuardedList.at(store.getCFSwitchBranches(dispatch.branches), 0).body).join;
+    const hot = try shapeOf(store, copy.body, head.id, copy.id);
+    try testing.expectEqual(BodyShape{ .unchecked_sets = 1, .jumps_to_copy = 1 }, hot);
+    const cold = try shapeOf(store, alias_a, head.id, copy.id);
+    try testing.expectEqual(BodyShape{ .switches = 1, .checked_sets = 1, .unchecked_sets = 1, .jumps_to_head = 1 }, cold);
+}
+
+test "promote leaves a tail-recursive loop alone when a back edge passes the argument along unwritten" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+
+    // proc(out, c):
+    //   loop J(out, c):
+    //     body: a = ref out; s = list_set(a, 0, 9)
+    //           switch c { 1: set out := s; jump J
+    //                      default: jump J }
+    //     remainder: jump J
+    // The default edge passes `out` along implicitly after its alias was
+    // consumed, so the set must keep its uniqueness check.
+    const out = try store.addLocal(.{ .layout_idx = f.list });
+    const c = try store.addLocal(.{ .layout_idx = .u8 });
+    const a = try store.addLocal(.{ .layout_idx = f.list });
+    const s = try store.addLocal(.{ .layout_idx = f.list });
+    const join_id = f.freshJoinPointId();
+
+    const written_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const written = try store.addCFStmt(.{ .set_local = .{
+        .target = out,
+        .value = s,
+        .mode = .initialize_join_param,
+        .next = written_jump,
+    } }, .test_fixture);
+    const identity_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = c,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = written }}),
+        .default_branch = identity_jump,
+        .continuation = null,
+    } }, .test_fixture);
+    const site = try addSetSite(&f, s, a, branch);
+    const alias_a = try store.addCFStmt(.{ .assign_ref = .{ .target = a, .op = .local(out), .next = site } }, .test_fixture);
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const loop = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{ out, c }),
+        .body = alias_a,
+        .remainder = entry_jump,
+    } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
+        .args = try store.addLocalSpan(&.{ out, c }),
+        .body = .some(loop),
+        .ret_layout = f.list,
+    }, .none);
+
+    try run(store, &f.layouts);
+
+    const head = store.getCFStmtImmediate(loop).join;
+    try testing.expectEqual(@as(usize, 2), store.getLocalSpan(head.params).len);
+    try testing.expectEqual(entry_jump, head.remainder);
+    try testing.expect(store.getCFStmtImmediate(entry_jump).* == .jump);
+    const shape = try shapeOf(store, head.body, head.id, head.id);
+    try testing.expectEqual(@as(u32, 1), shape.checked_sets);
+    try testing.expectEqual(@as(u32, 0), shape.unchecked_sets);
+}
+
+test "promote leaves a tail-recursive loop alone when the argument feeds a chain edge before the loop" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+
+    // proc(out, c):
+    //   loop J(out):
+    //     body: a = ref out; s = list_set(a, 0, 9); b = ref s
+    //           set out := b; jump J
+    //     remainder: switch c { 1: e = list_set(out, 0, 9); ret e
+    //                           default: jump J }
+    // The early exit's set runs before any entry measurement, so no metadata
+    // exists for it and the loop stays unpromoted.
+    const out = try store.addLocal(.{ .layout_idx = f.list });
+    const c = try store.addLocal(.{ .layout_idx = .u8 });
+    const a = try store.addLocal(.{ .layout_idx = f.list });
+    const s = try store.addLocal(.{ .layout_idx = f.list });
+    const b = try store.addLocal(.{ .layout_idx = f.list });
+    const e = try store.addLocal(.{ .layout_idx = f.list });
+    const join_id = f.freshJoinPointId();
+
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const back_set = try store.addCFStmt(.{ .set_local = .{
+        .target = out,
+        .value = b,
+        .mode = .initialize_join_param,
+        .next = back_jump,
+    } }, .test_fixture);
+    const alias_b = try store.addCFStmt(.{ .assign_ref = .{ .target = b, .op = .local(s), .next = back_set } }, .test_fixture);
+    const site = try addSetSite(&f, s, a, alias_b);
+    const alias_a = try store.addCFStmt(.{ .assign_ref = .{ .target = a, .op = .local(out), .next = site } }, .test_fixture);
+
+    const exit_ret = try store.addCFStmt(.{ .ret = .{ .value = e } }, .test_fixture);
+    const exit_site = try addSetSite(&f, e, out, exit_ret);
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = c,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = exit_site }}),
+        .default_branch = entry_jump,
+        .continuation = null,
+    } }, .test_fixture);
+    const loop = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{out}),
+        .body = alias_a,
+        .remainder = branch,
+    } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(6),
+        .args = try store.addLocalSpan(&.{ out, c }),
+        .body = .some(loop),
+        .ret_layout = f.list,
+    }, .none);
+
+    try run(store, &f.layouts);
+
+    const head = store.getCFStmtImmediate(loop).join;
+    try testing.expectEqual(@as(usize, 1), store.getLocalSpan(head.params).len);
+    try testing.expect(store.getCFStmtImmediate(entry_jump).* == .jump);
+    const shape = try shapeOf(store, loop, head.id, head.id);
+    try testing.expectEqual(@as(u32, 2), shape.checked_sets);
+    try testing.expectEqual(@as(u32, 0), shape.unchecked_sets);
 }
