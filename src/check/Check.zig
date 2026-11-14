@@ -33948,8 +33948,10 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
 
         // A body that matches tag patterns may match its parameters' values,
         // which come from callers the module may not see, so their rows count
-        // as produced (design.md "Pattern-Only Tags").
-        if (self.match_tag_patterns.items.len != state.match_tag_patterns_start) {
+        // as produced. A lambda written as a call argument is called only by
+        // that call's callee, so its parameters' rows are whatever the call
+        // relates them to (design.md "Pattern-Only Tags").
+        if (!frame.is_call_arg and self.match_tag_patterns.items.len != state.match_tag_patterns_start) {
             try self.matching_lambda_params.append(self.gpa, lambda.args);
         }
 
