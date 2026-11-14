@@ -1407,6 +1407,12 @@ same_target_reach: std.AutoHashMapUnmanaged(u64, bool) = .empty,
 /// nothing that re-enters it.
 scratch_same_target_pending: std.ArrayListUnmanaged(MethodNameId) = .empty,
 scratch_same_target_visited: collections.DenseMapUnmanaged(MethodNameId, void) = .empty,
+/// Scratch for `dispatchStateRepeatsRowLabel`, which calls nothing that
+/// re-enters it.
+scratch_row_label_stack: std.ArrayListUnmanaged(Var) = .empty,
+scratch_row_label_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
+scratch_row_labels: std.ArrayListUnmanaged(Ident.Idx) = .empty,
+scratch_row_chain_seen: std.ArrayListUnmanaged(Var) = .empty,
 /// Component obligations of a structural comparison or hash, each linked to
 /// the constraint callable of the comparison or hash it serves. Evaluating
 /// that operation evaluates the component's dispatch. Kept apart from
@@ -2056,6 +2062,10 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .same_target_reach = .keyed,
     .scratch_same_target_pending = .scratch,
     .scratch_same_target_visited = .scratch,
+    .scratch_row_label_stack = .scratch,
+    .scratch_row_label_seen = .scratch,
+    .scratch_row_labels = .scratch,
+    .scratch_row_chain_seen = .scratch,
     .component_derivations = .keyed,
     .component_derived_relations = .keyed,
     .component_derived_relation_set = .keyed,
@@ -48027,6 +48037,10 @@ fn normalizeDispatchStateRows(
     value: ?Var,
     env: *Env,
 ) Allocator.Error!void {
+    // Exact early exit: the walk below changes something only when the key
+    // writer reports a row repeating a label, and `dispatchStateRepeatsRowLabel`
+    // finds every row that it could report.
+    if (!try self.dispatchStateRepeatsRowLabel(dispatcher_var, constraint_fn_var)) return;
     self.canonical_key_writer.setReportDuplicateRows(true);
     defer self.canonical_key_writer.setReportDuplicateRows(false);
     for ([_]Var{ dispatcher_var, constraint_fn_var }) |root| {
@@ -48035,6 +48049,101 @@ fn normalizeDispatchStateRows(
             if (!try self.normalizeReportedDuplicateRow(value, env)) break;
         }
     }
+}
+
+/// Whether a dispatch state can hold a row the canonical key writer reports
+/// as repeating a label (`TypeWriter.takeDuplicateRow`) during
+/// `normalizeDispatchStateRows`'s walk. The writer reports a row it visits
+/// when two of the labels it gathers for it have equal text: the row's own
+/// labels and those of every row of the same kind its extension chain
+/// continues into, up to the first extension that is not such a row or that
+/// the chain already met. This walk follows every edge that walk follows
+/// (it never follows a type variable's constraints) and tests every row it
+/// reaches the same way, so it answers true whenever that walk would report
+/// a row.
+fn dispatchStateRepeatsRowLabel(self: *Self, dispatcher_var: Var, constraint_fn_var: Var) Allocator.Error!bool {
+    const stack = &self.scratch_row_label_stack;
+    const seen = &self.scratch_row_label_seen;
+    stack.clearRetainingCapacity();
+    seen.clearRetainingCapacity();
+    try stack.appendSlice(self.gpa, &.{ dispatcher_var, constraint_fn_var });
+    while (stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        if ((try seen.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex, .rigid, .err, .field_presence => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    if (try self.rowChainRepeatsLabel(resolved.var_, .record)) return true;
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.var_);
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    if (try self.rowChainRepeatsLabel(resolved.var_, .tag_union)) return true;
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+            },
+        }
+    }
+    return false;
+}
+
+/// Whether two labels the canonical key writer gathers for `row` have equal
+/// text: the row's own labels, then those of each row of the same kind its
+/// extension chain continues into, stopping at the first extension that is
+/// not such a row or that the chain already met (as the writer's row
+/// description does).
+fn rowChainRepeatsLabel(self: *Self, row: Var, comptime kind: enum { record, tag_union }) Allocator.Error!bool {
+    const labels = &self.scratch_row_labels;
+    const chain_seen = &self.scratch_row_chain_seen;
+    labels.clearRetainingCapacity();
+    chain_seen.clearRetainingCapacity();
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        if (std.mem.findScalar(Var, chain_seen.items, resolved.var_) != null) break;
+        try chain_seen.append(self.gpa, resolved.var_);
+        if (std.meta.activeTag(resolved.desc.content) != .structure) break;
+        switch (kind) {
+            .record => switch (resolved.desc.content.structure) {
+                .record => |record| {
+                    try labels.appendSlice(self.gpa, self.types.getRecordFieldsSlice(record.fields).items(.name));
+                    current = record.ext;
+                },
+                else => break,
+            },
+            .tag_union => switch (resolved.desc.content.structure) {
+                .tag_union => |tag_union| {
+                    try labels.appendSlice(self.gpa, self.types.getTagsSlice(tag_union.tags).items(.name));
+                    current = tag_union.ext;
+                },
+                else => break,
+            },
+        }
+    }
+    const idents = self.cir.getIdentStoreConst();
+    for (labels.items, 0..) |label, index| {
+        for (labels.items[index + 1 ..]) |other| {
+            if (idents.idxTextEql(label, other)) return true;
+        }
+    }
+    return false;
 }
 
 /// Canonical receiver+callable digest for one dispatch edge. Fresh
@@ -62678,5 +62787,92 @@ test "every checker frame stack and frame's own storage is checked for balance" 
     }) |field| {
         const discipline = state_inventory.get(field);
         try std.testing.expect(discipline == .frame_stack or discipline == .frame_partitioned);
+    }
+}
+
+test "a dispatch state repeats a row label exactly when the canonical key writer reports a row" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExprOpen("RowLabelRepeats", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    const idents = test_env.module_env;
+    const a = try idents.insertIdent(Ident.for_text("A"));
+    const b = try idents.insertIdent(Ident.for_text("B"));
+    const c = try idents.insertIdent(Ident.for_text("C"));
+
+    const Case = struct {
+        fn tagRow(s: *types_mod.Store, names: []const Ident.Idx, ext: Var) Allocator.Error!Var {
+            var tags: [4]types_mod.Tag = undefined;
+            for (names, 0..) |name, index| tags[index] = .{ .name = name, .args = try s.appendVars(&.{}) };
+            return s.freshFromContent(.{ .structure = .{ .tag_union = .{
+                .tags = try s.appendTags(tags[0..names.len]),
+                .ext = ext,
+            } } });
+        }
+        fn recordRow(s: *types_mod.Store, name: Ident.Idx, ext: Var) Allocator.Error!Var {
+            return s.freshFromContent(.{ .structure = .{ .record = .{
+                .fields = try s.appendRecordFields(&.{.{ .name = name, .presence = .required(try s.fresh()) }}),
+                .ext = ext,
+            } } });
+        }
+        fn callable(s: *types_mod.Store, arg: Var) Allocator.Error!Var {
+            return s.freshFromContent(.{ .structure = .{ .fn_pure = .{
+                .args = try s.appendVars(&.{arg}),
+                .ret = try s.fresh(),
+            } } });
+        }
+        fn writerReports(checker_: *Self, receiver: Var, fn_var: Var) Allocator.Error!bool {
+            checker_.canonical_key_writer.setReportDuplicateRows(true);
+            defer checker_.canonical_key_writer.setReportDuplicateRows(false);
+            var reported = false;
+            for ([_]Var{ receiver, fn_var }) |root| {
+                try checker_.canonical_key_writer.visitIgnoringConstraints(root);
+                if (checker_.canonical_key_writer.takeDuplicateRow() != null) reported = true;
+            }
+            return reported;
+        }
+        fn expectAgreement(checker_: *Self, receiver: Var, fn_var: Var, expected: bool) !void {
+            try std.testing.expectEqual(expected, try writerReports(checker_, receiver, fn_var));
+            try std.testing.expectEqual(expected, try checker_.dispatchStateRepeatsRowLabel(receiver, fn_var));
+        }
+    };
+    const empty_tags = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const empty_record = try store.freshFromContent(.{ .structure = .empty_record });
+
+    // `[A]` extended by `[A]`: neither part repeats a label alone.
+    {
+        const receiver = try Case.tagRow(store, &.{a}, try Case.tagRow(store, &.{a}, empty_tags));
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, receiver), true);
+    }
+    // `{ a }` extended by `{ a }`, reached only through the callable's argument tuple.
+    {
+        const receiver = try store.fresh();
+        const row = try Case.recordRow(store, a, try Case.recordRow(store, a, empty_record));
+        const tuple = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ row, receiver }) } } });
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, tuple), true);
+    }
+    // A repeating row reached only through a type variable's method
+    // requirement, which neither walk follows.
+    {
+        const row = try Case.tagRow(store, &.{a}, try Case.tagRow(store, &.{a}, empty_tags));
+        const method = try store.appendStaticDispatchConstraints(&.{.{
+            .fn_name = a,
+            .fn_var = try Case.callable(store, row),
+            .origin = .method_call,
+        }});
+        const receiver = try store.freshFromContent(.{ .flex = Flex.init().withConstraints(method) });
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, receiver), false);
+    }
+    // `[A, B]` extended by `[C]`: several labels, none repeated.
+    {
+        const receiver = try Case.tagRow(store, &.{ a, b }, try Case.tagRow(store, &.{c}, empty_tags));
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, receiver), false);
+    }
+    // `[A]` extended by a variable, beside a separate `[A]`: each row has one label.
+    {
+        const receiver = try Case.tagRow(store, &.{a}, try store.fresh());
+        const other = try Case.tagRow(store, &.{a}, empty_tags);
+        try Case.expectAgreement(checker, receiver, try Case.callable(store, other), false);
     }
 }
