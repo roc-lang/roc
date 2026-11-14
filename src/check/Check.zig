@@ -48928,7 +48928,10 @@ fn rowChainRepeatsLabel(self: *Self, row: Var, comptime kind: enum { record, tag
     var current = row;
     while (true) {
         const resolved = self.types.resolveVar(current);
-        if (std.mem.findScalar(Var, chain_seen.items, resolved.var_) != null) break;
+        const met_before = for (chain_seen.items) |seen| {
+            if (seen == resolved.var_) break true;
+        } else false;
+        if (met_before) break;
         try chain_seen.append(self.gpa, resolved.var_);
         if (std.meta.activeTag(resolved.desc.content) != .structure) break;
         switch (kind) {
@@ -48937,14 +48940,14 @@ fn rowChainRepeatsLabel(self: *Self, row: Var, comptime kind: enum { record, tag
                     try labels.appendSlice(self.gpa, self.types.getRecordFieldsSlice(record.fields).items(.name));
                     current = record.ext;
                 },
-                else => break,
+                .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => break,
             },
             .tag_union => switch (resolved.desc.content.structure) {
                 .tag_union => |tag_union| {
                     try labels.appendSlice(self.gpa, self.types.getTagsSlice(tag_union.tags).items(.name));
                     current = tag_union.ext;
                 },
-                else => break,
+                .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .record, .empty_record => break,
             },
         }
     }
@@ -63762,7 +63765,7 @@ test "a dispatch state repeats a row label exactly when the canonical key writer
             }
             return reported;
         }
-        fn expectAgreement(checker_: *Self, receiver: Var, fn_var: Var, expected: bool) !void {
+        fn expectAgreement(checker_: *Self, receiver: Var, fn_var: Var, expected: bool) (Allocator.Error || error{TestExpectedEqual})!void {
             try std.testing.expectEqual(expected, try writerReports(checker_, receiver, fn_var));
             try std.testing.expectEqual(expected, try checker_.dispatchStateRepeatsRowLabel(receiver, fn_var));
         }

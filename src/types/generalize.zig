@@ -56,7 +56,6 @@ const Var = @import("types.zig").Var;
 const Rank = @import("types.zig").Rank;
 const DescStoreIdx = @import("store.zig").DescStoreIdx;
 const RecordField = @import("types.zig").RecordField;
-const types = @import("types.zig");
 const UseAbsorbers = @import("use_absorbers.zig").UseAbsorbers;
 
 /// The descriptor a rank frame settles once its children have reported.

@@ -4,7 +4,6 @@
 //! 65,534 nested scopes, so these tests lower the deepest rank the checker's
 //! envs give a scope; the counting is the same at any limit.
 
-const std = @import("std");
 const types = @import("types");
 const TestEnv = @import("./TestEnv.zig");
 
