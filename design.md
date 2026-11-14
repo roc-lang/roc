@@ -9632,7 +9632,13 @@ closed type; Polymorphic Recursion rejects the rest) remains a fresh
 specialization. Every draft function and globally reserved root records
 the owner that created it, forming an explicit active ownership tree, and the
 reference names the in-progress specialization of the same procedure, with the
-same evidence, on that chain. Every other request—a non-recursive scheme
+same evidence, on that chain. The procedure is named by its declaration (a
+template, or a nested site with its owner and context function digest), not by
+the checked root the reference reads: inside a generalized procedure, a
+recursive reference reads the declaration at its monomorphic in-body type while
+the request that began the active specialization read an instantiation. A
+nested specialization's draft function records the specialization it lowers, so
+the reference finds it by walking its own ownership chain. Every other request—a non-recursive scheme
 instantiation, a dispatch plan, a generated codec's component call, or a
 compiler-generated component edge—is a fresh instantiation; it identifies with
 an existing specialization only through an exact interface and otherwise
