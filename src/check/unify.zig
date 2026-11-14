@@ -2154,12 +2154,7 @@ const Unifier = struct {
             .b_is_nominal => vars.a.desc,
         };
         if (!self.tagRowLiftable(anon_desc, anon_tag_union.ext)) {
-            if (self.rowEndsComparedPlain(anon_tag_union.ext)) self.refuseRecordTail(.{
-                .kind = .compared_plain_tags,
-                .nominal = nominal_type.ident.ident_idx,
-                .field = null,
-                .taken_apart = false,
-            });
+            if (self.rowEndsComparedPlain(anon_tag_union.ext)) self.refuseRecordTail(.{ .compared_plain_tags = nominal_type.ident.ident_idx });
             return error.TypeMismatch;
         }
 
@@ -2273,12 +2268,7 @@ const Unifier = struct {
 
         if (anonIsNominalBackingStructure(vars, direction)) return error.TypeMismatch;
         if (!self.recordRowLiftable(anon_record_ext)) {
-            if (self.rowEndsComparedPlain(anon_record_ext)) self.refuseRecordTail(.{
-                .kind = .compared_plain,
-                .nominal = nominal_type.ident.ident_idx,
-                .field = null,
-                .taken_apart = false,
-            });
+            if (self.rowEndsComparedPlain(anon_record_ext)) self.refuseRecordTail(.{ .compared_plain = nominal_type.ident.ident_idx });
             return error.TypeMismatch;
         }
 
@@ -2294,13 +2284,11 @@ const Unifier = struct {
             if (self.types_store.lookupNominalDecl(nominal_type)) |decl_idx| {
                 const decl = self.types_store.getNominalDecl(decl_idx);
                 if (decl.flags.padded) {
-                    self.refuseRecordTail(.{
-                        .kind = .padded_nominal,
+                    self.refuseRecordTail(.{ .padded_nominal = .{
                         .nominal = nominal_type.ident.ident_idx,
-                        .field = null,
                         .taken_apart = copy_tail.flags.record_pattern_tail,
                         .omits_omittable_field = self.backingOmittableFieldMissingFrom(decl.backing, anon_record_fields, anon_record_ext),
-                    });
+                    } });
                     return error.TypeMismatch;
                 }
             }
@@ -2357,12 +2345,11 @@ const Unifier = struct {
 
         if (self.rowCopyTail(anon_record_ext)) |copy_tail| {
             if (self.omittableFieldMissingFrom(nominal_backing_record.fields, anon_record_fields, anon_record_ext)) |field_name| {
-                self.refuseRecordTail(.{
-                    .kind = .added_field,
-                    .nominal = nominal_type.ident.ident_idx,
+                self.refuseRecordTail(.{ .added_field = .{
                     .field = field_name,
+                    .nominal = nominal_type.ident.ident_idx,
                     .taken_apart = copy_tail.flags.record_pattern_tail,
-                });
+                } });
                 return error.TypeMismatch;
             }
         }
@@ -2629,12 +2616,11 @@ const Unifier = struct {
                         var iter = self.types_store.iterRecordFields(record.fields);
                         while (iter.next()) |field| {
                             if (!self.fieldIsOmittable(field)) continue;
-                            self.refuseRecordTail(.{
-                                .kind = .added_field,
-                                .nominal = null,
+                            self.refuseRecordTail(.{ .added_field = .{
                                 .field = field.name,
+                                .nominal = null,
                                 .taken_apart = tail.desc.flags.record_pattern_tail,
-                            });
+                            } });
                             break;
                         }
                         return error.TypeMismatch;

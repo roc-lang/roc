@@ -54528,25 +54528,33 @@ fn varDeriveComponentObligations(
                 } else {
                     // Compared as the plain type: its uncommitted tail commits.
                     try self.commitComparedRowTail(resolved.var_, env);
-                    switch (flat_type) {
-                        .record => |record| for (0..record.fields.count) |offset| {
-                            const presence = self.types.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                            try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .admit_rigids = admit_rigids });
-                        },
-                        .tag_union => |tag_union| for (0..tag_union.tags.count) |tag_offset| {
-                            const tag_args = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
-                            for (0..tag_args.count) |offset| {
-                                try pending.append(self.gpa, .{ .var_ = self.types.getVarAt(tag_args, @intCast(offset)), .admit_rigids = admit_rigids });
-                            }
-                        },
-                        else => unreachable,
-                    }
                     // A further segment of the same row adds its own fields
                     // or tags.
                     const ext = switch (flat_type) {
-                        .record => |record| record.ext,
-                        .tag_union => |tag_union| tag_union.ext,
-                        else => unreachable,
+                        .record => |record| ext: {
+                            for (0..record.fields.count) |offset| {
+                                const presence = self.types.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                                try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .admit_rigids = admit_rigids });
+                            }
+                            break :ext record.ext;
+                        },
+                        .tag_union => |tag_union| ext: {
+                            for (0..tag_union.tags.count) |tag_offset| {
+                                const tag_args = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
+                                for (0..tag_args.count) |offset| {
+                                    try pending.append(self.gpa, .{ .var_ = self.types.getVarAt(tag_args, @intCast(offset)), .admit_rigids = admit_rigids });
+                                }
+                            }
+                            break :ext tag_union.ext;
+                        },
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .empty_tag_union,
+                        => unreachable, // this arm matched only .record and .tag_union
                     };
                     switch (self.types.resolveVar(ext).desc.content) {
                         .structure, .alias => try pending.append(self.gpa, .{ .var_ = ext, .admit_rigids = admit_rigids }),

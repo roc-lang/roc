@@ -32,8 +32,8 @@ fn expectRefusal(comptime source: []const u8, kind: Refusal.Kind, taken_apart: b
     defer test_env.deinit();
     try test_env.assertOneTypeError("Type Mismatch");
     const refusal = test_env.checker.problems.problems.items[0].type_mismatch.record_tail_refusal orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(kind, refusal.kind);
-    try std.testing.expectEqual(taken_apart, refusal.taken_apart);
+    try std.testing.expectEqual(kind, std.meta.activeTag(refusal));
+    try std.testing.expectEqual(taken_apart, refusal.takenApart());
 }
 
 const counter =
@@ -338,9 +338,12 @@ fn expectPaddedPatternRefusal(comptime source: []const u8, omits: bool) TestEnv.
     defer test_env.deinit();
     try test_env.assertOneTypeError("Type Mismatch");
     const refusal = test_env.checker.problems.problems.items[0].type_mismatch.record_tail_refusal orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(Refusal.Kind.padded_nominal, refusal.kind);
-    try std.testing.expect(refusal.taken_apart);
-    try std.testing.expectEqual(omits, refusal.omits_omittable_field);
+    const padded = switch (refusal) {
+        .padded_nominal => |padded| padded,
+        .added_field, .compared_plain, .compared_plain_tags => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(padded.taken_apart);
+    try std.testing.expectEqual(omits, padded.omits_omittable_field);
 }
 
 test "a padded nominal's refusal says when the pattern leaves out a defaulted field" {
