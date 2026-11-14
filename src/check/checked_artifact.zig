@@ -26584,6 +26584,8 @@ fn publishCheckedExhaustivenessSites(
     const obligations = bodies.env.exhaustiveness_obligations.items();
     const sites = try allocator.alloc(CheckedExhaustivenessSite, obligations.len);
     errdefer allocator.free(sites);
+    var requested_roots = try requestedCompileTimeRoots(allocator, compile_time_roots, root_requests);
+    defer requested_roots.deinit(allocator);
 
     for (obligations, sites, 0..) |obligation, *site, index| {
         const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
@@ -26624,7 +26626,7 @@ fn publishCheckedExhaustivenessSites(
             .destructure_pattern => |source_pattern| .{ .pattern = source_pattern },
         };
         const owner_template = try exhaustivenessOwnerTemplateForSource(allocator, bodies, owner_artifact, templates, needle);
-        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, root_requests, needle);
+        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, &requested_roots, needle);
         const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
             .{ .compile_time_replaced_by_root = root.id }
         else if (owner_template) |template_ref|
@@ -26879,18 +26881,33 @@ fn exhaustivenessOwnerTemplateForSource(
     return null;
 }
 
+/// The compile-time roots a root request evaluates, by root id.
+fn requestedCompileTimeRoots(
+    allocator: Allocator,
+    compile_time_roots: *const CompileTimeRootTable,
+    root_requests: *const RootRequestTable,
+) Allocator.Error!std.DynamicBitSetUnmanaged {
+    var requested = try std.DynamicBitSetUnmanaged.initEmpty(allocator, compile_time_roots.roots.items().len);
+    for (root_requests.requests.items()) |request| {
+        if (request.abi != .compile_time) continue;
+        const root = request.compile_time_root.get() orelse continue;
+        requested.set(@backingInt(root));
+    }
+    return requested;
+}
+
 fn exhaustivenessReplacingRootForSource(
     allocator: Allocator,
     bodies: CheckedBodies,
     compile_time_roots: *const CompileTimeRootTable,
-    root_requests: *const RootRequestTable,
+    requested_roots: *const std.DynamicBitSetUnmanaged,
     needle: CheckedBodyNeedle,
 ) Allocator.Error!?CompileTimeRoot {
     for (compile_time_roots.roots.items()) |root| {
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
         // Only a requested root is ever evaluated. A root with no request
         // replaces nothing: its source occurrence runs where it stands.
-        if (!compileTimeRootHasRootRequest(root_requests.requests.items(), root)) continue;
+        if (!requested_roots.isSet(@backingInt(root.id))) continue;
         // A literal conversion converts literal data and contains no site.
         if (root.literalConversionKind() != null) continue;
         if (root.hoisted_body) |body| switch (body) {
