@@ -13285,7 +13285,7 @@ fn testRootRegion(
 ) base.Region {
     return switch (source) {
         .statement => |statement| env.store.getStatementRegion(statement),
-        .def, .expr, .required_binding, .hoisted, .literal => {
+        .def, .expr, .required_binding, .hoisted, .literal, .literal_argument => {
             base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
         },
     };
@@ -13561,7 +13561,7 @@ fn collectExpectBindingPatterns(
 ) Allocator.Error![]CIR.Pattern.Idx {
     const statement_idx = switch (root.source) {
         .statement => |statement| statement,
-        .def, .expr, .required_binding, .hoisted, .literal => return allocator.alloc(CIR.Pattern.Idx, 0),
+        .def, .expr, .required_binding, .hoisted, .literal, .literal_argument => return allocator.alloc(CIR.Pattern.Idx, 0),
     };
     const statement = env.store.getStatement(statement_idx);
     if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);

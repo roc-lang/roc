@@ -71233,6 +71233,7 @@ fn procedureUseRootIdentity(request: checked.RootRequest, source_fn_key: names.T
         .def => |def| hashU32(&hasher, @backingInt(def)),
         .expr => |expr| hashU32(&hasher, @backingInt(expr)),
         .statement => |statement| hashU32(&hasher, @backingInt(statement)),
+        .literal_argument => |owner| hashU32(&hasher, @backingInt(owner)),
         .required_binding => |binding| hashU32(&hasher, binding),
         .literal => |literal| {
             hasher.update(@tagName(literal));

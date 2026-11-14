@@ -6414,7 +6414,13 @@ lowering in its worker's workspace and never added to the checked module:
   (`RootSource.literal`, a `LiteralNode` naming a literal expression or a
   custom literal pattern; `CompileTimeRoot.literalNode`), it holds no
   expression, and lowering converts the literal's value through the
-  conversion plan keyed by the literal's node.
+  conversion plan keyed by the literal's node;
+- a literal argument root's body ("Literal Arguments"): the root's source is
+  the expression owning its edge (`RootSource.literal_argument`), which
+  locates the root for reports and which the root does not evaluate; it holds
+  no expression and no body nodes (`bodyParts` is empty), and lowering
+  converts its literal at the edge `CompileTimeRoot.literal_argument`
+  records.
 
 ### Forbidden Checked-Boundary Shapes
 
