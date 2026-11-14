@@ -571,6 +571,21 @@ fn certifyUniqueArgs(
                 if (dense) |dense_id| {
                     if (uniqueness.born_unique.isSet(@backingInt(dense_id)) and
                         (uniqueness.conds[@backingInt(dense_id)] & ~sig.unique_params) == 0) continue;
+                    // A check that only reads its argument reads the count
+                    // of the value the argument aliases, so the birth may
+                    // hold at the end of its chain of single alias
+                    // definitions.
+                    if ((store.stmtRow(assign.rc_effect).consume_args & bit) == 0) {
+                        var cursor: u32 = @backingInt(dense_id);
+                        var steps: usize = 0;
+                        const viewed_birth = while (uniqueness.read_source[cursor].get()) |source| : (steps += 1) {
+                            if (steps > uniqueness.read_source.len) break false;
+                            cursor = source;
+                            if (uniqueness.born_unique.isSet(cursor) and
+                                (uniqueness.conds[cursor] & ~sig.unique_params) == 0) break true;
+                        } else false;
+                        if (viewed_birth) continue;
+                    }
                 }
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;

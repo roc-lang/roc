@@ -24461,6 +24461,16 @@ call:
 - no borrow of it is live at the call, under the same lender/holder
   liveness rule the certifier evaluates
 
+A check that only reads its argument may read it through a view: a borrowed
+pure same-value alias that no statement consumes. A view holds no unit and has
+no origin of its own, and the count the check reads is that of the value it
+views, so the three conditions are asked of the local owning the viewed unit,
+with every link of the borrowed alias chain down to it free of holder-adding
+occurrences. This is the shape a Builtin wrapper leaves behind when its inlined
+parameter feeds an op that only inspects the list, such as `list_owned_unique`.
+The certifier accepts such a claim when the birth holds at the end of the
+argument's chain of single alias definitions.
+
 The first two conditions are one more monotone bit per local in the ARC
 solver—born unique, destroyed by any flow edge that can add a holder—
 over the same alias and call edges the solver already walks. The third is a
@@ -24545,6 +24555,20 @@ Shared metadata locals are needed only for merged definitions, and tracked
 edges retain their existing hot path. Debug validation checks that every planned
 definition emitted its metadata.
 
+A loop whose list parameter is also a procedure argument (the loop plain TCE
+makes of a tail-recursive procedure, whose join parameters are the
+procedure's own arguments) is entered by jumps that write nothing, since the
+argument already holds the incoming list. Promotion gives each such entry
+jump the same entry write as any outside list: the argument's unit is
+acquired through `list_map_prepare_reuse`, measured, and written back into
+the parameter beside its metadata, so the head never reads metadata the
+entry did not compute. The loop qualifies only when every back edge writes
+the parameter, because TCE omits identity writes and an unwritten back edge
+passes the head's list along through a use control-flow use ordering does
+not see; when no statement before the loop writes the parameter or feeds a
+chain edge from a carrier; and when no statement is reachable both before
+the loop and inside it.
+
 Versioning (a head that dispatches on the ownership flags to a unique-only
 copy of the loop body) is applied only to leaf loops: promoted loops whose
 body contains neither another promoted loop nor a procedure call. It exists
@@ -24615,14 +24639,26 @@ on the original, unconsumed argument would allow ARC to move a preservation
 retain after that observation and incorrectly report a shared buffer as unique.
 
 `List.update` uses the same ownership-transfer protocol for its single selected
-item. After checking the index, it prepares the outer list and tests whether
-the allocation is reusable. A reusable list moves the selected item out of
-its slot, calls the updater with that owned value, and moves the result back
-into the vacated slot. This is what lets an updater mutate a uniquely owned
-refcounted item, such as an inner list, without a defensive copy. A shared
-outer list takes the ordinary checked replace path, which keeps the original
-list and selected item unchanged. Since `List.update` has the same item type
-on both sides, it needs no in-place representation cast.
+item. After checking the index, it prepares the outer list and asks
+`list_owned_unique` whether the allocation is reusable. A reusable list moves
+the selected item out of its slot, calls the updater with that owned value, and
+moves the result back into the vacated slot. This is what lets an updater
+mutate a uniquely owned refcounted item, such as an inner list, without a
+defensive copy. A shared outer list takes the ordinary checked set path, which
+keeps the original list and selected item unchanged. Since `List.update` has
+the same item type on both sides, it needs no in-place representation cast and
+no item-compatibility decision, so it asks the plain ownership question instead
+of `list_map_can_reuse`. That makes its test a runtime uniqueness check like
+any other, and both of its paths end in an operation whose result is a list
+declared unique (`list_move_in_unsafe` and `list_set`), so every `List.update`
+result is born unique: uniqueness inference deletes the test of each later
+update in a chain, and of every update in a loop whose entry value is proven
+unique. The in-place branch is present at every opt level, as it is for the
+sorts and `List.keep_if`.
+
+`list_map_can_reuse` is not a uniqueness-inference site. Its answer also
+depends on the layout decision below, and `List.map` asks it once per call
+rather than once per item, so a proof would remove one count read per map.
 
 The runtime meaning of `list_map_can_reuse` is "uniquely owned and not a
 seamless slice"—a slice's buffer points into the middle of an allocation
@@ -24637,7 +24673,7 @@ The in-place branch itself is dropped before it reaches LIR whenever the item
 representations are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off for
 dev, interpreter, and compile-time evaluation), so ineligible map
-and update specializations never carry dead in-place machinery and dev builds
+specializations never carry dead in-place machinery and dev builds
 lower exactly the copy path. The fold is one instance of a layout-resolved
 match: a `match` whose scrutinee calls a Builtin wrapper of a low-level whose
 answer committed layouts decide (`list_map_can_reuse`, whose decided answer is
