@@ -24629,6 +24629,39 @@ Only optimized builds (`--opt=speed` and `--opt=size`) run the analysis
 interpreter emit atomic count updates for every allocation and record no
 host-visibility results.
 
+### Releasing The Last Reference
+
+A release decides that its allocation is dying from the result of its own
+decrement and from nothing else: the builtins' release primitive
+(`releaseRcPtr`, `releaseDataPtr`, `RocList.releaseAllocation`) decrements
+and reports whether that decrement took the count to zero. The release that
+did owns the allocation exclusively; it releases what the allocation holds (a
+list's items, a box's payload, an erased callable's capture) and then
+frees it. No release path reads the count first to ask whether it is unique.
+For an allocation shared across threads that question has no stable answer:
+two threads holding the last two references would both read 2, both skip the
+teardown, and one of them would then free the allocation with its contents
+still alive.
+
+The atomic decrement uses acquire-release ordering. Release ordering places
+every access a thread made through its reference before the teardown done by
+whichever thread releases last, and acquire ordering is what lets that last
+thread rely on it. Single-thread releases use plain loads and stores and
+follow the same decrement-then-decide shape, so the compiled helpers, the
+interpreter, and the dynamic-value walker share one definition.
+
+A uniqueness check that gates an in-place update reads the count with a
+relaxed atomic load, in the builtins (`loadRefcountForUniqueness`) and in the
+checks backends emit inline. Another thread holding a reference may be
+decrementing the count during the read. A result of one means no other
+thread holds a reference, and the release ordering of that thread's
+decrement has already placed its accesses before the update.
+
+The concurrent-release tests in `src/builtins/atomic_rc_test.zig` run in the
+builtins module tests and, under ThreadSanitizer, in
+`zig build run-test-builtins-tsan`, which checks the orderings against the
+memory model rather than against the host CPU.
+
 ### Uniqueness Inference
 
 Ops with `may_runtime_uniqueness_check_args` branch at runtime: when the
