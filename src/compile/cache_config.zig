@@ -385,15 +385,15 @@ pub const Constants = struct {
     ///      189 and 190 changes.
     /// 192: literal argument roots record their edge owner as their own root
     ///      source and hold no expression.
-    /// 193: a type descriptor is stored as a 16-byte row: one word of kind,
+    /// 193: combines the two independent 192 entries.
+    /// 194: a type descriptor is stored as a 16-byte row: one word of kind,
     ///      flags, a flex's literal marker, two generalization marks that are
     ///      always clear in a stored row and a 14-bit rank, and a payload of
     ///      three words. A type store interns the identities of its nominal
     ///      types and aliases, which their descriptors name by row, and every
     ///      vars range has its length in the pool slot just before it, so a
-    ///      stored descriptor keeps only a range's start.
-    /// 194: combines the independent 192 literal argument root entry and the
-    ///      193 entry.
+    ///      stored descriptor keeps only a range's start. Includes the 193
+    ///      changes.
     pub const CACHE_VERSION = 194;
 };
 
