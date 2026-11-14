@@ -1343,6 +1343,13 @@ eligible expression, failure to evaluate, store, restore, or emit it correctly
 is a compiler bug with a regression test, not a reason to demote the expression
 from compile-time evaluation.
 
+Selection decides which expressions are roots, never how a root is completed.
+Once the module's dispatch plans and literal conversion roots are published,
+checking records for each selected root which producer completes it: the
+checked-value writer for a root in value form, an evaluator for every other
+("Value-Form Roots"). That record changes neither which expressions are roots
+nor any type.
+
 ### Every Rejection Is Explicit Recovery
 
 `roc check`, `roc build`, and `roc run` all lower every checked program, so
@@ -2055,6 +2062,102 @@ function-valued computation remains an ordinary compile-time callable root.
 When platform pairing binds a required procedure, it records the resulting
 alias forwarding in the pairing's own callable templates and persists it with
 the pairing. The unpaired platform's templates remain unchanged.
+
+#### Value-Form Roots
+
+A constant root whose checked expression already is its value computes
+nothing: `end_of_block = 256`, or the `Err(NotFound)` and `Ok({ x: 0, y: 0 })`
+a function body returns. **A root whose checked expression is in value form
+is completed by the checked-value writer; every other root is completed by an
+evaluator.** Each root has exactly one producer, which checking records on
+the root (`CompileTimeRoot.completion`), and finalization consumes that
+record as it is: it never re-inspects the expression, and never tries one
+producer and then the other.
+
+An expression is in value form when it is one of these, judged over checked
+CIR kinds (as the checked body reader presents them) and checked types:
+
+- a numeric literal with no conversion plan and no conversion root of its
+  own, whose checked type is a builtin scalar number type (`U8` through
+  `I128`, `F32`, `F64`, `Dec`), and whose exact value that type holds
+  (`exact_numeral.fits`; a float literal always converts, to its nearest
+  value);
+- a string literal whose quote dispatches to no `from_quote`, made of literal
+  segments only, whose checked type is the builtin `Str`;
+- an empty list, an empty record, or a tag with no payload;
+- a list, tuple, or tag application whose every part is in value form;
+- a record construction with no update base and no unset field, whose
+  checked type is a closed record of exactly its fields, every one
+  required, and whose every field value is in value form;
+- a nominal construction whose backing expression is in value form, unless
+  its type is a builtin nominal other than `Bool` and `Try`;
+
+and no part other than the root itself is read at a row other than its own
+(`CheckedBodies.rowCoercion`). The root's own coercion belongs to the site
+reading the root, which converts the stored value as it converts any other.
+Only `constant` and `hoisted_constant` roots whose body is their expression
+qualify. Checking marks them after it has published the module's dispatch
+plans and literal conversion roots (`publishValueFormRoots`); marking reads
+the checked types and changes none.
+
+Everything else stays with the evaluator, deliberately:
+
+- A literal converted by a custom `from_numeral` or `from_quote`, a literal
+  whose conversion depends on its instance, and a literal whose target
+  checking rejected: running the conversion, or reporting the rejection, is
+  evaluation. So is an integer or `Dec` literal its type cannot hold, which
+  the evaluator reports as an invalid literal.
+- A vector literal, and any literal whose type is not concrete when checking
+  finishes: its target is not a builtin scalar the checker fixed.
+- String interpolation, a record update, a record whose type stores a field
+  by its presence or fills it from a default, a call, a dispatch, an
+  operator (unary minus included), a lookup of any definition, a field or
+  tuple access, a block, a branch, `dbg`, `expect`, and `crash`.
+- A reference to another root's completed value. Its value is complete when
+  the root runs, but writing it would copy or share another root's nodes,
+  which this rule leaves to a later step.
+
+Nothing reported during evaluation can arise for a value-form root: it calls
+nothing, so it cannot crash, fail an `expect`, print with `dbg`, or reach an
+exhaustiveness failure; its literals convert by the builtin conversion and
+fit their types, so none is rejected; and it reads no value, so it fails by
+no read of a failed root. A root for which any of these could happen is not
+in value form.
+
+The writer stores the root under the plan, layout and stored type the
+`.boxy` compile-time evaluator stores it under, computed from the root's
+result type exactly as that evaluator's lowering computes them, by a program
+of the same modules that lowers nothing (`postcheck.Boxy.ValueSchema`). Under
+`.lss` too, every root that reads no function value is the `.boxy`
+evaluator's ("Compile-Time Evaluation Under `.lss`"), so this is the one
+representation either strategy stores such a root in. One store writer
+serves both producers (`eval/const_store_writer.zig`): the plan-directed walk,
+the node shapes it fills, the field and variant order, packed scalar and
+product lists, nominal wrapping, and the stored type are shared, and only
+where a value's parts come from differs: an evaluator's result memory, or the
+checked expression's parts. A numeral's bytes are the bytes lowering gives
+the literal (`exact_numeral.encodeBits`), and a literal list or string has
+no capacity beyond its items (Static Lists And Strings Keep Their Capacity).
+The stored graph shares a node exactly where the evaluator's would: the
+evaluator stores one node for every part it read at one address, and the
+parts a value-form root's evaluation reads at one address are its equal
+literals that lowering interns by content and the evaluation reads as views
+of their static backing, namely a string literal of one non-empty segment
+too long for the evaluation target to hold inline, and a non-empty list of
+numerals whose items have a builtin numeric type, which lowering writes as one
+packed literal. Every other part of such a root is built anew by its
+evaluation, and is a node of its own.
+
+A value-form root reads nothing, so finalization completes every pending
+one before any evaluator starts: the evaluators' dependency graph never
+names them, no program is built for them, and a module whose pending roots
+are all in value form builds no program and is complete for its unit
+scheduler at once. The checked artifact still carries each such root's
+request, entry wrapper template, and const template: the root graph walks no
+wrapper of a completed root, but a module's object defines each completed
+root's wrapper for the other objects of a link, and runtime reads restore
+the stored value through the const template, exactly as for an evaluated
+root.
 
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
@@ -16980,7 +17083,9 @@ root's value is stored by the plan and stored type its own result type gives
 it (`postcheck/boxy/const_schema.zig`). Both evaluators run the same LIR
 interpreter or native dev evaluator and store the same checked values, so a
 `.boxy` runtime program restores constants the same way under either, and
-reports the same diagnostics.
+reports the same diagnostics. Neither runs a value-form root: the
+checked-value writer completes those first, under the `.boxy` evaluator's
+plans and stored types ("Value-Form Roots").
 
 Selecting a root's compile-time evaluator by whether its value contains a
 function resolves nominal backings against the **complete checked program**:
@@ -26790,7 +26895,10 @@ lowering or interpreting a compile-time root is still a compiler bug, not a
 user-facing diagnostic.
 
 While storing an eval result, the `ConstStore` writer reserves a `ConstNodeId`
-and inserts the runtime-address-to-node memo before storing its children. Repeated
+and inserts the runtime-address-to-node memo before storing its children. The
+checked-value writer keys the same memo by the one kind of address a
+value-form root's evaluation shares, a literal's interned static backing
+("Value-Form Roots"). Repeated
 references and back-edges therefore resolve to that exact node. The builder
 verifies that every reserved node was filled exactly once and that every cycle
 crosses a delayed function-capture edge. Const materialization and dependency
@@ -28936,15 +29044,15 @@ per-procedure and per-statement paths test a pointer that is null. Detailed
 timing never changes what the compiler emits, takes part in no cache key,
 and orders nothing.
 
-Compile-time evaluation reports its steps (root graph, root classification,
-waiting for builds, program builds, lowering, procedure code generation,
-entry wrappers, import image selection, host splice, static data placement,
-program runs, root job setup, unit keys, the wait for every unit, module
-commit, checked cache writes) and counts its roots by kind and by value
-form, its programs, batches, retry passes, units restored and built, import
-images selected and loaded, and slow-root progress threads. Value form is a
-syntactic classification for this output only: no compiler decision reads
-it.
+Compile-time evaluation reports its steps (writing value-form roots, root
+graph, root classification, waiting for builds, program builds, lowering,
+procedure code generation, entry wrappers, import image selection, host
+splice, static data placement, program runs, root job setup, unit keys, the
+wait for every unit, module commit, checked cache writes) and counts the
+roots it completes by kind, its programs, batches, retry passes, units
+restored and built, import images selected and loaded, and slow-root
+progress threads. Its root counts separate the roots an evaluator ran from
+the roots the checked-value writer completed ("Value-Form Roots").
 
 Boxy lowering reports setup, unit worker seeding, root workers, worker
 bodies, type table filling, layout and static data requests, export needs,

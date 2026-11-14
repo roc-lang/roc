@@ -24507,6 +24507,17 @@ pub const CompileTimeRootPayload = union(enum) {
     runtime,
 };
 
+/// Which producer completes a compile-time root (design.md "Value-Form
+/// Roots"). Checking decides it once, from the root's checked expression,
+/// and every finalization consumes the decision as it is.
+pub const CompileTimeRootCompletion = enum(u8) {
+    /// A compile-time evaluator lowers, compiles and runs the root.
+    evaluate,
+    /// The root's checked expression is in value form: the checked-value
+    /// writer stores it from the expression, and nothing runs.
+    write_value,
+};
+
 /// Whether a selected compile-time root may become a root request.
 pub const CompileTimeRootRequestEligibility = enum(u8) {
     pending,
@@ -24548,6 +24559,8 @@ pub const CompileTimeRoot = struct {
     /// an aggregate. Boxy must produce its own capture graph for this root.
     /// Readiness never traverses a stored value or rediscovers its type.
     lss_value_has_functions: bool = false,
+    /// The producer that completes the root (`publishValueFormRoots`).
+    completion: CompileTimeRootCompletion = .evaluate,
 
     /// The payload available to this strategy. A completed function in the
     /// other strategy's representation is still pending for this producer.
@@ -24632,7 +24645,7 @@ pub const CompileTimeRoot = struct {
 };
 
 comptime {
-    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CompileTimeRoot) == 148);
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CompileTimeRoot) == 152);
 }
 
 /// One literal's conversion root (`CompileTimeRootTable.literal_conversions`).
@@ -24682,6 +24695,116 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
     if (parts.pattern) |pattern| if (diagnostics.isSet(@backingInt(pattern))) return true;
     if (parts.literal) |literal| if (diagnostics.isSet(literal.node())) return true;
     return false;
+}
+
+/// Mark each constant and hoisted constant root whose checked expression is
+/// in value form (`exprIsValueForm`) for the checked-value writer (design.md
+/// "Value-Form Roots"). It reads the module's dispatch plans and literal
+/// conversion roots, so it runs once both are published. It records a fact
+/// about the checked expression and changes no type.
+fn publishValueFormRoots(allocator: Allocator, roots: *CompileTimeRootTable, bodies: CheckedBodies) Allocator.Error!void {
+    var stack = std.ArrayList(CIR.Expr.Idx).empty;
+    defer stack.deinit(allocator);
+    for (roots.roots.items()) |*root| {
+        switch (root.kind) {
+            .constant, .hoisted_constant => {},
+            .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => continue,
+        }
+        if (root.hoisted_body) |body| switch (body) {
+            .expr => {},
+            .pattern_extraction, .pattern_error, .pattern_validation, .valueless_binding => continue,
+        };
+        const expr = root.expr.get() orelse continue;
+        if (try exprIsValueForm(allocator, bodies, expr, &stack)) root.completion = .write_value;
+    }
+}
+
+/// Whether the checked expression `root` is in value form (design.md
+/// "Value-Form Roots"): a literal whose conversion is the builtin one and
+/// cannot fail, or a list, tuple, record, tag, or nominal construction whose
+/// every part is in value form, with no part read at a row other than its
+/// own. Nothing in it calls, dispatches, reads a definition, or can crash.
+/// `stack` is scratch.
+pub fn exprIsValueForm(allocator: Allocator, bodies: CheckedBodies, root: CIR.Expr.Idx, stack: *std.ArrayList(CIR.Expr.Idx)) Allocator.Error!bool {
+    stack.clearRetainingCapacity();
+    try stack.append(allocator, root);
+    while (stack.pop()) |id| {
+        // A part its parent reads at a wider row is converted there; the
+        // root's own coercion belongs to the site that reads the root.
+        if (id != root and bodies.rowCoercion(id) != null) return false;
+        const raw = @backingInt(id);
+        switch (bodies.exprData(id)) {
+            .numeral => {
+                if (bodies.numeralPlan(raw) != null or bodies.literalConversionRoot(raw) != null) return false;
+                const builtin_type = checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) orelse return false;
+                const target = valueFormNumeralTarget(builtin_type) orelse return false;
+                switch (target) {
+                    // A float literal rounds to its nearest value; it never fails.
+                    .f32, .f64 => {},
+                    .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec => {
+                        const exact = bodies.env.exactNumeral(bodies.numeralLiteral(raw));
+                        if (!try exact_numeral.fits(allocator, exact, target)) return false;
+                    },
+                }
+            },
+            .str => |segments| {
+                if (bodies.quoteIsCustom(raw)) return false;
+                if (checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id)) != .str) return false;
+                for (segments) |segment| if (bodies.exprData(segment) != .str_segment) return false;
+            },
+            .empty_list, .empty_record, .zero_argument_tag => {},
+            .list => |items| try stack.appendSlice(allocator, items),
+            .tuple => |items| try stack.appendSlice(allocator, items),
+            .tag => |tag| try stack.appendSlice(allocator, tag.args),
+            .record => |record| {
+                if (record.ext != null or record.unsets.len != 0) return false;
+                if (!recordTypeIsClosedAndRequired(bodies.types, bodies.exprType(id), record.fields.len)) return false;
+                for (record.fields) |field| try stack.append(allocator, bodies.recordFieldValue(field));
+            },
+            .nominal => |nominal| {
+                // A builtin nominal other than `Bool` and `Try` has no
+                // backing a construction could build.
+                if (checkedConcreteBuiltinForLiteralTarget(bodies.types, bodies.exprType(id))) |builtin_type| switch (builtin_type) {
+                    .bool, .try_ => {},
+                    .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .stream, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => return false,
+                };
+                try stack.append(allocator, nominal.backing_expr);
+            },
+            .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+        }
+    }
+    return true;
+}
+
+/// The numeric type a value-form numeral converts to: a builtin scalar
+/// number. A vector or any other builtin type has no value-form numeral.
+fn valueFormNumeralTarget(builtin_type: CheckedBuiltinNominal) ?exact_numeral.Target {
+    return switch (builtin_type) {
+        inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |tag| @field(exact_numeral.Target, @tagName(tag)),
+        .bool, .try_, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .stream, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => null,
+    };
+}
+
+/// Whether `ty` is a closed record type of exactly `field_count` fields,
+/// every one required: a construction listing `field_count` fields then
+/// gives every field its value, and no field is stored by its presence or
+/// filled from a default.
+fn recordTypeIsClosedAndRequired(view: CheckedTypeStoreView, ty: CheckedTypeId, field_count: usize) bool {
+    var current = ty;
+    var count: usize = 0;
+    while (true) switch (view.payload(current)) {
+        .alias => |alias| current = alias.backing,
+        .record => |record| {
+            var fields = record.fields.iterator();
+            while (fields.next()) |field| {
+                if (field.kind.tag != .required) return false;
+                count += 1;
+            }
+            current = record.ext;
+        },
+        .empty_record => return count == field_count,
+        .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .tag_union, .empty_tag_union, .field_kind => return false,
+    };
 }
 
 /// Public `CompileTimeRootTable` declaration.
@@ -35075,6 +35198,11 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         &callable_eval_templates,
     );
+    try publishValueFormRoots(
+        allocator,
+        &compile_time_roots,
+        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
+    );
     try classifyTemplateDispatchPlanRefs(
         allocator,
         &static_dispatch_plans,
@@ -37117,8 +37245,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xCC, 0x13, 0xD1, 0xFD, 0x32, 0x3A, 0x27, 0x5D, 0x74, 0x47, 0x5E, 0x13, 0xFE, 0xBB, 0x49, 0x7E,
-        0xAF, 0xDF, 0x1A, 0x01, 0x9D, 0xC5, 0x4C, 0xAA, 0x9D, 0x90, 0x44, 0x71, 0x39, 0xA4, 0x5A, 0xEA,
+        0x32, 0xD5, 0x78, 0x2F, 0xF0, 0x8D, 0xD9, 0x38, 0xF4, 0xE2, 0x1C, 0x96, 0x8E, 0x13, 0xA6, 0x5C,
+        0x14, 0x04, 0x21, 0xEE, 0x6C, 0xF5, 0x49, 0x21, 0xEB, 0x59, 0x71, 0x0C, 0xB0, 0xD2, 0xF2, 0x74,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
