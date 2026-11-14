@@ -82,7 +82,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      renumbers later LowLevel ops, RC reasons name dead-lender reads,
 ///      procedure shapes widen to 32 bits, and dynamic tag payload reads
 ///      carry `whole`.
-pub const FORMAT_VERSION: u32 = 73;
+/// v74: `list_take_first` and `list_take_last` leave the LowLevel enum,
+///      renumbering later ops.
+pub const FORMAT_VERSION: u32 = 74;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

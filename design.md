@@ -22610,8 +22610,12 @@ generates constraints per statement:
   result flow to every input consumed by the ordinary operation. These are
   explicit ownership-flow edges, separate from same-value alias edges: slicing
   changes a list descriptor. Returned slices also demand this transfer, through
-  pure aliases, so lending a unique parameter and retaining its result cannot
-  discard the buffer's reserved capacity. Multi-bound results select ownership
+  pure aliases and through every join parameter a returned value is written
+  from (each alias write into the parameter names one more source to follow),
+  so lending a unique parameter and retaining its result cannot discard the
+  buffer's reserved capacity or keep alive the items a slice drops: a rest
+  pattern or `List.sublist` returned from a `match` or `if` arm transfers its
+  input exactly as one returned directly does. Multi-bound results select ownership
   and demand their consumed inputs too. Read-only slices can still select the
   borrowing operation and keep their lender live. Parameter demands and these
   edges settle together with direct-call demands, including across wrappers.
@@ -24959,6 +24963,16 @@ clearing one allocates the capacity its descriptor records (Static Lists And
 Strings Keep Their Capacity); a sublist of one never does, because a view
 reserves nothing.
 
+A list pattern's rest (`[first, .. as rest, last]`) is one `list_sublist` of
+the matched list, `{ start: front, len: len - (front + back) }`, under both
+strategies, and its fixed items are `list_get_unsafe` reads. As one sublist it
+has `listSublist`'s outcomes: a rest from index zero of a unique list shrinks
+it in place and releases the items behind it, any other rest is a seamless
+slice, and a rest of a list that stays live is a borrowed view
+(`list_sublist_borrowed`) with no reference count traffic. A rest returned
+from its arm transfers the matched list's ownership through the arm's value
+join, as a returned slice does ("Constraints Per Statement Form").
+
 An append-only promoted loop versions on its slack instead. The fill limit
 answers whether the next append fits; a bound on the loop's remaining
 iterations answers whether every remaining append does, once. The bound is
@@ -25844,10 +25858,7 @@ also releases the items a reusable list drops; the call is cheap next to the
 per-item releases it may make. The split is by whether the list layout marks
 its items refcounted, never by anything the lowering guesses. Zero-sized
 items have no bytes to slice, so their sublist is the window length alone.
-`list_take_first` and `list_take_last`, which a list rest pattern lowers to,
-are `list_sublist` over the first `count` items and over the items from
-`len -| count`, as every backend computes those windows for `listSublist`,
-and the Wasm backend lowers them exactly as it lowers `list_sublist`.
+A list rest pattern is a `list_sublist` like any other, with these outcomes.
 `list_release_excess_capacity` is not inline: it calls
 `listReleaseExcessCapacity`, since the allocation and copy it may make cost
 far more than the call.

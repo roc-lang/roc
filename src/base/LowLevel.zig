@@ -106,8 +106,6 @@ pub const LowLevel = enum(u16) {
     list_replace_unsafe,
     list_swap,
     list_prepend,
-    list_take_first,
-    list_take_last,
     list_reverse,
     list_reserve,
     list_reserve_for_append,
@@ -1119,8 +1117,6 @@ pub const LowLevel = enum(u16) {
 
         .list_drop_at = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
         .list_sublist = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
-        .list_take_first = byType(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
-        .list_take_last = byType(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
 
         .list_sublist_borrowed = byType(.retainsResultBorrowingArgs(arg_0)).elements(&.{ .layout, .none }),
 

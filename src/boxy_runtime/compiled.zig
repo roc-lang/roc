@@ -389,8 +389,6 @@ pub const ListOp = enum(u32) {
     reserve_for_append,
     clear,
     release_excess_capacity,
-    take_first,
-    take_last,
     reverse,
 };
 
@@ -540,17 +538,9 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
             a.zeroSizedKeeping(0)
         else
             list.listClear(a, e.alignment, e.width, e.rc, e.context, e.dec, m0, ops)),
-        .sublist, .sublist_borrowed, .take_first, .take_last => {
-            const start: u64, const len: u64 = switch (req.op) {
-                .sublist, .sublist_borrowed => .{ req.n[0], req.n[1] },
-                .take_first => .{ 0, req.n[0] },
-                .take_last => blk: {
-                    const size: u64 = @intCast(a.len());
-                    const take = req.n[0];
-                    break :blk .{ if (take >= size) 0 else size - take, take };
-                },
-                .clear, .capacity, .slack_unique, .owned_unique, .get_unsafe, .append_unsafe, .concat, .append_range_within, .copy_range_within, .append_range_within_unsafe, .append_sublist, .prepend, .swap, .map_can_reuse, .item_size_at_most, .map_cast_unsafe, .map_extract_unsafe, .map_write_unsafe, .drop_at, .replace_unsafe, .set, .set_in_place_unsafe, .with_capacity, .reserve, .reserve_for_append, .release_excess_capacity, .reverse => unreachable, // the enclosing prong admits only these five
-            };
+        .sublist, .sublist_borrowed => {
+            const start = req.n[0];
+            const len = req.n[1];
             if (e.width == 0) {
                 writeList(req.out, zstList(zstSublistLen(a.len(), start, len)));
             } else if (req.op == .sublist_borrowed) {

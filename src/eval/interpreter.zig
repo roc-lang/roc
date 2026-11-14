@@ -5993,8 +5993,6 @@ pub const Interpreter = struct {
                 );
                 break :blk self.listResult(ll, result);
             },
-            .list_take_first => self.evalListSublist(ll, list_elems, args[0], updateModeForArg0(ll.unique_args), 0, args[1].read(u64)),
-            .list_take_last => self.evalListTakeLast(ll, list_elems, args[0], args[1], updateModeForArg0(ll.unique_args)),
             .list_reverse => self.evalListReverse(ll, list_elems, args[0], updateModeForArg0(ll.unique_args)),
 
             // ── Arithmetic ──
@@ -7534,40 +7532,6 @@ pub const Interpreter = struct {
     }
 
     // ── List operation helpers ──
-
-    /// Keep `len` elements of the list starting at `start`, releasing the rest.
-    fn evalListSublist(self: *LirInterpreter, ll: LowLevelEvalInput, list_elems: ListElemSource, list_arg: Value, update_mode: UpdateMode, start: u64, len: u64) Error!Value {
-        const rl = self.listValue(list_elems, list_arg);
-        const info = self.listElemInfo(list_elems);
-        if (info.width == 0) {
-            return self.listResult(ll, canonicalZstList(zstSublistLen(rl.len(), start, len)));
-        }
-        const elems_rc = self.builtinListElemRc(list_elems);
-        var crash_boundary = self.enterCrashBoundary();
-        defer crash_boundary.deinit();
-        if (crash_boundary.set() != 0) return self.crashError();
-        var elem_rc_ctx = self.listElementRcContext(list_elems);
-        const result = builtins.list.listSublist(
-            rl,
-            info.alignment,
-            info.width,
-            elems_rc,
-            start,
-            len,
-            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-            update_mode,
-            &self.roc_ops,
-        );
-        return self.listResult(ll, result);
-    }
-
-    fn evalListTakeLast(self: *LirInterpreter, ll: LowLevelEvalInput, list_elems: ListElemSource, list_arg: Value, count_arg: Value, update_mode: UpdateMode) Error!Value {
-        const len = self.listValue(list_elems, list_arg).len();
-        const take = count_arg.read(u64);
-        const start = if (take >= len) 0 else len - @as(usize, @intCast(take));
-        return self.evalListSublist(ll, list_elems, list_arg, update_mode, @intCast(start), take);
-    }
 
     fn evalListReverse(self: *LirInterpreter, ll: LowLevelEvalInput, list_elems: ListElemSource, list_arg: Value, update_mode: UpdateMode) Error!Value {
         const rl = self.listValue(list_elems, list_arg);

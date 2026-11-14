@@ -955,6 +955,10 @@ const Lowerer = struct {
     erased_owner_states: std.ArrayList(ErasedOwnerState),
     erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
     erased_capture_ptr_ty: ?Type.TypeId = null,
+    /// The `{ len, start }` record layout a list rest pattern's sublist takes,
+    /// which the coordinator creates when it first prepares or lowers a bound
+    /// rest pattern (`listRestRangeLayout`).
+    list_rest_range_layout: ?layout.Idx = null,
     parallel_metrics: ?*ParallelMetrics = null,
     /// Worker callbacks borrow the coordinator's frozen identity tables while
     /// owning procedure-local scratch and LIR body storage.
@@ -2629,6 +2633,7 @@ const Lowerer = struct {
                 .list => |list| {
                     for (view.patSpan(list.patterns)) |pattern| try self.add(.{ .pattern = pattern });
                     if (list.rest.get()) |rest| if (rest.pattern.get()) |pattern| {
+                        _ = try self.lowerer.listRestRangeLayout();
                         try self.add(.{ .pattern = pattern });
                     };
                 },
@@ -11215,14 +11220,10 @@ const Lowerer = struct {
         }
 
         pub fn readListRest(self: MatchTreeCtx, dest: LIR.LocalId, source: LIR.LocalId, len_local: LIR.LocalId, front: u64, back: u64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-            // rest = take_first(take_last(source, len - front), len - (front + back))
-            const front_dropped = try self.l.addLocalForLayout(self.l.result.store.getLocal(source).layout_idx);
+            // rest = sublist(source, { len: len - (front + back), start: front })
             const keep_len = try self.l.addLocalForLayout(.u64);
-            var current = try self.l.assignBinaryLowLevel(self.where, dest, .list_take_first, front_dropped, keep_len, next);
-            current = try self.l.lenMinusConst(self.where, keep_len, len_local, @intCast(front + back), current);
-            const keep_after_front = try self.l.addLocalForLayout(.u64);
-            current = try self.l.assignBinaryLowLevel(self.where, front_dropped, .list_take_last, source, keep_after_front, current);
-            return try self.l.lenMinusConst(self.where, keep_after_front, len_local, @intCast(front), current);
+            const sublist = try self.l.assignListRest(self.where, dest, source, @intCast(front), keep_len, next);
+            return try self.l.lenMinusConst(self.where, keep_len, len_local, @intCast(front + back), sublist);
         }
 
         pub fn readNominalBacking(self: MatchTreeCtx, dest: LIR.LocalId, backing_ty: Type.TypeId, source: LIR.LocalId, nominal_ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -11753,15 +11754,10 @@ const Lowerer = struct {
                 task.current = input.?;
                 if (elems.len != 0) {
                     const rest = list.rest.get().?;
-                    // rest = take_first(take_last(source, len - rest.index), len - fixed_count)
-                    const source_layout = self.result.store.getLocal(task.source).layout_idx;
-                    const front_dropped = try self.addLocalForLayout(source_layout);
+                    // rest = sublist(source, { len: len - fixed_count, start: rest.index })
                     const keep_len = try self.addLocalForLayout(.u64);
-                    task.current = try self.assignBinaryLowLevel(where, task.rest_local, .list_take_first, front_dropped, keep_len, task.current);
+                    task.current = try self.assignListRest(where, task.rest_local, task.source, @intCast(rest.index), keep_len, task.current);
                     task.current = try self.lenMinusConst(where, keep_len, task.len_local, fixed_count, task.current);
-                    const keep_after_front = try self.addLocalForLayout(.u64);
-                    task.current = try self.assignBinaryLowLevel(where, front_dropped, .list_take_last, task.source, keep_after_front, task.current);
-                    task.current = try self.lenMinusConst(where, keep_after_front, task.len_local, @intCast(rest.index), task.current);
                 }
             },
             ListPatternCursor.element => {
@@ -11882,6 +11878,36 @@ const Lowerer = struct {
             .args = try self.result.store.addLocalSpan(&args),
             .next = next,
         } }, where.source());
+    }
+
+    /// Emit `target = list_sublist(source, { len: len_local, start })`, the
+    /// rest of a list pattern: the items after its `start` leading patterns,
+    /// `len_local` of them. The `{ len, start }` record is in field-name
+    /// order, as `List.sublist` takes it.
+    fn assignListRest(self: *Lowerer, where: LowerSite, target: LIR.LocalId, source: LIR.LocalId, start: i64, len_local: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const range = try self.addLocalForLayout(try self.listRestRangeLayout());
+        const start_local = try self.addLocalForLayout(.u64);
+        const sublist = try self.assignBinaryLowLevel(where, target, .list_sublist, source, range, next);
+        const build_range = try self.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = range,
+            .fields = try self.result.store.addLocalSpan(&.{ len_local, start_local }),
+            .next = sublist,
+        } }, where.source());
+        return try self.assignU64Literal(where, start_local, start, build_range);
+    }
+
+    /// The `{ len, start }` record layout of a list rest pattern's sublist.
+    /// The coordinator creates it the first time it prepares or lowers a bound
+    /// rest pattern; a worker only reads it, since workers never add layouts.
+    fn listRestRangeLayout(self: *Lowerer) Common.LowerError!layout.Idx {
+        if (self.list_rest_range_layout) |existing| return existing;
+        if (self.worker_callback) self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared list rest range layout");
+        const created = try self.result.layouts.putStructFields(&.{
+            .{ .index = 0, .layout = .u64 },
+            .{ .index = 1, .layout = .u64 },
+        });
+        self.list_rest_range_layout = created;
+        return created;
     }
 
     /// Emit `target = len_local - value` using a fresh u64 literal operand.

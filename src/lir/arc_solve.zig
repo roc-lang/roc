@@ -2546,6 +2546,21 @@ fn bindingOwnershipFlow(solver: *const Solver, fact: BindingFact) ?OwnershipFlow
     };
 }
 
+/// One write of a pure same-value alias into a join parameter, as dense
+/// indices: the parameter and the value the write names.
+const JoinParamWrite = struct { target: u32, source: u32 };
+
+fn joinParamWrite(solver: *const Solver, fact: BindingFact) ?JoinParamWrite {
+    const edge = switch (fact) {
+        .alias => |edge| edge,
+        .fresh, .multi, .borrow, .demand, .consuming_result => return null,
+    };
+    const target = solver.domain.indexOf(edge.target) orelse return null;
+    if (!solver.join_param.isSet(target)) return null;
+    const source = solver.domain.indexOf(edge.source) orelse return null;
+    return .{ .target = target, .source = source };
+}
+
 /// Settles the borrowed-parameter lattice from the facts collected above.
 /// A work item is one newly demanded local. Ownership-flow adjacency supplies
 /// its source demands; a parameter that flips owned supplies the exact caller
@@ -2600,18 +2615,47 @@ fn solveParameterModes(solver: *Solver) SolveError!void {
 
     // A returned truncation must transfer ownership too: lending its input
     // and retaining at the return would discard a unique buffer's capacity.
-    // Ordinary payload reads and same-value returns retain their borrow rules.
+    // The returned value reaches the truncation through pure same-value
+    // aliases and through the join parameters a value join writes them
+    // into, each write naming one alias source of the parameter. Ordinary
+    // payload reads and same-value returns retain their borrow rules.
+    const join_offsets = try solver.allocator.alloc(u32, local_count + 1);
+    defer solver.allocator.free(join_offsets);
+    @memset(join_offsets, 0);
+    for (solver.binding_facts.items) |fact| {
+        const edge = joinParamWrite(solver, fact) orelse continue;
+        join_offsets[edge.target + 1] += 1;
+    }
+    for (1..join_offsets.len) |index| join_offsets[index] += join_offsets[index - 1];
+    const join_sources = try solver.allocator.alloc(u32, join_offsets[local_count]);
+    defer solver.allocator.free(join_sources);
+    const join_fill = try solver.allocator.dupe(u32, join_offsets[0..local_count]);
+    defer solver.allocator.free(join_fill);
+    for (solver.binding_facts.items) |fact| {
+        const edge = joinParamWrite(solver, fact) orelse continue;
+        join_sources[join_fill[edge.target]] = edge.source;
+        join_fill[edge.target] += 1;
+    }
     var returned_aliases = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, local_count);
     defer returned_aliases.deinit(solver.allocator);
+    var returned_work = std.ArrayList(u32).empty;
+    defer returned_work.deinit(solver.allocator);
     for (solver.proc_returns.items.items) |local| {
-        var cursor = solver.domain.indexOf(@fromBackingInt(@intCast(local))) orelse continue;
+        const start = solver.domain.indexOf(@fromBackingInt(@intCast(local))) orelse continue;
+        try returned_work.append(solver.allocator, start);
+    }
+    while (returned_work.pop()) |start| {
+        var cursor = start;
         while (!returned_aliases.isSet(cursor)) {
             returned_aliases.set(cursor);
             if (consuming_results.isSet(cursor)) {
                 solver.demand[cursor] = true;
                 break;
             }
-            if (solver.defs[cursor] == .multi) break;
+            if (solver.defs[cursor] == .multi) {
+                try returned_work.appendSlice(solver.allocator, join_sources[join_offsets[cursor]..join_offsets[cursor + 1]]);
+                break;
+            }
             cursor = solver.alias_source[cursor].get() orelse break;
         }
     }
