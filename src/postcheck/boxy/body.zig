@@ -550,6 +550,9 @@ pub const Builder = struct {
     reads_inputs: collections.DenseMapUnmanaged(Tables.RecipeId, bool) = .empty,
     /// The evaluation of the recipes that read no input (`foldWord`).
     fold: ?Tables.Evaluation = null,
+    /// The descriptor-guided operations this body performs on the
+    /// descriptor each table word holds (`demandDescriptor`), by word.
+    table_demand: std.AutoArrayHashMapUnmanaged(u32, StaticDescs.OpSet) = .empty,
     /// The locals the entry chain defines, which every statement of the
     /// body can read.
     entry_locals: collections.DenseMapUnmanaged(LocalId, void) = .empty,
@@ -695,6 +698,7 @@ pub const Builder = struct {
         self.slots.deinit(self.allocator);
         self.reads_inputs.deinit(self.allocator);
         if (self.fold) |*fold| fold.deinit();
+        self.table_demand.deinit(self.allocator);
         self.entry_locals.deinit(self.allocator);
         self.codec_compositions.deinit(self.allocator);
         self.static_callables.deinit(self.allocator);
@@ -1606,9 +1610,18 @@ pub const Builder = struct {
         const input_count = self.program.inputCount(self.worker_id);
         if (input_count == 0) {
             if (self.slots.items.len != 0) invariant("a worker without inputs read a table slot");
+            if (self.table_demand.count() != 0) invariant("a worker without inputs demanded a table word");
             return null;
         }
-        return try self.recipes.needs(self.program.arena.allocator(), self.allocator, input_count, self.program.descCount(self.worker_id), self.slots.items);
+        const demand = try self.allocator.alloc(Tables.Demand, self.table_demand.count());
+        defer self.allocator.free(demand);
+        for (demand, self.table_demand.keys(), self.table_demand.values()) |*entry, word, ops| entry.* = .{ .word = word, .ops = ops };
+        std.mem.sort(Tables.Demand, demand, {}, struct {
+            fn lessThan(_: void, a: Tables.Demand, b: Tables.Demand) bool {
+                return a.word < b.word;
+            }
+        }.lessThan);
+        return try self.recipes.needs(self.program.arena.allocator(), self.allocator, input_count, self.program.descCount(self.worker_id), self.slots.items, demand);
     }
 
     /// The local holding input `index` (`inputWord`), read from this
@@ -1636,6 +1649,45 @@ pub const Builder = struct {
     pub fn varDesc(self: *Builder, index: usize) Allocator.Error!LocalId {
         if (index >= self.var_descs.len) invariant("a scope variable's descriptor is not among its worker's inputs");
         return try self.inputLocal(@intCast(index));
+    }
+
+    /// The descriptor local of `ty` as the operand of the descriptor-guided
+    /// operation `op`, whose demand on that descriptor is recorded
+    /// (`demandDescriptor`).
+    pub fn opDescOf(self: *Builder, ty: TypeId, op: StaticDescs.DescOp) Allocator.Error!LocalId {
+        const local = try self.descOf(ty);
+        try self.demandDescriptor(try self.descWord(ty), op);
+        return local;
+    }
+
+    /// The descriptor of scope variable `index` as the operand of the
+    /// descriptor-guided operation `op` (`opDescOf`).
+    pub fn opVarDesc(self: *Builder, index: usize, op: StaticDescs.DescOp) Allocator.Error!LocalId {
+        const local = try self.varDesc(index);
+        try self.demandDescriptor(try self.inputWord(index), op);
+        return local;
+    }
+
+    /// Record that this body performs `op` on values the descriptor word
+    /// `word` describes, which this body has materialized (design.md "Type
+    /// Descriptors"): a static word, or a recipe that reads no input, is
+    /// demanded now; an input or a table slot is demanded at each table
+    /// this worker's needs fill.
+    fn demandDescriptor(self: *Builder, word: Word, op: StaticDescs.DescOp) Allocator.Error!void {
+        const id = switch (word) {
+            .static => |static| return try self.program.static_descs.demandWord(static, op),
+            .recipe => |named| self.recipes.resolve(named),
+        };
+        const table_word: u32 = switch (self.recipes.get(id)) {
+            .input => |index| index,
+            .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => if (try self.readsInputs(id)) blk: {
+                const position = std.mem.findScalar(Tables.RecipeId, self.slots.items, id) orelse invariant("a demanded descriptor recipe has no slot of its worker's table");
+                break :blk self.program.inputCount(self.worker_id) + @as(u32, @intCast(position));
+            } else return try self.program.static_descs.demandWord(try self.foldWord(id), op),
+        };
+        const entry = try self.table_demand.getOrPut(self.allocator, table_word);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        entry.value_ptr.insert(op);
     }
 
     // -- Body --
@@ -2802,9 +2854,9 @@ pub const Builder = struct {
             .structural => |method| blk: {
                 const target = try self.localOf(ret, .frame);
                 switch (method) {
-                    .is_eq => try self.emitDyn(target, .{ .eq = .{ .lhs = values[0], .rhs = values[1], .desc = try self.varDesc(0) } }),
-                    .to_hash => try self.emitDyn(target, .{ .hash = .{ .hasher = values[1], .value = values[0], .desc = try self.varDesc(0) } }),
-                    .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = try self.varDesc(0), .names = try self.namesIn(try self.inputWord(0)) } }),
+                    .is_eq => try self.emitDyn(target, .{ .eq = .{ .lhs = values[0], .rhs = values[1], .desc = try self.opVarDesc(0, .eq) } }),
+                    .to_hash => try self.emitDyn(target, .{ .hash = .{ .hasher = values[1], .value = values[0], .desc = try self.opVarDesc(0, .hash) } }),
+                    .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = try self.opVarDesc(0, .inspect), .names = try self.namesIn(try self.inputWord(0)) } }),
                 }
                 break :blk target;
             },
@@ -3049,7 +3101,7 @@ pub const Builder = struct {
                 const hasher = self.popValue();
                 const value = self.popValue();
                 const target = try self.localOf(hash.result, .frame);
-                try self.emitDyn(target, .{ .hash = .{ .hasher = hasher, .value = value, .desc = try self.descOf(hash.value) } });
+                try self.emitDyn(target, .{ .hash = .{ .hasher = hasher, .value = value, .desc = try self.opDescOf(hash.value, .hash) } });
                 try self.pushValue(target);
             },
             .push_value_quote => |node| try self.pushValue(try self.textLiteral(self.bodies().quoteText(node))),
@@ -3208,7 +3260,7 @@ pub const Builder = struct {
                 const value = self.popValue();
                 const expr = self.bodies().expr(fail.expr);
                 const rendered = try self.closedLocal(.str);
-                try self.emitDyn(rendered, .{ .inspect = .{ .value = value, .desc = try self.descOf(fail.value), .names = try self.namesOf(fail.value) } });
+                try self.emitDyn(rendered, .{ .inspect = .{ .value = value, .desc = try self.opDescOf(fail.value, .inspect), .names = try self.namesOf(fail.value) } });
                 const prefix_text = try std.fmt.allocPrint(self.allocator, "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(", .{self.bodies().text(expr.data.expect_err.snippet)});
                 defer self.allocator.free(prefix_text);
                 const with_value = try self.closedLocal(.str);
@@ -3221,7 +3273,7 @@ pub const Builder = struct {
             .finish_dbg => |ty| {
                 const value = self.popValue();
                 const message = try self.closedLocal(.str);
-                try self.emitDyn(message, .{ .inspect = .{ .value = value, .desc = try self.descOf(ty), .names = try self.namesOf(ty) } });
+                try self.emitDyn(message, .{ .inspect = .{ .value = value, .desc = try self.opDescOf(ty, .inspect), .names = try self.namesOf(ty) } });
                 try self.emitLinear(.{ .debug = .{ .message = message, .next = undefined } });
                 // `dbg` evaluates to `{}`.
                 try self.pushValue(try self.unitValue());
@@ -8921,7 +8973,7 @@ pub const Builder = struct {
         const rhs = self.popValue();
         const lhs = self.popValue();
         const result = try self.closedLocal(.bool);
-        try self.emitDyn(result, .{ .eq = .{ .lhs = lhs, .rhs = rhs, .desc = try self.descOf(operand_ty) } });
+        try self.emitDyn(result, .{ .eq = .{ .lhs = lhs, .rhs = rhs, .desc = try self.opDescOf(operand_ty, .eq) } });
         if (!negated) return try self.pushValue(result);
         const flipped = try self.closedLocal(.bool);
         try self.emitLowLevel(flipped, .bool_not, &.{result});

@@ -15509,7 +15509,9 @@ TypeDesc {
     tag union: discriminant offset and width, variants ordered by
         discriminant, each { payload fields as a record },
     methods: optional erased callables for `is_eq`, `to_hash`, `to_inspect`
-        overrides, plus their rejected marks,
+        overrides, plus their rejected marks, each present only where the
+        program demands that operation of the descriptor
+        ("Descriptor Demand"),
     presence_slot_present_discriminant: optional, for optional-field slots,
     inspect_opaque: bool,
 }
@@ -15639,6 +15641,63 @@ merged into one descriptor agree on a nominal type when each of its methods
 enters the same procedure, and the merged scope keeps the first scope's
 callables.
 
+#### Descriptor Demand
+
+A descriptor's `Methods` slot for `is_eq`, `to_hash`, or `to_inspect` is
+present exactly when the descriptor has that override and the pair (its key,
+the operation) is in the program's demand closure; a descriptor with no
+present slot has a null `methods`. A descriptor needed only for layout,
+ownership, construction, or matching therefore roots none of its overrides,
+and their procedures are emitted only where something else calls them.
+
+The only readers of a `Methods` slot are the runtime walkers behind
+`roc_desc_eq`, `roc_desc_hash`, and `roc_desc_inspect`, reached only through
+LIR `dyn` `eq`, `hash`, and `inspect` operations. The descriptor operand of each
+such operation is a word of the executing worker: a static descriptor, one of
+its inputs, or a slot of its type table. Nothing else produces a descriptor at
+run time. No ordinary Roc value representation stores a descriptor ("Forbidden
+Shapes"): a function value reaches descriptors only through the type tables
+and dictionaries it captures, which are static data. Descriptors never cross
+the host ABI in either direction: no host-visible signature, hosted function,
+or glue type carries one, and a host-originating box is opaque unless Roc-side
+checked data supplies its descriptor. Every table is filled at compile time by
+`Program.fillTable`, including the tables of imported workers, of the Builtin
+unit's workers, and of stored function values restored from compile-time
+evaluation, and compile-time evaluation runs the same lowering.
+
+The closure has these seeds and propagation rules:
+
+- **Static operand.** When a body emits one of the three operations on a
+  static descriptor word, or on a recipe that reads no input (folded to its
+  static word, as a closed type composed in the body is), it demands
+  (that descriptor, the operation) directly.
+- **Table operand.** When the operand is an input or a table slot, the
+  worker's needs list records (word index, operations) (`Tables.Needs.demand`),
+  in table-word numbering, sorted by word. Filling any table of the worker
+  demands each recorded operation of the descriptor that word holds at that
+  instantiation. An imported worker's needs list carries its demand in its
+  encoded needs (`StoredFn.encodeNeeds`), so the importing unit seeds its own
+  descriptors from it.
+- **Propagation** (`StaticDescs.followDemand`) follows the walkers exactly. A
+  nominal type with an override for the operation (its override scope's
+  callable where the scope names the type, otherwise its static override)
+  builds that one override callable and stops. A nominal type without one
+  continues into its backing, except that inspection stops at an opaque type.
+  Records, tuples (padding excluded), tag payloads, list items, box payloads,
+  and recursion boxes continue into their components with the same operation.
+  `Bool`, scalars, strings, and function values stop. A SIMD vector demands
+  only its `to_inspect`, and only for inspection. A boxed function stops; a
+  boxed sequence continues into the sequence's descriptor for inspection only.
+
+Building an override callable reserves tables and queues the workers its
+dictionary entry needs, and lowering those can demand more, so lowering
+alternates among lowering queued workers, following queued demands, and
+filling reserved tables until none has work. Each `(key, operation)` pair is
+followed once. Only after that fixed point are the `Methods` nodes written,
+each holding exactly its demanded overrides. A descriptor's bytes and
+relocations are therefore a function of the whole lowering's demand, and
+each unit's static descriptors are its own static data.
+
 #### Type Tables
 
 A worker with hidden inputs (the descriptors of its type variables, its
@@ -15662,7 +15721,9 @@ discriminant of a tag or the label-order index of a field under a descriptor
 record update's or a coercion's plan (`update_plan`, `adapt_plan`). A
 position or plan whose descriptor reads no input is static: a position is an
 immediate operand, a plan static data the body reads directly.
-The worker's needs list says what each word is, as a recipe over its inputs.
+The worker's needs list says what each word is, as a recipe over its inputs,
+and which descriptor-guided operations the body performs on which words
+("Descriptor Demand").
 It is fixed when the worker's body is lowered, holds only the recipes its
 slots reach, and names them in the order a walk from the slots reaches them.
 Word `i` is at `LIR.tableEntryOffset(i, pointer width)`, read with

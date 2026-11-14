@@ -3351,9 +3351,13 @@ pub const Program = struct {
         };
     }
 
-    /// Lower every queued worker, and fill every reserved type table, each
-    /// once its worker's needs are known; filling a table reserves the
-    /// tables its words name, so the two alternate until neither has work.
+    /// Lower every queued worker, follow every descriptor demand, and fill
+    /// every reserved type table, each once its worker's needs are known.
+    /// Lowering a worker and filling a table demand descriptor operations;
+    /// following a demand builds override callables, which reserve tables
+    /// and queue workers; filling a table reserves the tables its words
+    /// name. The three alternate until none has work, which completes the
+    /// demand closure (design.md "Type Descriptors").
     fn drain(self: *Program) Allocator.Error!void {
         while (true) {
             while (self.worklist.pop()) |id| {
@@ -3361,13 +3365,16 @@ pub const Program = struct {
                 self.worker(id).lowered = true;
                 try Body.lowerWorker(self, id);
             }
+            if (try self.static_descs.drainDemand()) continue;
             const unfilled = self.static_descs.nextUnfilledTable() orelse return;
             try self.fillTable(unfilled);
         }
     }
 
     /// Fill the reserved table `unfilled`: its worker's inputs, then each
-    /// slot's recipe evaluated at them.
+    /// slot's recipe evaluated at them. Each descriptor operation the
+    /// worker's needs demand of a word is demanded of the descriptor the
+    /// word holds here.
     fn fillTable(self: *Program, unfilled: StaticDescs.UnfilledTable) Allocator.Error!void {
         // Tables are filled once the worklist is empty, so every worker
         // something called is lowered or imported.
@@ -3392,6 +3399,10 @@ pub const Program = struct {
         defer evaluation.deinit();
         for (words[needs.input_count..], needs.slots) |*slot_word, recipe| slot_word.* = try evaluation.word(recipe);
         try self.static_descs.fillTable(unfilled, words);
+        for (needs.demand) |entry| {
+            var ops = entry.ops.iterator();
+            while (ops.next()) |op| try self.static_descs.demandWord(words[entry.word], op);
+        }
     }
 
     /// How many input words lead worker `id`'s tables: its variables'
