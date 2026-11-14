@@ -15675,6 +15675,31 @@ its dictionary at its own requirement, to another worker or around a
 recursive call, therefore passes the word it was given, and the type tables
 of a recursion's levels are one table.
 
+The rule holds for every scope whose requirement discharges another's, not
+only for a worker's own. A scope the lowering enters while it lowers a body
+(a scheme alias's or an exact procedure alias's scope at one of its uses, a
+literal chain's frame, a declaration context) holds each dictionary at the
+interface its own requirement names, at the types the scope was entered with
+(`AliasScope.requirements`): the edge that entered the scope built the
+dictionary for exactly that parameter. Evidence read inside the scope that
+hands the dictionary on (an alias's forwarded lookup, a frame's edge into the
+next frame, the requirements of a literal conversion's target, a local
+procedure's own scheme) adapts it from that interface to the consumer's, and
+a dispatch through it calls it at that interface (`Builder.scopeInterface`).
+An alias can state its requirement at a narrower row than the procedure it
+forwards to requires (`narrow : b -> [Ok(Str), Err(Str), Extra] where
+[b.status : b -> [Ok(Str), Err(Str)]]` bound to a procedure whose requirement
+names `[Ok(Str), Err(Str), Extra]`), so any step of an alias chain can be an
+adapter. A literal's own conversion, the dispatch a literal chain lowers
+inside its innermost frame, has a signature checking fixes, error row
+included (a `from_numeral` requirement stating another row is a type
+mismatch), so it reads its result as the dictionary stored it; it is called
+at its scope's interface all the same.
+`test/cli/WidenClosedImplAliasScope.roc`,
+`test/cli/WidenClosedTryImplAliasScope.roc`, and
+`test/cli/WidenClosedImplLiteralChain.roc` run the alias scopes and the
+literal chain frames.
+
 A conversion between two CLOSED types is a static row conversion: a worker
 of the converting module (`WorkerKey.convert`, keyed by the source and
 destination types), lowered as ordinary LIR—a switch on the source
@@ -16284,7 +16309,9 @@ declared in a function body is a local procedure of that body: its dispatch
 calls the procedure's function value at the dispatch's instantiation, and its
 dictionary is that value. A target reached through an exact procedure alias
 takes the substitution and evidence each alias's forwarded lookup recorded in
-the alias's scope, alias by alias.
+the alias's scope, alias by alias; each alias's scope holds its dictionaries
+at the alias's own requirements, and a lookup that hands one on adapts it to
+the next scope's (Sealed Result Rows).
 
 Evidence the checker leaves to the concrete callable (`from_callable`, a
 target `derived_from_callable`, nested `from_callable` evidence) and the
