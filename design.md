@@ -21347,7 +21347,10 @@ sharing must go through typed lifted join points or LIR join points, never
 through re-lowering a Monotype id twice. Direct lowering preserves lifted
 `join_point`/`jump` as LIR `join`/`jump`. PR 9707 removed the one known violator,
 the list-pattern desugarer, after measuring ~(items+1)^branches statement
-blowup. The match
+blowup. Producers that use a value at several positions bind it to a local
+once and read the local at each position. A structural `to_hash` of a tag union
+with two or more variants binds the incoming hasher, which holds every earlier
+component's hash, so its branches do not each carry a copy. The match
 compiler holds the invariant by construction: rows (branches) are never
 duplicated during specialization—a row that does not test the selected
 occurrence ends the test group instead of being copied into every arm, and the

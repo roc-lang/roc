@@ -63351,7 +63351,7 @@ const BodyContext = struct {
             },
             .tag_union => |*tag_union| {
                 if (stage == 0) {
-                    tag_union.locals = try D.tagUnionEnter(self, tag_union.ty);
+                    tag_union.locals = try D.tagUnionEnter(self, tag_union.ty, tag_union.tags_span.len, ctx);
                     tag_union.branches = try self.allocator.alloc(DraftBranch, tag_union.tags_span.len);
                 } else {
                     tag_union.state = try D.combine(self, tag_union.state, input.?.expr, ctx);
@@ -63388,7 +63388,7 @@ const BodyContext = struct {
                     tag_union.payloads = GuardedList.at(self.typeStore().tagSpan(tag_union.tags_span), tag_union.index).payloads;
                     tag_union.branch_active = true;
                     tag_union.next = 0;
-                    tag_union.state = try D.tagBranchEnter(self, tag_union.ty, tag_union.payloads, @intCast(tag_union.index), tag_union.operand, &tag_union.branch, ctx);
+                    tag_union.state = try D.tagBranchEnter(self, tag_union.ty, tag_union.locals, tag_union.payloads, @intCast(tag_union.index), tag_union.operand, &tag_union.branch, ctx);
                 }
             },
         }
@@ -70322,7 +70322,7 @@ const EqDeriver = struct {
     /// right-hand side can be re-scrutinised inside every left-hand-side branch.
     const TagUnionLocals = struct { lhs: DraftLocalId, rhs: DraftLocalId };
 
-    fn tagUnionEnter(self: *BodyContext, ty: Type.TypeId) Allocator.Error!TagUnionLocals {
+    fn tagUnionEnter(self: *BodyContext, ty: Type.TypeId, _: usize, _: BodyContext.DerivationCtx) Allocator.Error!TagUnionLocals {
         const lhs_local = try self.addLocal(self.builder.symbols.fresh(), ty);
         const rhs_local = try self.addLocal(self.builder.symbols.fresh(), ty);
         return .{ .lhs = lhs_local, .rhs = rhs_local };
@@ -70346,7 +70346,7 @@ const EqDeriver = struct {
     /// Bind one variant's payloads on both sides. The branch's conjunction of
     /// pairwise payload comparisons starts at true: a variant with no payloads
     /// is equal once both discriminants match.
-    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, payloads: Type.Span, _: u64, _: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, _: TagUnionLocals, payloads: Type.Span, _: u64, _: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
         branch.lhs_pats = try self.allocator.alloc(DraftPatId, payloads.len);
         branch.rhs_pats = try self.allocator.alloc(DraftPatId, payloads.len);
         branch.lhs_exprs = try self.allocator.alloc(DraftExprId, payloads.len);
@@ -70525,11 +70525,16 @@ const HashDeriver = struct {
     // A tag-union hash writes the discriminant index into the hasher, then
     // matches on the value and threads the active variant's payloads through.
 
-    /// The value binds to a local so it is matched exactly once.
-    const TagUnionLocals = struct { value: DraftLocalId };
+    /// The value binds to a local so it is matched exactly once. With two or
+    /// more variants the incoming hasher is read by every branch, so it binds
+    /// to a local too and each branch reads that local: the hasher expression
+    /// (every earlier component's hash) is built once, not once per branch.
+    const TagUnionLocals = struct { value: DraftLocalId, hasher: ?DraftLocalId };
 
-    fn tagUnionEnter(self: *BodyContext, value_ty: Type.TypeId) Allocator.Error!TagUnionLocals {
-        return .{ .value = try self.addLocal(self.builder.symbols.fresh(), value_ty) };
+    fn tagUnionEnter(self: *BodyContext, value_ty: Type.TypeId, variant_count: usize, ctx: BodyContext.DerivationCtx) Allocator.Error!TagUnionLocals {
+        const value = try self.addLocal(self.builder.symbols.fresh(), value_ty);
+        const hasher = if (variant_count >= 2) try self.addLocal(self.builder.symbols.fresh(), ctx.result_ty) else null;
+        return .{ .value = value, .hasher = hasher };
     }
 
     const TagBranchPayloads = struct {
@@ -70545,7 +70550,7 @@ const HashDeriver = struct {
 
     /// Bind one variant's payloads; the branch's hasher starts with the
     /// discriminant index written.
-    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, payloads: Type.Span, variant_index: u64, operand: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, locals: TagUnionLocals, payloads: Type.Span, variant_index: u64, operand: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
         branch.pats = try self.allocator.alloc(DraftPatId, payloads.len);
         branch.exprs = try self.allocator.alloc(DraftExprId, payloads.len);
         for (0..payloads.len) |i| {
@@ -70554,7 +70559,11 @@ const HashDeriver = struct {
             branch.pats[i] = try self.bindPat(payload_local, payload_ty);
             branch.exprs[i] = try self.localExpr(payload_local, payload_ty);
         }
-        return try self.hasherWriteU64(operand.hasher, variant_index, ctx.result_ty);
+        const hasher = if (locals.hasher) |hasher_local|
+            try self.localExpr(hasher_local, ctx.result_ty)
+        else
+            operand.hasher;
+        return try self.hasherWriteU64(hasher, variant_index, ctx.result_ty);
     }
 
     fn tagPayloadOperand(branch: TagBranchPayloads, index: usize, hasher: DraftExprId) Operand {
@@ -70575,10 +70584,18 @@ const HashDeriver = struct {
             .branches = try self.addBranchSpan(branches),
         } } });
 
+        const bind_hasher = if (locals.hasher) |hasher_local|
+            try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
+                .bind = try self.bindPat(hasher_local, ctx.result_ty),
+                .value = operand.hasher,
+                .rest = match_expr,
+            } } })
+        else
+            match_expr;
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
             .bind = try self.bindPat(locals.value, value_ty),
             .value = operand.value,
-            .rest = match_expr,
+            .rest = bind_hasher,
         } } });
     }
 };
